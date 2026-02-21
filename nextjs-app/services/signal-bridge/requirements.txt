@@ -1,0 +1,8 @@
+# Signal Bridge Service Dependencies
+flask==3.0.0
+requests==2.31.0
+python-dotenv==1.0.0
+apscheduler==3.10.4
+pydub==0.25.1
+watchdog==3.0.0
+mutagen>=1.46.0

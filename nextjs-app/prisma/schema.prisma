@@ -1,0 +1,93 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model Choom {
+  id            String    @id @default(cuid())
+  companionId   String?   // Custom memory ID - if null, uses id. Allows memory isolation per Choom
+  name          String
+  description   String?
+  avatarUrl     String?
+  systemPrompt  String    @default("")
+  imageSettings String?   // JSON string - Choom-specific image gen settings
+  voiceId       String?   // TTS voice ID (per-Choom)
+  llmModel      String?   // LLM model override (per-Choom)
+  llmEndpoint   String?   // Optional LLM endpoint override
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  chats         Chat[]
+  images        GeneratedImage[]
+}
+
+model Chat {
+  id                String    @id @default(cuid())
+  title             String?
+  choomId           String
+  choom             Choom     @relation(fields: [choomId], references: [id], onDelete: Cascade)
+  messages          Message[]
+  archived          Boolean   @default(false)
+  compactionSummary String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+}
+
+model Message {
+  id          String   @id @default(cuid())
+  chatId      String
+  chat        Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  role        String   // 'user' | 'assistant' | 'system' | 'tool'
+  content     String
+  toolCalls   String?  // JSON string - Tool calls made by assistant
+  toolResults String?  // JSON string - Results from tool execution
+  createdAt   DateTime @default(now())
+}
+
+model GeneratedImage {
+  id        String   @id @default(cuid())
+  choomId   String
+  choom     Choom    @relation(fields: [choomId], references: [id], onDelete: Cascade)
+  prompt    String
+  imageUrl  String
+  settings  String?  // JSON string - Generation settings used
+  createdAt DateTime @default(now())
+}
+
+model ActivityLog {
+  id        String   @id @default(cuid())
+  choomId   String?
+  chatId    String?
+  level     String   // info, success, warning, error
+  category  String   // llm, tts, stt, image, memory, agent, system
+  title     String
+  message   String
+  details   String?  // JSON
+  duration  Int?
+  createdAt DateTime @default(now())
+}
+
+model Notification {
+  id           String   @id @default(cuid())
+  choomId      String
+  message      String
+  includeAudio Boolean  @default(true)
+  delivered    Boolean  @default(false)
+  createdAt    DateTime @default(now())
+}
+
+model Settings {
+  id         String   @id @default("global")
+  llm        String   // JSON string - LLM endpoint, model, params
+  tts        String   // JSON string - TTS endpoint, voice
+  stt        String   // JSON string - STT endpoint
+  imageGen   String   // JSON string - Forge endpoint, defaults
+  weather    String   // JSON string - Weather API config
+  search     String   // JSON string - Search API config
+  memory     String   // JSON string - Memory server config
+  appearance String   // JSON string - Theme, dark mode
+  updatedAt  DateTime @updatedAt
+}

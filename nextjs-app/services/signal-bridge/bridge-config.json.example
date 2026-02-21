@@ -1,0 +1,80 @@
+{
+  "tasks": {
+    "morning_briefing": {
+      "enabled": true,
+      "time": "07:00"
+    },
+    "weather_check_07:00": {
+      "enabled": true,
+      "time": "07:00"
+    },
+    "weather_check_12:00": {
+      "enabled": true,
+      "time": "12:00"
+    },
+    "weather_check_18:00": {
+      "enabled": true,
+      "time": "18:00"
+    },
+    "aurora_check_12:00": {
+      "enabled": false,
+      "time": "12:00"
+    },
+    "aurora_check_18:00": {
+      "enabled": false,
+      "time": "18:00"
+    },
+    "system_health": {
+      "enabled": true,
+      "interval_minutes": 30
+    },
+    "yt_download": {
+      "enabled": false,
+      "time": "04:00"
+    },
+    "db_backup": {
+      "enabled": true,
+      "time": "03:00"
+    }
+  },
+  "yt_downloader": {
+    "max_videos_per_channel": 3,
+    "channels": []
+  },
+  "weather": {
+    "apiKey": "",
+    "provider": "openweathermap",
+    "location": "",
+    "latitude": 0,
+    "longitude": 0,
+    "useCoordinates": true,
+    "units": "imperial",
+    "cacheMinutes": 30
+  },
+  "search": {
+    "provider": "brave",
+    "braveApiKey": "",
+    "searxngEndpoint": "",
+    "maxResults": 5
+  },
+  "imageGen": {
+    "endpoint": "http://localhost:7860"
+  },
+  "vision": {
+    "endpoint": "http://localhost:1234",
+    "model": "vision-model",
+    "maxTokens": 1024,
+    "temperature": 0.3
+  },
+  "homeAssistant": {
+    "baseUrl": "",
+    "accessToken": "",
+    "entityFilter": "",
+    "cacheSeconds": 30
+  },
+  "providers": [],
+  "reminders": [],
+  "custom_heartbeats": [],
+  "cron_jobs": [],
+  "automations": []
+}

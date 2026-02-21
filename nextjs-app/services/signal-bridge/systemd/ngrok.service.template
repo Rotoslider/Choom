@@ -1,0 +1,19 @@
+[Unit]
+Description=Ngrok Tunnel for Choom
+After=network.target
+
+[Service]
+Type=simple
+User=__USER__
+Group=__USER__
+ExecStart=/usr/local/bin/ngrok http 3000 --url=__NGROK_SUBDOMAIN__.ngrok-free.app
+Restart=always
+RestartSec=10
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ngrok
+
+[Install]
+WantedBy=multi-user.target

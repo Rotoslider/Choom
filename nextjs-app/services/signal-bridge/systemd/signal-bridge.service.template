@@ -1,0 +1,23 @@
+[Unit]
+Description=Signal Bridge for Choom
+After=network.target signal-cli-daemon.service
+Wants=network-online.target
+Requires=signal-cli-daemon.service
+
+[Service]
+Type=simple
+User=__USER__
+Group=__USER__
+WorkingDirectory=__PROJECT_PATH__/nextjs-app/services/signal-bridge
+Environment=PATH=__PROJECT_PATH__/nextjs-app/services/signal-bridge/venv/bin:/opt/signal-cli-0.13.24/bin:/usr/local/bin:/usr/bin
+ExecStart=__PROJECT_PATH__/nextjs-app/services/signal-bridge/venv/bin/python bridge.py
+Restart=always
+RestartSec=10
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=signal-bridge
+
+[Install]
+WantedBy=multi-user.target

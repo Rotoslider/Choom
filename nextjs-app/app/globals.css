@@ -1,0 +1,265 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 250 245 255;
+    --foreground: 15 10 26;
+    --card: 255 255 255;
+    --card-foreground: 15 10 26;
+    --popover: 255 255 255;
+    --popover-foreground: 15 10 26;
+    --primary: 147 51 234;
+    --primary-foreground: 255 255 255;
+    --secondary: 59 130 246;
+    --secondary-foreground: 255 255 255;
+    --accent: 236 72 153;
+    --accent-foreground: 255 255 255;
+    --muted: 243 232 255;
+    --muted-foreground: 107 33 168;
+    --destructive: 239 68 68;
+    --destructive-foreground: 255 255 255;
+    --border: 216 180 254;
+    --input: 216 180 254;
+    --ring: 147 51 234;
+    --radius: 0.75rem;
+  }
+
+  .dark {
+    --background: 15 10 26;
+    --foreground: 250 245 255;
+    --card: 26 16 37;
+    --card-foreground: 250 245 255;
+    --popover: 26 16 37;
+    --popover-foreground: 250 245 255;
+    --primary: 167 139 250;
+    --primary-foreground: 15 10 26;
+    --secondary: 96 165 250;
+    --secondary-foreground: 15 10 26;
+    --accent: 244 114 182;
+    --accent-foreground: 15 10 26;
+    --muted: 45 31 66;
+    --muted-foreground: 200 180 220;
+    --destructive: 248 113 113;
+    --destructive-foreground: 15 10 26;
+    --border: 45 31 66;
+    --input: 45 31 66;
+    --ring: 167 139 250;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+}
+
+@layer utilities {
+  /* Custom scrollbar styles */
+  .scrollbar-thin {
+    scrollbar-width: thin;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-track {
+    @apply bg-muted/30 rounded-full;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    @apply bg-primary/30 rounded-full hover:bg-primary/50;
+  }
+
+  /* Glass morphism effect */
+  .glass {
+    @apply bg-white/10 backdrop-blur-lg border border-white/20;
+  }
+
+  .glass-dark {
+    @apply bg-black/20 backdrop-blur-lg border border-white/10;
+  }
+
+  /* Gradient text */
+  .text-gradient {
+    @apply bg-gradient-primary bg-clip-text text-transparent;
+  }
+
+  /* Glowing border */
+  .glow-border {
+    @apply relative;
+  }
+
+  .glow-border::before {
+    content: '';
+    @apply absolute inset-0 rounded-inherit bg-gradient-primary opacity-50 blur-xl -z-10;
+  }
+
+  /* Message bubble styles */
+  .message-user {
+    @apply bg-gradient-to-br from-primary-500 to-accent-500 text-white rounded-2xl rounded-br-md;
+  }
+
+  .message-assistant {
+    @apply bg-surface-dark dark:bg-muted-dark text-foreground rounded-2xl rounded-bl-md;
+  }
+
+  /* Avatar glow effect */
+  .avatar-glow {
+    @apply relative;
+  }
+
+  .avatar-glow::after {
+    content: '';
+    @apply absolute inset-0 rounded-full bg-gradient-primary opacity-30 blur-xl scale-110;
+  }
+
+  /* Typing indicator dots */
+  .typing-dot {
+    @apply w-2 h-2 rounded-full bg-current animate-typing;
+  }
+
+  .typing-dot:nth-child(2) {
+    animation-delay: 0.2s;
+  }
+
+  .typing-dot:nth-child(3) {
+    animation-delay: 0.4s;
+  }
+
+  /* Service status indicators */
+  .status-connected {
+    @apply bg-green-500;
+  }
+
+  .status-disconnected {
+    @apply bg-red-500;
+  }
+
+  .status-checking {
+    @apply bg-yellow-500 animate-pulse;
+  }
+
+  /* Input focus glow */
+  .input-glow:focus {
+    @apply ring-2 ring-primary-500/50 shadow-glow-sm;
+  }
+
+  /* Button hover effects */
+  .btn-primary {
+    @apply bg-gradient-primary text-white font-medium px-4 py-2 rounded-lg
+           hover:shadow-glow transition-all duration-200
+           active:scale-95;
+  }
+
+  .btn-secondary {
+    @apply bg-muted text-foreground font-medium px-4 py-2 rounded-lg
+           hover:bg-muted/80 transition-all duration-200
+           active:scale-95;
+  }
+
+  .btn-ghost {
+    @apply text-muted-foreground font-medium px-4 py-2 rounded-lg
+           hover:bg-muted/50 transition-all duration-200;
+  }
+
+  /* Card styles */
+  .card {
+    @apply bg-card rounded-xl border border-border shadow-sm;
+  }
+
+  .card-hover {
+    @apply card hover:shadow-glow-sm hover:border-primary/30 transition-all duration-200;
+  }
+
+  /* Background patterns */
+  .bg-dots {
+    background-image: radial-gradient(circle, rgb(var(--primary) / 0.1) 1px, transparent 1px);
+    background-size: 20px 20px;
+  }
+
+  .bg-grid {
+    background-image:
+      linear-gradient(to right, rgb(var(--primary) / 0.05) 1px, transparent 1px),
+      linear-gradient(to bottom, rgb(var(--primary) / 0.05) 1px, transparent 1px);
+    background-size: 40px 40px;
+  }
+}
+
+/* Custom CSS variables for component use */
+:root {
+  --sidebar-width: 280px;
+  --header-height: 64px;
+  --input-height: 120px;
+}
+
+/* Animation for streaming text */
+@keyframes stream-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.stream-word {
+  display: inline;
+  animation: stream-in 0.15s ease-out forwards;
+}
+
+/* Smooth scrolling for chat */
+.chat-scroll {
+  scroll-behavior: smooth;
+  overscroll-behavior: contain;
+}
+
+/* Audio visualization */
+.audio-bar {
+  @apply w-1 bg-gradient-primary rounded-full transition-all duration-75;
+}
+
+/* Focus visible for accessibility */
+.focus-visible:focus-visible {
+  @apply outline-none ring-2 ring-primary ring-offset-2 ring-offset-background;
+}
+
+/* Code block styles */
+.code-block {
+  @apply my-2 rounded-lg overflow-hidden border border-border;
+  background-color: rgb(var(--muted));
+}
+
+.code-block .code-block-lang {
+  @apply text-[10px] font-medium uppercase tracking-wider px-3 py-1 border-b border-border text-muted-foreground;
+}
+
+.code-block pre {
+  @apply p-3 overflow-x-auto;
+  margin: 0;
+}
+
+.code-block code {
+  @apply text-xs font-mono leading-relaxed;
+  white-space: pre;
+}
+
+/* Selection style */
+::selection {
+  @apply bg-primary/30 text-foreground;
+}
+
+/* Placeholder style */
+::placeholder {
+  @apply text-muted-foreground/50;
+}
