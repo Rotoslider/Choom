@@ -1,0 +1,45 @@
+# Dependencies & build
+node_modules/
+.next/
+**/venv/
+**/__pycache__/
+*.tsbuildinfo
+
+# Databases
+*.db
+*.db-journal
+
+# Environment files
+.env
+.env.local
+.env.production
+
+# Google OAuth credentials
+**/google_auth/credentials.json
+**/google_auth/token.json
+
+# Bridge config (contains API keys, personal tasks, HA token)
+**/bridge-config.json
+
+# Systemd services (contain real paths after install)
+**/systemd/*.service
+
+# Private Choom profiles (keep example/ only)
+choom-profiles/genesis/
+choom-profiles/lissa/
+
+# YouTube download history
+**/download_history.json
+
+# Claude Code
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Lock files (not needed for project - no CI)
+package-lock.json

@@ -1,0 +1,30 @@
+[Unit]
+Description=signal-cli JSON-RPC Daemon
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+Group=__USER__
+
+# Create socket directory and clean orphaned native libs from previous subprocess invocations
+ExecStartPre=/bin/bash -c 'mkdir -p /run/user/$(id -u __USER__)/signal-cli && rm -rf /tmp/libsignal_jni_*'
+
+ExecStart=/opt/signal-cli-0.13.24/bin/signal-cli \
+    --config __HOME__/.local/share/signal-cli \
+    -a __SIGNAL_PHONE_NUMBER__ \
+    daemon \
+    --socket /run/user/$(id -u __USER__)/signal-cli/socket \
+    --receive-mode=on-start
+
+Restart=always
+RestartSec=5
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=signal-cli-daemon
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,31 @@
+{
+  "name": "Example Choom",
+  "description": "A sample Choom profile showing the available configuration options",
+  "voice_id": "sophie",
+  "traits": {
+    "personality": "Friendly, helpful, and conversational",
+    "interests": ["technology", "science", "creative writing"],
+    "communication_style": "Concise but warm"
+  },
+  "image_gen": {
+    "checkpoint": "",
+    "sampler": "Euler a",
+    "scheduler": "Normal",
+    "steps": 20,
+    "cfg_scale": 7,
+    "width": 1024,
+    "height": 1024,
+    "negative_prompt": "ugly, blurry, low quality, deformed",
+    "self_portrait": {
+      "enabled": false,
+      "checkpoint": "",
+      "prompt_prefix": "",
+      "prompt_suffix": "",
+      "loras": []
+    }
+  },
+  "memory": {
+    "auto_recall": true,
+    "recall_limit": 5
+  }
+}
