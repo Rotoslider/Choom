@@ -6,6 +6,8 @@ Each AI persona ("Choom") can have its own LLM model, voice, image style, and me
 
 All 75 tools are organized into 21 modular **skills** with progressive disclosure — the LLM only sees detailed documentation for skills relevant to the current request, saving ~3,400 tokens per message. Skills can be enabled/disabled, custom skills can be created via a visual builder, and external skills can be installed from GitHub with safety verification.
 
+![Chat Interface](docs/screenshots/chat-interface.png)
+
 ## Features
 
 - **Multi-Choom**: Create distinct AI personas with custom system prompts, voices, and LLM backends
@@ -148,6 +150,8 @@ nextjs-app/
 
 ## Settings Hierarchy
 
+![Settings Panel](docs/screenshots/settings-llm.png)
+
 Settings resolve in four layers. Each layer overrides the one before it.
 
 ```
@@ -236,6 +240,8 @@ Settings Hierarchy for "MyChoom":
 ```
 
 ## Image Generation
+
+![Image Settings](docs/screenshots/settings-image.png)
 
 Integrates with Stable Diffusion Forge (`/sdapi/v1/txt2img`).
 
@@ -470,6 +476,8 @@ The activity panel in the web UI also shows compaction events.
 
 ## Skills Architecture
 
+![Skills Catalog](docs/screenshots/skills-catalog.png)
+
 Choom's 75 tools are organized into 21 modular **skills**. Each skill is a self-contained directory with metadata, tool definitions, and a handler implementation. The skill registry provides progressive disclosure to minimize token usage while ensuring the LLM always has the right documentation at the right time.
 
 ### Progressive Disclosure (3 Levels)
@@ -577,6 +585,8 @@ Simple requests (weather check, memory search, single tool calls) bypass the pla
 
 ## Automations
 
+![Automations](docs/screenshots/settings-automations.png)
+
 Visual builder for creating scheduled multi-step task chains using skills. Accessible from Settings > Automations. See the [Conditional Triggers Guide](CONDITIONAL-TRIGGERS.md) for detailed documentation and examples.
 
 ### Creating an Automation
@@ -625,6 +635,8 @@ Automations can have conditions that must be satisfied before they execute. Cond
 - **Night Motion Alert** (HA + time conditional): Condition: binary_sensor.front_porch_motion == on + time 22:00-06:00 -> send_notification("Motion detected at front porch")
 
 ## Smart Home (Home Assistant)
+
+![Smart Home Settings](docs/screenshots/settings-smart-home.png)
 
 Full integration with [Home Assistant](https://www.home-assistant.io/) for reading sensors, controlling devices, viewing historical trends, and giving Chooms ambient awareness of your physical environment. Works from both the web UI and Signal.
 
