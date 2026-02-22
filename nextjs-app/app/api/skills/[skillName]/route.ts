@@ -2,8 +2,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import * as fs from 'fs';
 import * as path from 'path';
 import { getSkillRegistry } from '@/lib/skill-registry';
-import { loadCoreSkills } from '@/lib/skill-loader';
+import { loadCoreSkills, loadCustomSkills } from '@/lib/skill-loader';
 import { CUSTOM_SKILLS_ROOT } from '@/lib/config';
+import { createRequire } from 'module';
+const nodeRequire = createRequire(import.meta.url || __filename);
 
 // Validate skill name to prevent path traversal
 function isValidSkillName(name: string): boolean {
@@ -27,8 +29,9 @@ export async function GET(
       );
     }
 
-    // Ensure skills are loaded
+    // Ensure skills are loaded (core + custom from .choom-skills)
     loadCoreSkills();
+    loadCustomSkills();
     const registry = getSkillRegistry();
     const skill = registry.getSkill(skillName);
 
@@ -118,6 +121,7 @@ export async function PUT(
     }
 
     loadCoreSkills();
+    loadCustomSkills();
     const registry = getSkillRegistry();
     const skill = registry.getSkill(skillName);
 
@@ -209,7 +213,7 @@ export async function PUT(
       }
     }
 
-    // Update tools.ts if tools changed
+    // Update tools if changed
     if (tools && Array.isArray(tools)) {
       const toolsSrc = [
         "import type { ToolDefinition } from '@/lib/types';",
@@ -217,16 +221,42 @@ export async function PUT(
         `export const tools: ToolDefinition[] = ${JSON.stringify(tools, null, 2)};`,
         '',
       ].join('\n');
-
       fs.writeFileSync(path.join(resolvedDir, 'tools.ts'), toolsSrc, 'utf-8');
+
+      // Also update tools.js for runtime loading
+      const toolsJsSrc = `// Auto-generated from tools.ts\nexports.tools = ${JSON.stringify(tools, null, 2)};\n`;
+      fs.writeFileSync(path.join(resolvedDir, 'tools.js'), toolsJsSrc, 'utf-8');
 
       // Update in-memory tool definitions
       skill.toolDefinitions = tools;
     }
 
-    // Update handler.ts if handlerCode changed
+    // Update handler if changed — write .ts source and re-bundle to .js
     if (handlerCode && typeof handlerCode === 'string') {
-      fs.writeFileSync(path.join(resolvedDir, 'handler.ts'), handlerCode, 'utf-8');
+      const handlerTsPath = path.join(resolvedDir, 'handler.ts');
+      const handlerJsPath = path.join(resolvedDir, 'handler.js');
+      fs.writeFileSync(handlerTsPath, handlerCode, 'utf-8');
+
+      try {
+        const appRoot = process.cwd();
+        const esbuild = nodeRequire('esbuild') as {
+          buildSync: (opts: Record<string, unknown>) => { errors: { text: string }[] };
+        };
+        esbuild.buildSync({
+          entryPoints: [handlerTsPath],
+          outfile: handlerJsPath,
+          bundle: true,
+          platform: 'node',
+          target: 'node18',
+          format: 'cjs',
+          alias: { '@': appRoot },
+          external: ['fs', 'fs/promises', 'path', 'os', 'child_process', 'crypto', 'stream',
+            'http', 'https', 'url', 'util', 'events', 'buffer', 'net', 'tls'],
+          logLevel: 'warning',
+        });
+      } catch (err) {
+        console.warn(`[Skills API] Failed to re-bundle handler for ${skillName}:`, err instanceof Error ? err.message : err);
+      }
     }
 
     return NextResponse.json({
@@ -272,6 +302,7 @@ export async function DELETE(
     }
 
     loadCoreSkills();
+    loadCustomSkills();
     const registry = getSkillRegistry();
     const skill = registry.getSkill(skillName);
 

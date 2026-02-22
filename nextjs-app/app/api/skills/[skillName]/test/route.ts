@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSkillRegistry } from '@/lib/skill-registry';
-import { loadCoreSkills } from '@/lib/skill-loader';
+import { loadCoreSkills, loadCustomSkills } from '@/lib/skill-loader';
 import type { ToolCall } from '@/lib/types';
 import type { SkillHandlerContext } from '@/lib/skill-handler';
 import { MemoryClient } from '@/lib/memory-client';
@@ -25,6 +25,7 @@ export async function POST(
     }
 
     loadCoreSkills();
+    loadCustomSkills();
     const registry = getSkillRegistry();
     const skill = registry.getSkill(skillName);
 

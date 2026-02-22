@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   ArrowLeft,
   Blocks,
@@ -22,12 +22,25 @@ type FilterType = 'all' | 'core' | 'custom' | 'external';
 
 export default function SkillsPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [reloading, setReloading] = useState(false);
   const [selectedSkill, setSelectedSkill] = useState<string | null>(null);
   const [creatorOpen, setCreatorOpen] = useState(false);
+  const [editSkillName, setEditSkillName] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+
+  // Handle ?edit= query parameter
+  useEffect(() => {
+    const editParam = searchParams.get('edit');
+    if (editParam) {
+      setEditSkillName(editParam);
+      setCreatorOpen(true);
+      // Clear the query param from URL without navigation
+      router.replace('/skills', { scroll: false });
+    }
+  }, [searchParams, router]);
   const [filterType, setFilterType] = useState<FilterType>('all');
 
   const fetchSkills = useCallback(async (silent = false) => {
@@ -251,8 +264,9 @@ export default function SkillsPage() {
       {/* Creator dialog */}
       <SkillCreator
         open={creatorOpen}
-        onOpenChange={setCreatorOpen}
+        onOpenChange={(v) => { setCreatorOpen(v); if (!v) setEditSkillName(null); }}
         onCreated={handleCreated}
+        editSkillName={editSkillName}
       />
     </div>
   );

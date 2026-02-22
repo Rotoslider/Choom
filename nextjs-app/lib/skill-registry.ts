@@ -7,10 +7,10 @@ import * as path from 'path';
 import type { ToolDefinition } from './types';
 import type { SkillMetadata, LoadedSkill, BaseSkillHandler } from './skill-handler';
 
-// Dynamic require that bypasses Turbopack's static module resolution.
-// The indirect eval prevents Turbopack from analyzing the require() call.
-// eslint-disable-next-line @typescript-eslint/no-implied-eval, no-new-func
-const dynamicRequire = new Function('p', 'return require(p)') as (path: string) => Record<string, unknown>;
+// createRequire for loading custom skill files at runtime.
+// Turbopack compiles server code as ESM where bare `require` is not defined.
+import { createRequire } from 'module';
+const nodeRequire = createRequire(import.meta.url || __filename);
 
 // ============================================================================
 // Skill Registry Singleton
@@ -175,11 +175,19 @@ export class SkillRegistry {
     const toolsPath = path.join(skillPath, 'tools.ts');
     if (fs.existsSync(toolsJsPath)) {
       try {
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const toolsModule = dynamicRequire(toolsJsPath) as { tools?: ToolDefinition[]; default?: ToolDefinition[] };
-        toolDefinitions = toolsModule.tools || toolsModule.default || [];
+        // For custom/external skills outside the project tree, nodeRequire fails
+        // under Turbopack. Read the file and parse the JSON array directly.
+        const toolsSrc = fs.readFileSync(toolsJsPath, 'utf-8');
+        const jsonMatch = toolsSrc.match(/=\s*(\[[\s\S]*\])\s*;?\s*$/);
+        if (jsonMatch) {
+          toolDefinitions = JSON.parse(jsonMatch[1]) as ToolDefinition[];
+        } else {
+          // Fallback to nodeRequire for in-project files
+          const toolsModule = nodeRequire(toolsJsPath) as { tools?: ToolDefinition[]; default?: ToolDefinition[] };
+          toolDefinitions = toolsModule.tools || toolsModule.default || [];
+        }
       } catch (err) {
-        console.warn(`[SkillRegistry] Cannot require ${toolsJsPath}:`, err instanceof Error ? err.message : err);
+        console.warn(`[SkillRegistry] Cannot load ${toolsJsPath}:`, err instanceof Error ? err.message : err);
       }
     } else if (fs.existsSync(toolsPath)) {
       try {
@@ -190,37 +198,62 @@ export class SkillRegistry {
       }
     }
 
-    // Load handler — prefer .js (transpiled) over .ts (needs build-time compilation)
-    let handler: BaseSkillHandler | null = null;
+    // Create a lazy handler that defers require() to first actual use.
+    // At load time, nodeRequire fails for files outside the project tree
+    // because Turbopack can't resolve their transitive .ts imports.
+    // At request time, the runtime is fully active and can resolve them.
     const handlerJsPath = path.join(skillPath, 'handler.js');
-    const handlerPath = path.join(skillPath, 'handler.ts');
-    if (fs.existsSync(handlerJsPath)) {
-      try {
-        // Use require for CJS .js files (custom/external skills transpiled by esbuild)
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const handlerModule = dynamicRequire(handlerJsPath);
-        const HandlerClass = handlerModule.default || Object.values(handlerModule).find(
-          (v: unknown) => typeof v === 'function' && (v as { prototype: Record<string, unknown> }).prototype?.execute
-        );
-        if (HandlerClass && typeof HandlerClass === 'function') {
-          handler = new (HandlerClass as new () => BaseSkillHandler)();
+    const handlerTsPath = path.join(skillPath, 'handler.ts');
+    const hasHandlerJs = fs.existsSync(handlerJsPath);
+    const hasHandlerTs = fs.existsSync(handlerTsPath);
+    const skillToolNames = metadata.tools;
+    const skillName = metadata.name;
+    let cachedHandler: BaseSkillHandler | null = null;
+
+    const handler: BaseSkillHandler = {
+      canHandle: (toolName: string) => skillToolNames.includes(toolName),
+      execute: async (toolCall, ctx) => {
+        // Lazy-load on first call
+        if (!cachedHandler) {
+          if (hasHandlerJs) {
+            try {
+              const handlerModule = nodeRequire(handlerJsPath);
+              const HandlerClass = handlerModule.default || Object.values(handlerModule).find(
+                (v: unknown) => typeof v === 'function' && (v as { prototype: Record<string, unknown> }).prototype?.execute
+              );
+              if (HandlerClass && typeof HandlerClass === 'function') {
+                cachedHandler = new (HandlerClass as new () => BaseSkillHandler)();
+                console.log(`[SkillRegistry] Lazy-loaded handler for ${skillName}`);
+              }
+            } catch (err) {
+              console.warn(`[SkillRegistry] Cannot lazy-load handler.js for ${skillName}:`, err instanceof Error ? err.message : err);
+            }
+          } else if (hasHandlerTs) {
+            try {
+              const handlerModule = await import(/* webpackIgnore: true */ handlerTsPath);
+              const HandlerClass = handlerModule.default || Object.values(handlerModule).find(
+                (v: unknown) => typeof v === 'function' && (v as { prototype: Record<string, unknown> }).prototype?.execute
+              );
+              if (HandlerClass && typeof HandlerClass === 'function') {
+                cachedHandler = new (HandlerClass as new () => BaseSkillHandler)();
+                console.log(`[SkillRegistry] Lazy-loaded handler.ts for ${skillName}`);
+              }
+            } catch (err) {
+              console.warn(`[SkillRegistry] Cannot lazy-load handler.ts for ${skillName}:`, err instanceof Error ? err.message : err);
+            }
+          }
         }
-      } catch (err) {
-        console.warn(`[SkillRegistry] Cannot require handler from ${handlerJsPath}:`, err instanceof Error ? err.message : err);
-      }
-    } else if (fs.existsSync(handlerPath)) {
-      try {
-        const handlerModule = await import(/* webpackIgnore: true */ handlerPath);
-        const HandlerClass = handlerModule.default || Object.values(handlerModule).find(
-          (v: unknown) => typeof v === 'function' && (v as { prototype: Record<string, unknown> }).prototype?.execute
-        );
-        if (HandlerClass && typeof HandlerClass === 'function') {
-          handler = new (HandlerClass as new () => BaseSkillHandler)();
+        if (cachedHandler) {
+          return cachedHandler.execute(toolCall, ctx);
         }
-      } catch {
-        console.warn(`[SkillRegistry] Cannot import handler from ${handlerPath} — handler will be loaded via pre-registration`);
-      }
-    }
+        return {
+          toolCallId: toolCall.id,
+          name: toolCall.name,
+          result: null,
+          error: `Handler for skill "${skillName}" could not be loaded.`,
+        };
+      },
+    } as BaseSkillHandler;
 
     // Build loaded skill
     const skill: LoadedSkill = {

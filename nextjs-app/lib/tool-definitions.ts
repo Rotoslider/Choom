@@ -1251,16 +1251,17 @@ export function getToolsByCategory(
 // This function initializes the registry and returns all skill-based tools.
 // ============================================================================
 
-import { loadCoreSkills } from './skill-loader';
+import { loadCoreSkills, loadCustomSkills } from './skill-loader';
 import { getSkillRegistry } from './skill-registry';
 
 /**
  * Get all tool definitions from the skill registry.
- * Loads core skills on first call. Returns the same array format as allTools.
+ * Loads core + custom skills on first call. Returns the same array format as allTools.
  * Used by route.ts when USE_SKILL_DISPATCH=true.
  */
 export function getAllToolsFromSkills(): ToolDefinition[] {
   loadCoreSkills();
+  loadCustomSkills();
   return getSkillRegistry().getAllToolDefinitions();
 }
 
