@@ -28,7 +28,7 @@ import {
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Separator } from '@/components/ui/separator';
-import type { Choom, LoraConfig, ImageModeSettings, ImageSize, ImageAspect } from '@/lib/types';
+import type { Choom, LoraConfig, ImageModeSettings, ImageSize, ImageAspect, LLMProviderConfig } from '@/lib/types';
 import { IMAGE_SIZES, IMAGE_ASPECTS, computeImageDimensions } from '@/lib/types';
 import { Switch } from '@/components/ui/switch';
 import { useAppStore } from '@/lib/store';
@@ -543,6 +543,7 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave }: ChoomEditP
   const [voiceId, setVoiceId] = useState('');
   const [llmModel, setLlmModel] = useState('');
   const [llmEndpoint, setLlmEndpoint] = useState('');
+  const [llmProviderId, setLlmProviderId] = useState('');
 
   // Image settings - now with two modes
   const [generalSettings, setGeneralSettings] = useState<ImageModeSettings>({ ...emptyModeSettings });
@@ -572,6 +573,7 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave }: ChoomEditP
       setVoiceId(choom.voiceId || '');
       setLlmModel(choom.llmModel || '');
       setLlmEndpoint(choom.llmEndpoint || '');
+      setLlmProviderId(choom.llmProviderId || '');
 
       // Parse image settings
       const imgSettings = choom.imageSettings;
@@ -585,24 +587,40 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave }: ChoomEditP
     }
   }, [choom]);
 
+  // Fetch local models from the actual LM Studio endpoint.
+  // Accepts an optional override so callers can pass the correct endpoint
+  // immediately after a state change (React batches setState, so reading
+  // `llmEndpoint` inside the same event handler would return the OLD value).
+  const fetchLocalModels = async (endpointOverride?: string) => {
+    try {
+      const ep = endpointOverride || llmEndpoint || settings.llm.endpoint;
+      const res = await fetch(`/api/services/models?endpoint=${encodeURIComponent(ep)}`);
+      if (res.ok) {
+        const data = await res.json();
+        const seen = new Set<string>();
+        setModels((data.models || []).filter((m: ModelOption) => {
+          if (seen.has(m.id)) return false;
+          seen.add(m.id);
+          return true;
+        }));
+      }
+    } catch (error) {
+      console.error('Failed to fetch local models:', error);
+    }
+  };
+
   // Fetch options from services
   const fetchOptions = async () => {
     setIsLoadingOptions(true);
     try {
-      const llmEndpointParam = encodeURIComponent(settings.llm.endpoint);
       const ttsEndpointParam = encodeURIComponent(settings.tts.endpoint);
       const imageGenEndpointParam = encodeURIComponent(settings.imageGen.endpoint);
 
       const [modelsRes, voicesRes, checkpointsRes] = await Promise.allSettled([
-        fetch(`/api/services/models?endpoint=${llmEndpointParam}`),
+        fetchLocalModels(settings.llm.endpoint),
         fetch(`/api/services/voices?endpoint=${ttsEndpointParam}`),
         fetch(`/api/services/checkpoints?endpoint=${imageGenEndpointParam}`),
       ]);
-
-      if (modelsRes.status === 'fulfilled' && modelsRes.value.ok) {
-        const data = await modelsRes.value.json();
-        setModels(data.models || []);
-      }
 
       if (voicesRes.status === 'fulfilled' && voicesRes.value.ok) {
         const data = await voicesRes.value.json();
@@ -675,6 +693,7 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave }: ChoomEditP
         voiceId: voiceId || null,
         llmModel: llmModel || null,
         llmEndpoint: llmEndpoint || null,
+        llmProviderId: llmProviderId || null,
         imageSettings: (cleanedGeneral || selfPortraitWithCharacter) ? {
           general: cleanedGeneral,
           selfPortrait: selfPortraitWithCharacter,
@@ -868,23 +887,83 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave }: ChoomEditP
                   )}
                 </div>
                 <Separator />
-                <div>
-                  <h4 className="text-sm font-medium mb-4">LLM Model</h4>
-                  {models.length > 0 ? (
-                    <Select value={llmModel || '__default__'} onValueChange={(v) => setLlmModel(v === '__default__' ? '' : v)}>
-                      <SelectTrigger><SelectValue placeholder="Use default model" /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="__default__">Use default model</SelectItem>
-                        {models.map((model) => <SelectItem key={model.id} value={model.id}>{model.name}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
-                  ) : (
-                    <Input value={llmModel} onChange={(e) => setLlmModel(e.target.value)} placeholder="Leave empty to use default" />
-                  )}
-                  <div className="mt-4 space-y-2">
-                    <label className="text-sm font-medium">Endpoint Override</label>
-                    <Input value={llmEndpoint} onChange={(e) => setLlmEndpoint(e.target.value)} placeholder="Leave empty to use default" />
+                <div className="space-y-4">
+                  <h4 className="text-sm font-medium">LLM Provider</h4>
+                  <Select
+                    value={llmProviderId || '_local'}
+                    onValueChange={(v) => {
+                      if (v === '_local') {
+                        setLlmProviderId('');
+                        setLlmEndpoint('');
+                        setLlmModel('');
+                        // Pass the local endpoint directly — state hasn't updated yet
+                        fetchLocalModels(settings.llm.endpoint);
+                      } else {
+                        const provider = (settings.providers || []).find((p: LLMProviderConfig) => p.id === v);
+                        setLlmProviderId(v);
+                        setLlmEndpoint(provider?.endpoint || '');
+                        setLlmModel(provider?.models?.[0] || '');
+                      }
+                    }}
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="_local">Local (LM Studio / Ollama)</SelectItem>
+                      {(settings.providers || []).map((p: LLMProviderConfig) => (
+                        <SelectItem key={p.id} value={p.id}>
+                          {p.name}
+                          <span className="ml-2 text-xs text-muted-foreground">({p.type})</span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Model</label>
+                    {(() => {
+                      const selectedProvider = (settings.providers || []).find((p: LLMProviderConfig) => p.id === llmProviderId);
+                      if (selectedProvider && selectedProvider.models.length > 0) {
+                        // Provider model dropdown
+                        return (
+                          <Select value={llmModel || '_default'} onValueChange={(v) => setLlmModel(v === '_default' ? '' : v)}>
+                            <SelectTrigger><SelectValue placeholder="Select model" /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="_default">Default ({selectedProvider.models[0]})</SelectItem>
+                              {selectedProvider.models.map((m: string) => (
+                                <SelectItem key={m} value={m}>{m}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        );
+                      }
+                      // Local models dropdown or text input
+                      return models.length > 0 ? (
+                        <Select value={llmModel || '__default__'} onValueChange={(v) => setLlmModel(v === '__default__' ? '' : v)}>
+                          <SelectTrigger><SelectValue placeholder="Use default model" /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="__default__">Use default model</SelectItem>
+                            {models.map((model) => <SelectItem key={model.id} value={model.id}>{model.name}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <Input value={llmModel} onChange={(e) => setLlmModel(e.target.value)} placeholder="Leave empty to use default" />
+                      );
+                    })()}
                   </div>
+
+                  {/* Show endpoint (read-only for providers, editable for local) */}
+                  {llmProviderId ? (
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">Endpoint</label>
+                      <Input value={llmEndpoint} disabled className="text-sm text-muted-foreground" />
+                      <p className="text-xs text-muted-foreground">Set by provider — edit in Settings &gt; Providers</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">Endpoint Override</label>
+                      <Input value={llmEndpoint} onChange={(e) => setLlmEndpoint(e.target.value)} placeholder="Leave empty to use default" />
+                    </div>
+                  )}
                 </div>
               </TabsContent>
 

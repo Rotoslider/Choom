@@ -241,6 +241,11 @@ class ChoomClient:
         if ha_cfg and ha_cfg.get("baseUrl") and ha_cfg.get("accessToken"):
             default_settings["homeAssistant"] = ha_cfg
 
+        # Pass providers so chat route can resolve per-Choom/project provider API keys
+        providers_cfg = bridge_cfg.get("providers", [])
+        if providers_cfg:
+            default_settings["providers"] = providers_cfg
+
         # Merge with any provided settings
         if settings:
             for key, value in settings.items():

@@ -4,6 +4,8 @@ import type {
   AppSettings,
   HomeAssistantSettings,
   LLMProviderConfig,
+  LLMModelProfile,
+  VisionModelProfile,
   ServiceHealth,
   ServiceStatus,
   UIState,
@@ -203,6 +205,8 @@ interface AppState {
   updateVisionSettings: (settings: Partial<AppSettings['vision']>) => void;
   updateHomeAssistantSettings: (ha: Partial<HomeAssistantSettings>) => void;
   updateProvidersSettings: (providers: LLMProviderConfig[]) => void;
+  updateModelProfiles: (profiles: LLMModelProfile[]) => void;
+  updateVisionProfiles: (profiles: VisionModelProfile[]) => void;
   resetSettings: () => void;
 
   // Actions - Streaming
@@ -447,6 +451,18 @@ export const useAppStore = create<AppState>()(
         }));
         syncSettingsToBridgeConfig(get().settings);
       },
+      updateModelProfiles: (modelProfiles) => {
+        set((state) => ({
+          settings: { ...state.settings, modelProfiles },
+        }));
+        syncSettingsToBridgeConfig(get().settings);
+      },
+      updateVisionProfiles: (visionProfiles) => {
+        set((state) => ({
+          settings: { ...state.settings, visionProfiles },
+        }));
+        syncSettingsToBridgeConfig(get().settings);
+      },
       resetSettings: () => set({ settings: defaultSettings }),
 
       // Streaming actions
@@ -487,6 +503,7 @@ export const useAppStore = create<AppState>()(
         // Deep merge settings: default values are base, persisted values override per-section
         const mergedSettings: AppSettings = { ...defaultSettings };
         if (persistedSettings) {
+          // Merge keys that exist in defaults (nested objects get shallow-merged)
           for (const key of Object.keys(defaultSettings) as (keyof AppSettings)[]) {
             const dv = defaultSettings[key];
             const pv = persistedSettings[key];
@@ -496,6 +513,10 @@ export const useAppStore = create<AppState>()(
               (mergedSettings as unknown as Record<string, unknown>)[key] = pv;
             }
           }
+          // Preserve optional top-level arrays not in defaults (providers, modelProfiles, visionProfiles)
+          if (persistedSettings.providers) mergedSettings.providers = persistedSettings.providers;
+          if (persistedSettings.modelProfiles) mergedSettings.modelProfiles = persistedSettings.modelProfiles;
+          if (persistedSettings.visionProfiles) mergedSettings.visionProfiles = persistedSettings.visionProfiles;
         }
         // Deep merge UI state
         const persistedUI = persisted.ui as Partial<UIState> | undefined;

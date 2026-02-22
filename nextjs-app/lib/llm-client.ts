@@ -27,6 +27,10 @@ export interface ChatCompletionRequest {
   frequency_penalty?: number;
   presence_penalty?: number;
   stream?: boolean;
+  // Extended params (provider-specific)
+  top_k?: number;
+  repetition_penalty?: number;
+  chat_template_kwargs?: Record<string, unknown>;
 }
 
 export interface ChatCompletionChunk {
@@ -69,9 +73,16 @@ export class LLMClient {
   ): AsyncGenerator<ChatCompletionChunk, void, unknown> {
     const url = ensureEndpoint(this.endpoint, '/chat/completions');
 
+    // Sanitize messages: some APIs (Mistral, etc.) reject assistant messages
+    // with empty content and no tool_calls. Filter these out.
+    const sanitizedMessages = messages.filter(m => {
+      if (m.role === 'assistant' && !m.content && !m.tool_calls?.length) return false;
+      return true;
+    });
+
     const body: ChatCompletionRequest = {
       model: this.settings.model,
-      messages,
+      messages: sanitizedMessages,
       temperature: this.settings.temperature,
       max_tokens: this.settings.maxTokens,
       top_p: this.settings.topP,
@@ -79,6 +90,13 @@ export class LLMClient {
       presence_penalty: this.settings.presencePenalty,
       stream: true,
     };
+
+    // Extended params (provider-specific, only sent when present)
+    if (this.settings.topK !== undefined) body.top_k = this.settings.topK;
+    if (this.settings.repetitionPenalty !== undefined) body.repetition_penalty = this.settings.repetitionPenalty;
+    if (this.settings.enableThinking !== undefined) {
+      body.chat_template_kwargs = { enable_thinking: this.settings.enableThinking };
+    }
 
     if (tools && tools.length > 0) {
       body.tools = tools.map((t) => ({
@@ -154,6 +172,13 @@ export class LLMClient {
       presence_penalty: this.settings.presencePenalty,
       stream: false,
     };
+
+    // Extended params (provider-specific, only sent when present)
+    if (this.settings.topK !== undefined) body.top_k = this.settings.topK;
+    if (this.settings.repetitionPenalty !== undefined) body.repetition_penalty = this.settings.repetitionPenalty;
+    if (this.settings.enableThinking !== undefined) {
+      body.chat_template_kwargs = { enable_thinking: this.settings.enableThinking };
+    }
 
     if (tools && tools.length > 0) {
       body.tools = tools.map((t) => ({

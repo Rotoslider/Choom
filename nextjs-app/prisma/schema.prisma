@@ -18,6 +18,7 @@ model Choom {
   voiceId       String?   // TTS voice ID (per-Choom)
   llmModel      String?   // LLM model override (per-Choom)
   llmEndpoint   String?   // Optional LLM endpoint override
+  llmProviderId String?   // External provider ID (references settings.providers[])
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
   chats         Chat[]

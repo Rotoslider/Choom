@@ -9,7 +9,8 @@ import { WebSearchService } from '@/lib/web-search';
 import { WorkspaceService } from '@/lib/workspace-service';
 import { VisionService } from '@/lib/vision-service';
 import { ProjectService } from '@/lib/project-service';
-import type { VisionSettings, LLMProviderConfig } from '@/lib/types';
+import type { VisionSettings, LLMProviderConfig, LLMModelProfile, VisionModelProfile } from '@/lib/types';
+import { findLLMProfile, findVisionProfile } from '@/lib/model-profiles';
 import { allTools, memoryTools, getAllToolsFromSkills, useSkillDispatch } from '@/lib/tool-definitions';
 import { loadCoreSkills, loadCustomSkills } from '@/lib/skill-loader';
 import { getSkillRegistry } from '@/lib/skill-registry';
@@ -1964,12 +1965,55 @@ async function executeToolCall(
   // Vision analysis (Optic)
   if (toolCall.name === 'analyze_image') {
     try {
+      const visionProviderId = (settings?.vision as Record<string, unknown>)?.visionProviderId as string | undefined;
+      let visionApiKey = (settings?.vision as Record<string, unknown>)?.apiKey as string | undefined;
+      let visionEndpoint = (settings?.vision as Record<string, unknown>)?.endpoint as string || process.env.VISION_ENDPOINT || 'http://localhost:1234';
+      // Resolve providers: prefer client-sent, fall back to bridge-config.json
+      let visionProviders: LLMProviderConfig[] = (settings?.providers as LLMProviderConfig[]) || [];
+      if (visionProviders.length === 0) {
+        try {
+          const fs = await import('fs');
+          const path = await import('path');
+          const bridgePath = path.join(process.cwd(), 'services', 'signal-bridge', 'bridge-config.json');
+          if (fs.existsSync(bridgePath)) {
+            const bridgeCfg = JSON.parse(fs.readFileSync(bridgePath, 'utf-8'));
+            visionProviders = (bridgeCfg.providers || []) as LLMProviderConfig[];
+          }
+        } catch { /* ignore */ }
+      }
+      if (visionProviderId && visionProviders.length > 0) {
+        const visionProvider = visionProviders.find(
+          (p: LLMProviderConfig) => p.id === visionProviderId
+        );
+        if (visionProvider?.apiKey) {
+          visionApiKey = visionProvider.apiKey;
+        }
+        if (visionProvider?.endpoint) {
+          // Use provider endpoint — strip /v1 suffix since VisionService adds it
+          visionEndpoint = visionProvider.endpoint.replace(/\/v1\/?$/, '');
+        }
+      }
+      const visionModel = (settings?.vision as Record<string, unknown>)?.model as string || 'vision-model';
       const visionSettings: VisionSettings = {
-        endpoint: (settings?.vision as Record<string, unknown>)?.endpoint as string || process.env.VISION_ENDPOINT || 'http://localhost:1234',
-        model: (settings?.vision as Record<string, unknown>)?.model as string || 'vision-model',
+        endpoint: visionEndpoint,
+        model: visionModel,
         maxTokens: (settings?.vision as Record<string, unknown>)?.maxTokens as number || 1024,
         temperature: (settings?.vision as Record<string, unknown>)?.temperature as number || 0.3,
+        apiKey: visionApiKey,
       };
+
+      // Apply vision profile if available
+      const userVisionProfiles = (settings?.visionProfiles as VisionModelProfile[]) || [];
+      const visionProfile = findVisionProfile(visionModel, userVisionProfiles);
+      let visionMaxDimension: number | undefined;
+      let visionMaxSizeBytes: number | undefined;
+      if (visionProfile) {
+        if (visionProfile.maxTokens !== undefined) visionSettings.maxTokens = visionProfile.maxTokens;
+        if (visionProfile.temperature !== undefined) visionSettings.temperature = visionProfile.temperature;
+        visionMaxDimension = visionProfile.maxImageDimension;
+        visionMaxSizeBytes = visionProfile.maxImageSizeBytes;
+        console.log(`   👁️  Vision profile applied: "${visionProfile.label || visionProfile.modelId}" (maxDim=${visionMaxDimension}, maxSize=${visionMaxSizeBytes ? Math.round(visionMaxSizeBytes / 1024 / 1024) + 'MB' : 'default'})`);
+      }
 
       // If image_id is provided, look up the generated image from the database
       let imageBase64 = toolCall.arguments.image_base64 as string | undefined;
@@ -1995,7 +2039,11 @@ async function executeToolCall(
         }
       }
 
-      const visionService = new VisionService(visionSettings);
+      const visionService = new VisionService({
+        ...visionSettings,
+        maxImageDimension: visionMaxDimension,
+        maxImageSizeBytes: visionMaxSizeBytes,
+      });
       const result = await visionService.analyzeImage({
         prompt: toolCall.arguments.prompt as string,
         imagePath: toolCall.arguments.image_path as string | undefined,
@@ -2329,7 +2377,7 @@ export async function POST(request: NextRequest) {
     console.log(`\n⚙️  Settings Hierarchy for "${choom.name}":`);
     console.log(`   Layer 1 (defaults): model=${defaultLLMSettings.model}, endpoint=${defaultLLMSettings.endpoint}`);
     console.log(`   Layer 2 (settings panel): model=${clientLLMSettings.model || '(not set)'}, endpoint=${clientLLMSettings.endpoint || '(not set)'}`);
-    console.log(`   Layer 3 (Choom DB): llmModel=${choom.llmModel || '(not set)'}, llmEndpoint=${choom.llmEndpoint || '(not set)'}`);
+    console.log(`   Layer 3 (Choom DB): llmModel=${choom.llmModel || '(not set)'}, llmEndpoint=${choom.llmEndpoint || '(not set)'}, llmProviderId=${choom.llmProviderId || '(not set)'}`);
     console.log(`   ✅ RESOLVED: model=${llmSettings.model}, endpoint=${llmSettings.endpoint}`);
     if (choom.imageSettings) {
       try {
@@ -2344,6 +2392,71 @@ export async function POST(request: NextRequest) {
     const memoryEndpoint = settings?.memory?.endpoint || DEFAULT_MEMORY_ENDPOINT;
 
     let llmClient: { streamChat: LLMClient['streamChat'] } = new LLMClient(llmSettings);
+
+    // Resolve providers: prefer client-sent, fall back to bridge-config.json
+    let providers: LLMProviderConfig[] = (settings?.providers as LLMProviderConfig[]) || [];
+    if (providers.length === 0) {
+      try {
+        const fs = await import('fs');
+        const path = await import('path');
+        const bridgePath = path.join(process.cwd(), 'services', 'signal-bridge', 'bridge-config.json');
+        if (fs.existsSync(bridgePath)) {
+          const bridgeCfg = JSON.parse(fs.readFileSync(bridgePath, 'utf-8'));
+          providers = (bridgeCfg.providers || []) as LLMProviderConfig[];
+          if (providers.length > 0) {
+            console.log(`   📂 Loaded ${providers.length} providers from bridge-config.json (not sent by client)`);
+          }
+        }
+      } catch { /* ignore */ }
+    }
+    // Layer 2b: Global provider override (if LLM settings have a provider selected)
+    const globalProviderId = (clientLLMSettings as Record<string, unknown>)?.llmProviderId as string | undefined;
+    if (globalProviderId && providers.length > 0) {
+      const globalProvider = providers.find(
+        (p: LLMProviderConfig) => p.id === globalProviderId
+      );
+      if (globalProvider && globalProvider.apiKey) {
+        const providerSettings: LLMSettings = {
+          ...llmSettings,
+          endpoint: globalProvider.endpoint,
+        };
+        if (globalProvider.type === 'anthropic') {
+          const { AnthropicClient } = await import('@/lib/anthropic-client');
+          llmClient = new AnthropicClient(providerSettings, globalProvider.apiKey, globalProvider.endpoint);
+          console.log(`   🔌 Layer 2b (global provider): ${globalProvider.name} (anthropic) model=${llmSettings.model}`);
+        } else {
+          llmClient = new LLMClient(providerSettings, globalProvider.apiKey);
+          console.log(`   🔌 Layer 2b (global provider): ${globalProvider.name} (openai) model=${llmSettings.model}`);
+        }
+        llmSettings.endpoint = globalProvider.endpoint;
+      }
+    }
+
+    // Layer 3b: Choom-level provider override (if Choom has a provider assigned)
+    if (choom.llmProviderId && providers.length > 0) {
+      const choomProvider = providers.find(
+        (p: LLMProviderConfig) => p.id === choom.llmProviderId
+      );
+      if (choomProvider && choomProvider.apiKey) {
+        const choomModel = choom.llmModel || choomProvider.models[0] || llmSettings.model;
+        const providerSettings: LLMSettings = {
+          ...llmSettings,
+          endpoint: choomProvider.endpoint,
+          model: choomModel,
+        };
+
+        if (choomProvider.type === 'anthropic') {
+          const { AnthropicClient } = await import('@/lib/anthropic-client');
+          llmClient = new AnthropicClient(providerSettings, choomProvider.apiKey, choomProvider.endpoint);
+          console.log(`   🔌 Layer 3b (Choom provider): ${choomProvider.name} (anthropic) model=${choomModel}`);
+        } else {
+          llmClient = new LLMClient(providerSettings, choomProvider.apiKey);
+          console.log(`   🔌 Layer 3b (Choom provider): ${choomProvider.name} (openai) model=${choomModel}`);
+        }
+        llmSettings.model = choomModel;
+        llmSettings.endpoint = choomProvider.endpoint;
+      }
+    }
     const memoryClient = new MemoryClient(memoryEndpoint);
 
     // Use companionId for memory operations (falls back to choomId if not set)
@@ -2667,8 +2780,8 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
     } catch { /* ignore project detection errors */ }
 
     // Layer 4: Per-project LLM provider override
-    if (detectedProject?.metadata?.llmProviderId && settings?.providers) {
-      const provider = (settings.providers as LLMProviderConfig[]).find(
+    if (detectedProject?.metadata?.llmProviderId && providers.length > 0) {
+      const provider = providers.find(
         (p: LLMProviderConfig) => p.id === detectedProject!.metadata.llmProviderId
       );
       if (provider && provider.apiKey) {
@@ -2690,6 +2803,45 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
         }
         llmSettings.model = projectModel;
         llmSettings.endpoint = provider.endpoint;
+      }
+    }
+
+    // Profile application: apply per-model parameter profile if resolved model differs from global default
+    const globalModel = (clientLLMSettings as Record<string, unknown>)?.model as string || defaultLLMSettings.model;
+    if (llmSettings.model !== globalModel) {
+      const userProfiles = (settings?.modelProfiles as LLMModelProfile[]) || [];
+      const profile = findLLMProfile(llmSettings.model, userProfiles);
+      if (profile) {
+        // Apply profile params to llmSettings (only fields that are defined in the profile)
+        if (profile.temperature !== undefined) llmSettings.temperature = profile.temperature;
+        if (profile.topP !== undefined) llmSettings.topP = profile.topP;
+        if (profile.maxTokens !== undefined) llmSettings.maxTokens = profile.maxTokens;
+        if (profile.contextLength !== undefined) llmSettings.contextLength = profile.contextLength;
+        if (profile.frequencyPenalty !== undefined) llmSettings.frequencyPenalty = profile.frequencyPenalty;
+        if (profile.presencePenalty !== undefined) llmSettings.presencePenalty = profile.presencePenalty;
+        if (profile.topK !== undefined) llmSettings.topK = profile.topK;
+        if (profile.repetitionPenalty !== undefined) llmSettings.repetitionPenalty = profile.repetitionPenalty;
+        if (profile.enableThinking !== undefined) llmSettings.enableThinking = profile.enableThinking;
+
+        // Reconstruct llmClient with updated settings
+        // Re-check which provider type is active to use the right client class
+        const activeProviderId = choom.llmProviderId
+          || detectedProject?.metadata?.llmProviderId
+          || globalProviderId;
+        const activeProvider = activeProviderId && providers.length > 0
+          ? providers.find((p: LLMProviderConfig) => p.id === activeProviderId)
+          : null;
+
+        if (activeProvider?.type === 'anthropic' && activeProvider.apiKey) {
+          const { AnthropicClient } = await import('@/lib/anthropic-client');
+          llmClient = new AnthropicClient(llmSettings, activeProvider.apiKey, activeProvider.endpoint);
+        } else if (activeProvider?.apiKey) {
+          llmClient = new LLMClient(llmSettings, activeProvider.apiKey);
+        } else {
+          llmClient = new LLMClient(llmSettings);
+        }
+
+        console.log(`   📋 Model profile applied: "${profile.label || profile.modelId}" (temp=${profile.temperature}, topP=${profile.topP}, maxTokens=${profile.maxTokens}${profile.topK !== undefined ? `, topK=${profile.topK}` : ''}${profile.enableThinking !== undefined ? `, thinking=${profile.enableThinking}` : ''})`);
       }
     }
 

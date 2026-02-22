@@ -15,6 +15,7 @@ export interface Choom {
   voiceId: string | null;
   llmModel: string | null;
   llmEndpoint: string | null;
+  llmProviderId: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -76,6 +77,8 @@ export interface VisionSettings {
   model: string;       // vision model name
   maxTokens: number;   // default: 1024
   temperature: number; // default: 0.3
+  visionProviderId?: string; // Provider for vision (references settings.providers[])
+  apiKey?: string;     // API key (resolved from provider or manual)
 }
 
 export interface LLMProviderConfig {
@@ -85,6 +88,35 @@ export interface LLMProviderConfig {
   endpoint: string;        // API base URL
   apiKey?: string;         // API key
   models: string[];        // Available model names
+}
+
+export interface LLMModelProfile {
+  modelId: string;           // e.g. "qwen/qwen3.5-397b-a17b"
+  label?: string;            // e.g. "Qwen 3.5 397B"
+  builtIn?: boolean;         // shipped defaults (can override, can't delete)
+  // Standard params
+  temperature?: number;
+  topP?: number;
+  maxTokens?: number;
+  contextLength?: number;
+  frequencyPenalty?: number;
+  presencePenalty?: number;
+  // Extended params (NVIDIA/provider-specific)
+  topK?: number;
+  repetitionPenalty?: number;
+  enableThinking?: boolean;
+}
+
+export interface VisionModelProfile {
+  modelId: string;
+  label?: string;
+  builtIn?: boolean;
+  maxTokens?: number;
+  temperature?: number;
+  maxImageDimension?: number;      // replaces hardcoded 768
+  maxImageSizeBytes?: number;      // replaces hardcoded 10MB
+  supportedFormats?: string[];     // e.g. ['png', 'jpeg', 'webp']
+  outputFormat?: string;           // convert to before sending
 }
 
 export interface AppSettings {
@@ -99,6 +131,8 @@ export interface AppSettings {
   vision: VisionSettings;
   homeAssistant: HomeAssistantSettings;
   providers?: LLMProviderConfig[];
+  modelProfiles?: LLMModelProfile[];
+  visionProfiles?: VisionModelProfile[];
 }
 
 export interface LLMSettings {
@@ -110,6 +144,11 @@ export interface LLMSettings {
   topP: number;
   frequencyPenalty: number;
   presencePenalty: number;
+  llmProviderId?: string;  // Global default provider (references settings.providers[])
+  // Extended params (provider-specific)
+  topK?: number;
+  repetitionPenalty?: number;
+  enableThinking?: boolean;
 }
 
 export interface TTSSettings {
