@@ -107,12 +107,13 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
         const promptLower = ((toolCall.arguments.prompt as string) || '').toLowerCase();
         const messageLower = message.toLowerCase();
         const selfiePatterns = [
-          /\bself[- ]?portrait\b/, /\bselfie\b/, /\bpicture of (?:me|you|yourself|myself)\b/,
-          /\bphoto of (?:me|you|yourself|myself)\b/, /\bimage of (?:me|you|yourself|myself)\b/,
-          /\bdraw (?:me|you|yourself|myself)\b/, /\bshow (?:me |)(?:you|yourself)\b/,
-          /\bwhat (?:do )?(?:you|i) look like\b/, /\byour (?:face|appearance|look)\b/,
+          /\bself[- ]?portrait\b/, /\bselfie\b/,
+          /\bpicture of (?:you|yourself)\b/, /\bphoto of (?:you|yourself)\b/,
+          /\bdraw (?:you|yourself)\b/, /\bshow me (?:you|yourself|what you look like)\b/,
+          /\bwhat (?:do )?you look like\b/, /\byour (?:face|appearance|look)\b/,
         ];
-        const isSelfieRequest = selfiePatterns.some(p => p.test(messageLower) || p.test(promptLower));
+        // Only check the user message, not the LLM-generated prompt (which may contain unrelated "image of" phrases)
+        const isSelfieRequest = selfiePatterns.some(p => p.test(messageLower));
         if (isSelfieRequest && choomImageSettings?.selfPortrait) {
           console.log(`   🔄 Self-portrait override: LLM said self_portrait=false but detected selfie request in prompt/message`);
           isSelfPortrait = true;
