@@ -420,13 +420,16 @@ Google services integration via OAuth2 with offline access. Token stored at `ser
 
 #### OAuth2 Setup
 
-Google tools require OAuth2 credentials with the following scopes: Calendar, Tasks, Sheets, Docs, Drive, Gmail, Contacts, YouTube.
+See **[GOOGLE-OAUTH-SETUP.md](GOOGLE-OAUTH-SETUP.md)** for the complete step-by-step guide (Google Cloud project, consent screen, GitHub Pages for branding, domain verification, publishing to production, and authorization).
 
-1. Create a Google Cloud project with the necessary APIs enabled (Calendar, Tasks, Sheets, Docs, Drive, **Gmail API**, **People API**, **YouTube Data API v3**)
-2. Create OAuth2 credentials (Desktop app) and save as `services/signal-bridge/google_auth/credentials.json`
-3. Run initial auth: `cd services/signal-bridge && python3 -c "from google_client import GoogleClient; GoogleClient()"`
-4. Follow the browser prompt to authorize
-5. Token is stored at `services/signal-bridge/google_auth/token.json` and auto-refreshes
+Quick reference:
+
+1. Create a Google Cloud project with APIs enabled (Calendar, Tasks, Sheets, Docs, Drive, Gmail, People, YouTube Data v3)
+2. Configure OAuth consent screen with GitHub Pages URLs for branding
+3. **Publish the app to production** (Testing mode expires tokens after 7 days)
+4. Create Desktop app credentials, save as `services/signal-bridge/google_auth/credentials.json`
+5. Run initial auth: `cd services/signal-bridge && python3 -c "from google_client import GoogleClient; GoogleClient()"`
+6. Token stored at `services/signal-bridge/google_auth/token.json` (auto-refreshes)
 
 **Re-auth** (if token expires or scopes change):
 ```bash
