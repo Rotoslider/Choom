@@ -5,9 +5,8 @@ import { SkillInstaller } from '@/lib/skill-installer';
 import { getSkillRegistry } from '@/lib/skill-registry';
 import { loadCoreSkills } from '@/lib/skill-loader';
 
-// Dynamic require that bypasses Turbopack's static module resolution
-// eslint-disable-next-line @typescript-eslint/no-implied-eval, no-new-func
-const dynamicRequire = new Function('p', 'return require(p)') as (path: string) => Record<string, unknown>;
+import { createRequire } from 'module';
+const nodeRequire = createRequire(import.meta.url || __filename);
 
 // ============================================================================
 // POST /api/skills/install — Install an external skill from a GitHub URL
@@ -110,7 +109,7 @@ export async function POST(request: NextRequest) {
     if (fs.existsSync(handlerTsPath) && !fs.existsSync(handlerJsPath)) {
       try {
         // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const esbuild = dynamicRequire('esbuild') as { transform: (code: string, opts: Record<string, string>) => Promise<{ code: string }> };
+        const esbuild = nodeRequire('esbuild') as { transform: (code: string, opts: Record<string, string>) => Promise<{ code: string }> };
         const handlerSrc = fs.readFileSync(handlerTsPath, 'utf-8');
         const result = await esbuild.transform(handlerSrc, {
           loader: 'ts',
@@ -130,7 +129,7 @@ export async function POST(request: NextRequest) {
     if (fs.existsSync(toolsTsPath) && !fs.existsSync(toolsJsPath)) {
       try {
         // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const esbuild = dynamicRequire('esbuild') as { transform: (code: string, opts: Record<string, string>) => Promise<{ code: string }> };
+        const esbuild = nodeRequire('esbuild') as { transform: (code: string, opts: Record<string, string>) => Promise<{ code: string }> };
         const toolsSrc = fs.readFileSync(toolsTsPath, 'utf-8');
         const result = await esbuild.transform(toolsSrc, {
           loader: 'ts',
@@ -160,7 +159,7 @@ export async function POST(request: NextRequest) {
     if (fs.existsSync(toolsJsPath)) {
       try {
         // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const toolsModule = dynamicRequire(toolsJsPath) as Record<string, unknown>;
+        const toolsModule = nodeRequire(toolsJsPath) as Record<string, unknown>;
         toolDefs = (toolsModule.tools || toolsModule.default || []) as typeof toolDefs;
       } catch {
         // will fall back to empty
@@ -171,7 +170,7 @@ export async function POST(request: NextRequest) {
     if (fs.existsSync(handlerJsPath)) {
       try {
         // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const handlerModule = dynamicRequire(handlerJsPath);
+        const handlerModule = nodeRequire(handlerJsPath);
         const HandlerClass = handlerModule.default || Object.values(handlerModule).find(
           (v: unknown) => typeof v === 'function' && (v as { prototype: Record<string, unknown> }).prototype?.execute
         );

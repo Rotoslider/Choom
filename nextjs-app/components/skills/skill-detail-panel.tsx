@@ -23,7 +23,6 @@ import {
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import {
   Select,
@@ -79,7 +78,37 @@ export function SkillDetailPanel({ skillName, onClose }: SkillDetailPanelProps) 
   const [testToolName, setTestToolName] = useState<string>('');
   const [testArgs, setTestArgs] = useState('{}');
   const [testRunning, setTestRunning] = useState(false);
-  const [testResult, setTestResult] = useState<{ success: boolean; data?: unknown; error?: string } | null>(null);
+  const [testResult, setTestResult] = useState<{ success: boolean; result?: unknown; error?: string; duration?: number; toolName?: string } | null>(null);
+
+  /** Generate a JSON template from a tool's parameter definitions */
+  const buildArgTemplate = useCallback((tool: ToolDefinition): string => {
+    const props = tool.parameters?.properties;
+    if (!props || Object.keys(props).length === 0) return '{}';
+    const template: Record<string, unknown> = {};
+    for (const [name, param] of Object.entries(props)) {
+      if (param.enum?.length) {
+        template[name] = param.enum[0];
+      } else if (param.type === 'number') {
+        template[name] = 0;
+      } else if (param.type === 'boolean') {
+        template[name] = false;
+      } else {
+        template[name] = '';
+      }
+    }
+    return JSON.stringify(template, null, 2);
+  }, []);
+
+  /** When tool selection changes, auto-fill the args template */
+  const handleTestToolChange = useCallback((toolName: string) => {
+    setTestToolName(toolName);
+    setTestResult(null);
+    if (!detail) return;
+    const tool = detail.tools.find(t => t.name === toolName);
+    if (tool) {
+      setTestArgs(buildArgTemplate(tool));
+    }
+  }, [detail, buildArgTemplate]);
 
   // Tool expand state
   const [expandedTool, setExpandedTool] = useState<string | null>(null);
@@ -100,15 +129,19 @@ export function SkillDetailPanel({ skillName, onClose }: SkillDetailPanelProps) 
       const skillData = data.skill || data;
       setDetail(skillData);
       if (skillData.tools?.length > 0 && !testToolName) {
-        const firstTool = typeof skillData.tools[0] === 'string' ? skillData.tools[0] : skillData.tools[0].name;
-        setTestToolName(firstTool);
+        const firstTool = skillData.tools[0];
+        const toolName = typeof firstTool === 'string' ? firstTool : firstTool.name;
+        setTestToolName(toolName);
+        if (typeof firstTool !== 'string') {
+          setTestArgs(buildArgTemplate(firstTool));
+        }
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load skill details');
     } finally {
       setLoading(false);
     }
-  }, [skillName, testToolName]);
+  }, [skillName, testToolName, buildArgTemplate]);
 
   useEffect(() => {
     fetchDetail();
@@ -238,272 +271,287 @@ export function SkillDetailPanel({ skillName, onClose }: SkillDetailPanelProps) 
         ))}
       </div>
 
-      {/* Content */}
-      <ScrollArea className="flex-1">
-        <div className="p-4">
-          {/* Documentation tab */}
-          {activeTab === 'docs' && (
-            <div className="prose prose-sm prose-invert max-w-none">
-              {detail.fullDoc ? (
-                <ReactMarkdown
-                  components={{
-                    code({ className, children, ...props }) {
-                      const match = /language-(\w+)/.exec(className || '');
-                      const codeString = String(children).replace(/\n$/, '');
-                      if (match) {
-                        return (
-                          <div className="code-block my-2">
-                            <div className="code-block-lang">{match[1]}</div>
-                            <SyntaxHighlighter
-                              style={oneDark}
-                              language={match[1]}
-                              PreTag="div"
-                              customStyle={{ margin: 0, padding: '0.75rem', fontSize: '0.75rem', lineHeight: '1.625' }}
-                            >
-                              {codeString}
-                            </SyntaxHighlighter>
-                          </div>
-                        );
-                      }
-                      if (codeString.includes('\n')) {
-                        return (
-                          <div className="code-block my-2">
-                            <SyntaxHighlighter
-                              style={oneDark}
-                              language="text"
-                              PreTag="div"
-                              customStyle={{ margin: 0, padding: '0.75rem', fontSize: '0.75rem', lineHeight: '1.625' }}
-                            >
-                              {codeString}
-                            </SyntaxHighlighter>
-                          </div>
-                        );
-                      }
+      {/* Content — use plain overflow-auto instead of Radix ScrollArea
+           because ScrollArea's Viewport has overflow-hidden which kills
+           horizontal scrolling needed for the code tab */}
+      <div className="flex-1 min-h-0 overflow-auto">
+
+        {/* Documentation tab */}
+        {activeTab === 'docs' && (
+          <div className="p-4 prose prose-sm prose-invert max-w-none">
+            {detail.fullDoc ? (
+              <ReactMarkdown
+                components={{
+                  code({ className, children, ...props }) {
+                    const match = /language-(\w+)/.exec(className || '');
+                    const codeString = String(children).replace(/\n$/, '');
+                    if (match) {
                       return (
-                        <code className="bg-muted px-1 py-0.5 rounded text-xs font-mono" {...props}>
-                          {children}
-                        </code>
-                      );
-                    },
-                    a({ href, children }) {
-                      return (
-                        <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary underline hover:opacity-80">
-                          {children}
-                        </a>
-                      );
-                    },
-                    p({ children }) {
-                      return <p className="mb-2 last:mb-0 text-sm">{children}</p>;
-                    },
-                    h1({ children }) {
-                      return <h1 className="text-lg font-bold mb-2">{children}</h1>;
-                    },
-                    h2({ children }) {
-                      return <h2 className="text-base font-bold mb-1.5">{children}</h2>;
-                    },
-                    h3({ children }) {
-                      return <h3 className="text-sm font-bold mb-1">{children}</h3>;
-                    },
-                    ul({ children }) {
-                      return <ul className="ml-4 list-disc mb-2 text-sm">{children}</ul>;
-                    },
-                    ol({ children }) {
-                      return <ol className="ml-4 list-decimal mb-2 text-sm">{children}</ol>;
-                    },
-                    li({ children }) {
-                      return <li className="mb-0.5">{children}</li>;
-                    },
-                    blockquote({ children }) {
-                      return <blockquote className="border-l-2 border-primary pl-3 italic my-2 text-sm">{children}</blockquote>;
-                    },
-                  }}
-                >
-                  {detail.fullDoc}
-                </ReactMarkdown>
-              ) : (
-                <p className="text-sm text-muted-foreground italic">No documentation available for this skill.</p>
-              )}
-            </div>
-          )}
-
-          {/* Tools tab */}
-          {activeTab === 'tools' && (
-            <div className="space-y-2">
-              {detail.tools.length === 0 ? (
-                <p className="text-sm text-muted-foreground italic">No tool definitions found.</p>
-              ) : (
-                detail.tools.map((tool) => {
-                  const isExpanded = expandedTool === tool.name;
-                  const paramEntries = Object.entries(tool.parameters.properties || {});
-                  return (
-                    <div key={tool.name} className="rounded-lg border border-border bg-card overflow-hidden">
-                      <button
-                        onClick={() => setExpandedTool(isExpanded ? null : tool.name)}
-                        className="w-full flex items-center gap-2 p-3 text-left hover:bg-muted/50 transition-colors"
-                      >
-                        {isExpanded ? (
-                          <ChevronDown className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-                        ) : (
-                          <ChevronRight className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-                        )}
-                        <Wrench className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-                        <span className="font-mono text-sm font-medium truncate">{tool.name}</span>
-                      </button>
-
-                      {isExpanded && (
-                        <div className="px-3 pb-3 border-t border-border bg-muted/20">
-                          <p className="text-xs text-muted-foreground mt-2 mb-3">{tool.description}</p>
-
-                          {paramEntries.length > 0 && (
-                            <div className="space-y-1">
-                              <span className="text-[10px] font-medium uppercase text-muted-foreground tracking-wider">Parameters</span>
-                              <div className="rounded border border-border overflow-hidden">
-                                <table className="w-full text-xs">
-                                  <thead>
-                                    <tr className="bg-muted/50">
-                                      <th className="text-left px-2 py-1.5 font-medium">Name</th>
-                                      <th className="text-left px-2 py-1.5 font-medium">Type</th>
-                                      <th className="text-left px-2 py-1.5 font-medium">Description</th>
-                                      <th className="text-center px-2 py-1.5 font-medium">Req</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {paramEntries.map(([paramName, param]) => (
-                                      <tr key={paramName} className="border-t border-border/50">
-                                        <td className="px-2 py-1.5 font-mono text-primary">{paramName}</td>
-                                        <td className="px-2 py-1.5 text-muted-foreground">
-                                          {param.type}
-                                          {param.enum && (
-                                            <span className="ml-1 text-[10px]">
-                                              [{param.enum.join(', ')}]
-                                            </span>
-                                          )}
-                                        </td>
-                                        <td className="px-2 py-1.5 text-muted-foreground">{param.description}</td>
-                                        <td className="px-2 py-1.5 text-center">
-                                          {tool.parameters.required?.includes(paramName) ? (
-                                            <CheckCircle2 className="h-3 w-3 text-green-400 inline" />
-                                          ) : (
-                                            <span className="text-muted-foreground/40">-</span>
-                                          )}
-                                        </td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              </div>
-                            </div>
-                          )}
+                        <div className="code-block my-2">
+                          <div className="code-block-lang">{match[1]}</div>
+                          <SyntaxHighlighter
+                            style={oneDark}
+                            language={match[1]}
+                            PreTag="div"
+                            customStyle={{ margin: 0, padding: '0.75rem', fontSize: '0.75rem', lineHeight: '1.625' }}
+                          >
+                            {codeString}
+                          </SyntaxHighlighter>
                         </div>
-                      )}
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          )}
-
-          {/* Code tab */}
-          {activeTab === 'code' && (detail.handlerSource || detail.handlerCode) && (
-            <div className="code-block rounded-lg overflow-hidden">
-              <SyntaxHighlighter
-                style={oneDark}
-                language="typescript"
-                PreTag="div"
-                customStyle={{
-                  margin: 0,
-                  padding: '1rem',
-                  fontSize: '0.75rem',
-                  lineHeight: '1.625',
-                  maxHeight: '500px',
-                  overflow: 'auto',
+                      );
+                    }
+                    if (codeString.includes('\n')) {
+                      return (
+                        <div className="code-block my-2">
+                          <SyntaxHighlighter
+                            style={oneDark}
+                            language="text"
+                            PreTag="div"
+                            customStyle={{ margin: 0, padding: '0.75rem', fontSize: '0.75rem', lineHeight: '1.625' }}
+                          >
+                            {codeString}
+                          </SyntaxHighlighter>
+                        </div>
+                      );
+                    }
+                    return (
+                      <code className="bg-muted px-1 py-0.5 rounded text-xs font-mono" {...props}>
+                        {children}
+                      </code>
+                    );
+                  },
+                  a({ href, children }) {
+                    return (
+                      <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary underline hover:opacity-80">
+                        {children}
+                      </a>
+                    );
+                  },
+                  p({ children }) {
+                    return <p className="mb-2 last:mb-0 text-sm">{children}</p>;
+                  },
+                  h1({ children }) {
+                    return <h1 className="text-lg font-bold mb-2">{children}</h1>;
+                  },
+                  h2({ children }) {
+                    return <h2 className="text-base font-bold mb-1.5">{children}</h2>;
+                  },
+                  h3({ children }) {
+                    return <h3 className="text-sm font-bold mb-1">{children}</h3>;
+                  },
+                  ul({ children }) {
+                    return <ul className="ml-4 list-disc mb-2 text-sm">{children}</ul>;
+                  },
+                  ol({ children }) {
+                    return <ol className="ml-4 list-decimal mb-2 text-sm">{children}</ol>;
+                  },
+                  li({ children }) {
+                    return <li className="mb-0.5">{children}</li>;
+                  },
+                  blockquote({ children }) {
+                    return <blockquote className="border-l-2 border-primary pl-3 italic my-2 text-sm">{children}</blockquote>;
+                  },
                 }}
-                showLineNumbers
               >
-                {(detail.handlerSource || detail.handlerCode)!}
-              </SyntaxHighlighter>
-            </div>
-          )}
-        </div>
-
-        {/* Test runner */}
-        <div className="p-4 border-t border-border">
-          <Separator className="mb-4" />
-          <h3 className="text-xs font-medium uppercase text-muted-foreground tracking-wider mb-3">
-            Test Runner
-          </h3>
-
-          <div className="space-y-3">
-            {/* Tool selector */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium">Tool</label>
-              <Select value={testToolName} onValueChange={setTestToolName}>
-                <SelectTrigger className="text-sm">
-                  <SelectValue placeholder="Select a tool..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {detail.tools.map((t) => (
-                    <SelectItem key={t.name} value={t.name}>{t.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            {/* Args textarea */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium">Arguments (JSON)</label>
-              <Textarea
-                value={testArgs}
-                onChange={(e) => setTestArgs(e.target.value)}
-                placeholder='{"key": "value"}'
-                rows={4}
-                className="font-mono text-xs"
-              />
-            </div>
-
-            {/* Run button */}
-            <Button
-              size="sm"
-              onClick={runTest}
-              disabled={testRunning || !testToolName}
-              className="w-full"
-            >
-              {testRunning ? (
-                <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
-              ) : (
-                <Play className="h-4 w-4 mr-1.5" />
-              )}
-              {testRunning ? 'Running...' : 'Run Test'}
-            </Button>
-
-            {/* Result display */}
-            {testResult && (
-              <div className={cn(
-                'rounded-lg border p-3',
-                testResult.success
-                  ? 'border-green-500/30 bg-green-500/10'
-                  : 'border-red-500/30 bg-red-500/10'
-              )}>
-                <div className="flex items-center gap-1.5 mb-2">
-                  {testResult.success ? (
-                    <CheckCircle2 className="h-3.5 w-3.5 text-green-400" />
-                  ) : (
-                    <XCircle className="h-3.5 w-3.5 text-red-400" />
-                  )}
-                  <span className={cn('text-xs font-medium', testResult.success ? 'text-green-400' : 'text-red-400')}>
-                    {testResult.success ? 'Success' : 'Error'}
-                  </span>
-                </div>
-                <pre className="text-xs font-mono whitespace-pre-wrap overflow-auto max-h-48 text-foreground/80">
-                  {testResult.error
-                    ? testResult.error
-                    : JSON.stringify(testResult.data, null, 2)
-                  }
-                </pre>
-              </div>
+                {detail.fullDoc}
+              </ReactMarkdown>
+            ) : (
+              <p className="text-sm text-muted-foreground italic">No documentation available for this skill.</p>
             )}
           </div>
-        </div>
+        )}
+
+        {/* Tools tab */}
+        {activeTab === 'tools' && (
+          <div className="p-4 space-y-2">
+            {detail.tools.length === 0 ? (
+              <p className="text-sm text-muted-foreground italic">No tool definitions found.</p>
+            ) : (
+              detail.tools.map((tool) => {
+                const isExpanded = expandedTool === tool.name;
+                const paramEntries = Object.entries(tool.parameters.properties || {});
+                return (
+                  <div key={tool.name} className="rounded-lg border border-border bg-card overflow-hidden">
+                    <button
+                      onClick={() => setExpandedTool(isExpanded ? null : tool.name)}
+                      className="w-full flex items-center gap-2 p-3 text-left hover:bg-muted/50 transition-colors"
+                    >
+                      {isExpanded ? (
+                        <ChevronDown className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                      ) : (
+                        <ChevronRight className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                      )}
+                      <Wrench className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                      <span className="font-mono text-sm font-medium truncate">{tool.name}</span>
+                    </button>
+
+                    {isExpanded && (
+                      <div className="px-3 pb-3 border-t border-border bg-muted/20">
+                        <p className="text-xs text-muted-foreground mt-2 mb-3">{tool.description}</p>
+
+                        {paramEntries.length > 0 && (
+                          <div className="space-y-1">
+                            <span className="text-[10px] font-medium uppercase text-muted-foreground tracking-wider">Parameters</span>
+                            <div className="rounded border border-border overflow-hidden">
+                              <table className="w-full text-xs">
+                                <thead>
+                                  <tr className="bg-muted/50">
+                                    <th className="text-left px-2 py-1.5 font-medium">Name</th>
+                                    <th className="text-left px-2 py-1.5 font-medium">Type</th>
+                                    <th className="text-left px-2 py-1.5 font-medium">Description</th>
+                                    <th className="text-center px-2 py-1.5 font-medium">Req</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {paramEntries.map(([paramName, param]) => (
+                                    <tr key={paramName} className="border-t border-border/50">
+                                      <td className="px-2 py-1.5 font-mono text-primary">{paramName}</td>
+                                      <td className="px-2 py-1.5 text-muted-foreground">
+                                        {param.type}
+                                        {param.enum && (
+                                          <span className="ml-1 text-[10px]">
+                                            [{param.enum.join(', ')}]
+                                          </span>
+                                        )}
+                                      </td>
+                                      <td className="px-2 py-1.5 text-muted-foreground">{param.description}</td>
+                                      <td className="px-2 py-1.5 text-center">
+                                        {tool.parameters.required?.includes(paramName) ? (
+                                          <CheckCircle2 className="h-3 w-3 text-green-400 inline" />
+                                        ) : (
+                                          <span className="text-muted-foreground/40">-</span>
+                                        )}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })
+            )}
+
+            {/* Test runner — only on tools tab */}
+            <Separator className="my-4" />
+            <h3 className="text-xs font-medium uppercase text-muted-foreground tracking-wider mb-3">
+              Test Runner
+            </h3>
+            <div className="space-y-3">
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium">Tool</label>
+                <Select value={testToolName} onValueChange={handleTestToolChange}>
+                  <SelectTrigger className="text-sm">
+                    <SelectValue placeholder="Select a tool..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {detail.tools.map((t) => (
+                      <SelectItem key={t.name} value={t.name}>{t.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium">Arguments (JSON)</label>
+                {/* Parameter hints for selected tool */}
+                {(() => {
+                  const selectedTool = detail.tools.find(t => t.name === testToolName);
+                  const params = selectedTool?.parameters?.properties;
+                  if (!params || Object.keys(params).length === 0) {
+                    return <p className="text-[10px] text-muted-foreground">No parameters required</p>;
+                  }
+                  return (
+                    <div className="text-[10px] text-muted-foreground space-y-0.5 mb-1">
+                      {Object.entries(params).map(([name, param]) => (
+                        <div key={name} className="flex gap-1">
+                          <code className="text-primary/80">{name}</code>
+                          <span className="text-muted-foreground/60">({param.type}{param.enum ? `: ${param.enum.join('|')}` : ''})</span>
+                          {selectedTool?.parameters.required?.includes(name) && <span className="text-yellow-500">*</span>}
+                          <span className="truncate">{param.description}</span>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+                <Textarea
+                  value={testArgs}
+                  onChange={(e) => setTestArgs(e.target.value)}
+                  placeholder='{"key": "value"}'
+                  rows={4}
+                  className="font-mono text-xs"
+                />
+              </div>
+              <Button
+                size="sm"
+                onClick={runTest}
+                disabled={testRunning || !testToolName}
+                className="w-full"
+              >
+                {testRunning ? (
+                  <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
+                ) : (
+                  <Play className="h-4 w-4 mr-1.5" />
+                )}
+                {testRunning ? 'Running...' : 'Run Test'}
+              </Button>
+              {testResult && (
+                <div className={cn(
+                  'rounded-lg border p-3',
+                  testResult.success && !testResult.error
+                    ? 'border-green-500/30 bg-green-500/10'
+                    : 'border-red-500/30 bg-red-500/10'
+                )}>
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-1.5">
+                      {testResult.success && !testResult.error ? (
+                        <CheckCircle2 className="h-3.5 w-3.5 text-green-400" />
+                      ) : (
+                        <XCircle className="h-3.5 w-3.5 text-red-400" />
+                      )}
+                      <span className={cn('text-xs font-medium', testResult.success && !testResult.error ? 'text-green-400' : 'text-red-400')}>
+                        {testResult.success && !testResult.error ? 'Success' : 'Error'}
+                      </span>
+                    </div>
+                    {testResult.duration != null && (
+                      <span className="text-[10px] text-muted-foreground">{testResult.duration}ms</span>
+                    )}
+                  </div>
+                  <pre className="text-xs font-mono whitespace-pre-wrap overflow-auto max-h-64 text-foreground/80">
+                    {testResult.error
+                      ? testResult.error
+                      : JSON.stringify(testResult.result, null, 2)
+                    }
+                  </pre>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Code tab — no ScrollArea wrapper, native overflow handles both axes */}
+        {activeTab === 'code' && (detail.handlerSource || detail.handlerCode) && (
+          <div className="p-4">
+            <SyntaxHighlighter
+              style={oneDark}
+              language="typescript"
+              PreTag="div"
+              customStyle={{
+                margin: 0,
+                padding: '1rem',
+                fontSize: '0.7rem',
+                lineHeight: '1.5',
+                borderRadius: '0.5rem',
+              }}
+              showLineNumbers
+            >
+              {(detail.handlerSource || detail.handlerCode)!}
+            </SyntaxHighlighter>
+          </div>
+        )}
 
         {/* Actions for custom skills */}
         {detail.type === 'custom' && (
@@ -515,7 +563,6 @@ export function SkillDetailPanel({ skillName, onClose }: SkillDetailPanelProps) 
                   Edit Skill
                 </a>
               </Button>
-
               {deleteConfirm ? (
                 <div className="flex-1 flex items-center gap-2 p-2 rounded-lg bg-destructive/10 border border-destructive/30">
                   <span className="text-xs text-destructive flex-1">Delete this skill?</span>
@@ -528,18 +575,20 @@ export function SkillDetailPanel({ skillName, onClose }: SkillDetailPanelProps) 
                 </div>
               ) : (
                 <Button
-                  variant="ghost"
+                  variant="outline"
                   size="sm"
-                  className="text-destructive hover:bg-destructive/10"
+                  className="text-destructive hover:bg-destructive/10 border-destructive/30"
                   onClick={() => setDeleteConfirm(true)}
                 >
-                  <Trash2 className="h-3.5 w-3.5" />
+                  <Trash2 className="h-3.5 w-3.5 mr-1.5" />
+                  Delete
                 </Button>
               )}
             </div>
           </div>
         )}
-      </ScrollArea>
+
+      </div>
     </div>
   );
 }

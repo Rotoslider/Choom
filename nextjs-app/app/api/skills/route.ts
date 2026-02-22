@@ -2,12 +2,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import * as fs from 'fs';
 import * as path from 'path';
 import { getSkillRegistry } from '@/lib/skill-registry';
-import { loadCoreSkills } from '@/lib/skill-loader';
+import { loadCoreSkills, loadCustomSkills } from '@/lib/skill-loader';
 import { CUSTOM_SKILLS_ROOT } from '@/lib/config';
 
-// Dynamic require that bypasses Turbopack's static module resolution
-// eslint-disable-next-line @typescript-eslint/no-implied-eval, no-new-func
-const dynamicRequire = new Function('p', 'return require(p)') as (path: string) => Record<string, unknown>;
+// createRequire for loading custom skill files at runtime.
+// Turbopack compiles as ESM where bare `require` is not defined.
+import { createRequire } from 'module';
+const nodeRequire = createRequire(import.meta.url || __filename);
 
 // Skill name validation: lowercase letters, numbers, hyphens, underscores only
 const VALID_SKILL_NAME = /^[a-z][a-z0-9_-]*$/;
@@ -17,8 +18,9 @@ const VALID_SKILL_NAME = /^[a-z][a-z0-9_-]*$/;
  */
 export async function GET() {
   try {
-    // Ensure skills are loaded
+    // Ensure skills are loaded (core + custom from .choom-skills)
     loadCoreSkills();
+    loadCustomSkills();
     const registry = getSkillRegistry();
 
     const skillNames = registry.getSkillNames();
@@ -106,6 +108,7 @@ export async function POST(request: NextRequest) {
 
     // Check if skill already exists in the registry
     loadCoreSkills();
+    loadCustomSkills();
     const registry = getSkillRegistry();
     if (registry.getSkill(name)) {
       return NextResponse.json(
@@ -166,21 +169,48 @@ export async function POST(request: NextRequest) {
     const toolsJsSrc = `// Auto-generated from tools.ts\nexports.tools = ${JSON.stringify(tools, null, 2)};\n`;
     fs.writeFileSync(path.join(resolvedDir, 'tools.js'), toolsJsSrc, 'utf-8');
 
-    // Transpile handler.ts → handler.js using esbuild for runtime import
+    // Bundle handler.ts → handler.js using esbuild --bundle.
+    // This creates a self-contained CJS file that includes all project dependencies
+    // (skill-handler, workspace-service, config, types) so nodeRequire only needs
+    // Node.js builtins (fs, path, os, child_process) at runtime.
     let transpileError: string | null = null;
     try {
-      // esbuild is available at runtime (ships with Next.js) but has no TS declarations
+      const appRoot = process.cwd();
+      const handlerTsPath = path.join(resolvedDir, 'handler.ts');
+      const handlerJsPath = path.join(resolvedDir, 'handler.js');
+
       // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const esbuild = dynamicRequire('esbuild') as { transform: (code: string, opts: Record<string, string>) => Promise<{ code: string }> };
-      const result = await esbuild.transform(handlerCode, {
-        loader: 'ts',
+      const esbuild = nodeRequire('esbuild') as {
+        buildSync: (opts: Record<string, unknown>) => { errors: { text: string }[] };
+      };
+
+      const buildResult = esbuild.buildSync({
+        entryPoints: [handlerTsPath],
+        outfile: handlerJsPath,
+        bundle: true,
+        platform: 'node',
         target: 'node18',
         format: 'cjs',
+        // Resolve @/ aliases to the app root
+        alias: {
+          '@': appRoot,
+        },
+        // Don't bundle Node.js builtins
+        external: [
+          'fs', 'fs/promises', 'path', 'os', 'child_process', 'crypto', 'stream',
+          'http', 'https', 'url', 'util', 'events', 'buffer', 'net', 'tls',
+        ],
+        // Suppress warnings about require() in CJS
+        logLevel: 'warning',
       });
-      fs.writeFileSync(path.join(resolvedDir, 'handler.js'), result.code, 'utf-8');
+
+      if (buildResult.errors?.length > 0) {
+        transpileError = buildResult.errors.map((e: { text: string }) => e.text).join('; ');
+        console.warn(`[Skills API] esbuild errors for ${name}:`, transpileError);
+      }
     } catch (err) {
       transpileError = err instanceof Error ? err.message : 'Transpilation failed';
-      console.warn(`[Skills API] Failed to transpile handler for ${name}:`, transpileError);
+      console.warn(`[Skills API] Failed to bundle handler for ${name}:`, transpileError);
     }
 
     // Register with the registry
@@ -202,9 +232,9 @@ export async function POST(request: NextRequest) {
       try {
         const handlerJsPath = path.join(resolvedDir, 'handler.js');
         // Clear require cache for hot-reload
-        // No cache clearing needed — dynamicRequire always reads fresh
+        // No cache clearing needed — nodeRequire always reads fresh
         // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const handlerModule = dynamicRequire(handlerJsPath);
+        const handlerModule = nodeRequire(handlerJsPath);
         const HandlerClass = handlerModule.default || Object.values(handlerModule).find(
           (v: unknown) => typeof v === 'function' && (v as { prototype: Record<string, unknown> }).prototype?.execute
         );

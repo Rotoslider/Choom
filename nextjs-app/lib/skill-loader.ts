@@ -7,6 +7,14 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { getSkillRegistry } from './skill-registry';
 import type { SkillMetadata } from './skill-handler';
+import { CUSTOM_SKILLS_ROOT } from './config';
+
+// Use createRequire for loading custom skill handler.js files at runtime.
+// Turbopack compiles server code as ESM where `require` is not defined,
+// so `new Function('p','return require(p)')` fails with "require is not defined".
+// createRequire creates a proper CJS require function that works in ESM contexts.
+import { createRequire } from 'module';
+const nodeRequire = createRequire(import.meta.url || __filename);
 
 // Import all core skill tools
 import { tools as memoryTools } from '@/skills/core/memory-management/tools';
@@ -191,6 +199,125 @@ export function loadCoreSkills(): void {
 
   loaded = true;
   console.log(`[SkillLoader] Registered ${registry.getToolCount()} tools from ${registry.getSkillNames().length} core skills`);
+}
+
+/**
+ * Load custom skills from CUSTOM_SKILLS_ROOT into the registry.
+ * Scans the .choom-skills directory for skill folders with SKILL.md + tools.js + handler.js.
+ * Safe to call multiple times — skips skills already in the registry.
+ */
+let customLoaded = false;
+
+export function loadCustomSkills(): void {
+  if (customLoaded) return;
+  if (!fs.existsSync(CUSTOM_SKILLS_ROOT)) return;
+  console.log(`[SkillLoader] Scanning custom skills in ${CUSTOM_SKILLS_ROOT}`);
+
+  const registry = getSkillRegistry();
+  const entries = fs.readdirSync(CUSTOM_SKILLS_ROOT, { withFileTypes: true });
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    // Skip if already registered WITH tools (e.g., just created in-memory via POST).
+    // Re-load if registered but has 0 tools (stale registration from failed creation).
+    const existing = registry.getSkill(entry.name);
+    if (existing && existing.toolDefinitions.length > 0) continue;
+
+    const skillPath = path.join(CUSTOM_SKILLS_ROOT, entry.name);
+    const skillMdPath = path.join(skillPath, 'SKILL.md');
+
+    if (!fs.existsSync(skillMdPath)) continue;
+
+    try {
+      const content = fs.readFileSync(skillMdPath, 'utf-8');
+      const parsed = parseYAMLFrontmatter(content);
+      const frontmatter = parsed.frontmatter;
+
+      const metadata: SkillMetadata = {
+        name: (frontmatter.name as string) || entry.name,
+        description: (frontmatter.description as string) || '',
+        version: (frontmatter.version as string) || '1.0.0',
+        author: (frontmatter.author as string) || 'custom',
+        tools: (frontmatter.tools as string[]) || [],
+        dependencies: (frontmatter.dependencies as string[]) || [],
+        type: 'custom',
+        enabled: true,
+        path: skillPath,
+      };
+
+      // Load tool definitions from tools.js by extracting the JSON array.
+      // We read the file as text and parse the JSON portion because dynamicRequire
+      // fails for files outside the project tree in Turbopack.
+      let toolDefinitions: typeof memoryTools = [];
+      const toolsJsPath = path.join(skillPath, 'tools.js');
+      if (fs.existsSync(toolsJsPath)) {
+        try {
+          const toolsSrc = fs.readFileSync(toolsJsPath, 'utf-8');
+          // Extract the JSON array from "exports.tools = [...];" or "module.exports = [...];"
+          const jsonMatch = toolsSrc.match(/=\s*(\[[\s\S]*\])\s*;?\s*$/);
+          if (jsonMatch) {
+            toolDefinitions = JSON.parse(jsonMatch[1]) as typeof memoryTools;
+          }
+        } catch (err) {
+          console.warn(`[SkillLoader] Cannot parse tools.js for ${entry.name}:`, err instanceof Error ? err.message : err);
+        }
+      }
+
+      // Load the bundled handler.js. Since esbuild --bundle creates a self-contained
+      // CJS file with all project deps inlined, dynamicRequire only needs to resolve
+      // Node.js builtins — no Turbopack resolution needed.
+      const handlerJsPath = path.join(skillPath, 'handler.js');
+      const hasHandlerJs = fs.existsSync(handlerJsPath);
+      const toolNames = metadata.tools;
+      const skillName = entry.name;
+      let loadedHandler: InstanceType<typeof MemoryHandler> | null = null;
+
+      // Try to load immediately (bundled handlers should work at boot time)
+      if (hasHandlerJs) {
+        try {
+          const handlerModule = nodeRequire(handlerJsPath);
+          const HandlerClass = handlerModule.default || Object.values(handlerModule).find(
+            (v: unknown) => typeof v === 'function' && (v as { prototype: Record<string, unknown> }).prototype?.execute
+          );
+          if (HandlerClass && typeof HandlerClass === 'function') {
+            loadedHandler = new (HandlerClass as new () => InstanceType<typeof MemoryHandler>)();
+            console.log(`[SkillLoader] Loaded handler for ${skillName}`);
+          }
+        } catch (err) {
+          console.warn(`[SkillLoader] Cannot load handler for ${skillName}:`, err instanceof Error ? err.message : err);
+        }
+      }
+
+      const handler = loadedHandler || {
+        canHandle: (toolName: string) => toolNames.includes(toolName),
+        execute: async (toolCall: unknown) => ({
+          toolCallId: (toolCall as { id: string }).id || '',
+          name: (toolCall as { name: string }).name || '',
+          result: null,
+          error: `Handler for custom skill "${skillName}" could not be loaded. Try re-creating the skill or POST /api/skills/reload.`,
+        }),
+        success: () => ({ toolCallId: '', name: '', result: null }),
+        error: () => ({ toolCallId: '', name: '', result: null, error: '' }),
+      } as unknown as InstanceType<typeof MemoryHandler>;
+
+      // Remove stale registration before re-registering
+      if (registry.getSkill(entry.name)) {
+        registry.unregisterSkill(entry.name);
+      }
+      registry.registerSkill(metadata, parsed.body, toolDefinitions, handler);
+      console.log(`[SkillLoader] Loaded custom skill: ${entry.name} (${toolDefinitions.length} tools)`);
+    } catch (err) {
+      console.warn(`[SkillLoader] Failed to load custom skill ${entry.name}:`, err instanceof Error ? err.message : err);
+    }
+  }
+  customLoaded = true;
+}
+
+/**
+ * Reset the custom loaded flag (for hot-reload).
+ */
+export function resetCustomSkillsLoaded(): void {
+  customLoaded = false;
 }
 
 /**

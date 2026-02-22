@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getSkillRegistry, resetSkillRegistry } from '@/lib/skill-registry';
-import { loadCoreSkills, resetCoreSkillsLoaded } from '@/lib/skill-loader';
+import { loadCoreSkills, loadCustomSkills, resetCoreSkillsLoaded, resetCustomSkillsLoaded } from '@/lib/skill-loader';
 
 /**
  * POST /api/skills/reload — Hot-reload the skill registry
@@ -8,14 +8,16 @@ import { loadCoreSkills, resetCoreSkillsLoaded } from '@/lib/skill-loader';
  */
 export async function POST() {
   try {
-    // Reset the registry singleton and loader flag
+    // Reset the registry singleton and loader flags
     resetSkillRegistry();
     resetCoreSkillsLoaded();
+    resetCustomSkillsLoaded();
 
-    // Re-register core skills
+    // Re-register core skills, then custom skills from .choom-skills
     loadCoreSkills();
+    loadCustomSkills();
 
-    // After core skills are loaded, load custom/external via registry.loadAll()
+    // Also load any external skills via registry.loadAll()
     const registry = getSkillRegistry();
     await registry.loadAll();
 

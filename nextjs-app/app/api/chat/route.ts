@@ -11,7 +11,7 @@ import { VisionService } from '@/lib/vision-service';
 import { ProjectService } from '@/lib/project-service';
 import type { VisionSettings, LLMProviderConfig } from '@/lib/types';
 import { allTools, memoryTools, getAllToolsFromSkills, useSkillDispatch } from '@/lib/tool-definitions';
-import { loadCoreSkills } from '@/lib/skill-loader';
+import { loadCoreSkills, loadCustomSkills } from '@/lib/skill-loader';
 import { getSkillRegistry } from '@/lib/skill-registry';
 import type { SkillHandlerContext } from '@/lib/skill-handler';
 import { getGoogleClient } from '@/lib/google-client';
@@ -2271,6 +2271,7 @@ export async function POST(request: NextRequest) {
   const skillDispatch = useSkillDispatch();
   if (skillDispatch) {
     loadCoreSkills();
+    loadCustomSkills();
   }
 
   try {
@@ -2655,13 +2656,13 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
       // Inject project context so LLM uses the exact folder name
       if (detectedProject) {
         const projMaxIter = detectedProject.metadata.maxIterations || MAX_ITERATIONS;
-        enrichedMessage += `\n\n[System: Active project: "${detectedProject.folder}" (${projMaxIter} tool iterations available). Use this EXACT folder name for all workspace file operations. Do NOT create a new folder with different casing or naming.]`;
+        enrichedMessage += `\n\n[System: Active project: "${detectedProject.folder}" (${projMaxIter} thinking rounds available). Use this EXACT folder name for all workspace file operations. Do NOT create a new folder with different casing or naming.]`;
         // Also update system prompt with the correct iteration limit
-        currentMessages[0].content += `\nYou have a maximum of ${projMaxIter} tool iterations for this project.`;
+        currentMessages[0].content += `\nYou have ${projMaxIter} thinking rounds available. Each round can include multiple parallel tool calls — calling 5 tools in one round only uses 1 round, not 5. Do not stop early thinking you are running out of rounds.`;
         console.log(`   📂 Project "${detectedProject.folder}" detected — injecting context (maxIterations: ${projMaxIter})`);
       } else {
         // No project detected — use default limit
-        currentMessages[0].content += `\nYou have a maximum of ${MAX_ITERATIONS} tool iterations.`;
+        currentMessages[0].content += `\nYou have ${MAX_ITERATIONS} thinking rounds available. Each round can include multiple parallel tool calls — calling 5 tools in one round only uses 1 round, not 5. Do not stop early thinking you are running out of rounds.`;
       }
     } catch { /* ignore project detection errors */ }
 

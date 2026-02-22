@@ -1,12 +1,13 @@
 'use client';
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import {
   Plus,
   Trash2,
   Loader2,
   Wrench,
   AlertCircle,
+  Upload,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -40,6 +41,8 @@ interface SkillCreatorProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onCreated: () => void;
+  /** If set, opens in edit mode with pre-filled data from this skill */
+  editSkillName?: string | null;
 }
 
 const PARAM_TYPES = ['string', 'number', 'boolean', 'object', 'array'];
@@ -72,7 +75,7 @@ ${toolCases}
 `;
 }
 
-export function SkillCreator({ open, onOpenChange, onCreated }: SkillCreatorProps) {
+export function SkillCreator({ open, onOpenChange, onCreated, editSkillName }: SkillCreatorProps) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [tools, setTools] = useState<ToolDef[]>([
@@ -81,6 +84,109 @@ export function SkillCreator({ open, onOpenChange, onCreated }: SkillCreatorProp
   const [handlerCode, setHandlerCode] = useState('');
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [editMode, setEditMode] = useState(false);
+  const [editLoading, setEditLoading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Fetch skill data when editing
+  React.useEffect(() => {
+    if (!open || !editSkillName) {
+      setEditMode(false);
+      return;
+    }
+    setEditMode(true);
+    setEditLoading(true);
+    fetch(`/api/skills/${encodeURIComponent(editSkillName)}`)
+      .then(res => res.json())
+      .then(data => {
+        const skill = data.skill || data;
+        setName(skill.name || '');
+        setDescription(skill.description || '');
+        if (skill.handlerSource) setHandlerCode(skill.handlerSource);
+        // Convert API tool format to ToolDef[]
+        if (Array.isArray(skill.tools) && skill.tools.length > 0) {
+          const imported: ToolDef[] = skill.tools.map((t: Record<string, unknown>) => {
+            const params: ParamDef[] = [];
+            const parameters = t.parameters as Record<string, unknown> | undefined;
+            if (parameters?.properties) {
+              const props = parameters.properties as Record<string, { type?: string; description?: string }>;
+              const reqList = (parameters.required as string[]) || [];
+              for (const [pName, pDef] of Object.entries(props)) {
+                params.push({
+                  name: pName,
+                  type: pDef.type || 'string',
+                  description: pDef.description || '',
+                  required: reqList.includes(pName),
+                });
+              }
+            }
+            return { name: (t.name as string) || '', description: (t.description as string) || '', params };
+          });
+          setTools(imported);
+        }
+      })
+      .catch(err => setError(err instanceof Error ? err.message : 'Failed to load skill'))
+      .finally(() => setEditLoading(false));
+  }, [open, editSkillName]);
+
+  // Import from JSON file
+  const handleImportJson = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const json = JSON.parse(ev.target?.result as string);
+
+        // Populate name (prefer "name" over "displayName")
+        if (json.name) setName(json.name);
+
+        // Populate description
+        if (json.description) setDescription(json.description);
+
+        // Populate tools from various JSON formats
+        if (Array.isArray(json.tools) && json.tools.length > 0) {
+          const importedTools: ToolDef[] = json.tools.map((t: Record<string, unknown>) => {
+            const params: ParamDef[] = [];
+
+            // Handle full tool definition format with parameters.properties
+            const parameters = t.parameters as Record<string, unknown> | undefined;
+            if (parameters?.properties) {
+              const props = parameters.properties as Record<string, { type?: string; description?: string }>;
+              const reqList = (parameters.required as string[]) || [];
+              for (const [pName, pDef] of Object.entries(props)) {
+                params.push({
+                  name: pName,
+                  type: pDef.type || 'string',
+                  description: pDef.description || '',
+                  required: reqList.includes(pName),
+                });
+              }
+            }
+
+            return {
+              name: (t.name as string) || '',
+              description: (t.description as string) || '',
+              params,
+            };
+          });
+          setTools(importedTools);
+        }
+
+        // Populate handler code if provided
+        if (json.handlerCode) setHandlerCode(json.handlerCode);
+
+        setError(null);
+      } catch {
+        setError('Failed to parse JSON file. Check the format and try again.');
+      }
+    };
+    reader.readAsText(file);
+
+    // Reset the file input so re-importing the same file works
+    e.target.value = '';
+  }, []);
 
   // Name validation
   const nameError = name.length > 0 && !NAME_PATTERN.test(name)
@@ -186,20 +292,25 @@ export function SkillCreator({ open, onOpenChange, onCreated }: SkillCreatorProp
 
     setCreating(true);
     try {
-      const res = await fetch('/api/skills', {
-        method: 'POST',
+      const url = editMode
+        ? `/api/skills/${encodeURIComponent(name)}`
+        : '/api/skills';
+      const method = editMode ? 'PUT' : 'POST';
+
+      const res = await fetch(url, {
+        method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name,
           description,
-          toolDefinitions,
+          tools: toolDefinitions,
           handlerCode: handlerCode || generateHandlerSkeleton(name, validTools),
         }),
       });
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || `Failed to create skill: ${res.status}`);
+        throw new Error(data.error || `Failed to ${editMode ? 'update' : 'create'} skill: ${res.status}`);
       }
 
       // Reset form
@@ -207,6 +318,7 @@ export function SkillCreator({ open, onOpenChange, onCreated }: SkillCreatorProp
       setDescription('');
       setTools([{ name: '', description: '', params: [] }]);
       setHandlerCode('');
+      setEditMode(false);
       onOpenChange(false);
       onCreated();
     } catch (err) {
@@ -222,19 +334,38 @@ export function SkillCreator({ open, onOpenChange, onCreated }: SkillCreatorProp
     setTools([{ name: '', description: '', params: [] }]);
     setHandlerCode('');
     setError(null);
+    setEditMode(false);
   };
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) reset(); onOpenChange(v); }}>
-      <DialogContent className="max-w-2xl max-h-[85vh] flex flex-col p-0">
-        <DialogHeader className="px-6 pt-6 pb-0">
-          <DialogTitle>Create Custom Skill</DialogTitle>
+      <DialogContent className="max-w-2xl max-h-[85vh] !flex !flex-col overflow-hidden p-0">
+        <DialogHeader className="px-6 pt-6 pb-0 flex-shrink-0">
+          <div className="flex items-center justify-between">
+            <DialogTitle>{editMode ? 'Edit Skill' : 'Create Custom Skill'}</DialogTitle>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => fileInputRef.current?.click()}
+              className="text-xs"
+            >
+              <Upload className="h-3.5 w-3.5 mr-1.5" />
+              Import JSON
+            </Button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".json"
+              onChange={handleImportJson}
+              className="hidden"
+            />
+          </div>
           <DialogDescription>
-            Define a new skill with tools and a handler implementation.
+            Define a new skill with tools and a handler, or import from a JSON file.
           </DialogDescription>
         </DialogHeader>
 
-        <ScrollArea className="flex-1 px-6">
+        <ScrollArea className="flex-1 min-h-0 overflow-auto px-6">
           <div className="space-y-6 py-4">
             {/* Error banner */}
             {error && (
@@ -252,6 +383,7 @@ export function SkillCreator({ open, onOpenChange, onCreated }: SkillCreatorProp
                 value={name}
                 onChange={(e) => setName(e.target.value.toLowerCase())}
                 placeholder="e.g., my-custom-skill"
+                disabled={editMode}
                 className={cn(nameError && 'border-red-500/50 focus:ring-red-500/50')}
               />
               {nameError && (
@@ -406,7 +538,7 @@ export function SkillCreator({ open, onOpenChange, onCreated }: SkillCreatorProp
         </ScrollArea>
 
         {/* Footer */}
-        <div className="flex items-center justify-end gap-2 px-6 py-4 border-t border-border">
+        <div className="flex items-center justify-end gap-2 px-6 py-4 border-t border-border flex-shrink-0">
           <Button variant="ghost" size="sm" onClick={() => { reset(); onOpenChange(false); }}>
             Cancel
           </Button>
@@ -420,7 +552,7 @@ export function SkillCreator({ open, onOpenChange, onCreated }: SkillCreatorProp
             ) : (
               <Plus className="h-4 w-4 mr-1.5" />
             )}
-            {creating ? 'Creating...' : 'Create Skill'}
+            {creating ? (editMode ? 'Saving...' : 'Creating...') : (editMode ? 'Save Changes' : 'Create Skill')}
           </Button>
         </div>
       </DialogContent>
