@@ -7,13 +7,20 @@ export async function GET(request: NextRequest) {
   // Get endpoint from query param or use default
   const { searchParams } = new URL(request.url);
   const endpoint = searchParams.get('endpoint') || DEFAULT_LLM_ENDPOINT;
+  const apiKey = searchParams.get('apiKey') || null;
 
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10000);
 
+    const headers: Record<string, string> = {};
+    if (apiKey) {
+      headers['Authorization'] = `Bearer ${apiKey}`;
+    }
+
     const response = await fetch(`${endpoint}/models`, {
       method: 'GET',
+      headers,
       signal: controller.signal,
     });
 

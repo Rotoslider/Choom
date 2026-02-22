@@ -4,7 +4,7 @@ A self-hosted AI companion framework with persistent memory, image generation, t
 
 Each AI persona ("Choom") can have its own LLM model, voice, image style, and memory space. Chooms are agentic — they autonomously chain tools across multi-step tasks, searching the web, writing files, generating images, running code, and managing your calendar without manual prompting between steps. Talk to them through the web UI or via Signal messages.
 
-All 75 tools are organized into 21 modular **skills** with progressive disclosure — the LLM only sees detailed documentation for skills relevant to the current request, saving ~3,400 tokens per message. Skills can be enabled/disabled, custom skills can be created via a visual builder, and external skills can be installed from GitHub with safety verification.
+All 79 tools are organized into 21 modular **skills** with progressive disclosure — the LLM only sees detailed documentation for skills relevant to the current request, saving ~3,400 tokens per message. Skills can be enabled/disabled, custom skills can be created via a visual builder, and external skills can be installed from GitHub with safety verification.
 
 ![Chat Interface](docs/screenshots/chat-interface.png)
 
@@ -23,14 +23,15 @@ All 75 tools are organized into 21 modular **skills** with progressive disclosur
 - **Agentic Tool Loop**: Chooms autonomously execute up to 10 tool calls per turn — chaining memory lookups, web searches, image generation, file operations, calendar updates, and more in a single response. Includes automatic nudging (retries with `tool_choice=required` if the LLM describes a tool instead of calling it), tool call deduplication, and smart completion detection
 - **Planner Mode**: Complex multi-step requests (e.g., "research solar panels and write a comparison report") are automatically detected and broken into structured execution plans with real-time progress display, step-by-step watcher evaluation, and automatic retry/rollback on failure
 - **Automation Builder**: Visual drag-and-drop builder for creating scheduled task chains — combine any tools into multi-step automations with cron scheduling, interval triggers, template variables (`{{prev.result.field}}`), per-Choom targeting, and **conditional triggers** (weather, time range, day of week, calendar) with cooldown support. See the [Conditional Triggers Guide](CONDITIONAL-TRIGGERS.md) for details. Managed from Settings > Automations
-- **Vision (Optic)**: Image analysis via vision-capable LLM (workspace files, URLs, or base64) with automatic resizing for model compatibility
+- **Model Profiles**: Per-model parameter defaults (temperature, topP, maxTokens, topK, repetitionPenalty, enableThinking) that auto-apply when a Choom or project uses a different model. Built-in profiles for ~18 known models (NVIDIA, Anthropic, OpenAI) plus user-created custom profiles. Vision profiles configure per-model image dimension limits and supported formats
+- **Vision (Optic)**: Image analysis via vision-capable LLM (workspace files, URLs, or base64) with automatic resizing based on vision model profile (configurable per-model, not hardcoded)
 - **Image Attachment**: Attach images in the web GUI (paperclip, drag-and-drop, clipboard paste) or send via Signal for Optic analysis
 - **Project Management**: Live dashboard for workspace projects with per-project iteration limits, auto-refresh, automatic Choom assignment tracking, and project rename tool
 - **Code Sandbox**: Execute Python and Node.js code in workspace projects with venv/npm support, package installation, timeout enforcement, and output truncation
 - **Web Scraping & Downloads**: Scrape webpages for image URLs (`scrape_page_images`), download images with WebP-to-PNG auto-conversion (`download_web_image`), and download files (`download_web_file` for PDFs, docs, etc.) from the web into workspace projects
 - **PDF Generation & Reading**: Markdown-to-PDF with embedded images (`![caption](path)` syntax + explicit images array) via pdfkit; text extraction from PDFs via `pdftotext` with optional page range
 - **Context Compaction**: Two-layer context window management — cross-turn summarization of old messages into a rolling LLM-generated summary, plus within-turn truncation of stale tool results during agentic loops
-- **External LLM Providers**: Connect to Anthropic, OpenAI, or custom OpenAI-compatible APIs per-project with a full Anthropic Messages API adapter
+- **External LLM Providers**: Connect to Anthropic, OpenAI, NVIDIA Build, or custom OpenAI-compatible APIs per-Choom or per-project with provider presets, API key management (with visibility toggle), and a full Anthropic Messages API adapter. Provider API keys are resolved from settings at chat time and read from `bridge-config.json` as fallback for Signal bridge parity
 - **Heartbeat Deferral**: Scheduled heartbeats automatically defer when the user is actively chatting, preventing concurrent responses to the same conversation
 - **Markdown Rendering**: Chat messages rendered with `react-markdown` and `react-syntax-highlighter` (oneDark theme) for proper code blocks, tables, lists, links, and headings
 - **Web Search**: Brave Search or self-hosted SearXNG
@@ -42,10 +43,10 @@ All 75 tools are organized into 21 modular **skills** with progressive disclosur
 nextjs-app/
   app/
     page.tsx                        Main chat interface
-    settings/page.tsx               Settings page (16 sections)
+    settings/page.tsx               Settings page (17 sections)
     skills/page.tsx                 Skills management page
     api/
-      chat/route.ts                 LLM streaming + agentic tool loop (dedup, nudge, image cap)
+      chat/route.ts                 LLM streaming + agentic tool loop (dedup, nudge, image cap, model profile resolution)
       tts/route.ts                  TTS proxy
       stt/route.ts                  STT proxy
       chooms/                       CRUD for Choom personas
@@ -99,7 +100,7 @@ nextjs-app/
   components/
     chat/                           Message display, input, image attachment, typing indicator, plan display
     sidebar/                        Choom list, chat list, edit panel, skills nav
-    settings/                       16 settings tab components (incl. Smart Home, Automations)
+    settings/                       17 settings tab components (incl. Smart Home, Automations)
     skills/                         Skill catalog, detail panel, creator dialog
     gallery/                        Image browser
     health/                         Service status dashboard
@@ -107,7 +108,7 @@ nextjs-app/
   lib/
     store.ts                        Zustand state + persistence
     types.ts                        TypeScript definitions
-    llm-client.ts                   LLM integration
+    llm-client.ts                   LLM integration (supports extended params: topK, repetitionPenalty, enableThinking)
     memory-client.ts                Memory server client
     image-gen-client.ts             Stable Diffusion client
     tts-client.ts                   Streaming TTS with queue serialization + code block skipping
@@ -116,11 +117,12 @@ nextjs-app/
     homeassistant-service.ts        Home Assistant REST API client (states, services, history, prompt injection)
     web-search.ts                   Brave / SearXNG
     tool-definitions.ts             LLM tool schemas + skill bridge functions
-    vision-service.ts               Optic vision analysis (OpenAI vision API + sharp resize)
+    vision-service.ts               Optic vision analysis (OpenAI vision API + sharp resize, configurable per-model dimensions)
     project-service.ts              Workspace project management (CRUD + rename)
     workspace-service.ts            Sandboxed file ops with path traversal prevention
     code-sandbox.ts                 Python + Node.js code execution sandbox
     anthropic-client.ts             Anthropic Messages API adapter
+    model-profiles.ts               Built-in model profiles (LLM + vision), lookup helpers, merge functions
     compaction-service.ts           Two-layer context window compaction
     pdf-service.ts                  Markdown to PDF via pdfkit (with embedded image support)
     log-store.ts                    Activity logging (persisted to DB)
@@ -134,7 +136,7 @@ nextjs-app/
     watcher-loop.ts                 Step evaluation, retry, rollback heuristics
     google-client.ts                Google API client (Calendar, Sheets, Docs, Drive, Gmail, Contacts, YouTube)
   prisma/
-    schema.prisma                   SQLite (Choom, Chat, Message, GeneratedImage, ActivityLog)
+    schema.prisma                   SQLite (Choom [+llmProviderId], Chat, Message, GeneratedImage, ActivityLog)
     create-views.sql                SQLite views with human-readable timestamps (npm run db:views)
   services/signal-bridge/           Python Signal messaging daemon
     bridge.py                       Main daemon (signal-cli JSON-RPC socket)
@@ -152,7 +154,7 @@ nextjs-app/
 
 ![Settings Panel](docs/screenshots/settings-llm.png)
 
-Settings resolve in four layers. Each layer overrides the one before it.
+Settings resolve in six layers. Each layer overrides the one before it. After the final model is resolved, a **model profile** is applied if the resolved model differs from the global default.
 
 ```
 Layer 1: Code Defaults (hardcoded)
@@ -161,10 +163,19 @@ Layer 1: Code Defaults (hardcoded)
 Layer 2: Settings Panel (localStorage via Zustand)
     |
     v
+Layer 2b: Global Provider (if provider set in settings)
+    |
+    v
 Layer 3: Per-Choom Overrides (database)
     |
     v
+Layer 3b: Per-Choom Provider (if Choom has llmProviderId)
+    |
+    v
 Layer 4: Per-Project Provider (project metadata)  <-- wins (LLM only)
+    |
+    v
+Model Profile Application (if resolved model != global model)
 ```
 
 ### Layer 1 - Code Defaults
@@ -184,9 +195,9 @@ Hardcoded fallback in `store.ts` and API routes:
 
 ### Layer 2 - Settings Panel
 
-User-configurable at `/settings`. Persisted in localStorage through Zustand with a custom deep-merge function (prevents nested keys from being wiped on app updates). Weather, search, image, and Home Assistant settings are synced to `bridge-config.json` for Signal parity. Sixteen sections:
+User-configurable at `/settings`. Persisted in localStorage through Zustand with a custom deep-merge function (prevents nested keys from being wiped on app updates; explicitly preserves optional top-level arrays like `providers`, `modelProfiles`, `visionProfiles`). Weather, search, image, and Home Assistant settings are synced to `bridge-config.json` for Signal parity. Providers are also synced for bridge-side LLM resolution. Seventeen sections:
 
-1. **LLM** - endpoint, model, temperature, context length, max tokens
+1. **LLM** - endpoint, model, temperature, context length, max tokens, and **Model Profiles** (per-model parameter defaults with built-in profiles for ~18 models + custom user profiles)
 2. **Audio** - TTS/STT endpoints, voice, language, VAD sensitivity
 3. **Image** - SD checkpoint, sampler, CFG scale, steps, dimensions, LoRA
 4. **Memory** - server endpoint, auto-recall
@@ -195,13 +206,14 @@ User-configurable at `/settings`. Persisted in localStorage through Zustand with
 7. **Cron Jobs** - scheduled task times (morning briefing, weather, aurora)
 8. **Heartbeats** - health check interval, quiet hours (e.g. 9 PM - 6 AM)
 9. **Reminders** - view and manage pending Signal reminders
-10. **Optic** - vision LLM endpoint, model, max tokens, temperature
+10. **Optic** - vision LLM endpoint, model, max tokens, temperature, and **Vision Model Profiles** (per-model image dimension limits, supported formats)
 11. **Projects** - workspace project dashboard with status, iteration limits, Choom assignment
-12. **Providers** - external LLM providers (Anthropic, OpenAI, custom) with per-project assignment
+12. **Providers** - external LLM providers (Anthropic, OpenAI, NVIDIA Build, custom) with presets, API key visibility toggle, and per-Choom/per-project assignment
 13. **YouTube DL** - YouTube music channel management, max videos per channel, per-channel enable/disable, Run Now trigger
 14. **Automations** - visual multi-step task builder with cron/interval scheduling, Choom targeting, and template variables
 15. **Smart Home** - Home Assistant connection (URL, access token), entity filter, system prompt injection, cache TTL, entity browser
 16. **Theme** - light/dark, accent color, font size
+17. **Model Profiles** - (subsection of LLM settings) built-in defaults for NVIDIA Build models (Nemotron Ultra 253B, Mistral Large 3 675B, DeepSeek V3.2, Kimi K2.5, Kimi K2, Qwen 3.5 397B, Qwen 3 Next 80B, GLM-5, Llama 405B, Llama 3.3 70B, Mistral Nemotron), Anthropic (Claude Sonnet 4, Haiku 4.5, Opus 4.6), OpenAI (GPT-4.1, GPT-4.1 Mini, GPT-4o, o3-mini), and vision models (GPT-4o, Claude Sonnet 4, Claude Haiku 4.5, Qwen 3.5 397B, Qwen 3 VL 30B)
 
 ### Layer 3 - Per-Choom Overrides
 
@@ -211,12 +223,13 @@ Each Choom can override specific settings stored in the database:
 |-------------|-----------|
 | `llmModel` | LLM model name |
 | `llmEndpoint` | LLM API endpoint |
+| `llmProviderId` | External provider from Settings > Providers (triggers Layer 3b — provider endpoint + API key + model profile auto-applied) |
 | `voiceId` | TTS voice |
 | `imageSettings` | Image generation config (JSON): checkpoint, LoRA, size, aspect, upscale, choomDecides |
 | `companionId` | Memory isolation ID |
 | `systemPrompt` | Character instructions |
 
-This means one Choom can use GPT-4o on OpenAI while another uses a local Llama model -- each with their own voice and image style, all from the same app.
+This means one Choom can use GPT-4o on OpenAI while another uses a local Llama model -- each with their own voice and image style, all from the same app. When a Choom has a `llmProviderId`, Layer 3b resolves the provider's endpoint and API key from `settings.providers[]` (or `bridge-config.json` as fallback), and the appropriate model profile is auto-applied for optimal parameters.
 
 ### Layer 4 - Per-Project Provider
 
@@ -234,9 +247,12 @@ The chat API logs the full resolution on each request:
 Settings Hierarchy for "MyChoom":
   Layer 1 (defaults): model=local-model, endpoint=http://your-llm-host:1234/v1
   Layer 2 (settings): model=qwen3-30b, endpoint=http://your-llm-host:1234/v1
-  Layer 3 (Choom DB): llmModel=gpt-4o, llmEndpoint=https://api.openai.com/v1
-  Layer 4 (project): provider=anthropic, model=claude-sonnet-4-5-20250929
-  RESOLVED: model=claude-sonnet-4-5-20250929, endpoint=https://api.anthropic.com
+  Layer 2b (global provider): (none)
+  Layer 3 (Choom DB): llmModel=nvidia/llama-3.1-nemotron-ultra-253b-v1
+  Layer 3b (Choom provider): provider=nvidia_1234, endpoint=https://integrate.api.nvidia.com/v1
+  Layer 4 (project): (none)
+  RESOLVED: model=nvidia/llama-3.1-nemotron-ultra-253b-v1, endpoint=https://integrate.api.nvidia.com/v1
+  📋 Model profile applied: "Nemotron Ultra 253B" (temp=0.6, topP=0.95, topK=40, thinking=on)
 ```
 
 ## Image Generation
@@ -316,7 +332,7 @@ Hybrid SQLite + ChromaDB storage via a Python HTTP server on port 8100.
 
 ### Vision Tool (Optic)
 - `analyze_image` - Analyze an image via a vision-capable LLM. Accepts workspace path, URL, or raw base64.
-- Images are automatically resized to fit within 768x768px (via sharp) to prevent vision model token mismatch errors.
+- Images are automatically resized via sharp to fit the vision model's capabilities. The max dimension is determined by the vision model profile (e.g. GPT-4o: 2048px, Claude: 1568px, Qwen: 1280px, local models: 768px default). If no profile exists for the model, falls back to 768px.
 - Three ways to send images for analysis:
   - **Web GUI**: Paperclip button, drag-and-drop onto input, or paste from clipboard
   - **Signal**: Send an image attachment to your Choom
@@ -478,7 +494,7 @@ The activity panel in the web UI also shows compaction events.
 
 ![Skills Catalog](docs/screenshots/skills-catalog.png)
 
-Choom's 75 tools are organized into 21 modular **skills**. Each skill is a self-contained directory with metadata, tool definitions, and a handler implementation. The skill registry provides progressive disclosure to minimize token usage while ensuring the LLM always has the right documentation at the right time.
+Choom's 79 tools are organized into 21 modular **skills**. Each skill is a self-contained directory with metadata, tool definitions, and a handler implementation. The skill registry provides progressive disclosure to minimize token usage while ensuring the LLM always has the right documentation at the right time.
 
 ### Progressive Disclosure (3 Levels)
 
@@ -936,7 +952,7 @@ SQLite via Prisma ORM. (dev.db)
 
 | Model | Purpose |
 |-------|---------|
-| `Choom` | AI personas with per-Choom settings overrides |
+| `Choom` | AI personas with per-Choom settings overrides (incl. `llmProviderId` for external provider assignment) |
 | `Chat` | Conversations grouped by Choom (archivable, with rolling compaction summary) |
 | `Message` | Messages with role, content, tool calls/results |
 | `GeneratedImage` | Generated images with prompt and settings |
@@ -1120,10 +1136,12 @@ sudo systemctl start signal-bridge.service
 - PDF text extraction requires `pdftotext` (from `poppler-utils` package) installed on the host
 - Some LLMs may describe tool usage in text rather than making function calls — a nudge mechanism with `tool_choice=required` retries automatically (disabled after tools have executed to prevent response repetition), but model-dependent
 - Image generation capped at 3 per request to prevent runaway loops (heartbeat selfie spam, etc.)
-- Image resizing (768px max) applied before vision analysis; very small details may be lost
+- Image resizing applied before vision analysis (max dimension per vision model profile: 768-2048px); very small details may be lost
 - Page scraping (`scrape_page_images`) works with static HTML; JavaScript-rendered content (SPAs, lazy-loaded galleries) may not return all images
 - Code sandbox has no network restrictions — Chooms can make HTTP requests and download packages
-- External LLM providers (Anthropic, OpenAI) require separate API keys/subscriptions
+- External LLM providers (Anthropic, OpenAI, NVIDIA Build) require separate API keys/subscriptions
+- NVIDIA Build API: large models (Qwen 3.5 397B, GLM-5, Kimi K2.5) may be overloaded or have high latency; some model IDs are periodically retired/renamed. Confirmed working: Nemotron Ultra 253B, Mistral Large 3 675B, DeepSeek V3.2, Llama 3.3 70B, Llama 405B
+- Some LLM APIs (Mistral, others) reject assistant messages with empty content and no tool_calls — LLMClient automatically sanitizes these out before sending
 - Google integration (Calendar, Sheets, Docs, Drive, Gmail, Contacts, YouTube) requires OAuth2 re-auth when token expires or scopes change
 - Gmail `send_email` sends immediately and cannot be undone — prefer `draft_email` unless the user explicitly says "send"
 - Contacts search uses the People API which may not index all contacts immediately after creation

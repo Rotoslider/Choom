@@ -30,31 +30,34 @@ export interface VisionServiceConfig {
   model: string;
   maxTokens: number;
   temperature: number;
+  apiKey?: string;
+  maxImageDimension?: number;      // default: 768
+  maxImageSizeBytes?: number;      // default: 10MB
 }
 
-const MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024; // 10MB
-const MAX_IMAGE_DIMENSION = 768; // Max width/height for vision model input
+const DEFAULT_MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024; // 10MB
+const DEFAULT_MAX_IMAGE_DIMENSION = 768; // Max width/height for vision model input
 
 /**
- * Resize an image buffer to fit within MAX_IMAGE_DIMENSION, preserving aspect ratio.
+ * Resize an image buffer to fit within maxDimension, preserving aspect ratio.
  * Converts to PNG for consistent encoding.
  * Returns { buffer, mime } — the resized image buffer and MIME type.
  */
-async function resizeForVision(input: Buffer): Promise<{ buffer: Buffer; mime: string }> {
+async function resizeForVision(input: Buffer, maxDimension: number): Promise<{ buffer: Buffer; mime: string }> {
   const image = sharp(input);
   const metadata = await image.metadata();
   const width = metadata.width || 0;
   const height = metadata.height || 0;
 
-  if (width <= MAX_IMAGE_DIMENSION && height <= MAX_IMAGE_DIMENSION) {
+  if (width <= maxDimension && height <= maxDimension) {
     // Already small enough — just ensure it's PNG for consistency
     const buf = await image.png().toBuffer();
     return { buffer: buf, mime: 'image/png' };
   }
 
-  // Resize to fit within MAX_IMAGE_DIMENSION x MAX_IMAGE_DIMENSION
+  // Resize to fit within maxDimension x maxDimension
   const resized = await image
-    .resize(MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION, { fit: 'inside', withoutEnlargement: true })
+    .resize(maxDimension, maxDimension, { fit: 'inside', withoutEnlargement: true })
     .png()
     .toBuffer();
   return { buffer: resized, mime: 'image/png' };
@@ -65,12 +68,18 @@ export class VisionService {
   private model: string;
   private maxTokens: number;
   private temperature: number;
+  private apiKey?: string;
+  private maxImageDimension: number;
+  private maxImageSizeBytes: number;
 
   constructor(config: VisionServiceConfig) {
     this.endpoint = config.endpoint.replace(/\/+$/, '');
     this.model = config.model;
     this.maxTokens = config.maxTokens;
     this.temperature = config.temperature;
+    this.apiKey = config.apiKey;
+    this.maxImageDimension = config.maxImageDimension || DEFAULT_MAX_IMAGE_DIMENSION;
+    this.maxImageSizeBytes = config.maxImageSizeBytes || DEFAULT_MAX_IMAGE_SIZE_BYTES;
   }
 
   /**
@@ -91,10 +100,10 @@ export class VisionService {
         throw new Error('Path traversal blocked: image path resolves outside workspace');
       }
       const rawBuffer = await readFile(fullPath);
-      if (rawBuffer.length > MAX_IMAGE_SIZE_BYTES) {
-        throw new Error(`Image too large (${(rawBuffer.length / 1024 / 1024).toFixed(1)}MB). Maximum: 10MB`);
+      if (rawBuffer.length > this.maxImageSizeBytes) {
+        throw new Error(`Image too large (${(rawBuffer.length / 1024 / 1024).toFixed(1)}MB). Maximum: ${Math.round(this.maxImageSizeBytes / 1024 / 1024)}MB`);
       }
-      const resized = await resizeForVision(rawBuffer);
+      const resized = await resizeForVision(rawBuffer, this.maxImageDimension);
       base64Data = resized.buffer.toString('base64');
       resolvedMime = resized.mime;
     } else if (imageUrl) {
@@ -104,20 +113,20 @@ export class VisionService {
         throw new Error(`Failed to fetch image from URL: ${response.status} ${response.statusText}`);
       }
       const arrayBuffer = await response.arrayBuffer();
-      if (arrayBuffer.byteLength > MAX_IMAGE_SIZE_BYTES) {
-        throw new Error(`Image too large (${(arrayBuffer.byteLength / 1024 / 1024).toFixed(1)}MB). Maximum: 10MB`);
+      if (arrayBuffer.byteLength > this.maxImageSizeBytes) {
+        throw new Error(`Image too large (${(arrayBuffer.byteLength / 1024 / 1024).toFixed(1)}MB). Maximum: ${Math.round(this.maxImageSizeBytes / 1024 / 1024)}MB`);
       }
-      const resized = await resizeForVision(Buffer.from(arrayBuffer));
+      const resized = await resizeForVision(Buffer.from(arrayBuffer), this.maxImageDimension);
       base64Data = resized.buffer.toString('base64');
       resolvedMime = resized.mime;
     } else if (imageBase64) {
       // Use raw base64
       const sizeEstimate = Math.ceil(imageBase64.length * 0.75);
-      if (sizeEstimate > MAX_IMAGE_SIZE_BYTES) {
-        throw new Error(`Image too large (~${(sizeEstimate / 1024 / 1024).toFixed(1)}MB). Maximum: 10MB`);
+      if (sizeEstimate > this.maxImageSizeBytes) {
+        throw new Error(`Image too large (~${(sizeEstimate / 1024 / 1024).toFixed(1)}MB). Maximum: ${Math.round(this.maxImageSizeBytes / 1024 / 1024)}MB`);
       }
       const rawBuffer = Buffer.from(imageBase64, 'base64');
-      const resized = await resizeForVision(rawBuffer);
+      const resized = await resizeForVision(rawBuffer, this.maxImageDimension);
       base64Data = resized.buffer.toString('base64');
       resolvedMime = resized.mime;
     } else {
@@ -140,9 +149,12 @@ export class VisionService {
       },
     ];
 
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
+
     const response = await fetch(`${this.endpoint}/v1/chat/completions`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({
         model: this.model,
         messages,

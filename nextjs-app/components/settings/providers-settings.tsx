@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Plus, Trash2, Server } from 'lucide-react';
+import { Plus, Trash2, Server, Eye, EyeOff } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import {
@@ -25,7 +25,24 @@ const PRESETS: Record<string, Partial<LLMProviderConfig>> = {
     name: 'OpenAI',
     type: 'openai',
     endpoint: 'https://api.openai.com/v1',
-    models: ['gpt-4o', 'gpt-4o-mini', 'o3-mini'],
+    models: ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano', 'gpt-4o', 'o3-mini'],
+  },
+  nvidia: {
+    name: 'NVIDIA Build',
+    type: 'openai',
+    endpoint: 'https://integrate.api.nvidia.com/v1',
+    models: [
+      'nvidia/llama-3.1-nemotron-ultra-253b-v1',
+      'mistralai/mistral-large-3-675b-instruct-2512',
+      'deepseek-ai/deepseek-v3.2',
+      'moonshotai/kimi-k2.5',
+      'moonshotai/kimi-k2-instruct',
+      'qwen/qwen3.5-397b-a17b',
+      'qwen/qwen3-next-80b-a3b-instruct',
+      'z-ai/glm5',
+      'meta/llama-3.1-405b-instruct',
+      'meta/llama-3.3-70b-instruct',
+    ],
   },
   custom: {
     name: 'Custom Provider',
@@ -40,6 +57,7 @@ export function ProvidersSettings() {
   const updateProvidersSettings = useAppStore((s) => s.updateProvidersSettings);
   const [showAddForm, setShowAddForm] = useState(false);
   const [presetType, setPresetType] = useState<string>('anthropic');
+  const [visibleKeys, setVisibleKeys] = useState<Set<string>>(new Set());
 
   const addProvider = () => {
     const preset = PRESETS[presetType];
@@ -74,7 +92,7 @@ export function ProvidersSettings() {
             LLM Providers
           </h3>
           <p className="text-xs text-muted-foreground mt-1">
-            Configure external LLM providers (Anthropic, OpenAI, or custom). Assign to projects for per-project model selection.
+            Configure external LLM providers (Anthropic, OpenAI, NVIDIA Build, or custom). Assign to projects for per-project model selection.
           </p>
         </div>
         <Button size="sm" onClick={() => setShowAddForm(!showAddForm)}>
@@ -95,6 +113,7 @@ export function ProvidersSettings() {
               <SelectContent>
                 <SelectItem value="anthropic">Anthropic (Claude)</SelectItem>
                 <SelectItem value="openai">OpenAI (GPT)</SelectItem>
+                <SelectItem value="nvidia">NVIDIA Build</SelectItem>
                 <SelectItem value="custom">Custom (OpenAI-compatible)</SelectItem>
               </SelectContent>
             </Select>
@@ -157,13 +176,31 @@ export function ProvidersSettings() {
             </div>
             <div className="space-y-1">
               <label className="text-xs font-medium">API Key</label>
-              <Input
-                type="password"
-                value={provider.apiKey || ''}
-                onChange={(e) => updateProvider(provider.id, { apiKey: e.target.value })}
-                placeholder="sk-..."
-                className="text-sm"
-              />
+              <div className="relative">
+                <Input
+                  type={visibleKeys.has(provider.id) ? 'text' : 'password'}
+                  value={provider.apiKey || ''}
+                  onChange={(e) => updateProvider(provider.id, { apiKey: e.target.value })}
+                  placeholder="sk-..."
+                  className="text-sm pr-9"
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="absolute right-0 top-0 h-full px-2 hover:bg-transparent"
+                  onClick={() => setVisibleKeys(prev => {
+                    const next = new Set(prev);
+                    if (next.has(provider.id)) next.delete(provider.id);
+                    else next.add(provider.id);
+                    return next;
+                  })}
+                >
+                  {visibleKeys.has(provider.id)
+                    ? <EyeOff className="h-4 w-4 text-muted-foreground" />
+                    : <Eye className="h-4 w-4 text-muted-foreground" />}
+                </Button>
+              </div>
             </div>
           </div>
 
