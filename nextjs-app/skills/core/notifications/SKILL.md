@@ -14,3 +14,8 @@ dependencies: []
 - Long task complete → `send_notification`
 - Found something interesting → `send_notification`
 - Need user attention → `send_notification`
+
+## Image Attachments
+When sending notifications about generated images, include the `image_ids` parameter with the IDs returned by `generate_image` or `save_generated_image`. This will attach the actual images to the Signal message so the user can see them on their phone.
+
+Example: After generating images, call `send_notification` with `image_ids: ["cmlzfwg8y...", "cmlzfwvad..."]` to deliver them via Signal.

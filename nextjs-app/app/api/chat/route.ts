@@ -1935,22 +1935,25 @@ async function executeToolCall(
   if (toolCall.name === 'send_notification') {
     try {
       const notifMessage = toolCall.arguments.message as string;
-      const includeAudio = toolCall.arguments.include_audio !== false;
+      const rawAudio = toolCall.arguments.include_audio;
+      const includeAudio = rawAudio === false || rawAudio === 'false' || rawAudio === 'False' ? false : true;
+      const imageIds = Array.isArray(toolCall.arguments.image_ids) ? toolCall.arguments.image_ids as string[] : [];
 
       await prisma.notification.create({
         data: {
           choomId,
           message: notifMessage,
           includeAudio,
+          imageIds: imageIds.length > 0 ? JSON.stringify(imageIds) : null,
         },
       });
 
-      console.log(`   📨 Notification queued: "${notifMessage.slice(0, 60)}..."`);
+      console.log(`   📨 Notification queued: "${notifMessage.slice(0, 60)}..." (images: ${imageIds.length})`);
 
       return {
         toolCallId: toolCall.id,
         name: toolCall.name,
-        result: { success: true, message: 'Notification queued for delivery via Signal.' },
+        result: { success: true, message: `Notification queued for delivery via Signal.${imageIds.length > 0 ? ` ${imageIds.length} image(s) attached.` : ''}` },
       };
     } catch (err) {
       return {
