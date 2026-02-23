@@ -75,6 +75,7 @@ model Notification {
   id           String   @id @default(cuid())
   choomId      String
   message      String
+  imageIds     String?  // JSON array of GeneratedImage IDs to attach
   includeAudio Boolean  @default(true)
   delivered    Boolean  @default(false)
   createdAt    DateTime @default(now())

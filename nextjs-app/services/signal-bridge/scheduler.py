@@ -366,8 +366,9 @@ class ScheduledTaskManager:
                     choom_id = notif.get("choomId", "")
                     message = notif.get("message", "")
                     include_audio = notif.get("includeAudio", True)
+                    images = notif.get("images", [])  # Resolved by API: [{id, url}]
 
-                    if not message:
+                    if not message and not images:
                         delivered_ids.append(notif["id"])
                         continue
 
@@ -380,13 +381,20 @@ class ScheduledTaskManager:
                     except Exception:
                         pass
 
-                    self.send_message_to_owner(
-                        message,
-                        include_audio=include_audio,
-                        choom_name=choom_name
-                    )
+                    # Send text + audio first
+                    if message:
+                        self.send_message_to_owner(
+                            message,
+                            include_audio=include_audio,
+                            choom_name=choom_name
+                        )
+
+                    # Send attached images via Signal
+                    if images:
+                        self._send_notification_images(images, choom_name)
+
                     delivered_ids.append(notif["id"])
-                    logger.info(f"Delivered notification {notif['id']}: {message[:50]}...")
+                    logger.info(f"Delivered notification {notif['id']}: {message[:50]}... (images: {len(images)})")
 
                 except Exception as e:
                     logger.warning(f"Failed to deliver notification {notif.get('id')}: {e}")
@@ -406,6 +414,48 @@ class ScheduledTaskManager:
             # Don't spam logs on connection errors
             if "Connection refused" not in str(e):
                 logger.warning(f"Notification check failed: {e}")
+
+    def _send_notification_images(self, images: list, choom_name: str = None):
+        """Decode and send notification images via Signal.
+
+        Args:
+            images: List of {id, url} dicts where url is base64 data URI
+            choom_name: Choom name for logging
+        """
+        import base64
+        import time
+
+        for i, img in enumerate(images):
+            img_url = img.get("url", "")
+            if not img_url or not img_url.startswith("data:image"):
+                logger.warning(f"Notification image {i}: unexpected format, skipping")
+                continue
+
+            try:
+                base64_data = img_url.split(",")[1] if "," in img_url else img_url
+                decoded = base64.b64decode(base64_data)
+                img_path = f"{config.TEMP_IMAGE_PATH}/notif_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{i}.png"
+
+                with open(img_path, "wb") as f:
+                    f.write(decoded)
+
+                time.sleep(1)  # Small delay between messages for signal-cli
+                self.signal.send_message(
+                    self.owner_phone,
+                    "",  # Empty message — just the image
+                    attachments=[img_path]
+                )
+                logger.info(f"Sent notification image {i} ({len(decoded)} bytes) for {choom_name}")
+
+                # Clean up temp file
+                try:
+                    import os
+                    os.remove(img_path)
+                except Exception:
+                    pass
+
+            except Exception as e:
+                logger.error(f"Failed to send notification image {i}: {e}")
 
     # =========================================================================
     # Default Task Implementations

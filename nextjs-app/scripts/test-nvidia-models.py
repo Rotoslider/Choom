@@ -28,10 +28,11 @@ MODELS = [
     "moonshotai/kimi-k2.5",
     "moonshotai/kimi-k2-instruct",
     "qwen/qwen3.5-397b-a17b",
-    "qwen/qwen3-next-80b-a3b-instruct",
+    "qwen/qwen3-coder-480b-a35b-instruct",
+    "stepfun-ai/step-3.5-flash",
+    "z-ai/glm4.7",
     "z-ai/glm5",
     "meta/llama-3.1-405b-instruct",
-    "meta/llama-3.3-70b-instruct",
     "mistralai/mistral-nemotron",
 ]
 

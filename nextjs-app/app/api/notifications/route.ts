@@ -8,7 +8,7 @@ import prisma from '@/lib/db';
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { choomId, message, includeAudio } = body;
+    const { choomId, message, includeAudio, imageIds } = body;
 
     if (!choomId || !message) {
       return NextResponse.json({ error: 'choomId and message are required' }, { status: 400 });
@@ -19,6 +19,7 @@ export async function POST(request: NextRequest) {
         choomId,
         message,
         includeAudio: includeAudio !== false,
+        imageIds: Array.isArray(imageIds) && imageIds.length > 0 ? JSON.stringify(imageIds) : null,
       },
     });
 
@@ -31,6 +32,7 @@ export async function POST(request: NextRequest) {
 
 /**
  * GET /api/notifications — Fetch undelivered notifications (for bridge polling)
+ * Resolves imageIds into base64 image data for Signal delivery
  */
 export async function GET() {
   try {
@@ -39,7 +41,34 @@ export async function GET() {
       orderBy: { createdAt: 'asc' },
     });
 
-    return NextResponse.json(notifications);
+    // Resolve image IDs to base64 data
+    const enriched = await Promise.all(
+      notifications.map(async (notif) => {
+        const result: Record<string, unknown> = { ...notif };
+
+        if (notif.imageIds) {
+          try {
+            const ids = JSON.parse(notif.imageIds) as string[];
+            if (ids.length > 0) {
+              const images = await prisma.generatedImage.findMany({
+                where: { id: { in: ids } },
+                select: { id: true, imageUrl: true },
+              });
+              result.images = images.map((img) => ({
+                id: img.id,
+                url: img.imageUrl,
+              }));
+            }
+          } catch {
+            // Invalid JSON in imageIds — skip
+          }
+        }
+
+        return result;
+      })
+    );
+
+    return NextResponse.json(enriched);
   } catch (error) {
     console.error('Notification GET error:', error);
     return NextResponse.json({ error: 'Failed to fetch notifications' }, { status: 500 });

@@ -16,6 +16,11 @@ export const tools: ToolDefinition[] = [
           type: 'boolean',
           description: 'Whether to include TTS audio with the notification (default: true)',
         },
+        image_ids: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Array of generated image IDs to attach to the notification. Use the image IDs returned by generate_image/save_generated_image.',
+        },
       },
       required: ['message'],
     },
