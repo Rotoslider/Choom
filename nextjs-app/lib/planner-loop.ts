@@ -33,6 +33,10 @@ export interface PlanStep {
   result?: ToolResult;
   retries: number;
   rollbackAction?: { toolName: string; args: Record<string, unknown> };
+  // Delegation support: when type is 'delegate', route through choom-delegation handler
+  type?: 'tool' | 'delegate';
+  choomName?: string; // Target Choom for delegate steps
+  task?: string;      // Task description for delegate steps
 }
 
 export interface ExecutionPlan {
@@ -119,20 +123,32 @@ Respond with ONLY a JSON object in this format (no markdown, no backticks):
   "steps": [
     {
       "id": "step_1",
+      "type": "tool",
       "description": "Human-readable description of what this step does",
       "skillName": "skill-name",
       "toolName": "tool_name",
       "args": { "param": "value" },
       "dependsOn": [],
       "expectedOutcome": "What success looks like for this step"
+    },
+    {
+      "id": "step_2",
+      "type": "delegate",
+      "description": "Delegate research to Genesis",
+      "choomName": "Genesis",
+      "task": "Detailed task for the target Choom including context from {{step_1.result.field}}",
+      "dependsOn": ["step_1"],
+      "expectedOutcome": "Genesis returns research findings"
     }
   ]
 }
 
 Rules:
-- Each step should call exactly one tool
+- Each step is either type "tool" (calls a tool directly) or type "delegate" (sends task to another Choom)
+- Use type "delegate" when the task needs another Choom's expertise (research, coding, image analysis)
+- For delegate steps, specify choomName and task (not toolName/args)
 - Use dependsOn to reference step IDs that must complete first
-- Use {{step_N.result.field}} syntax in args to reference previous step outputs
+- Use {{step_N.result.field}} syntax in args/task to reference previous step outputs
 - If the request is simple (1-2 steps), respond with: {"goal": null}
 - Maximum 10 steps per plan
 - Only use tools from the available skills listed above`,
@@ -188,6 +204,10 @@ Rules:
       expectedOutcome: (s.expectedOutcome as string) || '',
       status: 'pending' as const,
       retries: 0,
+      // Delegation fields
+      type: (s.type as 'tool' | 'delegate') || 'tool',
+      choomName: (s.choomName as string) || undefined,
+      task: (s.task as string) || undefined,
     }));
 
     // Validate that all referenced tools exist
@@ -284,8 +304,9 @@ export async function executePlan(
     steps: plan.steps.map(s => ({
       id: s.id,
       description: s.description,
-      toolName: s.toolName,
+      toolName: s.type === 'delegate' ? `delegate → ${s.choomName}` : s.toolName,
       status: s.status,
+      type: s.type || 'tool',
     })),
   });
 
@@ -304,20 +325,35 @@ export async function executePlan(
       continue;
     }
 
-    // Resolve template variables
+    // Resolve template variables (for both args and delegate task text)
     const resolvedArgs = resolveTemplateVars(step.args, completedSteps);
+    const resolvedTask = step.task ? resolveTemplateVars({ _task: step.task }, completedSteps)._task as string : undefined;
 
     // Mark step as running
     step.status = 'running';
     send({ type: 'plan_step_update', stepId: step.id, status: 'running' });
 
-    // Build tool call
+    // Build tool call — delegate steps route through delegate_to_choom
     toolCallCounter++;
-    const toolCall: ToolCall = {
-      id: `plan_tc_${toolCallCounter}`,
-      name: step.toolName,
-      arguments: resolvedArgs,
-    };
+    let toolCall: ToolCall;
+    if (step.type === 'delegate' && step.choomName) {
+      toolCall = {
+        id: `plan_tc_${toolCallCounter}`,
+        name: 'delegate_to_choom',
+        arguments: {
+          choom_name: step.choomName,
+          task: resolvedTask || step.description,
+          context: `Part of plan: "${plan.goal}". Step ${step.id}: ${step.description}`,
+        },
+      };
+      console.log(`[Planner] Step ${step.id}: delegating to "${step.choomName}"`);
+    } else {
+      toolCall = {
+        id: `plan_tc_${toolCallCounter}`,
+        name: step.toolName,
+        arguments: resolvedArgs,
+      };
+    }
 
     // Execute
     let result: ToolResult;

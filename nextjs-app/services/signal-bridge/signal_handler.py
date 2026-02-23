@@ -417,6 +417,9 @@ class MessageParser:
     CHOOM_NAME_VARIANTS = {
         "genesis": "Genesis",
         "lissa": "Lissa",
+        "aloy": "Aloy",
+        "anya": "Anya",
+        "optic": "Optic",
         # Common voice transcription variants
         "lisa": "Lissa",
         "lysa": "Lissa",
@@ -424,6 +427,15 @@ class MessageParser:
         "leesa": "Lissa",
         "elissa": "Lissa",
         "alyssa": "Lissa",
+        "alloy": "Aloy",
+        "eloy": "Aloy",
+        "aloi": "Aloy",
+        "ahoy": "Aloy",
+        "ania": "Anya",
+        "oniya": "Anya",
+        "optek": "Optic",
+        "optik": "Optic",
+        "optics": "Optic",
     }
 
     @staticmethod

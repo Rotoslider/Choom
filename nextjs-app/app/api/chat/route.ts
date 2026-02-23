@@ -2324,7 +2324,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { choomId, chatId, message, settings } = body;
+    const { choomId, chatId, message, settings, isDelegation } = body;
 
     if (!choomId || !chatId || !message) {
       return new Response(
@@ -2597,7 +2597,44 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
     }
 
     // Select tool definitions based on dispatch mode
-    const activeTools: ToolDefinition[] = skillDispatch ? getAllToolsFromSkills() : allTools;
+    let activeTools: ToolDefinition[] = skillDispatch ? getAllToolsFromSkills() : allTools;
+
+    // Per-Choom tool filtering: if system prompt contains <!-- allowed_skills: ... -->, restrict tools
+    // Also supports <!-- max_iterations: N --> to cap agentic loop iterations
+    const allowedSkillsMatch = (choom.systemPrompt || '').match(/<!--\s*allowed_skills:\s*(.+?)\s*-->/);
+    let choomMaxIterations = 0; // 0 = use default
+    const maxIterMatch = (choom.systemPrompt || '').match(/<!--\s*max_iterations:\s*(\d+)\s*-->/);
+    if (maxIterMatch) {
+      choomMaxIterations = Math.min(25, Math.max(3, parseInt(maxIterMatch[1])));
+    }
+    if (allowedSkillsMatch && skillDispatch) {
+      const allowedSkillNames = allowedSkillsMatch[1].split(',').map(s => s.trim());
+      const registry = getSkillRegistry();
+      const allowedToolNames = new Set<string>();
+      for (const skillName of allowedSkillNames) {
+        const skill = registry.getSkill(skillName);
+        if (skill) {
+          for (const toolDef of skill.toolDefinitions) {
+            allowedToolNames.add(toolDef.name);
+          }
+        }
+      }
+      if (allowedToolNames.size > 0) {
+        activeTools = activeTools.filter(t => allowedToolNames.has(t.name));
+        console.log(`   🔒 Tool filter: ${allowedSkillNames.join(', ')} → ${activeTools.length} tools`);
+      }
+    }
+
+    // Delegation mode: strip delegation + plan tools to prevent recursive delegation loops
+    if (isDelegation) {
+      const delegationTools = new Set([
+        'delegate_to_choom', 'list_team', 'get_delegation_result',
+        'create_plan', 'execute_plan', 'adjust_plan',
+      ]);
+      const before = activeTools.length;
+      activeTools = activeTools.filter(t => !delegationTools.has(t.name));
+      console.log(`   🔒 Delegation mode: stripped ${before - activeTools.length} delegation/plan tools → ${activeTools.length} tools`);
+    }
 
     // Build raw history messages (before compaction)
     const historyMessages: ChatMessage[] = [];
@@ -2851,8 +2888,14 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
     // Create streaming response
     const stream = new ReadableStream({
       async start(controller) {
+        let streamClosed = false;
         const send = (data: Record<string, unknown>) => {
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+          if (streamClosed) return; // Silently skip if controller already closed (e.g., aborted delegation)
+          try {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+          } catch {
+            streamClosed = true; // Mark closed so subsequent sends skip silently
+          }
         };
 
         let fullContent = '';
@@ -2861,6 +2904,18 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
         const sessionFileCount = { created: 0, maxAllowed: WORKSPACE_MAX_FILES_PER_SESSION };
         let maxIterations = MAX_ITERATIONS;
         let projectIterationLimitApplied = false;
+
+        // Apply per-Choom iteration limit (from <!-- max_iterations: N --> in system prompt)
+        if (choomMaxIterations > 0) {
+          maxIterations = choomMaxIterations;
+          console.log(`   🔒 [${choom.name}] maxIterations → ${maxIterations} (from system prompt directive)`);
+        }
+
+        // Delegation mode: cap iterations to prevent sub-tasks from running too long
+        if (isDelegation) {
+          maxIterations = Math.min(maxIterations, 6);
+          console.log(`   🔒 [${choom.name}] Delegation mode: maxIterations capped at ${maxIterations}`);
+        }
 
         // Apply per-project iteration limit from pre-detected project (detected above from message or chat history)
         if (detectedProject?.metadata?.maxIterations && detectedProject.metadata.maxIterations > 0) {
@@ -2891,7 +2946,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           const requestStartTime = Date.now();
           const initialMsgContent = currentMessages.map(m => m.content).join('');
           const approxInitialTokens = Math.ceil(initialMsgContent.length / 4);
-          console.log(`\n💬 Chat Request | ${currentMessages.length} msgs | ~${approxInitialTokens.toLocaleString()} tokens`);
+          console.log(`\n💬 Chat Request [${choom.name}] | ${currentMessages.length} msgs | ~${approxInitialTokens.toLocaleString()} tokens`);
           serverLog(choomId, chatId, 'info', 'llm', 'LLM Request', `${llmSettings.model}: ${message.slice(0, 100)}`,
             { model: llmSettings.model, endpoint: llmSettings.endpoint, userMessage: message, messageCount: currentMessages.length, approxTokens: approxInitialTokens });
 
@@ -2905,7 +2960,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           // PLANNER — for multi-step requests, create and execute a plan
           // ================================================================
           let planExecuted = false;
-          if (skillDispatch && isMultiStepRequest(message)) {
+          if (skillDispatch && !isDelegation && isMultiStepRequest(message)) {
             try {
               console.log(`   📋 Multi-step request detected — creating plan...`);
               const registry = getSkillRegistry();
@@ -2974,7 +3029,8 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           let consecutiveFailures = 0; // Abort after MAX_CONSECUTIVE_FAILURES
           const MAX_CONSECUTIVE_FAILURES = 3;
           const MAX_CALLS_PER_TOOL = 5; // Max times any single tool can be called per request
-          console.log(`   🛠️  Tools available: ${activeTools.length} (${activeTools.map(t => t.name).join(', ')})${skillDispatch ? ' [skill dispatch]' : ''}`);
+          const choomTag = `[${choom.name}]`;
+          console.log(`   🛠️  ${choomTag} Tools available: ${activeTools.length} (${activeTools.map(t => t.name).join(', ')})${skillDispatch ? ' [skill dispatch]' : ''}`);
 
           // If plan was executed, reduce remaining iterations for the follow-up loop
           if (planExecuted) {
@@ -2986,7 +3042,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
 
             if (iteration > 1) {
               send({ type: 'agent_iteration', iteration, maxIterations });
-              console.log(`   🔄 Agent iteration ${iteration}/${maxIterations}`);
+              console.log(`   🔄 ${choomTag} Agent iteration ${iteration}/${maxIterations}`);
             }
 
             // Stream LLM response
@@ -3309,7 +3365,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             }
 
             const approxTokens = Math.ceil(currentMessages.map(m => m.content).join('').length / 4);
-            console.log(`   🔧 Next iteration | ${currentMessages.length} msgs | ~${approxTokens.toLocaleString()} tokens`);
+            console.log(`   🔧 ${choomTag} Next iteration | ${currentMessages.length} msgs | ~${approxTokens.toLocaleString()} tokens`);
 
             // Within-turn compaction: truncate old tool results if context is getting large
             const withinTurnResult = compactionService.compactWithinTurn(currentMessages, systemPromptWithSummary, activeTools, 2);
@@ -3376,7 +3432,9 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             error: error instanceof Error ? error.message : 'Unknown error',
           });
         } finally {
-          controller.close();
+          if (!streamClosed) {
+            try { controller.close(); } catch { /* already closed */ }
+          }
         }
       },
     });
