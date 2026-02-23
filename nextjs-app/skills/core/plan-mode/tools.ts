@@ -14,7 +14,7 @@ export const tools: ToolDefinition[] = [
         },
         steps: {
           type: 'array',
-          description: 'Array of plan steps. Each step: { description, toolName, args, dependsOn? }. Use {{step_N.result.field}} in args to reference previous step outputs.',
+          description: 'Array of plan steps. Tool steps: { type: "tool", description, toolName, args, dependsOn? }. Delegate steps: { type: "delegate", description, choomName, task, dependsOn? }. Use {{step_N.result.field}} in args/task to reference previous step outputs. Use {{step_N.result.response}} for delegation text.',
         },
       },
       required: ['goal', 'steps'],

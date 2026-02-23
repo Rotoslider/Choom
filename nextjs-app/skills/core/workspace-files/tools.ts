@@ -80,6 +80,29 @@ export const tools: ToolDefinition[] = [
     },
   },
   {
+    name: 'workspace_create_project',
+    description:
+      'Create a new project with a folder and .choom-project.json metadata file. Use this BEFORE writing any project files. The project will appear in the Projects tab.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: {
+          type: 'string',
+          description: 'Project name in snake_case (e.g. "react_server_components", "email_validator"). Used as the folder name.',
+        },
+        description: {
+          type: 'string',
+          description: 'Brief description of the project goal',
+        },
+        assigned_choom: {
+          type: 'string',
+          description: 'Name of the Choom managing this project (e.g. "Aloy")',
+        },
+      },
+      required: ['name', 'description'],
+    },
+  },
+  {
     name: 'workspace_rename_project',
     description:
       'Rename a project folder in the workspace. Updates the folder name and project metadata.',

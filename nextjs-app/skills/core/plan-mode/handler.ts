@@ -54,8 +54,13 @@ export default class PlanModeHandler extends BaseSkillHandler {
         const id = (s.id as string) || `step_${i + 1}`;
         const toolName = (s.toolName as string) || '';
 
-        // Validate tool exists
-        if (toolName && !registry.getSkillForTool(toolName)) {
+        // Validate: tool steps need valid tool, delegate steps need choomName
+        const stepType = (s.type as string) || 'tool';
+        if (stepType === 'delegate') {
+          if (!s.choomName) {
+            warnings.push(`Step ${id}: delegate step requires choomName`);
+          }
+        } else if (toolName && !registry.getSkillForTool(toolName)) {
           warnings.push(`Step ${id}: tool "${toolName}" not found in registry`);
         }
 
@@ -69,6 +74,10 @@ export default class PlanModeHandler extends BaseSkillHandler {
           expectedOutcome: (s.expectedOutcome as string) || '',
           status: 'pending' as const,
           retries: 0,
+          // Delegation support
+          type: (s.type as 'tool' | 'delegate') || 'tool',
+          choomName: (s.choomName as string) || undefined,
+          task: (s.task as string) || undefined,
         };
       });
 
@@ -87,7 +96,13 @@ export default class PlanModeHandler extends BaseSkillHandler {
         success: true,
         plan_id: planId,
         goal,
-        steps: planSteps.map(s => ({ id: s.id, description: s.description, toolName: s.toolName, dependsOn: s.dependsOn })),
+        steps: planSteps.map(s => ({
+          id: s.id,
+          description: s.description,
+          type: s.type || 'tool',
+          toolName: s.type === 'delegate' ? `delegate → ${s.choomName}` : s.toolName,
+          dependsOn: s.dependsOn,
+        })),
         warnings: warnings.length > 0 ? warnings : undefined,
         message: `Plan created with ${planSteps.length} steps. Use execute_plan with plan_id "${planId}" to run it.`,
       });

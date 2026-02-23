@@ -4,13 +4,14 @@ import { WorkspaceService } from '@/lib/workspace-service';
 import { ProjectService } from '@/lib/project-service';
 import { WORKSPACE_ROOT } from '@/lib/config';
 const WORKSPACE_MAX_FILE_SIZE_KB = 1024;
-const WORKSPACE_ALLOWED_EXTENSIONS = ['.md', '.txt', '.json', '.py', '.ts', '.js', '.html', '.css', '.csv'];
+const WORKSPACE_ALLOWED_EXTENSIONS = ['.md', '.txt', '.json', '.py', '.ts', '.tsx', '.js', '.jsx', '.html', '.css', '.csv'];
 
 const TOOL_NAMES = new Set([
   'workspace_write_file',
   'workspace_read_file',
   'workspace_list_files',
   'workspace_create_folder',
+  'workspace_create_project',
   'workspace_delete_file',
   'workspace_rename_project',
 ]);
@@ -30,6 +31,8 @@ export default class WorkspaceFilesHandler extends BaseSkillHandler {
         return this.listFiles(toolCall);
       case 'workspace_create_folder':
         return this.createFolder(toolCall, ctx);
+      case 'workspace_create_project':
+        return this.createProject(toolCall, ctx);
       case 'workspace_delete_file':
         return this.deleteFile(toolCall);
       case 'workspace_rename_project':
@@ -46,8 +49,13 @@ export default class WorkspaceFilesHandler extends BaseSkillHandler {
         return this.error(toolCall, `Session file creation limit reached (${sessionFileCount.maxAllowed}). Cannot create more files in this session.`);
       }
 
-      const filePath = toolCall.arguments.path as string;
+      // Accept common aliases for path
+      const filePath = (toolCall.arguments.path || toolCall.arguments.file_path || toolCall.arguments.filename) as string;
       const content = toolCall.arguments.content as string;
+
+      if (!filePath) {
+        return this.error(toolCall, 'path is required. Provide a relative file path (e.g., "my_project/file.md")');
+      }
 
       const ws = new WorkspaceService(WORKSPACE_ROOT, WORKSPACE_MAX_FILE_SIZE_KB, WORKSPACE_ALLOWED_EXTENSIONS);
       const result = await ws.writeFile(filePath, content);
@@ -113,7 +121,11 @@ export default class WorkspaceFilesHandler extends BaseSkillHandler {
         return this.error(toolCall, `Session file creation limit reached (${sessionFileCount.maxAllowed}). Cannot create more folders in this session.`);
       }
 
-      const folderPath = toolCall.arguments.path as string;
+      // Accept common aliases: path, folder, name, project_name, folder_name
+      const folderPath = (toolCall.arguments.path || toolCall.arguments.folder || toolCall.arguments.name || toolCall.arguments.project_name || toolCall.arguments.folder_name) as string;
+      if (!folderPath) {
+        return this.error(toolCall, 'path is required. Provide a relative folder path (e.g., "my_project")');
+      }
 
       const ws = new WorkspaceService(WORKSPACE_ROOT, WORKSPACE_MAX_FILE_SIZE_KB, WORKSPACE_ALLOWED_EXTENSIONS);
       const result = await ws.createFolder(folderPath);
@@ -127,6 +139,45 @@ export default class WorkspaceFilesHandler extends BaseSkillHandler {
     } catch (err) {
       console.error('   ❌ Workspace create folder error:', err instanceof Error ? err.message : err);
       return this.error(toolCall, `Failed to create folder: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    }
+  }
+
+  private async createProject(toolCall: ToolCall, ctx: SkillHandlerContext): Promise<ToolResult> {
+    try {
+      const { sessionFileCount } = ctx;
+      if (sessionFileCount.created >= sessionFileCount.maxAllowed) {
+        return this.error(toolCall, `Session file creation limit reached.`);
+      }
+
+      const name = (toolCall.arguments.name || toolCall.arguments.project_name) as string;
+      const description = (toolCall.arguments.description || '') as string;
+      const assignedChoom = (toolCall.arguments.assigned_choom || (ctx.choom as Record<string, unknown>).name || '') as string;
+
+      if (!name) {
+        return this.error(toolCall, 'name is required. Provide a snake_case project name (e.g., "my_project")');
+      }
+
+      const projectService = new ProjectService(WORKSPACE_ROOT);
+      const project = await projectService.createProject(name, {
+        description,
+        assignedChoom: assignedChoom,
+        status: 'active',
+      });
+
+      sessionFileCount.created++;
+
+      ctx.send({ type: 'file_created', path: `${project.folder}/.choom-project.json` });
+
+      console.log(`   📂 Project created: ${project.folder} (assigned to ${assignedChoom || 'unassigned'})`);
+      return this.success(toolCall, {
+        success: true,
+        project_folder: project.folder,
+        metadata: project.metadata,
+        message: `Project "${name}" created at ${project.folder}/. All project files should use paths starting with "${project.folder}/".`,
+      });
+    } catch (err) {
+      console.error('   ❌ Project create error:', err instanceof Error ? err.message : err);
+      return this.error(toolCall, `Failed to create project: ${err instanceof Error ? err.message : 'Unknown error'}`);
     }
   }
 
