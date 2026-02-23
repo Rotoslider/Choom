@@ -2,14 +2,15 @@
 
 A self-hosted AI companion framework with persistent memory, image generation, text-to-speech, and Signal messaging integration. Built with Next.js, Prisma, and a Python Signal bridge.
 
-Each AI persona ("Choom") can have its own LLM model, voice, image style, and memory space. Chooms are agentic — they autonomously chain tools across multi-step tasks, searching the web, writing files, generating images, running code, and managing your calendar without manual prompting between steps. Talk to them through the web UI or via Signal messages.
+Each AI persona ("Choom") can have its own LLM model, voice, image style, and memory space. Chooms are agentic — they autonomously chain tools across multi-step tasks, searching the web, writing files, generating images, running code, and managing your calendar without manual prompting between steps. **Chooms can also delegate tasks to each other** — an orchestrator Choom can assign research to one agent, coding to another, and image analysis to a third, then synthesize the results. Talk to them through the web UI or via Signal messages.
 
-All 79 tools are organized into 21 modular **skills** with progressive disclosure — the LLM only sees detailed documentation for skills relevant to the current request, saving ~3,400 tokens per message. Skills can be enabled/disabled, custom skills can be created via a visual builder, and external skills can be installed from GitHub with safety verification.
+All 82 tools are organized into 22 modular **skills** with progressive disclosure — the LLM only sees detailed documentation for skills relevant to the current request, saving ~3,400 tokens per message. Skills can be enabled/disabled, custom skills can be created via a visual builder, and external skills can be installed from GitHub with safety verification.
 
 ![Chat Interface](docs/screenshots/chat-interface.png)
 
 ## Features
 
+- **Multi-Agent Collaboration**: Chooms delegate tasks to each other via the `choom-delegation` skill — an orchestrator sends work to specialists (researcher, coder, vision analyst) and synthesizes results. Recursive delegation prevention, per-Choom tool filtering (`<!-- allowed_skills: ... -->`), and iteration caps (`<!-- max_iterations: N -->`) keep workflows controlled
 - **Multi-Choom**: Create distinct AI personas with custom system prompts, voices, and LLM backends
 - **Persistent Memory**: Vector-based semantic memory (SQLite + ChromaDB) with per-Choom isolation
 - **Image Generation**: Stable Diffusion Forge integration with selfie mode, LoRA support, and LLM-guided sizing
@@ -19,7 +20,7 @@ All 79 tools are organized into 21 modular **skills** with progressive disclosur
 - **Smart Home (Home Assistant)**: Full integration with Home Assistant for reading sensors, controlling lights/switches/climate, viewing history trends, and ambient home awareness. Three-layer environmental awareness: system prompt injection (every LLM call knows the current home state), heartbeat monitoring (periodic checks with intelligent reasoning), and conditional automations (trigger actions based on sensor thresholds). Includes an Entity Browser in Settings and works from both the web UI and Signal. See the [Smart Home Guide](#smart-home-home-assistant-1) for setup and usage
 - **Scheduled Tasks**: Cron-driven morning briefings, weather checks, aurora forecasts, health heartbeats, and YouTube music downloads
 - **Google Integration**: Full Google Workspace access — Calendar (CRUD), Tasks, Sheets, Docs, Drive, Gmail (read/send/draft/search/archive/reply), Contacts (search/lookup), and YouTube (search/video details/channel info/playlists) — 35 tools via OAuth2
-- **Skills Architecture**: 75 tools organized into 21 modular skills with 3-level progressive disclosure — Level 1 (one-line summaries, always sent), Level 2 (full docs, injected on match), Level 3 (reference files, on demand). Custom skills via visual builder, external skills from GitHub with safety scanning. See the [Skills Guide](SKILLS-GUIDE.md) for details
+- **Skills Architecture**: 82 tools organized into 22 modular skills with 3-level progressive disclosure — Level 1 (one-line summaries, always sent), Level 2 (full docs, injected on match), Level 3 (reference files, on demand). Custom skills via visual builder, external skills from GitHub with safety scanning. See the [Skills Guide](SKILLS-GUIDE.md) for details
 - **Agentic Tool Loop**: Chooms autonomously execute up to 10 tool calls per turn — chaining memory lookups, web searches, image generation, file operations, calendar updates, and more in a single response. Includes automatic nudging (retries with `tool_choice=required` if the LLM describes a tool instead of calling it), tool call deduplication, and smart completion detection
 - **Planner Mode**: Complex multi-step requests (e.g., "research solar panels and write a comparison report") are automatically detected and broken into structured execution plans with real-time progress display, step-by-step watcher evaluation, and automatic retry/rollback on failure
 - **Automation Builder**: Visual drag-and-drop builder for creating scheduled task chains — combine any tools into multi-step automations with cron scheduling, interval triggers, template variables (`{{prev.result.field}}`), per-Choom targeting, and **conditional triggers** (weather, time range, day of week, calendar) with cooldown support. See the [Conditional Triggers Guide](CONDITIONAL-TRIGGERS.md) for details. Managed from Settings > Automations
@@ -75,7 +76,8 @@ nextjs-app/
           eval/route.ts             GET: auto-generate evals, POST: run evals
       automations/route.ts          CRUD + trigger for scheduled automations
   skills/
-    core/                           21 built-in skill modules (SKILL.md + tools.ts + handler.ts)
+    core/                           22 built-in skill modules (SKILL.md + tools.ts + handler.ts)
+      choom-delegation/             3 tools (delegate_to_choom, list_team, get_delegation_result)
       memory-management/            9 tools (remember, search, update, delete, stats, etc.)
       image-generation/             1 tool (checkpoint switching, LoRA, self-portrait mode)
       web-searching/                1 tool (Brave/SearXNG)
@@ -88,7 +90,7 @@ nextjs-app/
       google-gmail/                 7 tools (list, read, send, draft, search, archive, reply)
       google-contacts/              2 tools (search, get contact details)
       google-youtube/               4 tools (search, video details, channel info, playlist items)
-      workspace-files/              6 tools (read, write, list, create, delete, rename)
+      workspace-files/              7 tools (read, write, list, create folder, create project, delete, rename)
       pdf-processing/               2 tools (generate PDF, read PDF)
       web-scraping/                 3 tools (scrape images, download image, download file)
       image-analysis/               1 tool (vision analysis)
@@ -341,6 +343,7 @@ Hybrid SQLite + ChromaDB storage via a Python HTTP server on port 8100.
 ### Workspace Tools
 - `workspace_write_file` / `workspace_read_file` / `workspace_list_files`
 - `workspace_create_folder` / `workspace_delete_file`
+- `workspace_create_project` - Create a new project folder with `.choom-project.json` metadata, assigned Choom, and description. Appears in the Projects tab in Settings
 - `workspace_rename_project` - Rename a project folder and update its `.choom-project.json` metadata (path traversal protected, duplicate name detection)
 - `workspace_read_pdf` - Extract text from PDF files (optional page range via `pdftotext`)
 - `workspace_generate_pdf` - Markdown to PDF via pdfkit with embedded image support:
@@ -497,7 +500,7 @@ The activity panel in the web UI also shows compaction events.
 
 ![Skills Catalog](docs/screenshots/skills-catalog.png)
 
-Choom's 79 tools are organized into 21 modular **skills**. Each skill is a self-contained directory with metadata, tool definitions, and a handler implementation. The skill registry provides progressive disclosure to minimize token usage while ensuring the LLM always has the right documentation at the right time.
+Choom's 82 tools are organized into 22 modular **skills**. Each skill is a self-contained directory with metadata, tool definitions, and a handler implementation. The skill registry provides progressive disclosure to minimize token usage while ensuring the LLM always has the right documentation at the right time.
 
 ### Progressive Disclosure (3 Levels)
 
@@ -520,10 +523,11 @@ skill-name/
   handler.ts            # SkillHandler class (canHandle + execute)
 ```
 
-### 21 Core Skills
+### 22 Core Skills
 
 | Skill | Tools | Description |
 |-------|-------|-------------|
+| `choom-delegation` | 3 | Multi-agent collaboration: delegate tasks to other Chooms, list team, retrieve results |
 | `memory-management` | 9 | Semantic memory (ChromaDB): store, search, update, delete, stats |
 | `image-generation` | 1 | Stable Diffusion Forge: checkpoint switching, LoRA, self-portrait mode |
 | `web-searching` | 1 | Brave Search / SearXNG |
@@ -536,7 +540,7 @@ skill-name/
 | `google-gmail` | 7 | Gmail: list, read, send, draft, search, archive, reply |
 | `google-contacts` | 2 | Google Contacts: search, get contact details |
 | `google-youtube` | 4 | YouTube: search, video details, channel info, playlist items |
-| `workspace-files` | 6 | Sandboxed file operations + project rename |
+| `workspace-files` | 7 | Sandboxed file operations + project creation + rename |
 | `pdf-processing` | 2 | Markdown-to-PDF generation + PDF text extraction |
 | `web-scraping` | 3 | Page image scraping, image/file downloads |
 | `image-analysis` | 1 | Vision LLM analysis (workspace, URL, or base64) |
@@ -601,6 +605,62 @@ Complex multi-step requests are automatically detected and handled by a dual-loo
 7. **Visible plan**: The chat UI displays a checklist showing step status (pending/running/completed/failed/rolled_back)
 
 Simple requests (weather check, memory search, single tool calls) bypass the planner and use the existing simple agentic loop.
+
+## Multi-Agent Collaboration
+
+Chooms can delegate tasks to each other, enabling teams of specialized agents to collaborate on complex projects. An orchestrator Choom breaks down work and assigns it to the right specialist.
+
+### Delegation Flow
+
+```
+User → Orchestrator (e.g. Aloy)
+         ├── delegate_to_choom("Genesis", "Research React Server Components")
+         │     └── Genesis uses web_search, workspace_write_file → returns findings
+         ├── delegate_to_choom("Anya", "Build a demo component based on the research")
+         │     └── Anya uses execute_code, workspace_write_file → returns code
+         └── Orchestrator synthesizes results → User
+```
+
+### Delegation Tools (choom-delegation skill)
+
+| Tool | Description |
+|------|-------------|
+| `delegate_to_choom` | Send a task to another Choom by name. Creates a dedicated chat, makes an internal API call, parses the SSE response stream, and returns the result. Configurable timeout (30-300s, default 120s) |
+| `list_team` | List all available Chooms with their descriptions, models, and specializations |
+| `get_delegation_result` | Retrieve a cached delegation result by ID (within the current session) |
+
+### Setting Up an Orchestrator
+
+1. **Create specialized Chooms** — each with a system prompt and model suited to their role (e.g. researcher, coder, vision analyst)
+2. **Restrict the orchestrator's tools** — add to the orchestrator's system prompt:
+   ```
+   <!-- allowed_skills: choom-delegation, plan-mode, workspace-files, web-searching, weather-forecasting -->
+   <!-- max_iterations: 12 -->
+   ```
+   This prevents the orchestrator from doing work itself instead of delegating
+3. **Instruct the orchestrator** — system prompt should explain the team composition and when to delegate vs. act directly
+
+### Safety Features
+
+- **Recursive loop prevention**: Delegated Chooms have delegation and plan-mode tools stripped automatically (`isDelegation` flag). They cannot delegate to other Chooms or create plans
+- **Iteration cap**: Delegated Chooms are capped at 6 agentic iterations regardless of their normal limit
+- **Multi-step detection disabled**: Plan detection is turned off for delegated tasks to prevent nested plan creation
+- **Empty response fallback**: If a target Choom returns <10 characters, the handler falls back to tool result text so the orchestrator still gets useful data
+
+### Plan Mode + Delegation
+
+Plans can include `delegate` step types alongside regular `tool` steps:
+
+```json
+{
+  "type": "delegate",
+  "choomName": "Genesis",
+  "task": "Research {{topic}} and save findings to {{project}}/research.md",
+  "description": "Have Genesis research the topic"
+}
+```
+
+Template variables (`{{step_N.result.field}}`) work across both tool and delegate steps.
 
 ## Automations
 
@@ -861,7 +921,7 @@ A Python daemon that connects Chooms to Signal messaging via `signal-cli`.
 
 - **Settings parity**: Signal messages use the same weather, search, and image settings as the web GUI (synced via `bridge-config.json`)
 - **Auto-refresh**: Chooms list refreshes every 60 seconds (no restart needed for new Chooms)
-- **Fuzzy matching**: Voice transcription variants map to correct Choom names (e.g. "my choom" -> "MyChoom")
+- **Fuzzy matching**: Voice transcription variants map to correct Choom names (e.g. "alloy" → "Aloy", "lisa" → "Lissa"). All Chooms are registered with common speech-to-text variants
 - **Quiet hours**: Heartbeat and system alert messages suppressed during configured quiet period (notifications from Chooms are always delivered)
 - **Heartbeat deferral**: Per-Choom user activity tracking — each incoming message records a timestamp per Choom, and heartbeats defer if the user was active with that specific Choom within a 2-minute window, preventing concurrent responses to the same conversation
 - **Lock file**: `/tmp/signal-bridge.lock` prevents duplicate instances
