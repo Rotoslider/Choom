@@ -337,7 +337,7 @@ export function MessageBubble({
           {generatedImages.length > 0 && (
             <div className="mt-3 space-y-2">
               {generatedImages.map((img, idx) => (
-                <div key={img.imageId || idx}>
+                <div key={`${img.imageId || 'img'}-${idx}`}>
                   {img.imageUrl ? (
                     <div className="relative">
                       <img
