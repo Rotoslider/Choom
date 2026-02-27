@@ -113,6 +113,17 @@ export class StreamingTTS {
     }
   }
 
+  // Reset buffer and queue for a new iteration (drops unsent text but lets current audio finish)
+  reset() {
+    this.buffer = '';
+    this.fullText = '';
+    this.insideThinking = false;
+    this.insideCodeBlock = false;
+    // Cancel pending TTS requests so queued-but-unsent sentences from previous iteration are dropped
+    this.audioQueue = [];
+    this.ttsQueue = Promise.resolve();
+  }
+
   // Stop current playback and clear queue
   stop() {
     // Stop current audio

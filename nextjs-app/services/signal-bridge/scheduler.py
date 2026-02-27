@@ -869,6 +869,15 @@ Include a warm greeting, the weather summary (mention if wind under 15mph is goo
             logger.debug(f"Custom heartbeat {task_id} suppressed (quiet period)")
             return
 
+        # Re-read config to get the latest prompt and choom_name
+        # (closure values from setup time may be stale after settings edits)
+        custom_tasks = get_custom_heartbeats()
+        for task in custom_tasks:
+            if task.get("id") == task_id:
+                choom_name = task.get("choom_name", choom_name)
+                prompt = task.get("prompt", prompt)
+                break
+
         # Skip if user is actively chatting with this Choom (avoid concurrent responses)
         if self.choom.is_user_active(choom_name, window_seconds=120):
             logger.info(f"Custom heartbeat {task_id} deferred: user active with {choom_name}")
