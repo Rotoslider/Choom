@@ -558,6 +558,8 @@ export default function Home() {
                 break;
               case 'agent_iteration':
                 log.system(`Agent step ${data.iteration}/${data.maxIterations}`, 'info');
+                // Reset TTS buffer so previous iteration's preamble text isn't spoken again
+                ttsRef.current?.reset();
                 setAgentProgress(prev => ({
                   iteration: data.iteration || 1,
                   maxIterations: data.maxIterations || 10,

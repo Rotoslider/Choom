@@ -3040,6 +3040,9 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             maxIterations = Math.min(maxIterations, 3); // Allow up to 3 iterations for summary/follow-up
           }
 
+          // Preserve any pre-loop content (e.g., plan summaries) so the final iteration can prefix it
+          const preLoopContent = fullContent;
+
           while (iteration < maxIterations) {
             iteration++;
 
@@ -3100,11 +3103,6 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               break;
             }
 
-            // Accumulate content
-            if (iterationContent) {
-              fullContent = fullContent ? fullContent + '\n\n' + iterationContent : iterationContent;
-            }
-
             // Convert accumulated tool calls (with malformed JSON protection)
             let toolCalls: { id: string; name: string; arguments: Record<string, unknown> }[] = [];
             if (toolCallsAccumulator.size > 0) {
@@ -3144,7 +3142,23 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 forceToolCall = true;
                 continue;
               }
+              // Final iteration (no tools, no nudge) — use only this iteration's content
+              // as the saved response. Previous iterations' text was preamble (already streamed
+              // but shouldn't be saved to DB since the LLM tends to repeat it).
+              // Preserve any pre-loop content (e.g., plan summaries).
+              fullContent = preLoopContent
+                ? preLoopContent + '\n\n' + iterationContent
+                : iterationContent;
               break;
+            }
+
+            // Iteration has tool calls — the text is just preamble ("Let me check...").
+            // It was already streamed to the user but we don't accumulate it into fullContent
+            // because the LLM will produce the real response after getting tool results.
+            // Only keep it if this is the first iteration and no prior content exists,
+            // as a fallback in case the loop exits unexpectedly.
+            if (!fullContent && iterationContent) {
+              fullContent = iterationContent;
             }
 
             // Track all tool calls for DB save
