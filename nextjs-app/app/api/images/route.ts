@@ -17,6 +17,15 @@ export async function GET(request: NextRequest) {
     const images = await prisma.generatedImage.findMany({
       where: { choomId },
       orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        choomId: true,
+        prompt: true,
+        settings: true,
+        createdAt: true,
+        // imageUrl excluded — too large for bulk fetch (base64 data URIs).
+        // Individual images served via /api/images/[id]/file
+      },
     });
 
     return NextResponse.json(images);

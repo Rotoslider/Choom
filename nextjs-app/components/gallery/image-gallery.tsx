@@ -17,9 +17,12 @@ interface GeneratedImage {
   id: string;
   choomId: string;
   prompt: string;
-  imageUrl: string;
   settings: string | null;
   createdAt: string;
+}
+
+function imageFileUrl(id: string) {
+  return `/api/images/${id}/file`;
 }
 
 interface ImageGalleryProps {
@@ -108,7 +111,7 @@ export function ImageGallery({
     const shortId = image.id.slice(-8); // Last 8 chars of ID
 
     const link = document.createElement('a');
-    link.href = image.imageUrl;
+    link.href = imageFileUrl(image.id);
     link.download = `${name}-${type}-${shortId}.png`;
     link.click();
   };
@@ -187,8 +190,9 @@ export function ImageGallery({
                     onClick={() => openLightbox(image, index)}
                   >
                     <img
-                      src={image.imageUrl}
+                      src={imageFileUrl(image.id)}
                       alt={image.prompt}
+                      loading="lazy"
                       className="w-full h-full object-cover transition-transform group-hover:scale-105"
                     />
                     {/* Hover overlay */}
@@ -273,7 +277,7 @@ export function ImageGallery({
             onClick={(e) => e.stopPropagation()}
           >
             <img
-              src={selectedImage.imageUrl}
+              src={imageFileUrl(selectedImage.id)}
               alt={selectedImage.prompt}
               className="max-w-full max-h-[70vh] object-contain rounded-lg"
             />
