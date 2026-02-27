@@ -448,6 +448,20 @@ async function executeToolCall(
         },
       });
 
+      // Enforce per-Choom image limit (keep last 50)
+      const MAX_IMAGES_PER_CHOOM = 50;
+      const allImages = await prisma.generatedImage.findMany({
+        where: { choomId },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true },
+      });
+      if (allImages.length > MAX_IMAGES_PER_CHOOM) {
+        const idsToDelete = allImages.slice(MAX_IMAGES_PER_CHOOM).map((img) => img.id);
+        await prisma.generatedImage.deleteMany({
+          where: { id: { in: idsToDelete } },
+        });
+      }
+
       // Send the image to the client for display
       send({
         type: 'image_generated',
