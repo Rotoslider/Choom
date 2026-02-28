@@ -51,7 +51,10 @@ export default class WorkspaceFilesHandler extends BaseSkillHandler {
 
       // Accept common aliases for path
       const filePath = (toolCall.arguments.path || toolCall.arguments.file_path || toolCall.arguments.filename) as string;
-      const content = toolCall.arguments.content as string;
+      // Stringify objects/arrays if model passes non-string content
+      const rawContent = toolCall.arguments.content;
+      const content = typeof rawContent === 'string' ? rawContent
+        : rawContent != null ? JSON.stringify(rawContent, null, 2) : '';
 
       if (!filePath) {
         return this.error(toolCall, 'path is required. Provide a relative file path (e.g., "my_project/file.md")');

@@ -176,10 +176,13 @@ export async function executeMemoryTool(
   companionId?: string
 ): Promise<MemoryServerResult> {
   switch (toolName) {
-    case 'remember':
+    case 'remember': {
+      const content = args.content as string;
+      // Auto-generate title from content if model omits it
+      const title = (args.title as string) || (content ? content.slice(0, 60).replace(/[^\w\s'-]/g, '').trim() : 'Untitled memory');
       return client.remember(
-        args.title as string,
-        args.content as string,
+        title,
+        content,
         {
           tags: args.tags as string,
           importance: args.importance as number,
@@ -187,13 +190,17 @@ export async function executeMemoryTool(
           companion_id: companionId,
         }
       );
+    }
 
-    case 'search_memories':
+    case 'search_memories': {
+      // Default query from content/topic if model omits required query param
+      const query = (args.query as string) || (args.content as string) || (args.topic as string) || 'recent memories';
       return client.search(
-        args.query as string,
+        query,
         (args.limit as number) || 10,
         companionId
       );
+    }
 
     case 'search_by_type':
       return client.searchByType(

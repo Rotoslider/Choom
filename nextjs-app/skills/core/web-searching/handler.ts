@@ -9,6 +9,19 @@ const defaultSearchSettings: SearchSettings = {
   maxResults: 5,
 };
 
+// Smart merge: skip empty strings, null, and undefined values
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function smartMerge<T extends Record<string, any>>(defaults: T, overrides: Partial<T> | undefined): T {
+  if (!overrides) return { ...defaults };
+  const result = { ...defaults };
+  for (const key of Object.keys(overrides) as (keyof T)[]) {
+    const val = overrides[key];
+    if (val === '' || val === null || val === undefined) continue;
+    result[key] = val as T[keyof T];
+  }
+  return result;
+}
+
 const TOOL_NAMES = new Set(['web_search']);
 
 export default class WebSearchHandler extends BaseSkillHandler {
@@ -27,10 +40,10 @@ export default class WebSearchHandler extends BaseSkillHandler {
 
   private async handleWebSearch(toolCall: ToolCall, ctx: SkillHandlerContext): Promise<ToolResult> {
     try {
-      const searchSettings: SearchSettings = {
-        ...defaultSearchSettings,
-        ...(ctx.settings?.search as object),
-      };
+      const searchSettings: SearchSettings = smartMerge(
+        defaultSearchSettings,
+        ctx.settings?.search as Partial<SearchSettings> | undefined,
+      );
 
       console.log(`   🔍 Search settings: provider=${searchSettings.provider}, braveApiKey=${searchSettings.braveApiKey ? '***' + searchSettings.braveApiKey.slice(-4) : '(empty)'}, searxng=${searchSettings.searxngEndpoint || '(empty)'}`);
 
