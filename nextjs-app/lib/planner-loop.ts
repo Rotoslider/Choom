@@ -109,6 +109,19 @@ export async function createPlan(
 ): Promise<ExecutionPlan | null> {
   const skillSummaries = registry.getLevel1Summaries();
 
+  // Build compact parameter reference so the LLM knows required args
+  const toolParamRef = tools.map(t => {
+    const props = t.parameters?.properties;
+    const required = t.parameters?.required || [];
+    if (!props || Object.keys(props).length === 0) return `  ${t.name}()`;
+    const params = Object.entries(props).map(([name, schema]) => {
+      const isReq = required.includes(name);
+      const enumVals = schema.enum ? ` [${schema.enum.join('|')}]` : '';
+      return `${isReq ? '*' : ''}${name}:${schema.type}${enumVals}`;
+    });
+    return `  ${t.name}(${params.join(', ')})`;
+  }).join('\n');
+
   const planPrompt: ChatMessage = {
     role: 'user',
     content: `[System — Plan Creation]
@@ -116,6 +129,9 @@ You are creating a structured execution plan. Based on the conversation so far, 
 
 Available skills and tools:
 ${skillSummaries}
+
+Tool parameters (* = required):
+${toolParamRef}
 
 Respond with ONLY a JSON object in this format (no markdown, no backticks):
 {
@@ -177,11 +193,16 @@ Rules:
 
   // Parse the JSON response
   try {
-    // Strip markdown code fences if present
-    const cleaned = responseText
-      .replace(/^```json?\s*/i, '')
-      .replace(/\s*```$/i, '')
-      .trim();
+    // Extract JSON from markdown code block anywhere in the response
+    // (LLMs often add preamble text before the ```json block)
+    const codeBlockMatch = responseText.match(/```json?\s*\n?([\s\S]*?)\n?\s*```/i);
+    let cleaned: string;
+    if (codeBlockMatch) {
+      cleaned = codeBlockMatch[1].trim();
+    } else {
+      // No code block — try the raw response (strip leading/trailing whitespace)
+      cleaned = responseText.trim();
+    }
 
     const parsed = JSON.parse(cleaned);
 

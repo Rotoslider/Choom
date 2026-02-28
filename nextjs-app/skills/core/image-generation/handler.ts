@@ -166,9 +166,12 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
       let genWidth: number;
       let genHeight: number;
 
-      if (toolCall.arguments.width && toolCall.arguments.height) {
-        genWidth = toolCall.arguments.width as number;
-        genHeight = toolCall.arguments.height as number;
+      // Filter out "None"/null string values that some models pass for optional int params
+      const argWidth = typeof toolCall.arguments.width === 'number' ? toolCall.arguments.width : parseInt(toolCall.arguments.width as string);
+      const argHeight = typeof toolCall.arguments.height === 'number' ? toolCall.arguments.height : parseInt(toolCall.arguments.height as string);
+      if (argWidth > 0 && argHeight > 0) {
+        genWidth = argWidth;
+        genHeight = argHeight;
       } else {
         const size = (toolCall.arguments.size as ImageSize) || (modeSettings.size as ImageSize) || 'medium';
         const aspect = (toolCall.arguments.aspect as ImageAspect) || (modeSettings.aspect as ImageAspect)
@@ -235,7 +238,7 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
           negativePrompt: toolCall.arguments.negative_prompt as string || (modeSettings.negativePrompt as string) || imageGenSettings.defaultNegativePrompt,
           width: genWidth,
           height: genHeight,
-          steps: toolCall.arguments.steps as number || (modeSettings.steps as number) || imageGenSettings.defaultSteps,
+          steps: (typeof toolCall.arguments.steps === 'number' ? toolCall.arguments.steps : parseInt(toolCall.arguments.steps as string)) || (modeSettings.steps as number) || imageGenSettings.defaultSteps,
           cfgScale: genCfgScale,
           distilledCfg: genDistilledCfg,
           sampler: (modeSettings.sampler as string) || imageGenSettings.defaultSampler,

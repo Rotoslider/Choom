@@ -56,9 +56,38 @@ class ChoomClient:
         self._last_user_activity[choom_name.lower()] = time.time()
 
     def is_user_active(self, choom_name: str, window_seconds: float = 120) -> bool:
-        """Check if user was recently active with this Choom (default: 2 min window)"""
+        """Check if user was recently active with this Choom (Signal or GUI).
+        Checks both in-memory Signal activity tracking and GUI activity files
+        written by the Next.js chat route (file exists = request in progress,
+        deleted in finally block when request completes)."""
+        # Check Signal activity (in-memory)
         last = self._last_user_activity.get(choom_name.lower(), 0)
-        return (time.time() - last) < window_seconds
+        if (time.time() - last) < window_seconds:
+            return True
+
+        # Check GUI activity (file-based, written by chat route)
+        # File exists = GUI chat request is in-flight (deleted on completion).
+        # Also check age as fallback in case file wasn't cleaned up (crash, etc.)
+        try:
+            import os
+            gui_activity_dir = os.path.join(os.path.dirname(__file__), '.gui-activity')
+            activity_file = os.path.join(gui_activity_dir, f"{choom_name.lower()}.ts")
+            if os.path.exists(activity_file):
+                with open(activity_file, 'r') as f:
+                    ts = int(f.read().strip())
+                # Convert JS timestamp (ms) to seconds
+                age = time.time() - (ts / 1000)
+                # File present + recent = definitely active
+                # File present + very old (>10 min) = stale, ignore
+                if age < 600:
+                    return True
+                else:
+                    # Stale file — clean it up
+                    os.remove(activity_file)
+        except Exception:
+            pass  # Non-critical — fall through to False
+
+        return False
 
     def _make_request(self, method: str, endpoint: str, **kwargs) -> requests.Response:
         """Make an API request"""

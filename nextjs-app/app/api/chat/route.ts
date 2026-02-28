@@ -22,6 +22,42 @@ import { isMultiStepRequest, createPlan, executePlan, summarizePlan } from '@/li
 import { WatcherLoop } from '@/lib/watcher-loop';
 import type { LLMSettings, ToolCall, ToolResult, ToolDefinition, ImageGenSettings, WeatherSettings, SearchSettings, ImageSize, ImageAspect } from '@/lib/types';
 import { computeImageDimensions } from '@/lib/types';
+import * as fs from 'fs';
+import * as path from 'path';
+
+// Smart merge: skip empty strings, null, and undefined values so GUI defaults
+// don't clobber real .env / bridge-config values.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function smartMerge<T extends Record<string, any>>(defaults: T, overrides: Partial<T> | undefined): T {
+  if (!overrides) return { ...defaults };
+  const result = { ...defaults };
+  for (const key of Object.keys(overrides) as (keyof T)[]) {
+    const val = overrides[key];
+    if (val === '' || val === null || val === undefined) continue;
+    result[key] = val as T[keyof T];
+  }
+  return result;
+}
+
+// GUI activity tracking — write a per-Choom timestamp file so the Python
+// heartbeat scheduler can detect active GUI conversations and defer.
+const ACTIVITY_DIR = path.join(process.cwd(), 'services', 'signal-bridge', '.gui-activity');
+function recordGuiActivity(choomName: string) {
+  try {
+    if (!fs.existsSync(ACTIVITY_DIR)) fs.mkdirSync(ACTIVITY_DIR, { recursive: true });
+    fs.writeFileSync(
+      path.join(ACTIVITY_DIR, `${choomName.toLowerCase()}.ts`),
+      Date.now().toString(),
+      'utf-8'
+    );
+  } catch { /* non-critical */ }
+}
+function clearGuiActivity(choomName: string) {
+  try {
+    const f = path.join(ACTIVITY_DIR, `${choomName.toLowerCase()}.ts`);
+    if (fs.existsSync(f)) fs.unlinkSync(f);
+  } catch { /* non-critical */ }
+}
 
 // Default LLM settings (fallback if client doesn't send settings)
 const defaultLLMSettings: LLMSettings = {
@@ -2010,7 +2046,11 @@ async function executeToolCall(
           visionEndpoint = visionProvider.endpoint.replace(/\/v1\/?$/, '');
         }
       }
-      const visionModel = (settings?.vision as Record<string, unknown>)?.model as string || 'vision-model';
+      const rawVisionModel = (settings?.vision as Record<string, unknown>)?.model as string;
+      const fallbackModel = ((settings?.llm as Record<string, unknown>)?.model as string) || defaultLLMSettings.model;
+      const visionModel = (rawVisionModel && rawVisionModel !== 'vision-model')
+        ? rawVisionModel
+        : fallbackModel; // Fall back to LLM model (multimodal models support vision natively)
       const visionSettings: VisionSettings = {
         endpoint: visionEndpoint,
         model: visionModel,
@@ -2265,6 +2305,30 @@ async function executeToolCallViaSkills(
     };
   }
 
+  // Validate required parameters before dispatching to handler
+  const toolDef = skill.toolDefinitions.find(t => t.name === toolCall.name);
+  if (toolDef?.parameters?.required) {
+    const missing = (toolDef.parameters.required as string[]).filter(
+      p => toolCall.arguments[p] === undefined || toolCall.arguments[p] === null
+    );
+    if (missing.length > 0) {
+      // Include enum/type hints for missing params so the model knows valid values
+      const props = toolDef.parameters.properties as unknown as Record<string, Record<string, unknown>> | undefined;
+      const hints = missing.map(p => {
+        const prop = props?.[p];
+        if (prop?.enum) return `${p} (valid values: ${(prop.enum as string[]).join(', ')})`;
+        if (prop?.description) return `${p} (${prop.description})`;
+        return p;
+      });
+      return {
+        toolCallId: toolCall.id,
+        name: toolCall.name,
+        result: null,
+        error: `Missing required parameter(s): ${hints.join('; ')}. Please provide ${missing.length === 1 ? 'this parameter' : 'these parameters'} and try again.`,
+      };
+    }
+  }
+
   const handlerCtx: SkillHandlerContext = {
     memoryClient: ctx.memoryClient,
     memoryCompanionId: ctx.memoryCompanionId,
@@ -2364,6 +2428,11 @@ export async function POST(request: NextRequest) {
         JSON.stringify({ error: 'Choom or Chat not found' }),
         { status: 404, headers: { 'Content-Type': 'application/json' } }
       );
+    }
+
+    // Record GUI activity so heartbeat scheduler defers while we're chatting
+    if (!isDelegation) {
+      recordGuiActivity(choom.name);
     }
 
     // Save user message
@@ -2484,10 +2553,10 @@ export async function POST(request: NextRequest) {
     const timeInfo = formatTimeContextForPrompt(timeContext);
 
     // Build weather context
-    const weatherSettings: WeatherSettings = {
-      ...defaultWeatherSettings,
-      ...settings?.weather,
-    };
+    const weatherSettings: WeatherSettings = smartMerge(
+      defaultWeatherSettings,
+      settings?.weather as Partial<WeatherSettings> | undefined,
+    );
     let weatherInfo = '';
     if (weatherSettings.apiKey) {
       try {
@@ -2724,73 +2793,18 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
       ...compactedHistory,
     ];
 
-    // Pre-process: detect workspace/file requests and inject listing context
-    // This helps models that don't reliably call workspace_list_files on their own
-    let enrichedMessage = message;
-    const msgLower = message.toLowerCase();
-    const mentionsImages = /\b(image|images|photo|photos|picture|pictures|jpg|jpeg|png|screenshot)\b/.test(msgLower);
-    const mentionsWorkspace = /\b(project|folder|workspace|directory|files?)\b/.test(msgLower);
-    const mentionsReview = /\b(review|analyze|look at|check|examine|describe|inspect|see|show)\b/.test(msgLower);
-    const mentionsList = /\b(list|what'?s in|contents?|show me|what do i have|what files|what'?s there|empty|anything in)\b/.test(msgLower);
-
-    if (mentionsWorkspace && (mentionsImages || mentionsReview || mentionsList)) {
-      try {
-        const imageExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'];
-        const ws = new WorkspaceService(WORKSPACE_ROOT, WORKSPACE_MAX_FILE_SIZE_KB, WORKSPACE_ALLOWED_EXTENSIONS);
-
-        // Scan top-level directories
-        const topLevel = await ws.listFiles('');
-        const allFilePaths: string[] = [];
-        const imagePaths: string[] = [];
-
-        for (const entry of topLevel) {
-          if (entry.type === 'directory') {
-            allFilePaths.push(`📁 ${entry.name}/`);
-            const subFiles = await ws.listFiles(entry.name);
-            for (const f of subFiles) {
-              if (f.type === 'file') {
-                allFilePaths.push(`  📄 ${entry.name}/${f.name} (${f.size} bytes)`);
-                if (imageExts.some(ext => f.name.toLowerCase().endsWith(ext))) {
-                  imagePaths.push(`${entry.name}/${f.name}`);
-                }
-              } else if (f.type === 'directory') {
-                allFilePaths.push(`  📁 ${entry.name}/${f.name}/`);
-              }
-            }
-          } else if (entry.type === 'file') {
-            allFilePaths.push(`📄 ${entry.name} (${entry.size} bytes)`);
-            if (imageExts.some(ext => entry.name.toLowerCase().endsWith(ext))) {
-              imagePaths.push(entry.name);
-            }
-          }
-        }
-
-        if (mentionsImages && imagePaths.length > 0) {
-          // Image-specific: inject image paths with analyze_image instructions
-          const fileList = imagePaths.map(p => `- ${p}`).join('\n');
-          enrichedMessage = `${message}\n\n[System: Found ${imagePaths.length} image(s) in workspace:\n${fileList}\nUse the analyze_image tool with image_path for each image listed above.]`;
-          console.log(`   🖼️  Pre-injected ${imagePaths.length} workspace image paths into message`);
-        } else if (allFilePaths.length > 0) {
-          // General listing: inject full workspace tree
-          const tree = allFilePaths.join('\n');
-          enrichedMessage = `${message}\n\n[System: Current workspace contents:\n${tree}\n]`;
-          console.log(`   📂  Pre-injected workspace listing (${allFilePaths.length} entries) into message`);
-        }
-      } catch (err) {
-        console.warn('   ⚠️  Failed to pre-list workspace files:', err);
-      }
-    }
-
-    // Pre-detect project from user message or recent chat history
+    // Pre-detect project from user message or recent chat history (FIRST, before image injection)
     // Used for: (1) injecting exact folder name so LLM doesn't create duplicates,
     //           (2) applying per-project iteration limits (e.g. 100 instead of 25)
-    let detectedProject: { folder: string; metadata: { maxIterations?: number; name?: string; llmProviderId?: string; llmModel?: string } } | null = null;
+    //           (3) scoping image pre-injection to only the detected project folder
+    let enrichedMessage = message;
+    let detectedProject: { folder: string; metadata: { maxIterations?: number; name?: string; llmProviderId?: string; llmModel?: string; assignedChoom?: string } } | null = null;
     try {
       const projectService = new ProjectService(WORKSPACE_ROOT);
       const allProjects = await projectService.listProjects();
       const msgLowerForProject = message.toLowerCase().replace(/[_\s]+/g, ' ');
 
-      // Helper: find matching projects in text, preferring one with maxIterations
+      // Helper: find matching projects in text, preferring longest (most specific) match
       const findBestMatch = (text: string): typeof detectedProject => {
         const matches: typeof allProjects = [];
         for (const proj of allProjects) {
@@ -2802,8 +2816,21 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           }
         }
         if (matches.length === 0) return null;
-        // Prefer match with maxIterations (user-configured project, not a stale duplicate)
-        return matches.find(p => p.metadata.maxIterations && p.metadata.maxIterations > 0) || matches[0];
+        // Priority: (1) assigned to current Choom, (2) longest folder name, (3) has maxIterations
+        const choomName = choom.name.toLowerCase();
+        matches.sort((a, b) => {
+          // Strongly prefer projects assigned to the current Choom
+          const aAssigned = (a.metadata.assignedChoom || '').toLowerCase() === choomName ? 1 : 0;
+          const bAssigned = (b.metadata.assignedChoom || '').toLowerCase() === choomName ? 1 : 0;
+          if (aAssigned !== bAssigned) return bAssigned - aAssigned;
+          // Then prefer longest folder name (most specific: "selfies_lissa" beats "selfies")
+          const lenDiff = b.folder.length - a.folder.length;
+          if (lenDiff !== 0) return lenDiff;
+          const aHasIter = a.metadata.maxIterations && a.metadata.maxIterations > 0 ? 1 : 0;
+          const bHasIter = b.metadata.maxIterations && b.metadata.maxIterations > 0 ? 1 : 0;
+          return bHasIter - aHasIter;
+        });
+        return matches[0];
       };
 
       // First: check current message for project name
@@ -2832,6 +2859,69 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
         currentMessages[0].content += `\nYou have ${MAX_ITERATIONS} thinking rounds available. Each round can include multiple parallel tool calls — calling 5 tools in one round only uses 1 round, not 5. Do not stop early thinking you are running out of rounds.`;
       }
     } catch { /* ignore project detection errors */ }
+
+    // Pre-process: detect workspace/file requests and inject listing context
+    // Scoped to detected project folder when available (avoids flooding context with unrelated images)
+    const msgLower = message.toLowerCase();
+    const mentionsImages = /\b(image|images|photo|photos|picture|pictures|jpg|jpeg|png|screenshot)\b/.test(msgLower);
+    const mentionsWorkspace = /\b(project|folder|workspace|directory|files?)\b/.test(msgLower);
+    const mentionsReview = /\b(review|analyze|look at|check|examine|describe|inspect|see|show)\b/.test(msgLower);
+    const mentionsList = /\b(list|what'?s in|contents?|show me|what do i have|what files|what'?s there|empty|anything in)\b/.test(msgLower);
+
+    if (mentionsWorkspace && (mentionsImages || mentionsReview || mentionsList)) {
+      try {
+        const imageExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'];
+        const ws = new WorkspaceService(WORKSPACE_ROOT, WORKSPACE_MAX_FILE_SIZE_KB, WORKSPACE_ALLOWED_EXTENSIONS);
+
+        // Scope scanning to detected project folder, or scan all top-level dirs
+        const scanDirs: string[] = detectedProject ? [detectedProject.folder] : [];
+        const allFilePaths: string[] = [];
+        const imagePaths: string[] = [];
+
+        if (scanDirs.length === 0) {
+          // No project detected — scan top-level to find all dirs
+          const topLevel = await ws.listFiles('');
+          for (const entry of topLevel) {
+            if (entry.type === 'directory') scanDirs.push(entry.name);
+            else if (entry.type === 'file') {
+              allFilePaths.push(`📄 ${entry.name} (${entry.size} bytes)`);
+              if (imageExts.some(ext => entry.name.toLowerCase().endsWith(ext))) {
+                imagePaths.push(entry.name);
+              }
+            }
+          }
+        }
+
+        for (const dir of scanDirs) {
+          allFilePaths.push(`📁 ${dir}/`);
+          const subFiles = await ws.listFiles(dir);
+          for (const f of subFiles) {
+            if (f.type === 'file') {
+              allFilePaths.push(`  📄 ${dir}/${f.name} (${f.size} bytes)`);
+              if (imageExts.some(ext => f.name.toLowerCase().endsWith(ext))) {
+                imagePaths.push(`${dir}/${f.name}`);
+              }
+            } else if (f.type === 'directory') {
+              allFilePaths.push(`  📁 ${dir}/${f.name}/`);
+            }
+          }
+        }
+
+        if (mentionsImages && imagePaths.length > 0) {
+          // Image-specific: inject image paths with analyze_image instructions
+          const fileList = imagePaths.map(p => `- ${p}`).join('\n');
+          enrichedMessage = `${enrichedMessage}\n\n[System: Found ${imagePaths.length} image(s) in ${detectedProject ? `project "${detectedProject.folder}"` : 'workspace'}:\n${fileList}\nUse the analyze_image tool with image_path for each image listed above.]`;
+          console.log(`   🖼️  Pre-injected ${imagePaths.length} workspace image paths into message${detectedProject ? ` (scoped to ${detectedProject.folder})` : ''}`);
+        } else if (allFilePaths.length > 0) {
+          // General listing: inject workspace tree
+          const tree = allFilePaths.join('\n');
+          enrichedMessage = `${enrichedMessage}\n\n[System: Current ${detectedProject ? `project "${detectedProject.folder}"` : 'workspace'} contents:\n${tree}\n]`;
+          console.log(`   📂  Pre-injected workspace listing (${allFilePaths.length} entries) into message`);
+        }
+      } catch (err) {
+        console.warn('   ⚠️  Failed to pre-list workspace files:', err);
+      }
+    }
 
     // Layer 4: Per-project LLM provider override
     if (detectedProject?.metadata?.llmProviderId && providers.length > 0) {
@@ -2947,10 +3037,10 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           memoryCompanionId,
           weatherSettings,
           settings: settings || {},
-          imageGenSettings: {
-            ...defaultImageGenSettings,
-            ...settings?.imageGen,
-          },
+          imageGenSettings: smartMerge(
+            defaultImageGenSettings,
+            settings?.imageGen as Partial<ImageGenSettings> | undefined,
+          ),
           choom: choom as unknown as Record<string, unknown>,
           choomId,
           chatId,
@@ -2976,7 +3066,9 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           // ================================================================
           // PLANNER — for multi-step requests, create and execute a plan
           // ================================================================
+          let imageGenCount = 0; // Track images generated across plan + loop (cap at 3)
           let planExecuted = false;
+          let planFullySucceeded = false;
           if (skillDispatch && !isDelegation && isMultiStepRequest(message)) {
             try {
               console.log(`   📋 Multi-step request detected — creating plan...`);
@@ -2989,6 +3081,17 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
 
                 // Execute plan with progress streaming
                 const planToolExecutor = async (toolCall: ToolCall, _iter: number): Promise<ToolResult> => {
+                  // Enforce image gen cap across plan + agentic loop
+                  if (toolCall.name === 'generate_image' && imageGenCount >= 3) {
+                    const capped: ToolResult = {
+                      toolCallId: toolCall.id, name: toolCall.name, result: null,
+                      error: `Image generation limit reached (${imageGenCount}/3 this request). Skip this step.`,
+                    };
+                    send({ type: 'tool_call', toolCall });
+                    send({ type: 'tool_result', toolResult: capped });
+                    return capped;
+                  }
+
                   // Send tool call event
                   send({ type: 'tool_call', toolCall });
                   serverLog(choomId, chatId, 'info', 'system', `Plan Tool: ${toolCall.name}`,
@@ -2999,6 +3102,11 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                     ? await executeToolCallViaSkills(toolCall, ctx)
                     : await executeToolCall(toolCall, ctx);
 
+                  // Track image gen count
+                  if (toolCall.name === 'generate_image' && !result.error) {
+                    imageGenCount++;
+                  }
+
                   // Track in allToolCalls/allToolResults for DB save
                   allToolCalls.push(toolCall);
                   allToolResults.push(result);
@@ -3008,7 +3116,10 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 };
 
                 const planResult = await executePlan(plan, planToolExecutor, watcher, send);
-                planExecuted = true;
+                // Only mark plan as "executed" if it actually succeeded at something.
+                // A completely failed plan should let the model recover via the agentic loop.
+                planExecuted = planResult.succeeded > 0;
+                planFullySucceeded = planResult.failed === 0 && planResult.succeeded > 0;
 
                 // Inject plan summary into conversation context so the LLM can reference it
                 const planSummaryText = summarizePlan(plan);
@@ -3039,19 +3150,23 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           let iteration = 0;
           let forceToolCall = false; // Set to true after nudge to force tool_choice:'required'
           let nudgeCount = 0; // Track how many times we've nudged (max 5)
-          let imageGenCount = 0; // Track how many images generated this request (cap at 3)
           const executedToolCache = new Map<string, unknown>(); // Dedup: normalizedKey → result
           const failedCallCache = new Map<string, string>(); // Cache: dedupKey → error message
           const toolCallCounts = new Map<string, number>(); // Per-tool name call counter
+          const brokenTools = new Set<string>(); // Tool names blocked due to config/auth errors
+          const toolFailureCounts = new Map<string, number>(); // Per-tool name failure counter
           let consecutiveFailures = 0; // Abort after MAX_CONSECUTIVE_FAILURES
           const MAX_CONSECUTIVE_FAILURES = 3;
           const MAX_CALLS_PER_TOOL = 5; // Max times any single tool can be called per request
+          const MAX_FAILURES_PER_TOOL = 2; // Block tool after this many failures (any error)
           const choomTag = `[${choom.name}]`;
           console.log(`   🛠️  ${choomTag} Tools available: ${activeTools.length} (${activeTools.map(t => t.name).join(', ')})${skillDispatch ? ' [skill dispatch]' : ''}`);
 
-          // If plan was executed, reduce remaining iterations for the follow-up loop
-          if (planExecuted) {
-            maxIterations = Math.min(maxIterations, 3); // Allow up to 3 iterations for summary/follow-up
+          // If plan fully succeeded, reduce remaining iterations (just summary/follow-up).
+          // If plan partially failed, keep full iterations so the model can finish remaining work.
+          // Never override a per-project maxIterations setting.
+          if (planFullySucceeded && !projectIterationLimitApplied) {
+            maxIterations = Math.min(maxIterations, 3);
           }
 
           // Preserve any pre-loop content (e.g., plan summaries) so the final iteration can prefix it
@@ -3138,16 +3253,29 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             // If no valid tool calls, check if the LLM described actions instead of calling tools
             if (toolCalls.length === 0) {
               const lowerContent = iterationContent.toLowerCase();
-              // Only nudge if no tools have been executed yet this request — if the cache
-              // already has entries, the LLM has done real work and is just presenting results.
+              // Only nudge if no tools have been attempted yet this request — if tools
+              // already ran (success or failure), the LLM has done real work.
               const hasExecutedTools = executedToolCache.size > 0;
-              // Match action-suggesting phrases, but exclude conversational endings
-              // like "let me know", "i can help", "i'll be here"
-              const suggestsToolUse = !hasExecutedTools &&
-                /\b(let me(?! know)|i'll (?!be\b)|i will (?!be\b)|i can (?!help|assist)|i'?m going to|i'?ve (?!been\b)|here(?:'s| is) (?:a |your |the )|checking|looking|searching|analyzing|reviewing|creating|sending|generating|taking|fetching|getting|moving|uploading|downloading|drawing|making|composing|preparing|producing|capturing|snapping|crafting|writing|saving|setting up|working on)\b/.test(lowerContent);
-              if (nudgeCount < 5 && suggestsToolUse) {
+              const hasAttemptedTools = hasExecutedTools || failedCallCache.size > 0;
+
+              // Two-tier nudge detection:
+              // Tier 1 (STRONG): LLM describes specific tool actions it should be performing
+              //   e.g. "I created 3 images", "Here are the selfies", "generating a portrait"
+              //   These ALWAYS nudge regardless of response length.
+              // Tier 2 (WEAK): Generic action-suggesting preambles like "let me check..."
+              //   These only nudge for SHORT responses (<500 chars) to avoid false positives
+              //   on long conversational responses that happen to contain "let me share".
+              const describesToolAction = !hasAttemptedTools &&
+                /(?:(?:generat|creat|mak|produc|design|render|draw|craft|captur|snap)\w*\s+(?:\d+\s+)?(?:unique\s+|some\s+|a\s+|an\s+|the\s+|your\s+|my\s+)?(?:image|selfie|portrait|picture|photo|illustration|artwork))|(?:(?:search|check|fetch|get|grab|download|send|analyz|look\w* up)\w*\s+(?:the |your |a |for )?(?:weather|forecast|web|image|file|email|contact|video|result|drone|review))|(?:(?:here(?:'s| is| are)|i (?:created|generated|made|took|prepared|composed|rendered))\s+(?:the |your |some |a |\d+ )?(?:\w+ )?(?:image|selfie|portrait|picture|photo|illustration|result|file|forecast))|(?:i (?:created|generated|made)\s+\d+\s+\w+)/i.test(lowerContent);
+
+              const isShortPreamble = iterationContent.length < 500;
+              const suggestsAction = isShortPreamble &&
+                /\b(let me(?! know| share| tell| explain| describe| show you what| be )|i'll (?!be\b)|i will (?!be\b)|i can (?!help|assist)|i'?m going to|here(?:'s| is) (?:a |your |the )|checking|looking up|searching|analyzing|fetching|downloading|setting up|working on)\b/.test(lowerContent);
+
+              const suggestsToolUse = describesToolAction || suggestsAction;
+              if (nudgeCount < 3 && suggestsToolUse && !hasAttemptedTools) {
                 nudgeCount++;
-                console.log(`   🔄 LLM described actions without calling tools — nudge ${nudgeCount}/5 with tool_choice=required`);
+                console.log(`   🔄 LLM described actions without calling tools — nudge ${nudgeCount}/3 (${describesToolAction ? 'tool-action match' : 'preamble match'}) with tool_choice=required`);
                 currentMessages.push({ role: 'assistant', content: iterationContent });
                 currentMessages.push({
                   role: 'user',
@@ -3178,84 +3306,76 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             // Track all tool calls for DB save
             allToolCalls = [...allToolCalls, ...toolCalls];
 
-            // Execute each tool call
+            // Execute tool calls — parallel for read-only tools, sequential for mutating tools
+            const PARALLEL_SAFE = new Set([
+              'get_weather', 'get_weather_forecast', 'web_search',
+              'search_memories', 'search_by_type', 'search_by_tags', 'get_recent_memories',
+              'search_by_date_range', 'get_memory_stats',
+              'workspace_read_file', 'workspace_list_files',
+              'analyze_image', 'scrape_page_images',
+              'ha_get_state', 'ha_list_entities', 'ha_get_history', 'ha_get_home_status',
+              'list_team', 'get_delegation_result',
+              'list_emails', 'read_email', 'search_emails',
+              'search_contacts', 'get_contact',
+              'search_youtube', 'get_video_details', 'get_channel_info', 'get_playlist_items',
+            ]);
+
             const iterationResults: ToolResult[] = [];
-            for (const tc of toolCalls) {
-              // --- Deduplication: skip if same tool+args already executed ---
+
+            // Pre-flight check: returns a ToolResult if the call should be skipped, or null to proceed
+            const preFlightCheck = (tc: { id: string; name: string; arguments: Record<string, unknown> }): ToolResult | null => {
               const normalizedArgs = JSON.stringify(tc.arguments).toLowerCase();
               const dedupKey = `${tc.name}:${normalizedArgs}`;
+
+              // --- Deduplication: skip if same tool+args already executed ---
               const cachedResult = executedToolCache.get(dedupKey);
               if (cachedResult !== undefined) {
                 console.log(`   🔁 Skipping duplicate tool call: ${tc.name}`);
                 const cachedObj = (typeof cachedResult === 'object' && cachedResult !== null && !Array.isArray(cachedResult))
                   ? { ...cachedResult as Record<string, unknown>, _note: 'This tool was already called with the same arguments. Use the previous result.' }
                   : { _cachedResult: cachedResult, _note: 'This tool was already called with the same arguments. Use the previous result.' };
-                const dupResult: ToolResult = {
-                  toolCallId: tc.id,
-                  name: tc.name,
-                  result: cachedObj,
-                };
-                iterationResults.push(dupResult);
-                allToolResults.push(dupResult);
-                send({ type: 'tool_call', toolCall: tc });
-                send({ type: 'tool_result', toolResult: dupResult });
-                continue;
+                return { toolCallId: tc.id, name: tc.name, result: cachedObj };
               }
 
-              // --- Image generation cap: max 3 per request ---
+              // --- Image generation cap ---
               if (tc.name === 'generate_image' && imageGenCount >= 3) {
                 console.log(`   🖼️  Skipping generate_image (${imageGenCount}/3 already generated this request)`);
-                const capResult: ToolResult = {
-                  toolCallId: tc.id,
-                  name: tc.name,
-                  result: { success: false, message: `Image generation limit reached (${imageGenCount}/3 this turn). Cannot generate more images in this request.` },
-                };
-                iterationResults.push(capResult);
-                allToolResults.push(capResult);
-                send({ type: 'tool_call', toolCall: tc });
-                send({ type: 'tool_result', toolResult: capResult });
-                continue;
+                return { toolCallId: tc.id, name: tc.name, result: { success: false, message: `Image generation limit reached (${imageGenCount}/3 this turn). Cannot generate more images in this request.` } };
               }
 
-              // --- Per-tool call counter: cap any tool at MAX_CALLS_PER_TOOL ---
+              // --- Per-tool call counter ---
               const currentToolCount = (toolCallCounts.get(tc.name) || 0) + 1;
               toolCallCounts.set(tc.name, currentToolCount);
               if (tc.name !== 'generate_image' && currentToolCount > MAX_CALLS_PER_TOOL) {
                 console.log(`   🛑 Tool call limit reached for ${tc.name} (${currentToolCount}/${MAX_CALLS_PER_TOOL})`);
-                const limitResult: ToolResult = {
-                  toolCallId: tc.id,
-                  name: tc.name,
-                  result: { success: false, message: `Tool ${tc.name} has been called ${currentToolCount} times this request (limit: ${MAX_CALLS_PER_TOOL}). You must try a different approach or present your results to the user.` },
-                };
-                iterationResults.push(limitResult);
-                allToolResults.push(limitResult);
-                send({ type: 'tool_call', toolCall: tc });
-                send({ type: 'tool_result', toolResult: limitResult });
-                continue;
+                return { toolCallId: tc.id, name: tc.name, result: { success: false, message: `Tool ${tc.name} has been called ${currentToolCount} times this request (limit: ${MAX_CALLS_PER_TOOL}). You must try a different approach or present your results to the user.` } };
               }
 
-              // --- Failed call cache: return cached error for identical failing calls ---
+              // --- Broken tool blocking (config error or repeated failures) ---
+              if (brokenTools.has(tc.name)) {
+                console.log(`   🚫 ${tc.name} blocked (broken tool — will not retry)`);
+                return { toolCallId: tc.id, name: tc.name, result: null, error: `${tc.name} has been disabled for this request because it failed repeatedly. Do NOT call ${tc.name} again. Tell the user what went wrong and suggest alternatives.` };
+              }
+
+              // --- Failed call cache ---
               const cachedError = failedCallCache.get(dedupKey);
               if (cachedError) {
                 console.log(`   🔁 Returning cached failure for ${tc.name} (same args already failed)`);
-                const failResult: ToolResult = {
-                  toolCallId: tc.id,
-                  name: tc.name,
-                  result: null,
-                  error: `${cachedError} [This exact call already failed. Try a different approach or different arguments.]`,
-                };
-                iterationResults.push(failResult);
-                allToolResults.push(failResult);
-                send({ type: 'tool_call', toolCall: tc });
-                send({ type: 'tool_result', toolResult: failResult });
-                consecutiveFailures++;
-                continue;
+                return { toolCallId: tc.id, name: tc.name, result: null, error: `${cachedError} [This exact call already failed. Try a different approach or different arguments.]` };
               }
 
+              return null; // Proceed with execution
+            };
+
+            // Execute a single tool call and handle post-execution bookkeeping
+            const executeAndProcess = async (tc: { id: string; name: string; arguments: Record<string, unknown> }): Promise<ToolResult> => {
               send({ type: 'tool_call', toolCall: tc });
               serverLog(choomId, chatId, 'info', 'system', `Tool Call: ${tc.name}`,
                 `Arguments: ${JSON.stringify(tc.arguments).slice(0, 200)}`,
                 { toolName: tc.name, arguments: tc.arguments });
+
+              const normalizedArgs = JSON.stringify(tc.arguments).toLowerCase();
+              const dedupKey = `${tc.name}:${normalizedArgs}`;
 
               let result: ToolResult;
               try {
@@ -3265,29 +3385,40 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               } catch (toolErr) {
                 const toolErrMsg = toolErr instanceof Error ? toolErr.message : String(toolErr);
                 console.error(`   ❌ Tool execution error for ${tc.name}:`, toolErrMsg);
-                result = {
-                  toolCallId: tc.id,
-                  name: tc.name,
-                  result: null,
-                  error: `Tool execution failed: ${toolErrMsg}`,
-                };
+                result = { toolCallId: tc.id, name: tc.name, result: null, error: `Tool execution failed: ${toolErrMsg}` };
               }
-              iterationResults.push(result);
-              allToolResults.push(result);
 
-              // Cache successful results for dedup; cache failures for retry prevention
+              // Cache results
               if (!result.error) {
                 executedToolCache.set(dedupKey, result.result);
-                consecutiveFailures = 0; // Reset on success
+                consecutiveFailures = 0;
               } else {
                 failedCallCache.set(dedupKey, result.error);
                 consecutiveFailures++;
+                // Classify the error to decide blocking strategy:
+                // - Config/auth errors → block immediately (model can't fix these)
+                // - Missing param errors → DON'T count toward per-tool cap (model can fix by providing params)
+                // - Other errors → count toward per-tool cap
+                const isConfigError = /not configured|api key|unauthorized|forbidden|invalid.*(?:model|endpoint|key)|ECONNREFUSED/i.test(result.error);
+                const isParamError = /missing required parameter/i.test(result.error);
+                if (isConfigError && !brokenTools.has(tc.name)) {
+                  brokenTools.add(tc.name);
+                  console.log(`   🚫 ${tc.name} blocked for rest of request (config error)`);
+                } else if (!isParamError) {
+                  // Count non-param failures toward per-tool cap
+                  const toolFails = (toolFailureCounts.get(tc.name) || 0) + 1;
+                  toolFailureCounts.set(tc.name, toolFails);
+                  if (toolFails >= MAX_FAILURES_PER_TOOL && !brokenTools.has(tc.name)) {
+                    brokenTools.add(tc.name);
+                    console.log(`   🚫 ${tc.name} blocked after ${toolFails} non-param failures this request`);
+                  }
+                }
                 if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
                   console.log(`   🛑 ${MAX_CONSECUTIVE_FAILURES} consecutive tool failures — aborting loop`);
                 }
               }
 
-              // Also check for success:false in result body (tool returned but indicated failure)
+              // Check for soft failure (success:false in result body)
               if (!result.error && result.result && typeof result.result === 'object' && (result.result as Record<string, unknown>).success === false) {
                 consecutiveFailures++;
                 if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
@@ -3301,13 +3432,13 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               }
 
               send({ type: 'tool_result', toolResult: result });
-              // Build details for expandable log entry — strip large base64 data
+
+              // Log details (strip large base64)
               const resultDetails: Record<string, unknown> = { toolName: result.name };
               if (result.error) {
                 resultDetails.error = result.error;
               } else if (result.result && typeof result.result === 'object') {
                 const cleaned = { ...(result.result as Record<string, unknown>) };
-                // Strip imageUrl to avoid giant base64 in logs
                 if ('imageUrl' in cleaned) delete cleaned.imageUrl;
                 if ('image_base64' in cleaned) delete cleaned.image_base64;
                 resultDetails.result = cleaned;
@@ -3315,16 +3446,12 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 resultDetails.result = result.result;
               }
               serverLog(choomId, chatId, result.error ? 'error' : 'success', 'system',
-                `Tool Result: ${result.name}`,
-                result.error || 'Success',
-                resultDetails);
+                `Tool Result: ${result.name}`, result.error || 'Success', resultDetails);
 
-              // Extract workspace path from tool call (works for workspace_* and analyze_image)
+              // Project metadata tracking
               const wsPath = (tc.arguments.path as string) || (tc.arguments.image_path as string) || '';
-              // Decode URL-encoded characters (LLMs sometimes encode spaces as %20)
               const topFolder = decodeURIComponent(wsPath.split('/')[0]);
 
-              // Per-project iteration limit
               if (!projectIterationLimitApplied && topFolder) {
                 try {
                   const projectService = new ProjectService(WORKSPACE_ROOT);
@@ -3337,7 +3464,6 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 } catch { /* ignore project read errors */ }
               }
 
-              // Auto-update project metadata on any workspace interaction (writes, reads, analyze)
               const projectUpdateTools = ['workspace_write_file', 'workspace_create_folder', 'workspace_read_file', 'workspace_list_files', 'analyze_image', 'download_web_image', 'download_web_file', 'workspace_read_pdf', 'execute_code', 'create_venv', 'install_package', 'run_command', 'workspace_rename_project', 'save_generated_image'];
               if (projectUpdateTools.includes(tc.name) && topFolder && !result.error) {
                 try {
@@ -3348,6 +3474,70 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                   });
                 } catch { /* ignore metadata update errors */ }
               }
+
+              return result;
+            };
+
+            // Phase 1: Run pre-flight checks on all tool calls
+            const preFlightResults = new Map<string, ToolResult>(); // tc.id → result
+            const pendingCalls: typeof toolCalls = [];
+            for (const tc of toolCalls) {
+              const skipped = preFlightCheck(tc);
+              if (skipped) {
+                preFlightResults.set(tc.id, skipped);
+                allToolResults.push(skipped);
+                if (skipped.error) consecutiveFailures++;
+                send({ type: 'tool_call', toolCall: tc });
+                send({ type: 'tool_result', toolResult: skipped });
+              } else {
+                pendingCalls.push(tc);
+              }
+            }
+
+            // Phase 2: Partition pending calls into parallel-safe and sequential
+            const parallelCalls = pendingCalls.filter(tc => PARALLEL_SAFE.has(tc.name));
+            const sequentialCalls = pendingCalls.filter(tc => !PARALLEL_SAFE.has(tc.name));
+
+            // Execute parallel-safe tools concurrently
+            const parallelResults = new Map<string, ToolResult>();
+            if (parallelCalls.length > 1) {
+              console.log(`   ⚡ Executing ${parallelCalls.length} read-only tools in parallel: ${parallelCalls.map(tc => tc.name).join(', ')}`);
+              const results = await Promise.all(parallelCalls.map(tc => executeAndProcess(tc)));
+              for (let i = 0; i < parallelCalls.length; i++) {
+                parallelResults.set(parallelCalls[i].id, results[i]);
+                allToolResults.push(results[i]);
+              }
+            } else if (parallelCalls.length === 1) {
+              // Single parallel-safe call — no benefit from Promise.all, just execute
+              const result = await executeAndProcess(parallelCalls[0]);
+              parallelResults.set(parallelCalls[0].id, result);
+              allToolResults.push(result);
+            }
+
+            // Execute sequential (mutating) tools one at a time
+            const sequentialResults = new Map<string, ToolResult>();
+            for (const tc of sequentialCalls) {
+              const result = await executeAndProcess(tc);
+              sequentialResults.set(tc.id, result);
+              allToolResults.push(result);
+            }
+
+            // Merge results in original tool call order
+            for (const tc of toolCalls) {
+              const r = preFlightResults.get(tc.id) || parallelResults.get(tc.id) || sequentialResults.get(tc.id);
+              if (r) iterationResults.push(r);
+            }
+
+            // If ALL tools in this iteration failed and we've seen 2+ total failures,
+            // inject an abort hint so the LLM doesn't loop endlessly.
+            const allFailedThisIteration = iterationResults.length > 0 &&
+              iterationResults.every(r => r.error || (r.result && typeof r.result === 'object' && (r.result as Record<string, unknown>).success === false));
+            if (allFailedThisIteration && failedCallCache.size >= 2) {
+              currentMessages.push({
+                role: 'user',
+                content: '[System] Multiple tool calls have failed. STOP retrying. Tell the user what went wrong and suggest they check their settings. Do NOT call any more tools.',
+              });
+              console.log(`   🛑 All tools failed this iteration (${failedCallCache.size} total failures) — injected abort hint`);
             }
 
             // Build messages for next iteration: append assistant message + tool results
@@ -3463,6 +3653,10 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             error: error instanceof Error ? error.message : 'Unknown error',
           });
         } finally {
+          // Clear GUI activity marker so heartbeats can resume
+          if (!isDelegation) {
+            clearGuiActivity(choom.name);
+          }
           if (!streamClosed) {
             try { controller.close(); } catch { /* already closed */ }
           }

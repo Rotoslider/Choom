@@ -20,7 +20,11 @@ PROJECT_NAME = "YouTube_Music"
 PROJECT_DIR = os.path.join(WORKSPACE_ROOT, PROJECT_NAME)
 
 YT_DLP_BIN = "/usr/bin/yt-dlp"
-YT_DLP_EXTRA_ARGS = ["--js-runtimes", "node", "--remote-components", "ejs:github"]
+YT_DLP_EXTRA_ARGS = [
+    "--cookies-from-browser", "firefox",
+    "--js-runtimes", "node",
+    "--remote-components", "ejs:github",
+]
 
 
 def _sanitize_filename(name: str) -> str:
@@ -325,6 +329,7 @@ class YouTubeDownloader:
             return result
 
         downloaded_count = 0
+        consecutive_meta_failures = 0
         for video in videos:
             vid_id = video["id"]
 
@@ -341,7 +346,14 @@ class YouTubeDownloader:
             meta = self.get_video_metadata(vid_id)
             if not meta:
                 result["errors"].append(f"Metadata failed: {video['title']}")
+                consecutive_meta_failures += 1
+                # Abort channel if 3+ consecutive metadata failures (likely auth/bot issue)
+                if consecutive_meta_failures >= 3:
+                    logger.warning(f"  Aborting channel {name}: {consecutive_meta_failures} consecutive metadata failures (likely YouTube auth issue)")
+                    result["errors"].append(f"Aborted after {consecutive_meta_failures} consecutive metadata failures")
+                    break
                 continue
+            consecutive_meta_failures = 0  # Reset on success
 
             # Download as MP3
             mp3_path = self.download_as_mp3(vid_id, channel_dir)

@@ -98,7 +98,7 @@ const defaultSettings: AppSettings = {
   },
   vision: {
     endpoint: 'http://localhost:1234',
-    model: 'vision-model',
+    model: '',
     maxTokens: 1024,
     temperature: 0.3,
   },

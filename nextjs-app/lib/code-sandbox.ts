@@ -32,6 +32,9 @@ export class CodeSandbox {
 
   /** Resolve and validate a project folder path within the workspace */
   private resolveProject(projectFolder: string): string {
+    if (!projectFolder || typeof projectFolder !== 'string') {
+      throw new Error('project_folder is required. Provide the project folder name (e.g., "my_project")');
+    }
     const cleaned = projectFolder.replace(/^[/\\]+/, '');
     const resolved = path.resolve(this.workspaceRoot, cleaned);
     if (!resolved.startsWith(this.workspaceRoot)) {

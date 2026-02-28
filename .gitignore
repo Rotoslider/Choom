@@ -31,6 +31,9 @@ choom-profiles/lissa/
 # YouTube download history
 **/download_history.json
 
+# GUI activity tracking (ephemeral, written by chat route)
+**/.gui-activity/
+
 # Claude Code
 .claude/
 
@@ -43,3 +46,4 @@ Thumbs.db
 
 # Lock files (not needed for project - no CI)
 package-lock.json
+nextjs-app/tests/
