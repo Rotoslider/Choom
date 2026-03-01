@@ -2305,29 +2305,33 @@ async function executeToolCallViaSkills(
     };
   }
 
-  // Validate required parameters before dispatching to handler
+  // Normalize parameter names: LLMs sometimes send camelCase (imageId, savePath)
+  // instead of the snake_case defined in tool schemas (image_id, save_path).
+  // Convert camelCase args to snake_case when a matching property exists in the definition.
   const toolDef = skill.toolDefinitions.find(t => t.name === toolCall.name);
-  if (toolDef?.parameters?.required) {
-    const missing = (toolDef.parameters.required as string[]).filter(
-      p => toolCall.arguments[p] === undefined || toolCall.arguments[p] === null
-    );
-    if (missing.length > 0) {
-      // Include enum/type hints for missing params so the model knows valid values
-      const props = toolDef.parameters.properties as unknown as Record<string, Record<string, unknown>> | undefined;
-      const hints = missing.map(p => {
-        const prop = props?.[p];
-        if (prop?.enum) return `${p} (valid values: ${(prop.enum as string[]).join(', ')})`;
-        if (prop?.description) return `${p} (${prop.description})`;
-        return p;
-      });
-      return {
-        toolCallId: toolCall.id,
-        name: toolCall.name,
-        result: null,
-        error: `Missing required parameter(s): ${hints.join('; ')}. Please provide ${missing.length === 1 ? 'this parameter' : 'these parameters'} and try again.`,
-      };
+  if (toolDef?.parameters?.properties) {
+    const expectedProps = new Set(Object.keys(toolDef.parameters.properties as Record<string, unknown>));
+    const normalized: Record<string, unknown> = {};
+    let changed = false;
+    for (const [key, value] of Object.entries(toolCall.arguments)) {
+      const snakeKey = key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
+      if (snakeKey !== key && expectedProps.has(snakeKey) && toolCall.arguments[snakeKey] === undefined) {
+        normalized[snakeKey] = value;
+        changed = true;
+      } else {
+        normalized[key] = value;
+      }
+    }
+    if (changed) {
+      console.log(`   🔄 Normalized param names for ${toolCall.name}: ${Object.keys(toolCall.arguments).join(', ')} → ${Object.keys(normalized).join(', ')}`);
+      toolCall.arguments = normalized;
     }
   }
+
+  // NOTE: No pre-validation of required params here — handlers already validate
+  // their own parameters and support aliases (e.g. path/file_path/filename).
+  // Pre-validation was too aggressive: it rejected calls before handlers could
+  // apply defaults or aliases, and the failures cascaded via brokenTools/consecutiveFailures.
 
   const handlerCtx: SkillHandlerContext = {
     memoryClient: ctx.memoryClient,
@@ -3394,18 +3398,23 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 consecutiveFailures = 0;
               } else {
                 failedCallCache.set(dedupKey, result.error);
-                consecutiveFailures++;
-                // Classify the error to decide blocking strategy:
+                // Classify the error to decide blocking and counting strategy:
                 // - Config/auth errors → block immediately (model can't fix these)
-                // - Missing param errors → DON'T count toward per-tool cap (model can fix by providing params)
-                // - Other errors → count toward per-tool cap
+                // - Missing param errors → DON'T count toward any failure cap (model can fix by providing params)
+                // - Other errors → count toward per-tool cap and consecutive failures
                 const isConfigError = /not configured|api key|unauthorized|forbidden|invalid.*(?:model|endpoint|key)|ECONNREFUSED/i.test(result.error);
-                const isParamError = /missing required parameter/i.test(result.error);
-                if (isConfigError && !brokenTools.has(tc.name)) {
+                const isParamError = /missing required parameter|is required|must provide|please provide/i.test(result.error);
+                if (isParamError) {
+                  // Param errors are recoverable — don't count toward any failure cap
+                  // The LLM can fix by providing the correct params on the next call
+                  console.log(`   ⚠️  ${tc.name}: param error (recoverable, not counted as failure)`);
+                } else if (isConfigError && !brokenTools.has(tc.name)) {
+                  consecutiveFailures++;
                   brokenTools.add(tc.name);
                   console.log(`   🚫 ${tc.name} blocked for rest of request (config error)`);
-                } else if (!isParamError) {
-                  // Count non-param failures toward per-tool cap
+                } else {
+                  consecutiveFailures++;
+                  // Count other failures toward per-tool cap
                   const toolFails = (toolFailureCounts.get(tc.name) || 0) + 1;
                   toolFailureCounts.set(tc.name, toolFails);
                   if (toolFails >= MAX_FAILURES_PER_TOOL && !brokenTools.has(tc.name)) {
