@@ -289,7 +289,7 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
           where: { id: { in: idsToDelete } },
         });
         // Reclaim disk space from deleted image blobs
-        await prisma.$executeRawUnsafe('PRAGMA incremental_vacuum');
+        await prisma.$queryRawUnsafe('PRAGMA incremental_vacuum');
       }
 
       // -------------------------------------------------------------------
