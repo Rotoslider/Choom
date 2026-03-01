@@ -497,7 +497,7 @@ async function executeToolCall(
           where: { id: { in: idsToDelete } },
         });
         // Reclaim disk space from deleted image blobs
-        await prisma.$executeRawUnsafe('PRAGMA incremental_vacuum');
+        await prisma.$queryRawUnsafe('PRAGMA incremental_vacuum');
       }
 
       // Send the image to the client for display
