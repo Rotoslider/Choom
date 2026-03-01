@@ -138,7 +138,7 @@ export class VisionService {
       {
         role: 'user',
         content: [
-          { type: 'text', text: prompt },
+          { type: 'text', text: prompt || 'Describe this image in detail' },
           {
             type: 'image_url',
             image_url: {
