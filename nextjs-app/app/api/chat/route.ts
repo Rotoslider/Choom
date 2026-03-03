@@ -156,6 +156,161 @@ function detectCheckpointType(checkpointName: string): 'pony' | 'flux' | 'other'
   return 'other';
 }
 
+// Attempt basic JSON repair for malformed tool call arguments from local models
+function tryRepairJSON(raw: string | undefined): Record<string, unknown> | null {
+  if (!raw) return null;
+  let s = raw.trim();
+  // Add missing closing braces (common with truncated streaming)
+  const opens = (s.match(/{/g) || []).length;
+  const closes = (s.match(/}/g) || []).length;
+  if (opens > closes) s += '}'.repeat(opens - closes);
+  // Remove trailing commas before }
+  s = s.replace(/,\s*}/g, '}');
+  // Remove trailing commas before ]
+  s = s.replace(/,\s*]/g, ']');
+  try { return JSON.parse(s); } catch { return null; }
+}
+
+// Extract tool calls from the LLM's text when it describes tool actions but doesn't
+// emit structured tool_calls (common with local models that ignore tool_choice=required).
+// Instead of nudging and hoping the model will emit structured calls, we parse what
+// it already said and construct the call directly.
+function extractToolCallFromText(
+  llmText: string,
+  userMessage: string,
+  availableToolNames: Set<string>,
+): { id: string; name: string; arguments: Record<string, unknown> } | null {
+  const lower = llmText.toLowerCase();
+
+  // First try: look for JSON tool call blocks in the text (some models emit these inline)
+  // Matches patterns like: {"name": "generate_image", "arguments": {...}}
+  // or ```json\n{"name": "tool", ...}\n```
+  const jsonBlockMatch = llmText.match(/```(?:json)?\s*\n?\s*(\{[\s\S]*?"name"\s*:\s*"(\w+)"[\s\S]*?\})\s*\n?\s*```/);
+  if (jsonBlockMatch) {
+    try {
+      const parsed = JSON.parse(jsonBlockMatch[1]);
+      if (parsed.name && availableToolNames.has(parsed.name)) {
+        return {
+          id: `extracted_${Date.now()}`,
+          name: parsed.name,
+          arguments: parsed.arguments || parsed.params || {},
+        };
+      }
+    } catch { /* continue to pattern matching */ }
+  }
+
+  // Second try: intent-based extraction from natural language
+  // Generate image — the most common failure case
+  if (availableToolNames.has('generate_image') &&
+    /(?:generat|creat|mak|produc|render|draw|design|craft)\w*\s+(?:\d+\s+)?(?:unique\s+|some\s+|a\s+|an\s+|the\s+|your\s+|my\s+)?(?:image|selfie|portrait|picture|photo|illustration|artwork)/i.test(lower)) {
+    return {
+      id: `extracted_${Date.now()}`,
+      name: 'generate_image',
+      arguments: { prompt: userMessage },
+    };
+  }
+
+  // Get weather
+  if (availableToolNames.has('get_weather') &&
+    /(?:check|get|fetch|look\w* up)\w*\s+(?:the\s+)?(?:weather|forecast|temperature)/i.test(lower)) {
+    // Extract location if mentioned, otherwise call with no args (uses configured home location)
+    const locationMatch = llmText.match(/(?:weather|forecast)\s+(?:in|for|at)\s+["']?([A-Z][a-zA-Z\s,]+)/);
+    return {
+      id: `extracted_${Date.now()}`,
+      name: 'get_weather',
+      arguments: locationMatch ? { location: locationMatch[1].trim() } : {},
+    };
+  }
+
+  // Web search
+  if (availableToolNames.has('web_search') &&
+    /(?:search|look\w* up|find\w* out|google|query)\w*\s+(?:the\s+web\s+)?(?:for\s+|about\s+)?/i.test(lower)) {
+    return {
+      id: `extracted_${Date.now()}`,
+      name: 'web_search',
+      arguments: { query: userMessage },
+    };
+  }
+
+  // Analyze image
+  if (availableToolNames.has('analyze_image') &&
+    /(?:analyz|examin|describ|look\s+at|inspect)\w*\s+(?:the\s+|this\s+|that\s+|your\s+)?(?:image|photo|picture)/i.test(lower)) {
+    // Try to extract image_id from text
+    const idMatch = llmText.match(/image[_\s]?id[:\s=]+["']?([a-zA-Z0-9_-]+)/i);
+    if (idMatch) {
+      return {
+        id: `extracted_${Date.now()}`,
+        name: 'analyze_image',
+        arguments: { image_id: idMatch[1] },
+      };
+    }
+  }
+
+  // Send notification
+  if (availableToolNames.has('send_notification') &&
+    /(?:send|push)\w*\s+(?:a\s+)?(?:notification|message|alert)/i.test(lower)) {
+    const msgMatch = llmText.match(/(?:message|notification|alert)[:\s]+["'](.+?)["']/i);
+    return {
+      id: `extracted_${Date.now()}`,
+      name: 'send_notification',
+      arguments: { message: msgMatch ? msgMatch[1] : userMessage },
+    };
+  }
+
+  // Workspace list files
+  if (availableToolNames.has('workspace_list_files') &&
+    /(?:list|check|browse|show|view)\w*\s+(?:the\s+)?(?:files?|folder|directory|project)/i.test(lower)) {
+    const folderMatch = llmText.match(/(?:in|from|folder|project)\s+["']?([a-zA-Z0-9_\-/]+)/i);
+    return {
+      id: `extracted_${Date.now()}`,
+      name: 'workspace_list_files',
+      arguments: folderMatch ? { path: folderMatch[1] } : {},
+    };
+  }
+
+  // Delegate to another choom
+  if (availableToolNames.has('delegate_to_choom') &&
+    /(?:delegat|ask|send|forward|pass)\w*\s+(?:this\s+)?(?:to|task)\s+/i.test(lower)) {
+    const choomMatch = llmText.match(/(?:to|ask)\s+(Genesis|Anya|Optic|Aloy|Nyx)\b/i);
+    if (choomMatch) {
+      return {
+        id: `extracted_${Date.now()}`,
+        name: 'delegate_to_choom',
+        arguments: { choom_name: choomMatch[1], task: userMessage },
+      };
+    }
+  }
+
+  // Home assistant - turn on/off
+  if (availableToolNames.has('ha_call_service') &&
+    /(?:turn|switch)\s+(?:on|off)\s+(?:the\s+)?/i.test(lower)) {
+    // Can't reliably extract entity_id from natural language, skip
+    return null;
+  }
+
+  // Remember / save memory
+  if (availableToolNames.has('remember') &&
+    /(?:remember|save|store|note)\s+(?:that|this)/i.test(lower)) {
+    return {
+      id: `extracted_${Date.now()}`,
+      name: 'remember',
+      arguments: { text: userMessage },
+    };
+  }
+
+  // Search memories
+  if (availableToolNames.has('search_memories') &&
+    /(?:search|check|look\w* (?:through|in)|recall)\s+(?:my\s+)?(?:memor|notes|knowledge)/i.test(lower)) {
+    return {
+      id: `extracted_${Date.now()}`,
+      name: 'search_memories',
+      arguments: { query: userMessage },
+    };
+  }
+
+  return null;
+}
+
 // Server-side activity logging - writes directly to DB so both Signal and web GUI get logged
 async function serverLog(
   choomId: string, chatId: string,
@@ -2628,6 +2783,12 @@ export async function POST(request: NextRequest) {
 
 ${timeInfo}${weatherInfo}${homeAssistantInfo}${recentImagesInfo}
 
+## TOOL USAGE (CRITICAL)
+You MUST use function calls to perform actions. NEVER describe what you would do — call the tool directly.
+Examples of WRONG behavior: "I'll search for that..." or "Let me check the weather..." (without a tool call)
+Examples of RIGHT behavior: [immediately calls web_search or get_weather tool]
+ALWAYS call tools via function calls when a request requires them. Do NOT narrate — just call.
+
 ## AGENTIC BEHAVIOR
 You can call tools multiple times across multiple steps. After receiving tool results, you may:
 - Call additional tools based on the results
@@ -2640,9 +2801,10 @@ Be efficient: batch independent tool calls together to minimize iteration count.
 
 ${toolDocs}
 
+Remember: Call tools via function calls. Do not narrate actions without calling the actual tool.
+
 ## IMPORTANT
 
-- ALWAYS call tools immediately via function calls when a request requires them. Do NOT describe what you would do — just call the tool. For example, if asked to "review images in the project folder", call \`workspace_list_files\` right away, then call \`analyze_image\` for each image found. Never say "Let me check..." without actually calling the tool in the same response.
 - When a task involves multiple files or images, process them all — call tools in sequence or parallel as needed.
 - Use tools via function calls (the tools array), not by writing tool names in your response
 - After using a tool, incorporate the results naturally into your response — do NOT echo or repeat raw tool output verbatim. Summarize results conversationally.
@@ -2688,32 +2850,67 @@ When presenting search results:
 Always include both \`size\` and \`aspect\` parameters when calling generate_image.`;
     }
 
-    // Select tool definitions based on dispatch mode
-    let activeTools: ToolDefinition[] = skillDispatch ? getAllToolsFromSkills() : allTools;
+    // Dynamic tool filtering: local models degrade with too many tools (>20).
+    // Send ~15-25 tools: essential base + dynamically matched from message/context/history.
+    // slimToolDefinition() in llm-client.ts further reduces token overhead per tool.
+    const allToolDefs: ToolDefinition[] = skillDispatch ? getAllToolsFromSkills() : allTools;
+    let activeTools: ToolDefinition[] = allToolDefs;
 
-    // Per-Choom tool filtering: if system prompt contains <!-- allowed_skills: ... -->, restrict tools
-    // Also supports <!-- max_iterations: N --> to cap agentic loop iterations
-    const allowedSkillsMatch = (choom.systemPrompt || '').match(/<!--\s*allowed_skills:\s*(.+?)\s*-->/);
+    // <!-- max_iterations: N --> to cap agentic loop iterations per Choom
     let choomMaxIterations = 0; // 0 = use default
     const maxIterMatch = (choom.systemPrompt || '').match(/<!--\s*max_iterations:\s*(\d+)\s*-->/);
     if (maxIterMatch) {
       choomMaxIterations = Math.min(25, Math.max(3, parseInt(maxIterMatch[1])));
     }
-    if (allowedSkillsMatch && skillDispatch) {
-      const allowedSkillNames = allowedSkillsMatch[1].split(',').map(s => s.trim());
+
+    if (skillDispatch) {
+      const ALWAYS_AVAILABLE = new Set([
+        'remember', 'search_memories', 'web_search',
+        'get_weather', 'send_notification', 'generate_image',
+      ]);
+
       const registry = getSkillRegistry();
-      const allowedToolNames = new Set<string>();
-      for (const skillName of allowedSkillNames) {
-        const skill = registry.getSkill(skillName);
-        if (skill) {
+      const includedToolNames = new Set<string>(ALWAYS_AVAILABLE);
+
+      // Match skills from current message (up to 5 skills)
+      const matchedSkills = registry.matchSkills(message, 5);
+      for (const skill of matchedSkills) {
+        for (const toolDef of skill.toolDefinitions) {
+          includedToolNames.add(toolDef.name);
+        }
+      }
+
+      // Context: match from last 3 user messages so follow-ups work
+      const recentUserMessages = chat.messages.filter(m => m.role === 'user').slice(-3);
+      for (const msg of recentUserMessages) {
+        const contextMatches = registry.matchSkills(msg.content || '', 2);
+        for (const skill of contextMatches) {
           for (const toolDef of skill.toolDefinitions) {
-            allowedToolNames.add(toolDef.name);
+            includedToolNames.add(toolDef.name);
           }
         }
       }
-      if (allowedToolNames.size > 0) {
-        activeTools = activeTools.filter(t => allowedToolNames.has(t.name));
-        console.log(`   🔒 Tool filter: ${allowedSkillNames.join(', ')} → ${activeTools.length} tools`);
+
+      // History: include tools already used in this conversation
+      for (const msg of chat.messages) {
+        if (msg.toolCalls) {
+          try {
+            const calls = JSON.parse(msg.toolCalls) as { name?: string }[];
+            for (const call of calls) {
+              if (call.name) includedToolNames.add(call.name);
+            }
+          } catch { /* ignore parse errors */ }
+        }
+      }
+
+      activeTools = allToolDefs.filter(t => includedToolNames.has(t.name));
+
+      // Safety floor: if too few matched, send all (something went wrong)
+      if (activeTools.length < 6) {
+        console.log(`   ⚠️  Dynamic filter: only ${activeTools.length} tools — sending all ${allToolDefs.length}`);
+        activeTools = allToolDefs;
+      } else {
+        console.log(`   🎯 Dynamic tool filter: ${activeTools.length}/${allToolDefs.length} tools (matched ${matchedSkills.map(s => s.metadata.name).join(', ') || 'none'})`);
       }
     }
 
@@ -3154,8 +3351,14 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           // AGENTIC LOOP — iterate until LLM stops calling tools or limit
           // ================================================================
           let iteration = 0;
-          let forceToolCall = false; // Set to true after nudge to force tool_choice:'required'
           let nudgeCount = 0; // Track how many times we've nudged (max 5)
+
+          // Proactive tool_choice='required': if the user message has strong tool intent,
+          // force the LLM to call a tool on the first iteration instead of narrating.
+          // This is the biggest reliability win for local models that tend to describe actions.
+          const msgLower = message.toLowerCase();
+          const strongToolIntent = /\b(what(?:'s| is) the weather|weather (?:like|today|tomorrow|forecast)|search (?:for|the web)|look up|find (?:me|out)|generate (?:an? |some )?(?:image|picture|photo|selfie|portrait)|take a (?:selfie|photo|picture)|create (?:a |an )?(?:image|picture)|make (?:me |an? )?(?:image|picture|selfie)|remember (?:that|this)|save (?:this|that) (?:to|as)|remind me|set (?:a )?reminder|send (?:a )?(?:notification|message|alert)|check (?:the |my )?(?:calendar|schedule|tasks|email|inbox)|write (?:a |an )?(?:file|document|report)|read (?:the |my )?(?:file|document)|list (?:my |the )?(?:files|projects|tasks)|download|scrape|analyze (?:this|the|that) (?:image|photo|picture)|turn (?:on|off) (?:the )?|(?:open|close) (?:the )?|(?:lights?|switch|fan|heater|thermostat) (?:on|off)|delegate|get (?:the )?(?:weather|forecast)|search (?:youtube|email|gmail|contacts)|draft (?:an? )?email|compose (?:an? )?email)\b/i.test(msgLower);
+          let forceToolCall = strongToolIntent; // Force tool_choice:'required' on first iteration if intent is strong
           const executedToolCache = new Map<string, unknown>(); // Dedup: normalizedKey → result
           const failedCallCache = new Map<string, string>(); // Cache: dedupKey → error message
           const toolCallCounts = new Map<string, number>(); // Per-tool name call counter
@@ -3167,6 +3370,9 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           const MAX_FAILURES_PER_TOOL = 2; // Block tool after this many failures (any error)
           const choomTag = `[${choom.name}]`;
           console.log(`   🛠️  ${choomTag} Tools available: ${activeTools.length} (${activeTools.map(t => t.name).join(', ')})${skillDispatch ? ' [skill dispatch]' : ''}`);
+          if (strongToolIntent) {
+            console.log(`   ⚡ ${choomTag} Strong tool intent detected — using tool_choice='required' on first iteration`);
+          }
 
           // If plan fully succeeded, reduce remaining iterations (just summary/follow-up).
           // If plan partially failed, keep full iterations so the model can finish remaining work.
@@ -3238,39 +3444,51 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               break;
             }
 
-            // Convert accumulated tool calls (with malformed JSON protection)
+            // Convert accumulated tool calls — parse each individually so one bad call
+            // doesn't drop ALL of them. Includes basic JSON repair for common LLM errors.
             let toolCalls: { id: string; name: string; arguments: Record<string, unknown> }[] = [];
             if (toolCallsAccumulator.size > 0) {
-              try {
-                toolCalls = Array.from(toolCallsAccumulator.values()).map(
-                  (tc) => ({
-                    id: tc.id,
-                    name: tc.name,
-                    arguments: JSON.parse(tc.arguments || '{}'),
-                  })
-                );
-              } catch (parseErr) {
-                // Model returned malformed tool call JSON — treat as no tool calls
-                console.warn(`   ⚠️  Malformed tool call arguments — treating as text-only response:`, parseErr);
-                toolCalls = [];
+              for (const tc of toolCallsAccumulator.values()) {
+                const callId = tc.id || `fallback_${Date.now()}_${toolCalls.length}`;
+                try {
+                  const args = JSON.parse(tc.arguments || '{}');
+                  toolCalls.push({ id: callId, name: tc.name, arguments: args });
+                } catch {
+                  // Try basic JSON repair: trailing commas, missing closing braces
+                  const repaired = tryRepairJSON(tc.arguments);
+                  if (repaired !== null) {
+                    toolCalls.push({ id: callId, name: tc.name, arguments: repaired });
+                    console.warn(`   🔧 Repaired malformed JSON for ${tc.name}`);
+                  } else {
+                    console.warn(`   ⚠️  Dropping tool call ${tc.name} — unrecoverable JSON: ${tc.arguments?.slice(0, 100)}`);
+                  }
+                }
               }
             }
 
-            // If no valid tool calls, check if the LLM described actions instead of calling tools
+            // If no structured tool calls, try to extract from the LLM's text.
+            // Local models (via LM Studio) often ignore tool_choice='required' and describe
+            // actions instead of emitting structured tool_calls. Instead of nudging and
+            // hoping the model will comply, we parse what it said and execute directly.
+            if (toolCalls.length === 0) {
+              const hasExecutedTools = executedToolCache.size > 0;
+              const hasAttemptedTools = hasExecutedTools || failedCallCache.size > 0;
+              if (!hasAttemptedTools) {
+                const availableToolNames = new Set(activeTools.map(t => t.name));
+                const extracted = extractToolCallFromText(iterationContent, message, availableToolNames);
+                if (extracted) {
+                  console.log(`   🧲 ${choomTag} Extracted tool call from text: ${extracted.name}(${JSON.stringify(extracted.arguments).slice(0, 80)})`);
+                  toolCalls.push(extracted);
+                }
+              }
+            }
+
+            // Still no tool calls after extraction — check if we should nudge or stop
             if (toolCalls.length === 0) {
               const lowerContent = iterationContent.toLowerCase();
-              // Only nudge if no tools have been attempted yet this request — if tools
-              // already ran (success or failure), the LLM has done real work.
               const hasExecutedTools = executedToolCache.size > 0;
               const hasAttemptedTools = hasExecutedTools || failedCallCache.size > 0;
 
-              // Two-tier nudge detection:
-              // Tier 1 (STRONG): LLM describes specific tool actions it should be performing
-              //   e.g. "I created 3 images", "Here are the selfies", "generating a portrait"
-              //   These ALWAYS nudge regardless of response length.
-              // Tier 2 (WEAK): Generic action-suggesting preambles like "let me check..."
-              //   These only nudge for SHORT responses (<500 chars) to avoid false positives
-              //   on long conversational responses that happen to contain "let me share".
               const describesToolAction = !hasAttemptedTools &&
                 /(?:(?:generat|creat|mak|produc|design|render|draw|craft|captur|snap)\w*\s+(?:\d+\s+)?(?:unique\s+|some\s+|a\s+|an\s+|the\s+|your\s+|my\s+)?(?:image|selfie|portrait|picture|photo|illustration|artwork))|(?:(?:search|check|fetch|get|grab|download|send|analyz|look\w* up)\w*\s+(?:the |your |a |for )?(?:weather|forecast|web|image|file|email|contact|video|result|drone|review))|(?:(?:here(?:'s| is| are)|i (?:created|generated|made|took|prepared|composed|rendered))\s+(?:the |your |some |a |\d+ )?(?:\w+ )?(?:image|selfie|portrait|picture|photo|illustration|result|file|forecast))|(?:i (?:created|generated|made)\s+\d+\s+\w+)/i.test(lowerContent);
 
@@ -3279,9 +3497,9 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 /\b(let me(?! know| share| tell| explain| describe| show you what| be )|i'll (?!be\b)|i will (?!be\b)|i can (?!help|assist)|i'?m going to|here(?:'s| is) (?:a |your |the )|checking|looking up|searching|analyzing|fetching|downloading|setting up|working on)\b/.test(lowerContent);
 
               const suggestsToolUse = describesToolAction || suggestsAction;
-              if (nudgeCount < 3 && suggestsToolUse && !hasAttemptedTools) {
+              if (nudgeCount < 2 && suggestsToolUse && !hasAttemptedTools) {
                 nudgeCount++;
-                console.log(`   🔄 LLM described actions without calling tools — nudge ${nudgeCount}/3 (${describesToolAction ? 'tool-action match' : 'preamble match'}) with tool_choice=required`);
+                console.log(`   🔄 ${choomTag} Nudge ${nudgeCount}/2 with tool_choice=required`);
                 currentMessages.push({ role: 'assistant', content: iterationContent });
                 currentMessages.push({
                   role: 'user',
