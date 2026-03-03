@@ -288,13 +288,19 @@ function extractToolCallFromText(
     return null;
   }
 
-  // Remember / save memory
-  if (availableToolNames.has('remember') &&
-    /(?:remember|save|store|note)\s+(?:that|this)/i.test(lower)) {
+  // Remember / save memory — broad matching for LLM text describing a save/store action
+  // Also check user message for explicit remember requests the LLM acknowledged but didn't tool-call
+  const userLower = userMessage.toLowerCase();
+  const describesRemember = /(?:(?:remember|sav|stor|not|record|keep|memoriz)\w*\s+(?:that|this|it|your |the |my )|(?:i'?ll |let me |i'?m going to )(?:remember|save|store|note|record|keep)|(?:i'?ve |i have )?(?:stored|saved|noted|recorded|memorized|remembered)\s+(?:that|this|it|your|the)|use (?:the )?remember)/i.test(lower);
+  const userAskedRemember = /(?:(?:please |can you |you should )remember (?:that|this|my|i |the |for )|(?<!i )(?<!i'll )remember (?:that |this |my |i |the |for )|(?:don'?t |never )forget |(?:save|store|note|keep) (?:this|that|my|the |it )|use (?:the )?remember)/i.test(userLower);
+  if (availableToolNames.has('remember') && (describesRemember || userAskedRemember)) {
+    // Try to extract a meaningful title from the user message
+    const titleMatch = userMessage.match(/(?:remember|save|store|note|keep|don'?t forget)\s+(?:that\s+)?(.{5,60}?)(?:\.|$)/i);
+    const title = titleMatch ? titleMatch[1].trim().slice(0, 60) : 'User memory';
     return {
       id: `extracted_${Date.now()}`,
       name: 'remember',
-      arguments: { text: userMessage },
+      arguments: { title, content: userMessage },
     };
   }
 
@@ -3357,7 +3363,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           // force the LLM to call a tool on the first iteration instead of narrating.
           // This is the biggest reliability win for local models that tend to describe actions.
           const msgLower = message.toLowerCase();
-          const strongToolIntent = /\b(what(?:'s| is) the weather|weather (?:like|today|tomorrow|forecast)|search (?:for|the web)|look up|find (?:me|out)|generate (?:an? |some )?(?:image|picture|photo|selfie|portrait)|take a (?:selfie|photo|picture)|create (?:a |an )?(?:image|picture)|make (?:me |an? )?(?:image|picture|selfie)|remember (?:that|this)|save (?:this|that) (?:to|as)|remind me|set (?:a )?reminder|send (?:a )?(?:notification|message|alert)|check (?:the |my )?(?:calendar|schedule|tasks|email|inbox)|write (?:a |an )?(?:file|document|report)|read (?:the |my )?(?:file|document)|list (?:my |the )?(?:files|projects|tasks)|download|scrape|analyze (?:this|the|that) (?:image|photo|picture)|turn (?:on|off) (?:the )?|(?:open|close) (?:the )?|(?:lights?|switch|fan|heater|thermostat) (?:on|off)|delegate|get (?:the )?(?:weather|forecast)|search (?:youtube|email|gmail|contacts)|draft (?:an? )?email|compose (?:an? )?email)\b/i.test(msgLower);
+          const strongToolIntent = /\b(what(?:'s| is) the weather|weather (?:like|today|tomorrow|forecast)|search (?:for|the web)|look up|find (?:me|out)|generate (?:an? |some )?(?:image|picture|photo|selfie|portrait)|take a (?:selfie|photo|picture)|create (?:a |an )?(?:image|picture)|make (?:me |an? )?(?:image|picture|selfie)|(?:please |can you |you should )remember (?:that|this|my|i |the |for )|(?<!i )(?<!i'll )remember (?:that |this |my |i |the |for )|(?:don'?t |never )forget (?:that|this|my|i )|(?:save|store|note|keep) (?:this|that|my|the |it )(?:in |to |as )?(?:memory|mind)?|use (?:the )?remember(?: tool)?|remind me|set (?:a )?reminder|send (?:a )?(?:notification|message|alert)|check (?:the |my )?(?:calendar|schedule|tasks|email|inbox)|write (?:a |an )?(?:file|document|report)|read (?:the |my )?(?:file|document)|list (?:my |the )?(?:files|projects|tasks)|download|scrape|analyze (?:this|the|that) (?:image|photo|picture)|turn (?:on|off) (?:the )?|(?:open|close) (?:the )?|(?:lights?|switch|fan|heater|thermostat) (?:on|off)|delegate|get (?:the )?(?:weather|forecast)|search (?:youtube|email|gmail|contacts)|draft (?:an? )?email|compose (?:an? )?email)\b/i.test(msgLower);
           let forceToolCall = strongToolIntent; // Force tool_choice:'required' on first iteration if intent is strong
           const executedToolCache = new Map<string, unknown>(); // Dedup: normalizedKey → result
           const failedCallCache = new Map<string, string>(); // Cache: dedupKey → error message
@@ -3490,7 +3496,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               const hasAttemptedTools = hasExecutedTools || failedCallCache.size > 0;
 
               const describesToolAction = !hasAttemptedTools &&
-                /(?:(?:generat|creat|mak|produc|design|render|draw|craft|captur|snap)\w*\s+(?:\d+\s+)?(?:unique\s+|some\s+|a\s+|an\s+|the\s+|your\s+|my\s+)?(?:image|selfie|portrait|picture|photo|illustration|artwork))|(?:(?:search|check|fetch|get|grab|download|send|analyz|look\w* up)\w*\s+(?:the |your |a |for )?(?:weather|forecast|web|image|file|email|contact|video|result|drone|review))|(?:(?:here(?:'s| is| are)|i (?:created|generated|made|took|prepared|composed|rendered))\s+(?:the |your |some |a |\d+ )?(?:\w+ )?(?:image|selfie|portrait|picture|photo|illustration|result|file|forecast))|(?:i (?:created|generated|made)\s+\d+\s+\w+)/i.test(lowerContent);
+                /(?:(?:generat|creat|mak|produc|design|render|draw|craft|captur|snap)\w*\s+(?:\d+\s+)?(?:unique\s+|some\s+|a\s+|an\s+|the\s+|your\s+|my\s+)?(?:image|selfie|portrait|picture|photo|illustration|artwork))|(?:(?:search|check|fetch|get|grab|download|send|analyz|look\w* up)\w*\s+(?:the |your |a |for )?(?:weather|forecast|web|image|file|email|contact|video|result|drone|review))|(?:(?:here(?:'s| is| are)|i (?:created|generated|made|took|prepared|composed|rendered))\s+(?:the |your |some |a |\d+ )?(?:\w+ )?(?:image|selfie|portrait|picture|photo|illustration|result|file|forecast))|(?:i (?:created|generated|made)\s+\d+\s+\w+)|(?:(?:remember|sav|stor|not|record|keep)\w*\s+(?:that|this|it|your|the )\s*(?:in |to |as )?(?:my |your )?(?:memory|notes|knowledge)?)|(?:(?:i'?ve |i have |i )?(?:stored|saved|noted|recorded|memorized|remembered)\s+(?:that|this|it|your|the ))/i.test(lowerContent);
 
               const isShortPreamble = iterationContent.length < 500;
               const suggestsAction = isShortPreamble &&
@@ -3499,11 +3505,45 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               const suggestsToolUse = describesToolAction || suggestsAction;
               if (nudgeCount < 2 && suggestsToolUse && !hasAttemptedTools) {
                 nudgeCount++;
-                console.log(`   🔄 ${choomTag} Nudge ${nudgeCount}/2 with tool_choice=required`);
+                // Build a dynamic tool hint based on what the LLM seems to be describing
+                const toolHints: string[] = [];
+                if (/(?:image|selfie|portrait|picture|photo|illustration|artwork)/i.test(lowerContent)) {
+                  toolHints.push('for images/selfies use generate_image');
+                }
+                if (/(?:weather|forecast|temperature)/i.test(lowerContent)) {
+                  toolHints.push('for weather use get_weather');
+                }
+                if (/(?:search|look\w* up|find|query|browse)/i.test(lowerContent)) {
+                  toolHints.push('for web search use web_search');
+                }
+                if (/(?:file|document|write|save to|create a )/i.test(lowerContent) && !/(?:memor|remember|store|note|record)/i.test(lowerContent)) {
+                  toolHints.push('for files use workspace_write_file');
+                }
+                if (/(?:remember|save|stor|not[ei]|record|memoriz|keep.*(?:mind|memory))/i.test(lowerContent)) {
+                  toolHints.push('for saving memories use remember');
+                }
+                if (/(?:email|gmail|inbox|message)/i.test(lowerContent)) {
+                  toolHints.push('for email use list_emails, read_email, or send_email');
+                }
+                if (/(?:calendar|schedule|event|appointment)/i.test(lowerContent)) {
+                  toolHints.push('for calendar use get_calendar_events');
+                }
+                if (/(?:delegat|ask|forward|pass.*to)/i.test(lowerContent)) {
+                  toolHints.push('for delegation use delegate_to_choom');
+                }
+                if (/(?:turn |switch |lights?|fan|thermostat|heater)/i.test(lowerContent)) {
+                  toolHints.push('for smart home use ha_call_service');
+                }
+                // Fallback if no specific hint matched
+                if (toolHints.length === 0) {
+                  toolHints.push('check the available tools and call the most appropriate one');
+                }
+                const hintStr = toolHints.join(', ');
+                console.log(`   🔄 ${choomTag} Nudge ${nudgeCount}/2 with tool_choice=required (hints: ${hintStr})`);
                 currentMessages.push({ role: 'assistant', content: iterationContent });
                 currentMessages.push({
                   role: 'user',
-                  content: `[System] You described what you would do but did not call any tools. You MUST use function calls — do NOT describe what you plan to do or narrate the action. Call the tool NOW using the function calling format. For images/selfies use generate_image, for weather use get_weather, for files use workspace_write_file, for search use web_search. Do not reply with text — only make a tool call.`,
+                  content: `[System] You described what you would do but did not call any tools. You MUST use function calls — do NOT describe what you plan to do or narrate the action. Call the tool NOW using the function calling format. Hints: ${hintStr}. Do not reply with text — only make a tool call.`,
                 });
                 forceToolCall = true;
                 continue;
