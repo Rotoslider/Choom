@@ -18,7 +18,7 @@ export interface ChatCompletionRequest {
   messages: ChatMessage[];
   tools?: Array<{
     type: 'function';
-    function: ToolDefinition;
+    function: ToolDefinition | Record<string, unknown>;
   }>;
   tool_choice?: 'auto' | 'none' | 'required' | { type: 'function'; function: { name: string } };
   temperature?: number;
@@ -99,9 +99,11 @@ export class LLMClient {
     }
 
     if (tools && tools.length > 0) {
+      // Slim down tool definitions: truncate descriptions and strip parameter
+      // descriptions to reduce token overhead for local models.
       body.tools = tools.map((t) => ({
         type: 'function' as const,
-        function: t,
+        function: slimToolDefinition(t),
       }));
       body.tool_choice = toolChoice || 'auto';
     }
@@ -183,7 +185,7 @@ export class LLMClient {
     if (tools && tools.length > 0) {
       body.tools = tools.map((t) => ({
         type: 'function' as const,
-        function: t,
+        function: slimToolDefinition(t),
       }));
       body.tool_choice = 'auto';
     }
@@ -235,6 +237,42 @@ export class LLMClient {
   }
 }
 
+// Slim down a tool definition for the API request: truncate description,
+// strip parameter descriptions, and simplify enum lists. Saves ~40-60% of
+// the tokens spent on tool schemas, which matters for local models.
+function slimToolDefinition(t: ToolDefinition): Record<string, unknown> {
+  // Truncate description to first sentence or 120 chars
+  let desc = t.description;
+  const sentenceEnd = desc.indexOf('. ');
+  if (sentenceEnd > 0 && sentenceEnd < 120) {
+    desc = desc.slice(0, sentenceEnd + 1);
+  } else if (desc.length > 120) {
+    desc = desc.slice(0, 117) + '...';
+  }
+
+  // Slim down parameter properties: keep type, enum, required but drop descriptions
+  const slimProps: Record<string, Record<string, unknown>> = {};
+  if (t.parameters?.properties) {
+    for (const [key, param] of Object.entries(t.parameters.properties)) {
+      const slim: Record<string, unknown> = { type: param.type };
+      if (param.enum) slim.enum = param.enum;
+      if (param.items) slim.items = param.items;
+      if (param.default !== undefined) slim.default = param.default;
+      slimProps[key] = slim;
+    }
+  }
+
+  return {
+    name: t.name,
+    description: desc,
+    parameters: {
+      type: 'object',
+      properties: slimProps,
+      ...(t.parameters?.required ? { required: t.parameters.required } : {}),
+    },
+  };
+}
+
 // Helper to accumulate streaming tool calls
 export function accumulateToolCalls(
   accumulated: Map<number, { id: string; name: string; arguments: string }>,
@@ -245,14 +283,14 @@ export function accumulateToolCalls(
   for (const tc of delta.tool_calls) {
     const existing = accumulated.get(tc.index);
     if (existing) {
-      // Append to existing
-      if (tc.function?.arguments) {
-        existing.arguments += tc.function.arguments;
-      }
+      // Append to existing — also fill in ID/name if they arrive in a later chunk
+      if (tc.id && !existing.id) existing.id = tc.id;
+      if (tc.function?.name && !existing.name) existing.name = tc.function.name;
+      if (tc.function?.arguments) existing.arguments += tc.function.arguments;
     } else {
-      // New tool call
+      // New tool call — generate fallback ID if model emits empty/missing ID
       accumulated.set(tc.index, {
-        id: tc.id || '',
+        id: tc.id || `tc_${Date.now()}_${tc.index}`,
         name: tc.function?.name || '',
         arguments: tc.function?.arguments || '',
       });
