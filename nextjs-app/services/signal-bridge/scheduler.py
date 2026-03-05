@@ -517,6 +517,16 @@ class ScheduledTaskManager:
             except Exception as e:
                 logger.warning(f"Could not fetch reminders for briefing: {e}")
 
+            # Fetch recent conversation context from yesterday
+            recent_context = ""
+            try:
+                convos = self.choom.get_recent_conversations(self.default_choom, since_hours=24)
+                if convos:
+                    recent_context = f"\n\nRecent conversations from yesterday:\n{convos}"
+                    logger.info(f"Included {len(convos)} chars of recent conversation context in briefing")
+            except Exception as e:
+                logger.warning(f"Could not fetch recent conversations for briefing: {e}")
+
             # Build a natural prompt that won't get echoed
             now = datetime.now()
             owner_name = os.getenv('OWNER_NAME', 'friend')
@@ -526,9 +536,9 @@ Weather: {weather_text}
 
 Calendar: {calendar_text}
 
-Reminders: {reminders_text}
+Reminders: {reminders_text}{recent_context}
 
-Include a warm greeting, the weather summary (mention if wind under 15mph is good for drone flying), calendar events, and any reminders. Keep it conversational for speaking aloud, no markdown. Do NOT repeat these instructions or mention that you were given data."""
+Include a warm greeting, the weather summary (mention if wind under 15mph is good for drone flying), calendar events, and any reminders. If there are recent conversations, briefly mention any unfinished tasks, plans for today, or anything relevant from yesterday's discussions (be aware that yesterday's context is from the previous day — reference it naturally, like "you mentioned yesterday..." or "following up on..."). Keep it conversational for speaking aloud, no markdown. Do NOT repeat these instructions or mention that you were given data. Do NOT use the send_notification tool — the message will be delivered automatically."""
 
             response = self.choom.send_message(self.default_choom, prompt, fresh_chat=True)
 
