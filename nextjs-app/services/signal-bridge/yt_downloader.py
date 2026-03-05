@@ -21,19 +21,42 @@ PROJECT_DIR = os.path.join(WORKSPACE_ROOT, PROJECT_NAME)
 
 YT_DLP_BIN = "/usr/bin/yt-dlp"
 YT_DLP_EXTRA_ARGS = [
-    "--cookies-from-browser", "firefox",
     "--js-runtimes", "node",
     "--remote-components", "ejs:github",
 ]
 
 
+def _normalize_unicode_text(text: str) -> str:
+    """Convert fancy Unicode characters (bold, italic, etc.) to plain ASCII equivalents."""
+    import unicodedata
+    result = []
+    for ch in text:
+        # Try NFKD decomposition first — maps bold/italic/script variants to base chars
+        decomposed = unicodedata.normalize("NFKD", ch)
+        # Keep only non-combining characters
+        cleaned = "".join(c for c in decomposed if not unicodedata.combining(c))
+        result.append(cleaned if cleaned else ch)
+    return "".join(result)
+
+
 def _sanitize_filename(name: str) -> str:
     """Sanitize a string for use as a filename/directory name."""
+    # Normalize fancy Unicode (bold, italic, etc.) to plain ASCII
+    name = _normalize_unicode_text(name)
     # Remove or replace problematic characters
     name = re.sub(r'[<>:"/\\|?*]', '_', name)
     name = re.sub(r'\s+', ' ', name).strip()
     name = name.strip('.')
     return name or "Unknown"
+
+
+def _clean_title(title: str) -> str:
+    """Clean a video title: normalize Unicode and strip everything after ' // '."""
+    title = _normalize_unicode_text(title)
+    # Strip genre/tag lists after " // "
+    if " // " in title:
+        title = title.split(" // ", 1)[0].strip()
+    return title
 
 
 class YouTubeDownloader:
@@ -134,6 +157,7 @@ class YouTubeDownloader:
             YT_DLP_BIN,
             *YT_DLP_EXTRA_ARGS,
             "--dump-json",
+            "--format", "bestaudio*/bestaudio/best",
             "--no-warnings",
             f"https://www.youtube.com/watch?v={video_id}",
         ]
@@ -157,6 +181,7 @@ class YouTubeDownloader:
         cmd = [
             YT_DLP_BIN,
             *YT_DLP_EXTRA_ARGS,
+            "--format", "bestaudio*/bestaudio/best",
             "-x",
             "--audio-format", "mp3",
             "--audio-quality", "0",
@@ -225,9 +250,10 @@ class YouTubeDownloader:
 
             tags = audio.tags
 
-            # Title
+            # Title — clean fancy Unicode and strip genre suffixes
             title = metadata.get("title", "") or metadata.get("track", "")
             if title:
+                title = _clean_title(title)
                 tags.add(TIT2(encoding=3, text=[title]))
 
             # Artist
@@ -239,11 +265,13 @@ class YouTubeDownloader:
                 or ""
             )
             if artist:
+                artist = _normalize_unicode_text(artist)
                 tags.add(TPE1(encoding=3, text=[artist]))
 
             # Album — use album if available, otherwise channel name
             album = metadata.get("album") or metadata.get("channel") or ""
             if album:
+                album = _normalize_unicode_text(album)
                 tags.add(TALB(encoding=3, text=[album]))
 
             # Genre
@@ -363,6 +391,24 @@ class YouTubeDownloader:
 
             # Apply ID3 tags
             self.apply_id3_tags(mp3_path, meta)
+
+            # Rename file to cleaned title
+            clean = _clean_title(meta.get("title", ""))
+            if clean:
+                clean_base = _sanitize_filename(clean)
+                clean_filename = clean_base + ".mp3"
+                clean_path = os.path.join(os.path.dirname(mp3_path), clean_filename)
+                # If a file with this name already exists, append the video ID
+                if os.path.exists(clean_path) and clean_path != mp3_path:
+                    clean_filename = f"{clean_base} [{vid_id}].mp3"
+                    clean_path = os.path.join(os.path.dirname(mp3_path), clean_filename)
+                if clean_path != mp3_path:
+                    try:
+                        os.rename(mp3_path, clean_path)
+                        mp3_path = clean_path
+                        logger.debug(f"Renamed to {clean_filename}")
+                    except OSError as e:
+                        logger.warning(f"Failed to rename {mp3_path}: {e}")
 
             # Update history
             history["downloaded_ids"].append(vid_id)
