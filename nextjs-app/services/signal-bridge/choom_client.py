@@ -178,6 +178,93 @@ class ChoomClient:
         logger.info(f"Created new chat {chat_id} for Choom {choom_id}")
         return chat_id
 
+    def get_recent_conversations(self, choom_name: str, since_hours: int = 24, max_messages: int = 40) -> str:
+        """Fetch recent conversation snippets for a Choom from the past N hours.
+        Returns a summarized text of recent discussions."""
+        try:
+            choom = self.get_choom_by_name(choom_name)
+            if not choom:
+                return ""
+
+            # Get recent chats for this Choom
+            response = self._make_request("GET", f"/api/chats?choomId={choom.id}")
+            chats = response.json()
+            if not chats:
+                return ""
+
+            from datetime import datetime, timedelta, timezone
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=since_hours)
+
+            snippets = []
+            msg_count = 0
+            for chat in chats:
+                # Filter by updatedAt
+                updated = chat.get("updatedAt", "")
+                if not updated:
+                    continue
+                try:
+                    chat_time = datetime.fromisoformat(updated.replace("Z", "+00:00"))
+                    if chat_time < cutoff:
+                        continue
+                except Exception:
+                    continue
+
+                # Skip briefing chats
+                title = chat.get("title", "")
+                if title and "Briefing" in title:
+                    continue
+
+                # Fetch messages for this chat
+                try:
+                    msg_response = self._make_request("GET", f"/api/chats/{chat['id']}/messages")
+                    messages = msg_response.json()
+                except Exception:
+                    continue
+
+                # Filter to messages within the time window
+                relevant = []
+                for msg in messages:
+                    created = msg.get("createdAt", "")
+                    try:
+                        msg_time = datetime.fromisoformat(created.replace("Z", "+00:00"))
+                        if msg_time >= cutoff:
+                            relevant.append(msg)
+                    except Exception:
+                        continue
+
+                if not relevant:
+                    continue
+
+                # Build snippet — take user and assistant messages, truncate long ones
+                chat_lines = []
+                if title:
+                    chat_lines.append(f"[{title}]")
+                for msg in relevant:
+                    if msg_count >= max_messages:
+                        break
+                    role = msg.get("role", "")
+                    content = msg.get("content", "")
+                    if role not in ("user", "assistant") or not content:
+                        continue
+                    # Truncate long messages
+                    if len(content) > 200:
+                        content = content[:200] + "..."
+                    prefix = "User" if role == "user" else choom_name
+                    chat_lines.append(f"  {prefix}: {content}")
+                    msg_count += 1
+
+                if chat_lines:
+                    snippets.append("\n".join(chat_lines))
+
+                if msg_count >= max_messages:
+                    break
+
+            return "\n\n".join(snippets) if snippets else ""
+
+        except Exception as e:
+            logger.warning(f"Failed to fetch recent conversations: {e}")
+            return ""
+
     def send_message(self, choom_name: str, message: str, settings: Optional[Dict] = None, fresh_chat: bool = False) -> ChatResponse:
         """
         Send a message to a Choom and get the response
