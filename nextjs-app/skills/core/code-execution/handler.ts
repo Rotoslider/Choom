@@ -37,7 +37,7 @@ export default class CodeExecutionHandler extends BaseSkillHandler {
       const language = toolCall.arguments.language as 'python' | 'node';
       const code = toolCall.arguments.code as string;
       const timeoutSeconds = toolCall.arguments.timeout_seconds as number | undefined;
-      const timeoutMs = timeoutSeconds ? Math.min(timeoutSeconds * 1000, 120_000) : undefined;
+      const timeoutMs = timeoutSeconds ? Math.min(timeoutSeconds * 1000, 600_000) : undefined;
 
       const result = language === 'python'
         ? await sandbox.executePython(projectFolder, code, timeoutMs)
@@ -91,7 +91,7 @@ export default class CodeExecutionHandler extends BaseSkillHandler {
       const projectFolder = toolCall.arguments.project_folder as string;
       const command = toolCall.arguments.command as string;
       const timeoutSeconds = toolCall.arguments.timeout_seconds as number | undefined;
-      const timeoutMs = timeoutSeconds ? Math.min(timeoutSeconds * 1000, 120_000) : undefined;
+      const timeoutMs = timeoutSeconds ? Math.min(timeoutSeconds * 1000, 600_000) : undefined;
 
       const result = await sandbox.runCommand(projectFolder, command, timeoutMs);
       return this.success(toolCall, result);

@@ -2890,56 +2890,10 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
       choomMaxIterations = Math.min(25, Math.max(3, parseInt(maxIterMatch[1])));
     }
 
-    if (skillDispatch) {
-      const ALWAYS_AVAILABLE = new Set([
-        'remember', 'search_memories', 'web_search',
-        'get_weather', 'send_notification', 'generate_image',
-      ]);
-
-      const registry = getSkillRegistry();
-      const includedToolNames = new Set<string>(ALWAYS_AVAILABLE);
-
-      // Match skills from current message (up to 5 skills)
-      const matchedSkills = registry.matchSkills(message, 5);
-      for (const skill of matchedSkills) {
-        for (const toolDef of skill.toolDefinitions) {
-          includedToolNames.add(toolDef.name);
-        }
-      }
-
-      // Context: match from last 3 user messages so follow-ups work
-      const recentUserMessages = chat.messages.filter(m => m.role === 'user').slice(-3);
-      for (const msg of recentUserMessages) {
-        const contextMatches = registry.matchSkills(msg.content || '', 2);
-        for (const skill of contextMatches) {
-          for (const toolDef of skill.toolDefinitions) {
-            includedToolNames.add(toolDef.name);
-          }
-        }
-      }
-
-      // History: include tools already used in this conversation
-      for (const msg of chat.messages) {
-        if (msg.toolCalls) {
-          try {
-            const calls = JSON.parse(msg.toolCalls) as { name?: string }[];
-            for (const call of calls) {
-              if (call.name) includedToolNames.add(call.name);
-            }
-          } catch { /* ignore parse errors */ }
-        }
-      }
-
-      activeTools = allToolDefs.filter(t => includedToolNames.has(t.name));
-
-      // Safety floor: if too few matched, send all (something went wrong)
-      if (activeTools.length < 6) {
-        console.log(`   ⚠️  Dynamic filter: only ${activeTools.length} tools — sending all ${allToolDefs.length}`);
-        activeTools = allToolDefs;
-      } else {
-        console.log(`   🎯 Dynamic tool filter: ${activeTools.length}/${allToolDefs.length} tools (matched ${matchedSkills.map(s => s.metadata.name).join(', ') || 'none'})`);
-      }
-    }
+    // All tools are always available. slimToolDefinition() in llm-client.ts
+    // handles token overhead (~40-60% reduction). Filtering tools out of the
+    // array prevents the LLM from ever calling them — lesson learned twice.
+    console.log(`   🛠️  All ${activeTools.length} tools available (no filtering)`);
 
     // noTools mode: strip ALL tools so the LLM can only produce text.
     // Used by scheduler briefings where all data is pre-fetched in the prompt.
@@ -3400,8 +3354,8 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           const brokenTools = new Set<string>(); // Tool names blocked due to config/auth errors
           const toolFailureCounts = new Map<string, number>(); // Per-tool name failure counter
           let consecutiveFailures = 0; // Abort after MAX_CONSECUTIVE_FAILURES
-          const MAX_CONSECUTIVE_FAILURES = 3;
-          const MAX_CALLS_PER_TOOL = 5; // Max times any single tool can be called per request
+          const MAX_CONSECUTIVE_FAILURES = 6;
+          const MAX_CALLS_PER_TOOL = 20; // Max times any single tool can be called per request
           const MAX_FAILURES_PER_TOOL = 2; // Block tool after this many failures (any error)
           const choomTag = `[${choom.name}]`;
           console.log(`   🛠️  ${choomTag} Tools available: ${activeTools.length} (${activeTools.map(t => t.name).join(', ')})${skillDispatch ? ' [skill dispatch]' : ''}`);

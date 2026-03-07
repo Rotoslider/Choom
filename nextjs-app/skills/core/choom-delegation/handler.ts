@@ -83,7 +83,7 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
     const choomName = toolCall.arguments.choom_name as string;
     const task = toolCall.arguments.task as string;
     const extraContext = toolCall.arguments.context as string | undefined;
-    const timeoutSeconds = Math.min(300, Math.max(30, (toolCall.arguments.timeout_seconds as number) || 120));
+    const timeoutSeconds = Math.min(300, Math.max(30, (toolCall.arguments.timeout_seconds as number) || 240));
 
     if (!choomName) return this.error(toolCall, 'choom_name is required');
     if (!task) return this.error(toolCall, 'task is required');

@@ -83,6 +83,12 @@ const MULTI_STEP_PATTERNS = [
   /\b(download|fetch|get)\b.*\b(and|then)\b.*\b(process|convert|save|upload)/i,
   /\b(scrape|crawl)\b.*\b(and|then)\b.*\b(extract|save|write)/i,
   /\b(first|1\))\b.*\b(then|2\)|second)\b/i,
+  // Project-style multi-step requests
+  /\b(build|create|set up|start)\b.*\b(project|app|application|system|pipeline|workflow)\b/i,
+  /\b(plan|design|architect)\b.*\b(and|then)\b/i,
+  /\b(delegate|have \w+ do|ask \w+ to)\b.*\b(and|while|then)\b/i,
+  /\bcreate a plan\b/i,
+  /\buse.+chooms?\b/i,
 ];
 
 /**
@@ -162,9 +168,11 @@ Respond with ONLY a JSON object in this format (no markdown, no backticks):
 Rules:
 - Each step is either type "tool" (calls a tool directly) or type "delegate" (sends task to another Choom)
 - Use type "delegate" when the task needs another Choom's expertise (research, coding, image analysis)
-- For delegate steps, specify choomName and task (not toolName/args)
-- Use dependsOn to reference step IDs that must complete first
+- For delegate steps, specify choomName and task (not toolName/args) — the target Choom does its OWN research/work, so delegate steps should NOT depend on your web_search steps
+- ONLY use dependsOn when a step truly needs DATA from a previous step's result (e.g. writing a file that uses {{step_1.result.field}}). If a step can run independently, leave dependsOn empty
+- Delegate steps are independent by default — the target Choom has its own tools and does its own searches. Do NOT chain delegate steps after web_search steps unless the delegate literally needs a specific result value
 - Use {{step_N.result.field}} syntax in args/task to reference previous step outputs
+- Limit web_search to 2-3 calls max per plan to avoid rate limiting. Prefer delegating research to other Chooms
 - If the request is simple (1-2 steps), respond with: {"goal": null}
 - Maximum 10 steps per plan
 - Only use tools from the available skills listed above`,
@@ -349,6 +357,15 @@ export async function executePlan(
     // Resolve template variables (for both args and delegate task text)
     const resolvedArgs = resolveTemplateVars(step.args, completedSteps);
     const resolvedTask = step.task ? resolveTemplateVars({ _task: step.task }, completedSteps)._task as string : undefined;
+
+    // Rate limit protection: add a short delay between consecutive web searches
+    const toolName = step.type === 'delegate' ? 'delegate_to_choom' : step.toolName;
+    if (toolName === 'web_search' && toolCallCounter > 0) {
+      const prevStep = plan.steps[plan.steps.indexOf(step) - 1];
+      if (prevStep && (prevStep.toolName === 'web_search' || prevStep.type === 'delegate')) {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+    }
 
     // Mark step as running
     step.status = 'running';

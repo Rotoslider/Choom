@@ -20,7 +20,7 @@ interface ExecutionResult {
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000;
-const MAX_TIMEOUT_MS = 120_000;
+const MAX_TIMEOUT_MS = 600_000; // 10 min — package installs (PyTorch, CUDA) need time
 const MAX_OUTPUT_BYTES = 50 * 1024; // 50KB
 
 export class CodeSandbox {
@@ -217,7 +217,7 @@ export class CodeSandbox {
       }
     }
     const safePackages = packages.join(' ');
-    return this.runCommand(projectFolder, `pip install ${safePackages}`, 120_000);
+    return this.runCommand(projectFolder, `pip install ${safePackages}`, 600_000);
   }
 
   /** Install Node.js packages via npm */
@@ -237,6 +237,6 @@ export class CodeSandbox {
       }
     }
     const safePackages = packages.join(' ');
-    return this.runCommand(projectFolder, `npm install ${safePackages}`, 120_000);
+    return this.runCommand(projectFolder, `npm install ${safePackages}`, 600_000);
   }
 }
