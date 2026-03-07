@@ -265,7 +265,7 @@ class ChoomClient:
             logger.warning(f"Failed to fetch recent conversations: {e}")
             return ""
 
-    def send_message(self, choom_name: str, message: str, settings: Optional[Dict] = None, fresh_chat: bool = False) -> ChatResponse:
+    def send_message(self, choom_name: str, message: str, settings: Optional[Dict] = None, fresh_chat: bool = False, no_tools: bool = False) -> ChatResponse:
         """
         Send a message to a Choom and get the response
 
@@ -274,6 +274,7 @@ class ChoomClient:
             message: User's message
             settings: Optional settings override
             fresh_chat: If True, always create a new chat (useful for briefings to avoid stale context)
+            no_tools: If True, strip all tools from the LLM request (text-only response)
 
         Returns:
             ChatResponse with the Choom's response
@@ -382,12 +383,17 @@ class ChoomClient:
         logger.info(f"Sending to {choom_name} with LLM model={default_settings['llm'].get('model', 'default')}, endpoint={default_settings['llm'].get('endpoint', 'default')}")
 
         # Send message to chat API
+        # suppressNotifications: the bridge/scheduler always delivers the response
+        # directly via Signal, so suppress send_notification to prevent duplicates.
         payload = {
             "choomId": choom.id,
             "chatId": chat_id,
             "message": message,
             "settings": default_settings,
+            "suppressNotifications": True,
         }
+        if no_tools:
+            payload["noTools"] = True
 
         # Use streaming endpoint
         response = self._make_request(

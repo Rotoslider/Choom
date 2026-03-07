@@ -236,11 +236,7 @@ class SignalBridge:
                 # Record user activity so heartbeats defer while we're active
                 self.choom.record_user_activity(choom_name)
 
-                # Append Signal context instruction to prevent duplicate responses.
-                # The bridge sends the response back via Signal automatically, so if
-                # the LLM also calls send_notification, the user gets the message twice.
-                signal_message = f"{cleaned_message}\n\n[System: This message is from a Signal conversation. Your response will be delivered automatically — do NOT use the send_notification tool.]"
-                response = self.choom.send_message(choom_name, signal_message)
+                response = self.choom.send_message(choom_name, cleaned_message)
 
                 # Log response details for debugging
                 logger.info(f"Choom response - content length: {len(response.content)}, images: {len(response.images)}, tool_calls: {len(response.tool_calls)}")
