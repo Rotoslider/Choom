@@ -350,6 +350,7 @@ interface ToolContext {
   send: (data: Record<string, unknown>) => void;
   sessionFileCount: { created: number; maxAllowed: number };
   suppressNotifications?: boolean;
+  activeProjectFolder?: string;
 }
 
 // ============================================================================
@@ -3239,6 +3240,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           send,
           sessionFileCount,
           suppressNotifications: !!suppressNotifications,
+          activeProjectFolder: detectedProject?.folder,
         };
 
         try {
@@ -3640,6 +3642,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 executedToolCache.set(dedupKey, result.result);
                 consecutiveFailures = 0;
               } else {
+                console.log(`   ❌ ${choomTag} ${tc.name} failed: ${result.error.slice(0, 200)}`);
                 failedCallCache.set(dedupKey, result.error);
                 // Classify the error to decide blocking and counting strategy:
                 // - Config/auth errors → block immediately (model can't fix these)

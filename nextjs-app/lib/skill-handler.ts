@@ -30,6 +30,9 @@ export interface SkillHandlerContext {
   // Session limits
   sessionFileCount: { created: number; maxAllowed: number };
 
+  // Active project context (passed to delegation so target Choom knows where to work)
+  activeProjectFolder?: string;
+
   // Skill-specific context (injected by registry)
   skillDoc: string;
   getReference: (fileName: string) => Promise<string>;
