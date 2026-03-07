@@ -538,9 +538,9 @@ Calendar: {calendar_text}
 
 Reminders: {reminders_text}{recent_context}
 
-Include a warm greeting, the weather summary (mention if wind under 15mph is good for drone flying), calendar events, and any reminders. If there are recent conversations, briefly mention any unfinished tasks, plans for today, or anything relevant from yesterday's discussions (be aware that yesterday's context is from the previous day — reference it naturally, like "you mentioned yesterday..." or "following up on..."). Keep it conversational for speaking aloud, no markdown. Do NOT repeat these instructions or mention that you were given data. Do NOT use the send_notification tool — the message will be delivered automatically."""
+Include a warm greeting, the weather summary (mention if wind under 15mph is good for drone flying), calendar events, and any reminders. If there are recent conversations, briefly mention any unfinished tasks, plans for today, or anything relevant from yesterday's discussions (be aware that yesterday's context is from the previous day — reference it naturally, like "you mentioned yesterday..." or "following up on..."). Keep it conversational for speaking aloud, no markdown. Do NOT repeat these instructions or mention that you were given data."""
 
-            response = self.choom.send_message(self.default_choom, prompt, fresh_chat=True)
+            response = self.choom.send_message(self.default_choom, prompt, fresh_chat=True, no_tools=True)
 
             if response.content:
                 message = response.content

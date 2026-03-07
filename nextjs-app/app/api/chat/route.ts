@@ -349,6 +349,7 @@ interface ToolContext {
   message: string;
   send: (data: Record<string, unknown>) => void;
   sessionFileCount: { created: number; maxAllowed: number };
+  suppressNotifications?: boolean;
 }
 
 // ============================================================================
@@ -2145,6 +2146,14 @@ async function executeToolCall(
   }
 
   // Proactive notification (Batch 5)
+  if (toolCall.name === 'send_notification' && ctx.suppressNotifications) {
+    console.log(`   🔇 send_notification suppressed (suppressNotifications=true)`);
+    return {
+      toolCallId: toolCall.id,
+      name: toolCall.name,
+      result: { success: true, message: 'Notification suppressed — response will be delivered directly.' },
+    };
+  }
   if (toolCall.name === 'send_notification') {
     try {
       const notifMessage = toolCall.arguments.message as string;
@@ -2456,6 +2465,18 @@ async function executeToolCallViaSkills(
   toolCall: ToolCall,
   ctx: ToolContext
 ): Promise<ToolResult> {
+  // Suppress send_notification when caller already delivers the response
+  // (e.g. Signal bridge, scheduler). Without this, the LLM queues a
+  // notification AND the caller sends the message directly → duplicate.
+  if (toolCall.name === 'send_notification' && ctx.suppressNotifications) {
+    console.log(`   🔇 send_notification suppressed (suppressNotifications=true)`);
+    return {
+      toolCallId: toolCall.id,
+      name: toolCall.name,
+      result: { success: true, message: 'Notification suppressed — response will be delivered directly.' },
+    };
+  }
+
   const registry = getSkillRegistry();
   const skill = registry.getSkillForTool(toolCall.name);
 
@@ -2572,7 +2593,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { choomId, chatId, message, settings, isDelegation } = body;
+    const { choomId, chatId, message, settings, isDelegation, suppressNotifications, noTools } = body;
 
     if (!choomId || !chatId || !message) {
       return new Response(
@@ -2920,6 +2941,13 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
       }
     }
 
+    // noTools mode: strip ALL tools so the LLM can only produce text.
+    // Used by scheduler briefings where all data is pre-fetched in the prompt.
+    if (noTools) {
+      console.log(`   🚫 noTools mode: stripped all ${activeTools.length} tools — text-only response`);
+      activeTools = [];
+    }
+
     // Delegation mode: strip delegation + plan tools to prevent recursive delegation loops
     if (isDelegation) {
       const delegationTools = new Set([
@@ -3256,6 +3284,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           message,
           send,
           sessionFileCount,
+          suppressNotifications: !!suppressNotifications,
         };
 
         try {
@@ -3503,7 +3532,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 /\b(let me(?! know| share| tell| explain| describe| show you what| be )|i'll (?!be\b)|i will (?!be\b)|i can (?!help|assist)|i'?m going to|here(?:'s| is) (?:a |your |the )|checking|looking up|searching|analyzing|fetching|downloading|setting up|working on)\b/.test(lowerContent);
 
               const suggestsToolUse = describesToolAction || suggestsAction;
-              if (nudgeCount < 2 && suggestsToolUse && !hasAttemptedTools) {
+              if (nudgeCount < 2 && suggestsToolUse && !hasAttemptedTools && activeTools.length > 0) {
                 nudgeCount++;
                 // Build a dynamic tool hint based on what the LLM seems to be describing
                 const toolHints: string[] = [];
