@@ -14,7 +14,21 @@ export const tools: ToolDefinition[] = [
         },
         steps: {
           type: 'array',
-          description: 'Array of plan steps. Tool steps: { type: "tool", description, toolName, args, dependsOn? }. Delegate steps: { type: "delegate", description, choomName, task, dependsOn? }. Use {{step_N.result.field}} in args/task to reference previous step outputs. Use {{step_N.result.response}} for delegation text.',
+          description: 'Array of plan steps. Use {{step_N.result.field}} in args/task to reference previous step outputs.',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string', description: 'Unique step ID, e.g. "step_1"' },
+              type: { type: 'string', enum: ['tool', 'delegate'], description: '"tool" to call a tool directly, "delegate" to send task to another Choom' },
+              description: { type: 'string', description: 'What this step does' },
+              toolName: { type: 'string', description: 'Tool to call (for type "tool")' },
+              args: { type: 'object', description: 'Arguments for the tool (for type "tool")' },
+              choomName: { type: 'string', description: 'Target Choom name (for type "delegate")' },
+              task: { type: 'string', description: 'Task description for the target Choom (for type "delegate")' },
+              dependsOn: { type: 'array', items: { type: 'string' }, description: 'Step IDs that must complete first' },
+            },
+            required: ['id', 'type', 'description'],
+          },
         },
       },
       required: ['goal', 'steps'],
@@ -48,7 +62,17 @@ export const tools: ToolDefinition[] = [
         },
         modifications: {
           type: 'array',
-          description: 'Array of modifications: { stepId, action: "modify"|"skip"|"add", newArgs?, newStep? }',
+          description: 'Array of modifications to apply to the plan',
+          items: {
+            type: 'object',
+            properties: {
+              stepId: { type: 'string', description: 'ID of the step to modify' },
+              action: { type: 'string', enum: ['modify', 'skip', 'add'], description: 'What to do' },
+              newArgs: { type: 'object', description: 'New arguments (for action "modify")' },
+              newStep: { type: 'object', description: 'New step definition (for action "add")' },
+            },
+            required: ['stepId', 'action'],
+          },
         },
       },
       required: ['plan_id', 'modifications'],
