@@ -35,13 +35,30 @@ export default class PlanModeHandler extends BaseSkillHandler {
       let steps = toolCall.arguments.steps as Array<Record<string, unknown>>;
 
       if (!goal) return this.error(toolCall, 'goal is required');
-      if (!Array.isArray(steps) || steps.length === 0) {
-        return this.error(toolCall, 'steps must be a non-empty array');
+
+      // Parse steps if passed as string (LLMs sometimes stringify nested arrays)
+      if (typeof steps === 'string') {
+        try { steps = JSON.parse(steps); } catch { return this.error(toolCall, 'steps must be a valid JSON array'); }
       }
 
-      // Parse steps if passed as string (LLMs sometimes stringify)
-      if (typeof steps === 'string') {
-        try { steps = JSON.parse(steps); } catch { return this.error(toolCall, 'steps must be a valid array'); }
+      // Handle model sending a single step object instead of an array
+      if (steps && typeof steps === 'object' && !Array.isArray(steps)) {
+        // Could be {step_1: {...}, step_2: {...}} or just a single step
+        const asRecord = steps as unknown as Record<string, unknown>;
+        if (asRecord.id || asRecord.description || asRecord.type) {
+          steps = [asRecord as Record<string, unknown>];
+        } else {
+          // Try extracting values as steps
+          const vals = Object.values(asRecord).filter(v => v && typeof v === 'object');
+          if (vals.length > 0) {
+            steps = vals as Array<Record<string, unknown>>;
+          }
+        }
+      }
+
+      if (!Array.isArray(steps) || steps.length === 0) {
+        console.log(`   ❌ create_plan: steps is ${typeof steps}, value: ${JSON.stringify(steps).slice(0, 200)}`);
+        return this.error(toolCall, 'steps must be a non-empty array of step objects with id, type, and description');
       }
 
       // Cap at 10 steps

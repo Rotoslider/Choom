@@ -121,8 +121,15 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
       if (extraContext) {
         fullTask = `## Context from orchestrator\n${extraContext}\n\n## Your Task\n${task}`;
       }
+
+      // Include active project context if the orchestrator has one
+      const activeProject = ctx.activeProjectFolder;
+      const projectContext = activeProject
+        ? `\n- IMPORTANT: Work inside the existing project folder "${activeProject}". Do NOT create a new project — use workspace_write_file with project_folder="${activeProject}" for all file operations.`
+        : '';
+
       // Prepend delegation header so the target Choom knows it's a delegated task
-      const delegationMessage = `[DELEGATED TASK from ${(ctx.choom as Record<string, unknown>).name || 'Orchestrator'}]\n\n${fullTask}\n\nRULES FOR THIS TASK:\n- Complete this task DIRECTLY using your own tools. Do NOT delegate to other Chooms.\n- Use the most specific tool available (e.g., get_weather for weather, not web_search).\n- Aim to complete in 1-3 tool calls. Be thorough but concise.\n- Your full response text will be returned to the orchestrator.`;
+      const delegationMessage = `[DELEGATED TASK from ${(ctx.choom as Record<string, unknown>).name || 'Orchestrator'}]\n\n${fullTask}\n\nRULES FOR THIS TASK:\n- Complete this task DIRECTLY using your own tools. Do NOT delegate to other Chooms.\n- Use the most specific tool available (e.g., get_weather for weather, not web_search).\n- Aim to complete in 1-3 tool calls. Be thorough but concise.${projectContext}\n- Your full response text will be returned to the orchestrator.`;
 
       console.log(`   🤝 Delegating to "${targetChoom.name}" (${delegationId}): ${task.slice(0, 80)}...`);
 
