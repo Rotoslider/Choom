@@ -3210,17 +3210,19 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           console.log(`   🔒 [${choom.name}] maxIterations → ${maxIterations} (from system prompt directive)`);
         }
 
-        // Delegation mode: cap iterations to prevent sub-tasks from running too long
-        if (isDelegation) {
-          maxIterations = Math.min(maxIterations, 6);
-          console.log(`   🔒 [${choom.name}] Delegation mode: maxIterations capped at ${maxIterations}`);
-        }
-
         // Apply per-project iteration limit from pre-detected project (detected above from message or chat history)
         if (detectedProject?.metadata?.maxIterations && detectedProject.metadata.maxIterations > 0) {
           maxIterations = detectedProject.metadata.maxIterations;
           projectIterationLimitApplied = true;
           console.log(`   📂 Project "${detectedProject.folder}": maxIterations → ${maxIterations}`);
+        }
+
+        // Delegation mode: cap iterations AFTER project limit to prevent sub-tasks
+        // from running unbounded. This must come last to always win.
+        if (isDelegation) {
+          maxIterations = Math.min(maxIterations, 6);
+          projectIterationLimitApplied = true; // Prevent mid-loop project detection from overriding
+          console.log(`   🔒 [${choom.name}] Delegation mode: maxIterations capped at ${maxIterations}`);
         }
 
         // Build tool context
@@ -3378,6 +3380,13 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           while (iteration < maxIterations) {
             iteration++;
 
+            // Early exit: if the SSE stream was closed (e.g., delegation aborted by
+            // orchestrator, or client disconnected), stop processing immediately.
+            if (streamClosed) {
+              console.log(`   🛑 ${choomTag} Stream closed (client disconnected) — stopping agentic loop at iteration ${iteration}`);
+              break;
+            }
+
             if (iteration > 1) {
               send({ type: 'agent_iteration', iteration, maxIterations });
               console.log(`   🔄 ${choomTag} Agent iteration ${iteration}/${maxIterations}`);
@@ -3461,34 +3470,30 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             // Local models (via LM Studio) often ignore tool_choice='required' and describe
             // actions instead of emitting structured tool_calls. Instead of nudging and
             // hoping the model will comply, we parse what it said and execute directly.
+            // NOTE: We allow extraction even after tools have executed — a read→write
+            // sequence may fail to emit the write as a structured call.
             if (toolCalls.length === 0) {
-              const hasExecutedTools = executedToolCache.size > 0;
-              const hasAttemptedTools = hasExecutedTools || failedCallCache.size > 0;
-              if (!hasAttemptedTools) {
-                const availableToolNames = new Set(activeTools.map(t => t.name));
-                const extracted = extractToolCallFromText(iterationContent, message, availableToolNames);
-                if (extracted) {
-                  console.log(`   🧲 ${choomTag} Extracted tool call from text: ${extracted.name}(${JSON.stringify(extracted.arguments).slice(0, 80)})`);
-                  toolCalls.push(extracted);
-                }
+              const availableToolNames = new Set(activeTools.map(t => t.name));
+              const extracted = extractToolCallFromText(iterationContent, message, availableToolNames);
+              if (extracted) {
+                console.log(`   🧲 ${choomTag} Extracted tool call from text: ${extracted.name}(${JSON.stringify(extracted.arguments).slice(0, 80)})`);
+                toolCalls.push(extracted);
               }
             }
 
             // Still no tool calls after extraction — check if we should nudge or stop
             if (toolCalls.length === 0) {
               const lowerContent = iterationContent.toLowerCase();
-              const hasExecutedTools = executedToolCache.size > 0;
-              const hasAttemptedTools = hasExecutedTools || failedCallCache.size > 0;
 
-              const describesToolAction = !hasAttemptedTools &&
-                /(?:(?:generat|creat|mak|produc|design|render|draw|craft|captur|snap)\w*\s+(?:\d+\s+)?(?:unique\s+|some\s+|a\s+|an\s+|the\s+|your\s+|my\s+)?(?:image|selfie|portrait|picture|photo|illustration|artwork))|(?:(?:search|check|fetch|get|grab|download|send|analyz|look\w* up)\w*\s+(?:the |your |a |for )?(?:weather|forecast|web|image|file|email|contact|video|result|drone|review))|(?:(?:here(?:'s| is| are)|i (?:created|generated|made|took|prepared|composed|rendered))\s+(?:the |your |some |a |\d+ )?(?:\w+ )?(?:image|selfie|portrait|picture|photo|illustration|result|file|forecast))|(?:i (?:created|generated|made)\s+\d+\s+\w+)|(?:(?:remember|sav|stor|not|record|keep)\w*\s+(?:that|this|it|your|the )\s*(?:in |to |as )?(?:my |your )?(?:memory|notes|knowledge)?)|(?:(?:i'?ve |i have |i )?(?:stored|saved|noted|recorded|memorized|remembered)\s+(?:that|this|it|your|the ))/i.test(lowerContent);
+              const describesToolAction =
+                /(?:(?:generat|creat|mak|produc|design|render|draw|craft|captur|snap)\w*\s+(?:\d+\s+)?(?:unique\s+|some\s+|a\s+|an\s+|the\s+|your\s+|my\s+)?(?:image|selfie|portrait|picture|photo|illustration|artwork))|(?:(?:search|check|fetch|get|grab|download|send|analyz|look\w* up)\w*\s+(?:the |your |a |for )?(?:weather|forecast|web|image|file|email|contact|video|result|drone|review))|(?:(?:here(?:'s| is| are)|i (?:created|generated|made|took|prepared|composed|rendered))\s+(?:the |your |some |a |\d+ )?(?:\w+ )?(?:image|selfie|portrait|picture|photo|illustration|result|file|forecast))|(?:i (?:created|generated|made)\s+\d+\s+\w+)|(?:(?:remember|sav|stor|not|record|keep)\w*\s+(?:that|this|it|your|the )\s*(?:in |to |as )?(?:my |your )?(?:memory|notes|knowledge)?)|(?:(?:i'?ve |i have |i )?(?:stored|saved|noted|recorded|memorized|remembered)\s+(?:that|this|it|your|the ))|(?:(?:fix|updat|edit|modif|correct|rewrit|patch|chang|writ)\w*\s+(?:the |this |that )?(?:file|code|script|bug|issue|error|implementation|model|function|class))/i.test(lowerContent);
 
               const isShortPreamble = iterationContent.length < 500;
               const suggestsAction = isShortPreamble &&
-                /\b(let me(?! know| share| tell| explain| describe| show you what| be )|i'll (?!be\b)|i will (?!be\b)|i can (?!help|assist)|i'?m going to|here(?:'s| is) (?:a |your |the )|checking|looking up|searching|analyzing|fetching|downloading|setting up|working on)\b/.test(lowerContent);
+                /\b(let me(?! know| share| tell| explain| describe| show you what| be )|i'll (?!be\b)|i will (?!be\b)|i can (?!help|assist)|i'?m going to|here(?:'s| is) (?:a |your |the )|checking|looking up|searching|analyzing|fetching|downloading|setting up|working on|now (?:i'll|let me|i need to)|fixing|updating|writing|correcting|applying)\b/.test(lowerContent);
 
               const suggestsToolUse = describesToolAction || suggestsAction;
-              if (nudgeCount < 2 && suggestsToolUse && !hasAttemptedTools && activeTools.length > 0) {
+              if (nudgeCount < 2 && suggestsToolUse && activeTools.length > 0) {
                 nudgeCount++;
                 // Build a dynamic tool hint based on what the LLM seems to be describing
                 const toolHints: string[] = [];
@@ -3781,6 +3786,14 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             for (const tc of toolCalls) {
               const r = preFlightResults.get(tc.id) || parallelResults.get(tc.id) || sequentialResults.get(tc.id);
               if (r) iterationResults.push(r);
+            }
+
+            // Reset nudge count after successful tool execution so the next
+            // read→write cycle gets fresh nudge budget (prevents reads from
+            // permanently blocking nudges for subsequent write attempts)
+            const anySucceededThisIteration = iterationResults.some(r => !r.error);
+            if (anySucceededThisIteration) {
+              nudgeCount = 0;
             }
 
             // If ALL tools in this iteration failed and we've seen 2+ total failures,
