@@ -17,6 +17,10 @@ interface DelegationResult {
   timestamp: number;
   durationMs: number;
   chatId: string;
+  choomId: string;
+  incomplete: boolean;
+  iterationsUsed: number;
+  maxIterations: number;
 }
 
 export default class ChoomDelegationHandler extends BaseSkillHandler {
@@ -84,6 +88,7 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
     const task = toolCall.arguments.task as string;
     const extraContext = toolCall.arguments.context as string | undefined;
     const timeoutSeconds = Math.min(600, Math.max(30, (toolCall.arguments.timeout_seconds as number) || 300));
+    const continueDelegationId = toolCall.arguments.continue_delegation_id as string | undefined;
 
     if (!choomName) return this.error(toolCall, 'choom_name is required');
     if (!task) return this.error(toolCall, 'task is required');
@@ -91,30 +96,54 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
     const startTime = Date.now();
 
     try {
-      // 1. Find target Choom
-      // SQLite: case-insensitive lookup via fetching all and comparing
-      const allChooms = await prisma.choom.findMany();
-      const targetChoom = allChooms.find(
-        c => c.name.toLowerCase() === choomName.toLowerCase()
-      );
+      // 1. If continuing a previous delegation, reuse the same Choom and chat
+      let targetChoom: { id: string; name: string } | undefined;
+      let delegationChatId: string;
+      let delegationId: string;
+      let isContinuation = false;
 
-      if (!targetChoom) {
-        const names = allChooms.map(c => c.name).join(', ');
-        return this.error(toolCall, `Choom "${choomName}" not found. Available: ${names}`);
+      if (continueDelegationId) {
+        const prev = delegationResults.get(continueDelegationId);
+        if (!prev) {
+          return this.error(toolCall, `Previous delegation "${continueDelegationId}" not found. Cannot continue.`);
+        }
+        // Reuse the same chat so the Choom has full conversation history
+        const allChooms = await prisma.choom.findMany();
+        targetChoom = allChooms.find(c => c.name.toLowerCase() === prev.choomName.toLowerCase());
+        if (!targetChoom) {
+          return this.error(toolCall, `Choom "${prev.choomName}" no longer available.`);
+        }
+        delegationChatId = prev.chatId;
+        delegationId = `${continueDelegationId}_cont_${Date.now()}`;
+        isContinuation = true;
+        console.log(`   🔄 Continuing delegation ${continueDelegationId} to "${targetChoom.name}" (chat: ${delegationChatId})`);
+      } else {
+        // Find target Choom fresh
+        // SQLite: case-insensitive lookup via fetching all and comparing
+        const allChooms = await prisma.choom.findMany();
+        targetChoom = allChooms.find(
+          c => c.name.toLowerCase() === choomName.toLowerCase()
+        );
+
+        if (!targetChoom) {
+          const names = allChooms.map(c => c.name).join(', ');
+          return this.error(toolCall, `Choom "${choomName}" not found. Available: ${names}`);
+        }
+
+        if (targetChoom.id === ctx.choomId) {
+          return this.error(toolCall, 'Cannot delegate to yourself. Use tools directly instead.');
+        }
+
+        // Create a dedicated delegation chat
+        delegationId = `deleg_${++delegationCounter}_${Date.now()}`;
+        const delegationChat = await prisma.chat.create({
+          data: {
+            choomId: targetChoom.id,
+            title: `[Delegation] ${task.slice(0, 50)}...`,
+          },
+        });
+        delegationChatId = delegationChat.id;
       }
-
-      if (targetChoom.id === ctx.choomId) {
-        return this.error(toolCall, 'Cannot delegate to yourself. Use tools directly instead.');
-      }
-
-      // 2. Create a dedicated delegation chat
-      const delegationId = `deleg_${++delegationCounter}_${Date.now()}`;
-      const delegationChat = await prisma.chat.create({
-        data: {
-          choomId: targetChoom.id,
-          title: `[Delegation] ${task.slice(0, 50)}...`,
-        },
-      });
 
       // 3. Build the delegation message with context
       let fullTask = task;
@@ -128,10 +157,15 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
         ? `\n- IMPORTANT: Work inside the existing project folder "${activeProject}". Do NOT create a new project — use workspace_write_file with project_folder="${activeProject}" for all file operations.`
         : '';
 
-      // Prepend delegation header so the target Choom knows it's a delegated task
-      const delegationMessage = `[DELEGATED TASK from ${(ctx.choom as Record<string, unknown>).name || 'Orchestrator'}]\n\n${fullTask}\n\nRULES FOR THIS TASK:\n- Complete this task DIRECTLY using your own tools. Do NOT delegate to other Chooms.\n- Use the most specific tool available (e.g., get_weather for weather, not web_search).\n- Aim to complete in 1-3 tool calls. Be thorough but concise.${projectContext}\n- Your full response text will be returned to the orchestrator.`;
+      // Build delegation message — different phrasing for continuation vs fresh
+      let delegationMessage: string;
+      if (isContinuation) {
+        delegationMessage = `[CONTINUATION — from ${(ctx.choom as Record<string, unknown>).name || 'Orchestrator'}]\n\nYour previous work was cut short. Continue where you left off.\n\n## Updated Instructions\n${fullTask}\n\nRULES:\n- You have the full conversation history above — do NOT re-read files you already read.\n- Pick up from where you stopped and complete the remaining work.\n- Use as many tool calls as needed.${projectContext}\n- Provide a complete summary of ALL work done (previous + this continuation).`;
+      } else {
+        delegationMessage = `[DELEGATED TASK from ${(ctx.choom as Record<string, unknown>).name || 'Orchestrator'}]\n\n${fullTask}\n\nRULES FOR THIS TASK:\n- Complete this task DIRECTLY using your own tools. Do NOT delegate to other Chooms.\n- Use the most specific tool available (e.g., get_weather for weather, not web_search).\n- Use as many tool calls as needed to fully complete the task. Read all necessary files before making changes.${projectContext}\n- IMPORTANT: Your full response text will be returned to the orchestrator. Provide a complete summary of what you did, what you changed, and any issues found.`;
+      }
 
-      console.log(`   🤝 Delegating to "${targetChoom.name}" (${delegationId}): ${task.slice(0, 80)}...`);
+      console.log(`   🤝 ${isContinuation ? 'Continuing' : 'Delegating to'} "${targetChoom.name}" (${delegationId}): ${task.slice(0, 80)}...`);
 
       // Stream SSE update to the client
       ctx.send({
@@ -154,7 +188,7 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             choomId: targetChoom.id,
-            chatId: delegationChat.id,
+            chatId: delegationChatId,
             message: delegationMessage,
             settings: ctx.settings, // Forward shared settings (weather, search, etc.)
             isDelegation: true, // Tells chat route: strip delegation tools, disable plan detection
@@ -190,6 +224,9 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
       let buffer = '';
       let eventCount = 0;
       let sseError = '';
+      let doneIterations = 0;
+      let doneMaxIterations = 0;
+      let doneStatus = 'complete';
 
       try {
         while (true) {
@@ -235,6 +272,9 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
                 }
                 case 'done':
                   if (data.content) doneContent = data.content;
+                  if (data.iteration) doneIterations = data.iteration;
+                  if (data.maxIterations) doneMaxIterations = data.maxIterations;
+                  if (data.status) doneStatus = data.status;
                   break;
                 case 'error':
                   sseError = data.error || 'Unknown SSE error';
@@ -280,7 +320,11 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
         }
       }
 
-      // 6. Cache the result
+      // 6. Determine if the work was incomplete
+      const hitMaxIterations = doneStatus === 'max_iterations';
+      const incomplete = hitMaxIterations || effectiveResponse.includes('[Reached maximum tool iterations]');
+
+      // 7. Cache the result
       const result: DelegationResult = {
         id: delegationId,
         choomName: targetChoom.name,
@@ -289,11 +333,18 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
         toolCalls: toolCallsUsed,
         timestamp: Date.now(),
         durationMs,
-        chatId: delegationChat.id,
+        chatId: delegationChatId,
+        choomId: targetChoom.id,
+        incomplete,
+        iterationsUsed: doneIterations,
+        maxIterations: doneMaxIterations,
       };
       delegationResults.set(delegationId, result);
 
-      console.log(`   🤝 Delegation complete: "${targetChoom.name}" responded in ${(durationMs / 1000).toFixed(1)}s (${effectiveResponse.length} chars, ${toolCallsUsed.length} tool calls, ${eventCount} SSE events)`);
+      const completionLabel = incomplete
+        ? `INCOMPLETE (${doneIterations}/${doneMaxIterations} iterations)`
+        : 'complete';
+      console.log(`   🤝 Delegation ${completionLabel}: "${targetChoom.name}" responded in ${(durationMs / 1000).toFixed(1)}s (${effectiveResponse.length} chars, ${toolCallsUsed.length} tool calls, ${eventCount} SSE events)`);
 
       // Stream completion event
       ctx.send({
@@ -305,16 +356,23 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
         toolCallCount: toolCallsUsed.length,
       });
 
-      return this.success(toolCall, {
+      const resultPayload: Record<string, unknown> = {
         success: true,
         delegation_id: delegationId,
         choom_name: targetChoom.name,
         response: effectiveResponse,
         tools_used: toolCallsUsed.map(tc => tc.name),
         duration_seconds: Math.round(durationMs / 1000),
-        chat_id: delegationChat.id,
-        message: `${targetChoom.name} completed the task in ${Math.round(durationMs / 1000)}s.`,
-      });
+        chat_id: delegationChatId,
+        iterations_used: doneIterations,
+        max_iterations: doneMaxIterations,
+        incomplete,
+        message: incomplete
+          ? `${targetChoom.name} ran out of iterations (${doneIterations}/${doneMaxIterations}) and did not finish. You can continue this delegation by calling delegate_to_choom again with continue_delegation_id="${delegationId}" and a task describing what remains.`
+          : `${targetChoom.name} completed the task in ${Math.round(durationMs / 1000)}s.`,
+      };
+
+      return this.success(toolCall, resultPayload);
 
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);

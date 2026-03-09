@@ -30,9 +30,18 @@ dependencies: []
 - **Chain with Plan Mode**: Use `create_plan` with delegate steps for complex multi-Choom workflows
 - **Review before delivering**: Always review delegated results before passing them to the user
 
+## Continuation (Incomplete Delegations)
+When a delegated Choom runs out of iterations, the result includes `incomplete: true` and a message explaining how to continue. To resume:
+```
+delegate_to_choom(choom_name="Eve", task="Continue fixing the handler", continue_delegation_id="deleg_1_...")
+```
+This reuses the same chat, preserving full conversation history so the Choom can pick up where it left off.
+
 ## Important
 - Delegations use the target Choom's own model, endpoint, and system prompt
 - Each delegation creates a dedicated chat session for traceability
-- Delegations have a 120-second timeout to prevent hanging
+- Delegations have a 300-second default timeout (configurable up to 600s) to prevent hanging
+- Delegated Chooms get up to 12 iterations to complete their task
+- If a delegation is incomplete, use `continue_delegation_id` to continue in the same chat
 - The delegating Choom's settings are forwarded (weather, search, etc.) so the target has access to shared services
 - Results are cached by delegation ID for retrieval

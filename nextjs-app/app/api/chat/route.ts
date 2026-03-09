@@ -2652,7 +2652,7 @@ export async function POST(request: NextRequest) {
     console.log(`\n⚙️  Settings Hierarchy for "${choom.name}":`);
     console.log(`   Layer 1 (defaults): model=${defaultLLMSettings.model}, endpoint=${defaultLLMSettings.endpoint}`);
     console.log(`   Layer 2 (settings panel): model=${clientLLMSettings.model || '(not set)'}, endpoint=${clientLLMSettings.endpoint || '(not set)'}`);
-    console.log(`   Layer 3 (Choom DB): llmModel=${choom.llmModel || '(not set)'}, llmEndpoint=${choom.llmEndpoint || '(not set)'}, llmProviderId=${choom.llmProviderId || '(not set)'}`);
+    console.log(`   Layer 3 (Choom DB): llmModel=${choom.llmModel || '(not set)'}, llmEndpoint=${choom.llmEndpoint || '(not set)'}, llmProviderId=${choom.llmProviderId || '(not set)'}, timeout=${choom.llmTimeoutSec || 120}s`);
     console.log(`   ✅ RESOLVED: model=${llmSettings.model}, endpoint=${llmSettings.endpoint}`);
     if (choom.imageSettings) {
       try {
@@ -3184,6 +3184,14 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
     // Add current user message
     currentMessages.push({ role: 'user', content: enrichedMessage });
 
+    // Log history sent to LLM for debugging conversation continuity
+    const histMsgs = currentMessages.filter(m => m.role !== 'system');
+    console.log(`   📜 History for "${choom.name}": ${histMsgs.length} messages (${compactionWasPerformed ? `compacted, ${compactionStats.messagesDropped} dropped` : 'uncompacted'})`);
+    for (let i = 0; i < histMsgs.length; i++) {
+      const m = histMsgs[i];
+      console.log(`      [${i}] ${m.role}: ${(m.content || '').slice(0, 120)}${(m.content || '').length > 120 ? '...' : ''} (${(m.content || '').length} chars)`);
+    }
+
     // Create streaming response
     const stream = new ReadableStream({
       async start(controller) {
@@ -3220,7 +3228,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
         // Delegation mode: cap iterations AFTER project limit to prevent sub-tasks
         // from running unbounded. This must come last to always win.
         if (isDelegation) {
-          maxIterations = Math.min(maxIterations, 6);
+          maxIterations = Math.min(maxIterations, 12);
           projectIterationLimitApplied = true; // Prevent mid-loop project detection from overriding
           console.log(`   🔒 [${choom.name}] Delegation mode: maxIterations capped at ${maxIterations}`);
         }
@@ -3350,7 +3358,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           // force the LLM to call a tool on the first iteration instead of narrating.
           // This is the biggest reliability win for local models that tend to describe actions.
           const msgLower = message.toLowerCase();
-          const strongToolIntent = /\b(what(?:'s| is) the weather|weather (?:like|today|tomorrow|forecast)|search (?:for|the web)|look up|find (?:me|out)|generate (?:an? |some )?(?:image|picture|photo|selfie|portrait)|take a (?:selfie|photo|picture)|create (?:a |an )?(?:image|picture)|make (?:me |an? )?(?:image|picture|selfie)|(?:please |can you |you should )remember (?:that|this|my|i |the |for )|(?<!i )(?<!i'll )remember (?:that |this |my |i |the |for )|(?:don'?t |never )forget (?:that|this|my|i )|(?:save|store|note|keep) (?:this|that|my|the |it )(?:in |to |as )?(?:memory|mind)?|use (?:the )?remember(?: tool)?|remind me|set (?:a )?reminder|send (?:a )?(?:notification|message|alert)|check (?:the |my )?(?:calendar|schedule|tasks|email|inbox)|write (?:a |an )?(?:file|document|report)|read (?:the |my )?(?:file|document)|list (?:my |the )?(?:files|projects|tasks)|download|scrape|analyze (?:this|the|that) (?:image|photo|picture)|turn (?:on|off) (?:the )?|(?:open|close) (?:the )?|(?:lights?|switch|fan|heater|thermostat) (?:on|off)|delegate|get (?:the )?(?:weather|forecast)|search (?:youtube|email|gmail|contacts)|draft (?:an? )?email|compose (?:an? )?email)\b/i.test(msgLower);
+          const strongToolIntent = /\b(what(?:'s| is) the weather|weather (?:like|today|tomorrow|forecast)|search (?:for|the web)|look up|find (?:me|out)|generate (?:an? |some )?(?:image|picture|photo|selfie|portrait)|take a (?:selfie|photo|picture)|create (?:a |an )?(?:image|picture)|make (?:me |an? )?(?:image|picture|selfie)|(?:please |can you |you should )remember (?:that|this|my|i |the |for )|(?<!i )(?<!i'll )remember (?:that |this |my |i |the |for )|(?:don'?t |never )forget (?:that|this|my|i )|(?:save|store|note|keep) (?:this|that|my|the |it )(?:in |to |as )?(?:memory|mind)?|use (?:the )?remember(?: tool)?|remind me|set (?:a )?reminder|send (?:a )?(?:notification|message|alert)|check (?:the |my )?(?:calendar|schedule|tasks|email|inbox)|write (?:a |an )?(?:file|document|report)|read (?:the |my |this )?(?:file|document|pdf|report)|(?:look|take a look|glance) at (?:the |this |that )?(?:file|document|pdf|report)|open (?:the |this |that )?(?:pdf|report|document)|review (?:the |this |that )?(?:file|document|pdf|report)|list (?:my |the )?(?:files|projects|tasks)|download|scrape|analyze (?:this|the|that) (?:image|photo|picture)|turn (?:on|off) (?:the )?|(?:open|close) (?:the )?|(?:lights?|switch|fan|heater|thermostat) (?:on|off)|delegate|get (?:the )?(?:weather|forecast)|search (?:youtube|email|gmail|contacts)|draft (?:an? )?email|compose (?:an? )?email)\b/i.test(msgLower);
           let forceToolCall = strongToolIntent; // Force tool_choice:'required' on first iteration if intent is strong
           const executedToolCache = new Map<string, unknown>(); // Dedup: normalizedKey → result
           const failedCallCache = new Map<string, string>(); // Cache: dedupKey → error message
@@ -3359,7 +3367,8 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           const toolFailureCounts = new Map<string, number>(); // Per-tool name failure counter
           let consecutiveFailures = 0; // Abort after MAX_CONSECUTIVE_FAILURES
           const MAX_CONSECUTIVE_FAILURES = 6;
-          const MAX_CALLS_PER_TOOL = 20; // Max times any single tool can be called per request
+          const MAX_CALLS_PER_TOOL = 10; // Max times any single tool can be called per request
+          const MAX_CALLS_PER_READONLY_TOOL = 25; // Higher limit for read-only (PARALLEL_SAFE) tools
           const MAX_FAILURES_PER_TOOL = 2; // Block tool after this many failures (any error)
           const choomTag = `[${choom.name}]`;
           console.log(`   🛠️  ${choomTag} Tools available: ${activeTools.length} (${activeTools.map(t => t.name).join(', ')})${skillDispatch ? ' [skill dispatch]' : ''}`);
@@ -3400,8 +3409,8 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             >();
             let finishReason = 'stop';
 
-            // Create timeout for this iteration
-            const timeoutMs = 120000;
+            // Create timeout for this iteration (per-Choom override or default 120s)
+            const timeoutMs = (choom.llmTimeoutSec ? choom.llmTimeoutSec * 1000 : 120000);
             const timeoutPromise = new Promise<never>((_, reject) => {
               setTimeout(() => reject(new Error('LLM response timeout')), timeoutMs);
             });
@@ -3466,13 +3475,13 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               }
             }
 
-            // If no structured tool calls, try to extract from the LLM's text.
-            // Local models (via LM Studio) often ignore tool_choice='required' and describe
-            // actions instead of emitting structured tool_calls. Instead of nudging and
-            // hoping the model will comply, we parse what it said and execute directly.
-            // NOTE: We allow extraction even after tools have executed — a read→write
-            // sequence may fail to emit the write as a structured call.
-            if (toolCalls.length === 0) {
+            // Text extraction and nudging: ONLY when no tools have been called yet.
+            // Once any tool succeeds, the model's next text response is the final answer.
+            // This prevents loops where confirmations ("I've saved that") get misread
+            // as new action narration and trigger re-extraction or re-nudging.
+            // Extraction also skipped for long responses (800+ chars) which are
+            // substantive answers containing incidental action words ("search", "analyze").
+            if (toolCalls.length === 0 && allToolCalls.length === 0 && iterationContent.length < 800) {
               const availableToolNames = new Set(activeTools.map(t => t.name));
               const extracted = extractToolCallFromText(iterationContent, message, availableToolNames);
               if (extracted) {
@@ -3483,6 +3492,15 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
 
             // Still no tool calls after extraction — check if we should nudge or stop
             if (toolCalls.length === 0) {
+              // If tools were already called this request, accept text as final response
+              if (allToolCalls.length > 0) {
+                fullContent = preLoopContent
+                  ? preLoopContent + '\n\n' + iterationContent
+                  : iterationContent;
+                break;
+              }
+
+              // No tools called yet — check if model is narrating instead of acting
               const lowerContent = iterationContent.toLowerCase();
 
               const describesToolAction =
@@ -3506,8 +3524,10 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 if (/(?:search|look\w* up|find|query|browse)/i.test(lowerContent)) {
                   toolHints.push('for web search use web_search');
                 }
-                if (/(?:file|document|write|save to|create a )/i.test(lowerContent) && !/(?:memor|remember|store|note|record)/i.test(lowerContent)) {
-                  toolHints.push('for files use workspace_write_file');
+                if (/(?:pdf|\.pdf)/i.test(lowerContent) && /(?:read|open|extract|look|review|access|text from)/i.test(lowerContent)) {
+                  toolHints.push('for reading PDFs use workspace_read_pdf');
+                } else if (/(?:file|document|write|save to|create a )/i.test(lowerContent) && !/(?:memor|remember|store|note|record)/i.test(lowerContent)) {
+                  toolHints.push('for files use workspace_write_file or workspace_read_file');
                 }
                 if (/(?:remember|save|stor|not[ei]|record|memoriz|keep.*(?:mind|memory))/i.test(lowerContent)) {
                   toolHints.push('for saving memories use remember');
@@ -3600,9 +3620,10 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               // --- Per-tool call counter ---
               const currentToolCount = (toolCallCounts.get(tc.name) || 0) + 1;
               toolCallCounts.set(tc.name, currentToolCount);
-              if (tc.name !== 'generate_image' && currentToolCount > MAX_CALLS_PER_TOOL) {
-                console.log(`   🛑 Tool call limit reached for ${tc.name} (${currentToolCount}/${MAX_CALLS_PER_TOOL})`);
-                return { toolCallId: tc.id, name: tc.name, result: { success: false, message: `Tool ${tc.name} has been called ${currentToolCount} times this request (limit: ${MAX_CALLS_PER_TOOL}). You must try a different approach or present your results to the user.` } };
+              const effectiveLimit = PARALLEL_SAFE.has(tc.name) ? MAX_CALLS_PER_READONLY_TOOL : MAX_CALLS_PER_TOOL;
+              if (tc.name !== 'generate_image' && currentToolCount > effectiveLimit) {
+                console.log(`   🛑 Tool call limit reached for ${tc.name} (${currentToolCount}/${effectiveLimit})`);
+                return { toolCallId: tc.id, name: tc.name, result: { success: false, message: `Tool ${tc.name} has been called ${currentToolCount} times this request (limit: ${effectiveLimit}). You must try a different approach or present your results to the user.` } };
               }
 
               // --- Broken tool blocking (config error or repeated failures) ---
@@ -3788,13 +3809,9 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               if (r) iterationResults.push(r);
             }
 
-            // Reset nudge count after successful tool execution so the next
-            // read→write cycle gets fresh nudge budget (prevents reads from
-            // permanently blocking nudges for subsequent write attempts)
-            const anySucceededThisIteration = iterationResults.some(r => !r.error);
-            if (anySucceededThisIteration) {
-              nudgeCount = 0;
-            }
+            // Note: nudgeCount is NOT reset after tool success. Once tools have been
+            // called (allToolCalls.length > 0), nudging and extraction are skipped
+            // entirely — the model's next text response is accepted as the final answer.
 
             // If ALL tools in this iteration failed and we've seen 2+ total failures,
             // inject an abort hint so the LLM doesn't loop endlessly.
@@ -3913,7 +3930,14 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             { model: llmSettings.model, charCount: fullContent.length, iterations: iteration, fullResponse: fullContent.slice(0, 2000),
               toolCallCount: allToolCalls.length, toolNames: allToolCalls.map(t => t.name) },
             elapsed);
-          send({ type: 'done', content: fullContent, resolvedModel: llmSettings.model });
+          send({
+            type: 'done',
+            content: fullContent,
+            resolvedModel: llmSettings.model,
+            iteration,
+            maxIterations,
+            status: iteration >= maxIterations ? 'max_iterations' : 'complete',
+          });
         } catch (error) {
           console.error('   ❌ Chat error:', error instanceof Error ? error.message : error);
           send({

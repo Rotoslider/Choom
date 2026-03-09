@@ -22,7 +22,11 @@ export const tools: ToolDefinition[] = [
         },
         timeout_seconds: {
           type: 'number',
-          description: 'Max seconds to wait for response (default 120, max 300).',
+          description: 'Max seconds to wait for response (default 300, max 600).',
+        },
+        continue_delegation_id: {
+          type: 'string',
+          description: 'If a previous delegation was incomplete (hit max iterations), pass its delegation_id here to continue the work in the same chat. The Choom will have full conversation history and can pick up where it left off.',
         },
       },
       required: ['choom_name', 'task'],

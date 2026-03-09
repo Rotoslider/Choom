@@ -248,35 +248,78 @@ export function loadCustomSkills(): void {
         path: skillPath,
       };
 
-      // Load tool definitions from tools.js by extracting the JSON array.
-      // We read the file as text and parse the JSON portion because dynamicRequire
-      // fails for files outside the project tree in Turbopack.
+      // Load tool definitions from tools.js or tools.ts.
+      // We read the file as text and parse/eval — dynamicRequire fails for
+      // files outside the project tree in Turbopack.
       let toolDefinitions: typeof memoryTools = [];
       const toolsJsPath = path.join(skillPath, 'tools.js');
-      if (fs.existsSync(toolsJsPath)) {
+      const toolsTsPath = path.join(skillPath, 'tools.ts');
+      const toolsFilePath = fs.existsSync(toolsJsPath) ? toolsJsPath : (fs.existsSync(toolsTsPath) ? toolsTsPath : null);
+      if (toolsFilePath) {
         try {
-          const toolsSrc = fs.readFileSync(toolsJsPath, 'utf-8');
-          // Extract the JSON array from "exports.tools = [...];" or "module.exports = [...];"
+          const toolsSrc = fs.readFileSync(toolsFilePath, 'utf-8');
+          // Strategy 1: Extract JSON array from "exports.tools = [...];" or "module.exports = [...];"
           const jsonMatch = toolsSrc.match(/=\s*(\[[\s\S]*\])\s*;?\s*$/);
           if (jsonMatch) {
             toolDefinitions = JSON.parse(jsonMatch[1]) as typeof memoryTools;
+          } else {
+            // Strategy 2: For TypeScript files, strip types and evaluate to extract tool objects.
+            // Use esbuild.transformSync to transpile TS→JS, then eval.
+            try {
+              const esbuild = nodeRequire('esbuild') as {
+                transformSync: (code: string, opts: Record<string, string>) => { code: string };
+              };
+              const transpiled = esbuild.transformSync(toolsSrc, {
+                loader: 'ts',
+                format: 'cjs',
+              });
+              // Evaluate the transpiled JS in a minimal sandbox
+              const exports: Record<string, unknown> = {};
+              const module = { exports };
+              // eslint-disable-next-line no-new-func
+              new Function('exports', 'module', transpiled.code)(exports, module);
+              // Find an array of tool definitions in the exports
+              const allExports = { ...exports, ...(module.exports as Record<string, unknown>) };
+              for (const val of Object.values(allExports)) {
+                if (Array.isArray(val) && val.length > 0 && val[0]?.name && val[0]?.parameters) {
+                  toolDefinitions = val as typeof memoryTools;
+                  break;
+                }
+              }
+              // If no array found, collect individual tool objects from exports
+              if (toolDefinitions.length === 0) {
+                for (const val of Object.values(allExports)) {
+                  if (val && typeof val === 'object' && !Array.isArray(val) &&
+                      (val as Record<string, unknown>).name && (val as Record<string, unknown>).parameters) {
+                    toolDefinitions.push(val as typeof memoryTools[0]);
+                  }
+                }
+              }
+            } catch (evalErr) {
+              console.warn(`[SkillLoader] Cannot transpile/eval tools for ${entry.name}:`, evalErr instanceof Error ? evalErr.message : evalErr);
+            }
           }
         } catch (err) {
-          console.warn(`[SkillLoader] Cannot parse tools.js for ${entry.name}:`, err instanceof Error ? err.message : err);
+          console.warn(`[SkillLoader] Cannot parse tools file for ${entry.name}:`, err instanceof Error ? err.message : err);
         }
       }
 
-      // Load the bundled handler.js. Since esbuild --bundle creates a self-contained
-      // CJS file with all project deps inlined, dynamicRequire only needs to resolve
-      // Node.js builtins — no Turbopack resolution needed.
+      // Load the handler. Priority:
+      // 1. handler.js (pre-bundled via UI skill builder) — load via nodeRequire
+      // 2. handler.ts (source only) — transpile with esbuild and eval in-memory
+      // 3. Placeholder handler (returns error asking user to re-create)
+      //
+      // NOTE: Do NOT auto-compile handler.ts to handler.js on disk — Node v24 + Turbopack
+      // treats the resulting CJS file as ESM and crashes with "module is not defined".
+      // Instead, transpile in-memory and eval.
       const handlerJsPath = path.join(skillPath, 'handler.js');
-      const hasHandlerJs = fs.existsSync(handlerJsPath);
+      const handlerTsPath = path.join(skillPath, 'handler.ts');
       const toolNames = metadata.tools;
       const skillName = entry.name;
       let loadedHandler: InstanceType<typeof MemoryHandler> | null = null;
 
-      // Try to load immediately (bundled handlers should work at boot time)
-      if (hasHandlerJs) {
+      // Try pre-bundled handler.js first (created by UI skill builder)
+      if (fs.existsSync(handlerJsPath)) {
         try {
           const handlerModule = nodeRequire(handlerJsPath);
           const HandlerClass = handlerModule.default || Object.values(handlerModule).find(
@@ -284,10 +327,76 @@ export function loadCustomSkills(): void {
           );
           if (HandlerClass && typeof HandlerClass === 'function') {
             loadedHandler = new (HandlerClass as new () => InstanceType<typeof MemoryHandler>)();
-            console.log(`[SkillLoader] Loaded handler for ${skillName}`);
+            console.log(`[SkillLoader] Loaded handler class for ${skillName}`);
           }
         } catch (err) {
-          console.warn(`[SkillLoader] Cannot load handler for ${skillName}:`, err instanceof Error ? err.message : err);
+          console.warn(`[SkillLoader] Cannot load handler.js for ${skillName}:`, err instanceof Error ? err.message : err);
+        }
+      }
+
+      // Fallback: transpile handler.ts in-memory (no file written to disk)
+      if (!loadedHandler && fs.existsSync(handlerTsPath)) {
+        try {
+          const esbuild = nodeRequire('esbuild') as {
+            transformSync: (code: string, opts: Record<string, string>) => { code: string };
+          };
+          const handlerSrc = fs.readFileSync(handlerTsPath, 'utf-8');
+          const transpiled = esbuild.transformSync(handlerSrc, { loader: 'ts', format: 'cjs' });
+          const hExports: Record<string, unknown> = {};
+          const hMod = { exports: hExports };
+          // eslint-disable-next-line no-new-func
+          new Function('require', 'exports', 'module', '__filename', '__dirname', transpiled.code)(
+            nodeRequire, hExports, hMod, handlerTsPath, path.dirname(handlerTsPath)
+          );
+          const handlerModule = hMod.exports as Record<string, unknown>;
+
+          // Pattern 1: BaseSkillHandler class with execute() method
+          const HandlerClass = handlerModule.default || Object.values(handlerModule).find(
+            (v: unknown) => typeof v === 'function' && (v as { prototype: Record<string, unknown> }).prototype?.execute
+          );
+          if (HandlerClass && typeof HandlerClass === 'function') {
+            loadedHandler = new (HandlerClass as new () => InstanceType<typeof MemoryHandler>)();
+            console.log(`[SkillLoader] Loaded handler class for ${skillName} (from handler.ts)`);
+          } else {
+            // Pattern 2: Plain function exports (e.g., handleDownloadYoutubeVideo)
+            const funcMap = new Map<string, (params: Record<string, unknown>) => Promise<unknown>>();
+            for (const [key, val] of Object.entries(handlerModule)) {
+              if (typeof val === 'function' && key.startsWith('handle')) {
+                // Convert handleDownloadYoutubeVideo → download_youtube_video
+                const toolName = key
+                  .replace(/^handle/, '')
+                  .replace(/([A-Z])/g, '_$1')
+                  .toLowerCase()
+                  .replace(/^_/, '');
+                funcMap.set(toolName, val as (params: Record<string, unknown>) => Promise<unknown>);
+              }
+            }
+            if (funcMap.size > 0) {
+              loadedHandler = {
+                canHandle: (toolName: string) => funcMap.has(toolName) || toolNames.includes(toolName),
+                execute: async (toolCall: unknown) => {
+                  const tc = toolCall as { id: string; name: string; arguments: Record<string, unknown> };
+                  const fn = funcMap.get(tc.name);
+                  if (!fn) {
+                    return { toolCallId: tc.id, name: tc.name, result: null,
+                      error: `No handler function found for ${tc.name}` };
+                  }
+                  try {
+                    const result = await fn(tc.arguments);
+                    return { toolCallId: tc.id, name: tc.name, result };
+                  } catch (err) {
+                    return { toolCallId: tc.id, name: tc.name, result: null,
+                      error: err instanceof Error ? err.message : String(err) };
+                  }
+                },
+                success: () => ({ toolCallId: '', name: '', result: null }),
+                error: () => ({ toolCallId: '', name: '', result: null, error: '' }),
+              } as unknown as InstanceType<typeof MemoryHandler>;
+              console.log(`[SkillLoader] Loaded ${funcMap.size} handler functions for ${skillName}: ${Array.from(funcMap.keys()).join(', ')}`);
+            }
+          }
+        } catch (err) {
+          console.warn(`[SkillLoader] Cannot transpile handler.ts for ${skillName}:`, err instanceof Error ? err.message : err);
         }
       }
 

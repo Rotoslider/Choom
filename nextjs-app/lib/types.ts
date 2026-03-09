@@ -16,6 +16,7 @@ export interface Choom {
   llmModel: string | null;
   llmEndpoint: string | null;
   llmProviderId: string | null;
+  llmTimeoutSec: number | null;
   createdAt: Date;
   updatedAt: Date;
 }
