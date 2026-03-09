@@ -131,69 +131,129 @@ This happens automatically -- you don't need to tell your Choom to use specific 
 
 ## Creating Custom Skills
 
-Custom skills let you add entirely new capabilities to your Choom. Here's how to create one step by step.
+Custom skills let you add entirely new capabilities to your Choom. There are two ways to create them:
 
-### Step 1: Open the Skill Creator
+1. **Via the UI** — use the Skills page builder (good for simple skills)
+2. **Via code** — write files directly to `~/choom-projects/.choom-skills/` (best for Chooms creating skills programmatically)
 
-1. Go to the **Skills** page (sidebar > Skills)
-2. Click the **"Create Skill"** button in the top right
-3. A dialog will open with the skill builder form
+---
 
-### Step 2: Name Your Skill
+### Method 1: Via the UI (Skills Page Builder)
 
-- Enter a **lowercase name** using letters, numbers, hyphens, or underscores
-- Examples: `price-checker`, `recipe_finder`, `daily-summary`
-- The name must start with a letter
-- Keep it short and descriptive
+1. Go to **Skills** page (sidebar > Skills) → click **"Create Skill"**
+2. Fill in name (lowercase with hyphens/underscores), description, tools, and handler code
+3. Click **"Create Skill"** — it saves to `~/choom-projects/.choom-skills/your-skill-name/` and registers immediately
 
-### Step 3: Add a Description
+---
 
-Write a brief description of what your skill does. This helps the LLM understand when to use it.
+### Method 2: Via Code (File-Based — For Chooms)
 
-Good: "Checks product prices from online stores and compares them"
-Bad: "A skill" (too vague for the LLM)
+This is how Chooms should create custom skills. Write 3 files to `~/choom-projects/.choom-skills/your-skill-name/`:
 
-### Step 4: Define Your Tools
+#### Required File Structure
 
-Each skill contains one or more tools. A tool is a specific action your Choom can perform.
+```
+~/choom-projects/.choom-skills/your-skill-name/
+├── SKILL.md        # Metadata (YAML frontmatter) + documentation
+├── tools.ts        # Tool definitions (JSON Schema format)
+└── handler.ts      # Handler code (auto-compiled to handler.js)
+```
 
-1. Click **"Add Tool"** to create your first tool
-2. Fill in:
-   - **Tool name**: Lowercase with underscores (e.g., `check_price`)
-   - **Description**: What the tool does (shown to the LLM)
-3. Add **parameters** (the inputs the tool needs):
-   - Click "Add Parameter"
-   - Enter the parameter name (e.g., `product_name`)
-   - Choose a type: string (text), number, boolean (true/false), array (list), or object (complex data)
-   - Write a description so the LLM knows what to pass
-   - Toggle "Required" if the parameter must be provided
+#### File 1: SKILL.md
 
-**Example**: A `check_price` tool might have:
-- `product_name` (string, required) - "The name of the product to look up"
-- `max_results` (number, optional) - "Maximum number of prices to return (default 5)"
+**CRITICAL**: The YAML frontmatter MUST include a `tools:` list with exact tool names. Without this, the tools won't register.
 
-### Step 5: Write the Handler Code
+```yaml
+---
+name: my-skill
+version: 1.0.0
+description: What this skill does (shown to the LLM for tool selection)
+author: custom
+tools:
+  - my_tool_one
+  - my_tool_two
+dependencies: []
+---
 
-The handler is the code that actually runs when the tool is called. Don't worry if you're not a programmer -- there's a shortcut.
+# My Skill
 
-**Easy way**: Click **"Generate Skeleton"** to auto-create a template based on your tools. This gives you a working starting point with `TODO` comments showing where to add your logic.
+Documentation about what this skill does and how to use it.
+```
 
-**The generated code looks like this**:
+**Common mistake**: Omitting the `tools:` field or using `tags:`/`requires:` instead. Only `tools:` registers tool names with the system.
+
+#### File 2: tools.ts
+
+Export an array named `tools` containing tool definitions in JSON Schema format. Each tool needs `name`, `description`, and `parameters`.
+
+```typescript
+import type { ToolDefinition } from '@/lib/types';
+
+export const tools: ToolDefinition[] = [
+  {
+    name: 'my_tool_one',
+    description: 'Does something useful. Be specific — the LLM reads this to decide when to call the tool.',
+    parameters: {
+      type: 'object',
+      properties: {
+        input_text: {
+          type: 'string',
+          description: 'The text to process'
+        },
+        max_results: {
+          type: 'number',
+          description: 'Maximum number of results (default 5)'
+        }
+      },
+      required: ['input_text']
+    }
+  },
+  {
+    name: 'my_tool_two',
+    description: 'Another action this skill provides.',
+    parameters: {
+      type: 'object',
+      properties: {
+        item_id: {
+          type: 'string',
+          description: 'The ID of the item to look up'
+        }
+      },
+      required: ['item_id']
+    }
+  }
+];
+```
+
+**IMPORTANT**: The exported array MUST be named `tools`. Other names (like `mySkillTools` or `allTools`) will not be found by the loader. Individual named exports also work — the loader collects all exported objects that have `name` + `parameters` fields.
+
+#### File 3: handler.ts
+
+Two patterns are supported. Use whichever fits your skill better.
+
+**Pattern A: Class Handler (recommended for complex skills)**
+
 ```typescript
 import { BaseSkillHandler, SkillHandlerContext } from '@/lib/skill-handler';
 import type { ToolCall, ToolResult } from '@/lib/types';
 
 export default class MySkillHandler extends BaseSkillHandler {
   canHandle(toolName: string): boolean {
-    return ['check_price'].includes(toolName);
+    return ['my_tool_one', 'my_tool_two'].includes(toolName);
   }
 
   async execute(toolCall: ToolCall, ctx: SkillHandlerContext): Promise<ToolResult> {
     switch (toolCall.name) {
-      case 'check_price':
-        // TODO: Implement check_price
-        const productName = toolCall.arguments.product_name as string;
-        return this.success(toolCall, { message: `Checked price for ${productName}` });
+      case 'my_tool_one': {
+        const inputText = toolCall.arguments.input_text as string;
+        // ... do work ...
+        return this.success(toolCall, { result: 'done', processed: inputText });
+      }
+      case 'my_tool_two': {
+        const itemId = toolCall.arguments.item_id as string;
+        // ... do work ...
+        return this.success(toolCall, { item: itemId, details: '...' });
+      }
       default:
         return this.error(toolCall, `Unknown tool: ${toolCall.name}`);
     }
@@ -201,22 +261,142 @@ export default class MySkillHandler extends BaseSkillHandler {
 }
 ```
 
-**Key patterns for handler code**:
-- `toolCall.arguments.param_name` -- access the parameters the LLM passed
-- `this.success(toolCall, { ... })` -- return a successful result (the data goes back to the LLM)
-- `this.error(toolCall, "message")` -- return an error
-- `ctx.settings` -- access Choom settings
-- `ctx.choomId` -- the current Choom's ID
-- `ctx.send({ type: '...', ... })` -- send data to the chat UI in real time
+Key methods:
+- `toolCall.arguments.param_name` — access parameters the LLM passed
+- `this.success(toolCall, { ... })` — return successful result (data goes back to the LLM)
+- `this.error(toolCall, "message")` — return an error
+- `ctx.settings` — access Choom settings (weather keys, search keys, etc.)
+- `ctx.choomId` — the current Choom's ID
+- `ctx.send({ type: '...', ... })` — send data to the chat UI in real time
 
-### Step 6: Create the Skill
+**Pattern B: Plain Function Exports (simpler, good for straightforward tools)**
 
-Click **"Create Skill"** at the bottom of the dialog. Your skill will be:
-1. Saved to `~/choom-projects/.choom-skills/your-skill-name/`
-2. Registered in the skill registry
-3. Immediately available to all Chooms
+```typescript
+import { exec } from 'child_process';
+import { promisify } from 'util';
 
-### Step 7: Test Your Skill
+const execAsync = promisify(exec);
+
+export async function handleMyToolOne(params: {
+  input_text: string;
+  max_results?: number;
+}): Promise<{ success: boolean; result?: string; error?: string }> {
+  try {
+    const { input_text, max_results = 5 } = params;
+    // ... do work ...
+    return { success: true, result: 'processed' };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+}
+
+export async function handleMyToolTwo(params: {
+  item_id: string;
+}): Promise<{ success: boolean; details?: string; error?: string }> {
+  try {
+    // ... do work ...
+    return { success: true, details: '...' };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+}
+```
+
+**Function naming convention**: The function name MUST start with `handle` followed by the tool name in CamelCase. The loader converts `handleMyToolOne` → `my_tool_one` automatically.
+
+| Function Name | Tool Name |
+|--------------|-----------|
+| `handleCheckPrice` | `check_price` |
+| `handleDownloadYoutubeVideo` | `download_youtube_video` |
+| `handleGetStatus` | `get_status` |
+
+#### How Compilation Works
+
+You only need to write `handler.ts`. The system auto-compiles it to `handler.js` using esbuild when the skill is loaded. You do NOT need to manually compile or create `handler.js`.
+
+The compilation bundles all dependencies (except Node.js builtins like `fs`, `path`, `child_process`) into a single file. This means your handler can import npm packages if they're installed.
+
+#### After Writing Files
+
+The skill loads automatically on next server restart or when any Choom makes an API call (the loader runs lazily). To force an immediate reload without restart, you can call:
+
+```
+POST /api/skills/reload
+```
+
+Or click the **Reload** button on the Skills page.
+
+#### Complete Example: YouTube Extractor
+
+```
+~/choom-projects/.choom-skills/youtube-extractor/
+├── SKILL.md
+├── tools.ts
+└── handler.ts
+```
+
+**SKILL.md** — note the `tools:` list matching exact tool names:
+```yaml
+---
+name: youtube-extractor
+version: 1.0.0
+description: Extract video, audio, and transcripts from YouTube using yt-dlp
+author: custom
+tools:
+  - download_youtube_video
+  - extract_youtube_audio
+  - create_audio_transcript
+dependencies: []
+---
+
+# YouTube Extractor
+Downloads YouTube videos, extracts audio, and creates transcripts.
+```
+
+**tools.ts** — export array named `tools`:
+```typescript
+export const tools = [
+  {
+    name: 'download_youtube_video',
+    description: 'Downloads a YouTube video as MP4 using yt-dlp.',
+    parameters: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: 'YouTube video URL' },
+        quality: { type: 'string', description: 'Video quality (1080p, 720p, best)', default: 'best' }
+      },
+      required: ['url']
+    }
+  }
+  // ... more tools
+];
+```
+
+**handler.ts** — plain function pattern:
+```typescript
+import { exec } from 'child_process';
+import { promisify } from 'util';
+const execAsync = promisify(exec);
+
+export async function handleDownloadYoutubeVideo(params: { url: string; quality?: string }) {
+  const { url, quality = 'best' } = params;
+  const { stdout } = await execAsync(`yt-dlp -f "best" -o "%(title)s.%(ext)s" "${url}"`);
+  return { success: true, output: stdout };
+}
+```
+
+#### Checklist for Working Custom Skills
+
+- [ ] `SKILL.md` has `tools:` in YAML frontmatter listing every tool name
+- [ ] `tools.ts` exports array named `tools` (or individual objects with `name` + `parameters`)
+- [ ] Tool names in `SKILL.md` frontmatter match tool names in `tools.ts`
+- [ ] If using function pattern: functions start with `handle` + CamelCase tool name
+- [ ] If using class pattern: class has `canHandle()` and `execute()` methods, exported as `default`
+- [ ] `handler.ts` exists (auto-compiled to `handler.js` by the loader)
+
+---
+
+### Testing Your Skill
 
 1. Click on your new skill card in the Skills page
 2. In the detail panel, select a tool from the dropdown
@@ -226,6 +406,7 @@ Click **"Create Skill"** at the bottom of the dialog. Your skill will be:
 If something goes wrong, you can:
 - Edit the skill by clicking on it and modifying the handler code
 - Check the browser console (F12) for error messages
+- Check the server console for `[SkillLoader]` log messages
 - Disable the skill temporarily while you fix issues
 
 ---

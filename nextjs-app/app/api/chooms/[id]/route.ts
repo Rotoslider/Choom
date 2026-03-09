@@ -57,7 +57,7 @@ export async function PUT(
   try {
     const { id } = await params;
     const body = await request.json();
-    const { name, description, avatarUrl, systemPrompt, voiceId, llmModel, llmEndpoint, llmProviderId, imageSettings, companionId } = body;
+    const { name, description, avatarUrl, systemPrompt, voiceId, llmModel, llmEndpoint, llmProviderId, llmTimeoutSec, imageSettings, companionId } = body;
 
     const choom = await prisma.choom.update({
       where: { id },
@@ -70,6 +70,7 @@ export async function PUT(
         ...(llmModel !== undefined && { llmModel }),
         ...(llmEndpoint !== undefined && { llmEndpoint }),
         ...(llmProviderId !== undefined && { llmProviderId }),
+        ...(llmTimeoutSec !== undefined && { llmTimeoutSec: llmTimeoutSec ? parseInt(llmTimeoutSec, 10) : null }),
         ...(companionId !== undefined && { companionId }),
         ...(imageSettings !== undefined && { imageSettings: imageSettings ? JSON.stringify(imageSettings) : null }),
       },

@@ -3,12 +3,13 @@
 NVIDIA Build API Model Tester
 Tests latency, availability, and tool-calling support for NVIDIA Build models.
 Reads API key from bridge-config.json automatically.
+https://build.nvidia.com/models
 
 Usage:
   python3 scripts/test-nvidia-models.py              # Test all models
   python3 scripts/test-nvidia-models.py --quick       # Quick check (no tool test)
   python3 scripts/test-nvidia-models.py --model NAME  # Test a specific model
-  python3 scripts/test-nvidia-models.py --timeout 30  # Custom timeout (default 120s)
+  python3 scripts/test-nvidia-models.py --timeout 30  # Custom timeout (default 60s)
 """
 
 import json
@@ -25,15 +26,20 @@ MODELS = [
     "nvidia/llama-3.1-nemotron-ultra-253b-v1",
     "mistralai/mistral-large-3-675b-instruct-2512",
     "deepseek-ai/deepseek-v3.2",
+    "deepseek-ai/deepseek-v3.1-terminus",
+    "deepseek-ai/deepseek-v3.1",
     "moonshotai/kimi-k2.5",
     "moonshotai/kimi-k2-instruct",
     "qwen/qwen3.5-397b-a17b",
+    "qwen/qwen3.5-122b-a10b",
     "qwen/qwen3-coder-480b-a35b-instruct",
     "stepfun-ai/step-3.5-flash",
     "z-ai/glm4.7",
     "z-ai/glm5",
     "meta/llama-3.1-405b-instruct",
     "mistralai/mistral-nemotron",
+    "minimaxai/minimax-m2.5",
+    "minimaxai/minimax-m2.1",
 ]
 
 SIMPLE_PROMPT = [
@@ -84,7 +90,7 @@ def get_api_key():
     sys.exit(1)
 
 
-def test_model(model, api_key, timeout=120, test_tools=True):
+def test_model(model, api_key, timeout=60, test_tools=True):
     """Test a single model for availability, latency, and tool support"""
     result = {
         "model": model,

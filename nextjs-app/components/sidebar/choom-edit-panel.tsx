@@ -544,6 +544,7 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave }: ChoomEditP
   const [llmModel, setLlmModel] = useState('');
   const [llmEndpoint, setLlmEndpoint] = useState('');
   const [llmProviderId, setLlmProviderId] = useState('');
+  const [llmTimeoutSec, setLlmTimeoutSec] = useState('');
 
   // Image settings - now with two modes
   const [generalSettings, setGeneralSettings] = useState<ImageModeSettings>({ ...emptyModeSettings });
@@ -574,6 +575,7 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave }: ChoomEditP
       setLlmModel(choom.llmModel || '');
       setLlmEndpoint(choom.llmEndpoint || '');
       setLlmProviderId(choom.llmProviderId || '');
+      setLlmTimeoutSec(choom.llmTimeoutSec ? String(choom.llmTimeoutSec) : '');
 
       // Parse image settings
       const imgSettings = choom.imageSettings;
@@ -694,6 +696,7 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave }: ChoomEditP
         llmModel: llmModel || null,
         llmEndpoint: llmEndpoint || null,
         llmProviderId: llmProviderId || null,
+        llmTimeoutSec: llmTimeoutSec ? parseInt(llmTimeoutSec, 10) : null,
         imageSettings: (cleanedGeneral || selfPortraitWithCharacter) ? {
           general: cleanedGeneral,
           selfPortrait: selfPortraitWithCharacter,
@@ -964,6 +967,20 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave }: ChoomEditP
                       <Input value={llmEndpoint} onChange={(e) => setLlmEndpoint(e.target.value)} placeholder="Leave empty to use default" />
                     </div>
                   )}
+
+                  {/* LLM Response Timeout */}
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Response Timeout (seconds)</label>
+                    <Input
+                      type="number"
+                      value={llmTimeoutSec}
+                      onChange={(e) => setLlmTimeoutSec(e.target.value)}
+                      placeholder="120"
+                      min="30"
+                      max="600"
+                    />
+                    <p className="text-xs text-muted-foreground">Max time to wait for LLM response per iteration (default: 120s)</p>
+                  </div>
                 </div>
               </TabsContent>
 

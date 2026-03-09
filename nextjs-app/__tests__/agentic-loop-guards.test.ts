@@ -19,8 +19,8 @@ describe('Agentic Loop Guards', () => {
       expect(routeContent).toContain('let consecutiveFailures = 0');
     });
 
-    test('MAX_CONSECUTIVE_FAILURES is defined as 3', () => {
-      expect(routeContent).toContain('const MAX_CONSECUTIVE_FAILURES = 3');
+    test('MAX_CONSECUTIVE_FAILURES is defined as 6', () => {
+      expect(routeContent).toContain('const MAX_CONSECUTIVE_FAILURES = 6');
     });
 
     test('consecutiveFailures is incremented on error', () => {
@@ -28,7 +28,7 @@ describe('Agentic Loop Guards', () => {
     });
 
     test('consecutiveFailures is reset on success', () => {
-      expect(routeContent).toContain('consecutiveFailures = 0; // Reset on success');
+      expect(routeContent).toContain('consecutiveFailures = 0;');
     });
 
     test('abort check exists for consecutive failures', () => {
@@ -47,8 +47,12 @@ describe('Agentic Loop Guards', () => {
       expect(routeContent).toContain('const toolCallCounts = new Map<string, number>()');
     });
 
-    test('MAX_CALLS_PER_TOOL is defined as 5', () => {
-      expect(routeContent).toContain('const MAX_CALLS_PER_TOOL = 5');
+    test('MAX_CALLS_PER_TOOL is defined as 10', () => {
+      expect(routeContent).toContain('const MAX_CALLS_PER_TOOL = 10');
+    });
+
+    test('MAX_CALLS_PER_READONLY_TOOL is defined as 25', () => {
+      expect(routeContent).toContain('const MAX_CALLS_PER_READONLY_TOOL = 25');
     });
 
     test('tool calls are counted', () => {
@@ -56,7 +60,7 @@ describe('Agentic Loop Guards', () => {
     });
 
     test('per-tool limit check exists', () => {
-      expect(routeContent).toContain('currentToolCount > MAX_CALLS_PER_TOOL');
+      expect(routeContent).toContain('currentToolCount > effectiveLimit');
     });
 
     test('limit message tells LLM to try a different approach', () => {
@@ -64,7 +68,11 @@ describe('Agentic Loop Guards', () => {
     });
 
     test('generate_image is excluded from per-tool limit (has its own cap)', () => {
-      expect(routeContent).toContain("tc.name !== 'generate_image' && currentToolCount > MAX_CALLS_PER_TOOL");
+      expect(routeContent).toContain("tc.name !== 'generate_image' && currentToolCount > effectiveLimit");
+    });
+
+    test('read-only tools use higher limit (PARALLEL_SAFE)', () => {
+      expect(routeContent).toContain('PARALLEL_SAFE.has(tc.name) ? MAX_CALLS_PER_READONLY_TOOL : MAX_CALLS_PER_TOOL');
     });
   });
 
@@ -109,7 +117,7 @@ describe('Agentic Loop Guards', () => {
     });
 
     test('per-tool limit check comes BEFORE tool execution', () => {
-      const limitCheckPos = routeContent.indexOf('currentToolCount > MAX_CALLS_PER_TOOL');
+      const limitCheckPos = routeContent.indexOf('currentToolCount > effectiveLimit');
       const executePos = routeContent.indexOf('executeToolCallViaSkills(tc, ctx)');
       expect(limitCheckPos).toBeLessThan(executePos);
     });
