@@ -191,18 +191,6 @@ export function CronSettings() {
     }
   }, []);
 
-  if (!config) {
-    return <div className="text-sm text-muted-foreground">Loading config...</div>;
-  }
-
-  // Sort tasks: cron jobs only (exclude system_health)
-  const cronTasks = Object.entries(config.tasks).filter(([id]) => id !== 'system_health');
-
-  // Find tasks that are defined in TASK_META but not yet in the config
-  const availableToAdd = Object.keys(TASK_META).filter(
-    (id) => !config.tasks[id]
-  );
-
   const addTask = useCallback(
     (taskId: string) => {
       if (!config) return;
@@ -221,6 +209,18 @@ export function CronSettings() {
       saveConfig(updated);
     },
     [config, saveConfig]
+  );
+
+  if (!config) {
+    return <div className="text-sm text-muted-foreground">Loading config...</div>;
+  }
+
+  // Sort tasks: cron jobs only (exclude system_health)
+  const cronTasks = Object.entries(config.tasks).filter(([id]) => id !== 'system_health');
+
+  // Find tasks that are defined in TASK_META but not yet in the config
+  const availableToAdd = Object.keys(TASK_META).filter(
+    (id) => !config.tasks[id]
   );
 
   return (
