@@ -16,7 +16,7 @@ export default class RemindersHandler extends BaseSkillHandler {
       case 'get_reminders':
         return this.getReminders(toolCall);
       case 'create_reminder':
-        return this.createReminder(toolCall);
+        return this.createReminder(toolCall, ctx.message);
       default:
         return this.error(toolCall, `Unknown reminder tool: ${toolCall.name}`);
     }
@@ -61,14 +61,31 @@ export default class RemindersHandler extends BaseSkillHandler {
     }
   }
 
-  private async createReminder(toolCall: ToolCall): Promise<ToolResult> {
+  private async createReminder(toolCall: ToolCall, userMessage?: string): Promise<ToolResult> {
     try {
       let text = toolCall.arguments.text as string;
       const minutesFromNow = toolCall.arguments.minutes_from_now as number | undefined;
-      const timeStr = toolCall.arguments.time as string | undefined;
+      let timeStr = toolCall.arguments.time as string | undefined;
 
       // Clean up text: strip stray time abbreviations like "1.m.", "a.m.", "p.m."
       text = text.replace(/\b\d+\.m\.\s*/gi, '').replace(/\b[ap]\.m\.\s*/gi, '').trim();
+
+      // AM/PM cross-check: if the user's message explicitly says "pm" but the LLM
+      // sent "AM" (or vice versa), correct it. LLMs frequently confuse AM/PM.
+      if (timeStr && userMessage) {
+        const userMsgLower = userMessage.toLowerCase();
+        const userSaidPM = /\b\d{1,2}\s*(?:p\.?m\.?|pm)\b/i.test(userMsgLower);
+        const userSaidAM = /\b\d{1,2}\s*(?:a\.?m\.?|am)\b/i.test(userMsgLower);
+        const llmSaidAM = /AM$/i.test(timeStr.trim());
+        const llmSaidPM = /PM$/i.test(timeStr.trim());
+        if (userSaidPM && llmSaidAM && !userSaidAM) {
+          console.log(`   ⚠️  AM/PM mismatch: user said PM, LLM sent "${timeStr}" — correcting to PM`);
+          timeStr = timeStr.replace(/AM$/i, 'PM');
+        } else if (userSaidAM && llmSaidPM && !userSaidPM) {
+          console.log(`   ⚠️  AM/PM mismatch: user said AM, LLM sent "${timeStr}" — correcting to AM`);
+          timeStr = timeStr.replace(/PM$/i, 'AM');
+        }
+      }
 
       let remindAt: Date;
 

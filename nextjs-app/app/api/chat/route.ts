@@ -246,6 +246,27 @@ function extractToolCallFromText(
     }
   }
 
+  // Create reminder
+  if (availableToolNames.has('create_reminder') &&
+    /(?:remind|set\w*\s+(?:a\s+)?reminder|creat\w*\s+(?:a\s+)?reminder)/i.test(lower)) {
+    // Try to extract time from the text
+    const timeMatch = llmText.match(/(?:at|for)\s+(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm))/i);
+    const textMatch = llmText.match(/remind\w*\s+(?:you\s+)?(?:to\s+|about\s+)?["']?(.+?)["']?\s*(?:at|for|\.|$)/i);
+    const args: Record<string, unknown> = { text: textMatch ? textMatch[1].trim() : userMessage };
+    if (timeMatch) {
+      // Normalize to colon format: "8pm" → "8:00 PM"
+      let t = timeMatch[1].trim();
+      const bare = t.match(/^(\d{1,2})\s*(AM|PM)$/i);
+      if (bare) t = `${bare[1]}:00 ${bare[2].toUpperCase()}`;
+      args.time = t;
+    }
+    return {
+      id: `extracted_${Date.now()}`,
+      name: 'create_reminder',
+      arguments: args,
+    };
+  }
+
   // Send notification
   if (availableToolNames.has('send_notification') &&
     /(?:send|push)\w*\s+(?:a\s+)?(?:notification|message|alert)/i.test(lower)) {
@@ -1363,10 +1384,27 @@ async function executeToolCall(
     try {
       let text = toolCall.arguments.text as string;
       const minutesFromNow = toolCall.arguments.minutes_from_now as number | undefined;
-      const timeStr = toolCall.arguments.time as string | undefined;
+      let timeStr = toolCall.arguments.time as string | undefined;
 
       // Clean up text: strip stray time abbreviations like "1.m.", "a.m.", "p.m."
       text = text.replace(/\b\d+\.m\.\s*/gi, '').replace(/\b[ap]\.m\.\s*/gi, '').trim();
+
+      // AM/PM cross-check: if the user's message explicitly says "pm" but the LLM
+      // sent "AM" (or vice versa), correct it. LLMs frequently confuse AM/PM.
+      if (timeStr && message) {
+        const userMsgLower = message.toLowerCase();
+        const userSaidPM = /\b\d{1,2}\s*(?:p\.?m\.?|pm)\b/i.test(userMsgLower);
+        const userSaidAM = /\b\d{1,2}\s*(?:a\.?m\.?|am)\b/i.test(userMsgLower);
+        const llmSaidAM = /AM$/i.test(timeStr.trim());
+        const llmSaidPM = /PM$/i.test(timeStr.trim());
+        if (userSaidPM && llmSaidAM && !userSaidAM) {
+          console.log(`   ⚠️  AM/PM mismatch: user said PM, LLM sent "${timeStr}" — correcting to PM`);
+          timeStr = timeStr.replace(/AM$/i, 'PM');
+        } else if (userSaidAM && llmSaidPM && !userSaidPM) {
+          console.log(`   ⚠️  AM/PM mismatch: user said AM, LLM sent "${timeStr}" — correcting to AM`);
+          timeStr = timeStr.replace(/PM$/i, 'AM');
+        }
+      }
 
       let remindAt: Date;
 
@@ -3372,8 +3410,23 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           const MAX_FAILURES_PER_TOOL = 2; // Block tool after this many failures (any error)
           const choomTag = `[${choom.name}]`;
           console.log(`   🛠️  ${choomTag} Tools available: ${activeTools.length} (${activeTools.map(t => t.name).join(', ')})${skillDispatch ? ' [skill dispatch]' : ''}`);
+          // Intent-specific tool guidance: when we detect a specific intent, inject a
+          // system message steering the LLM to the correct tool. This prevents the LLM
+          // from calling get_calendar_events when the user says "remind me" etc.
+          let intentToolHint = '';
+          if (/\b(?:remind me|set (?:a )?reminder)\b/i.test(msgLower)) {
+            intentToolHint = 'create_reminder';
+          } else if (/\b(?:check (?:the |my )?(?:calendar|schedule)|what(?:\'s| is) on my calendar)\b/i.test(msgLower)) {
+            intentToolHint = 'get_calendar_events';
+          }
           if (strongToolIntent) {
-            console.log(`   ⚡ ${choomTag} Strong tool intent detected — using tool_choice='required' on first iteration`);
+            console.log(`   ⚡ ${choomTag} Strong tool intent detected — using tool_choice='required' on first iteration${intentToolHint ? ` (hint: ${intentToolHint})` : ''}`);
+          }
+          if (intentToolHint) {
+            currentMessages.push({
+              role: 'system',
+              content: `[Tool guidance] The user's request maps to the "${intentToolHint}" tool. Call that tool directly — do NOT use other tools for this request.`,
+            });
           }
 
           // If plan fully succeeded, reduce remaining iterations (just summary/follow-up).
@@ -3504,7 +3557,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               const lowerContent = iterationContent.toLowerCase();
 
               const describesToolAction =
-                /(?:(?:generat|creat|mak|produc|design|render|draw|craft|captur|snap)\w*\s+(?:\d+\s+)?(?:unique\s+|some\s+|a\s+|an\s+|the\s+|your\s+|my\s+)?(?:image|selfie|portrait|picture|photo|illustration|artwork))|(?:(?:search|check|fetch|get|grab|download|send|analyz|look\w* up)\w*\s+(?:the |your |a |for )?(?:weather|forecast|web|image|file|email|contact|video|result|drone|review))|(?:(?:here(?:'s| is| are)|i (?:created|generated|made|took|prepared|composed|rendered))\s+(?:the |your |some |a |\d+ )?(?:\w+ )?(?:image|selfie|portrait|picture|photo|illustration|result|file|forecast))|(?:i (?:created|generated|made)\s+\d+\s+\w+)|(?:(?:remember|sav|stor|not|record|keep)\w*\s+(?:that|this|it|your|the )\s*(?:in |to |as )?(?:my |your )?(?:memory|notes|knowledge)?)|(?:(?:i'?ve |i have |i )?(?:stored|saved|noted|recorded|memorized|remembered)\s+(?:that|this|it|your|the ))|(?:(?:fix|updat|edit|modif|correct|rewrit|patch|chang|writ)\w*\s+(?:the |this |that )?(?:file|code|script|bug|issue|error|implementation|model|function|class))/i.test(lowerContent);
+                /(?:(?:generat|creat|mak|produc|design|render|draw|craft|captur|snap)\w*\s+(?:\d+\s+)?(?:unique\s+|some\s+|a\s+|an\s+|the\s+|your\s+|my\s+)?(?:image|selfie|portrait|picture|photo|illustration|artwork))|(?:(?:search|check|fetch|get|grab|download|send|analyz|look\w* up)\w*\s+(?:the |your |a |for )?(?:weather|forecast|web|image|file|email|contact|video|result|drone|review))|(?:(?:here(?:'s| is| are)|i (?:created|generated|made|took|prepared|composed|rendered))\s+(?:the |your |some |a |\d+ )?(?:\w+ )?(?:image|selfie|portrait|picture|photo|illustration|result|file|forecast))|(?:i (?:created|generated|made)\s+\d+\s+\w+)|(?:(?:remember|sav|stor|not|record|keep)\w*\s+(?:that|this|it|your|the )\s*(?:in |to |as )?(?:my |your )?(?:memory|notes|knowledge)?)|(?:(?:i'?ve |i have |i )?(?:stored|saved|noted|recorded|memorized|remembered)\s+(?:that|this|it|your|the ))|(?:(?:fix|updat|edit|modif|correct|rewrit|patch|chang|writ)\w*\s+(?:the |this |that )?(?:file|code|script|bug|issue|error|implementation|model|function|class))|(?:(?:set|creat|schedul)\w*\s+(?:a\s+|the\s+|your\s+)?(?:reminder|remind))|(?:(?:i'?ll |i will |let me )?remind\s+(?:you|the user))/i.test(lowerContent);
 
               const isShortPreamble = iterationContent.length < 500;
               const suggestsAction = isShortPreamble &&
@@ -3517,6 +3570,9 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 const toolHints: string[] = [];
                 if (/(?:image|selfie|portrait|picture|photo|illustration|artwork)/i.test(lowerContent)) {
                   toolHints.push('for images/selfies use generate_image');
+                }
+                if (/(?:remind|reminder)/i.test(lowerContent)) {
+                  toolHints.push('for reminders use create_reminder (NOT get_calendar_events)');
                 }
                 if (/(?:weather|forecast|temperature)/i.test(lowerContent)) {
                   toolHints.push('for weather use get_weather');
