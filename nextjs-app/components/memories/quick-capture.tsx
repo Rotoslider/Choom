@@ -11,10 +11,11 @@ const MEMORY_TYPES: MemoryType[] = ['fact', 'preference', 'event', 'task', 'conv
 
 interface QuickCaptureProps {
   memoryEndpoint: string;
+  companionId?: string;
   onCaptured: () => void;
 }
 
-export function QuickCapture({ memoryEndpoint, onCaptured }: QuickCaptureProps) {
+export function QuickCapture({ memoryEndpoint, companionId, onCaptured }: QuickCaptureProps) {
   const [expanded, setExpanded] = useState(false);
   const [content, setContent] = useState('');
   const [title, setTitle] = useState('');
@@ -41,6 +42,7 @@ export function QuickCapture({ memoryEndpoint, onCaptured }: QuickCaptureProps) 
           tags: tags.trim(),
           importance,
           memory_type: memoryType,
+          companion_id: companionId,
         }),
       });
       if (res.ok) {
