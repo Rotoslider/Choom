@@ -1,0 +1,23 @@
+use_default_settings: true
+
+general:
+  instance_name: "Choom SearXNG"
+  debug: false
+  enable_metrics: false
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "en"
+  # CRITICAL: json format needed for Choom API access
+  formats:
+    - html
+    - json
+
+server:
+  port: 8888
+  bind_address: "127.0.0.1"
+  secret_key: "choom-searxng-local-instance"
+  limiter: false
+  public_instance: false
+  image_proxy: false

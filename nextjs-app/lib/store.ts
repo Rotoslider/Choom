@@ -83,6 +83,7 @@ const defaultSettings: AppSettings = {
     provider: 'brave',
     braveApiKey: '',
     searxngEndpoint: '',
+    serpApiKey: '',
     maxResults: 5,
   },
   memory: {

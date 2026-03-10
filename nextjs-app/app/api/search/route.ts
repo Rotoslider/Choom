@@ -7,6 +7,7 @@ const defaultSearchSettings: SearchSettings = {
   provider: 'brave',
   braveApiKey: process.env.BRAVE_API_KEY || '',
   searxngEndpoint: process.env.SEARXNG_ENDPOINT || '',
+  serpApiKey: process.env.SERP_API_KEY || '',
   maxResults: 5,
 };
 
@@ -24,9 +25,10 @@ export async function GET(request: NextRequest) {
 
     // Build settings from query params or use defaults
     const settings: SearchSettings = {
-      provider: (searchParams.get('provider') as 'brave' | 'searxng') || defaultSearchSettings.provider,
+      provider: (searchParams.get('provider') as 'brave' | 'searxng' | 'serpapi') || defaultSearchSettings.provider,
       braveApiKey: searchParams.get('braveApiKey') || defaultSearchSettings.braveApiKey,
       searxngEndpoint: searchParams.get('searxngEndpoint') || defaultSearchSettings.searxngEndpoint,
+      serpApiKey: searchParams.get('serpApiKey') || defaultSearchSettings.serpApiKey,
       maxResults: parseInt(searchParams.get('maxResults') || '5') || defaultSearchSettings.maxResults,
     };
 
@@ -41,6 +43,13 @@ export async function GET(request: NextRequest) {
     if (settings.provider === 'searxng' && !settings.searxngEndpoint) {
       return NextResponse.json(
         { error: 'SearXNG endpoint not configured' },
+        { status: 400 }
+      );
+    }
+
+    if (settings.provider === 'serpapi' && !settings.serpApiKey) {
+      return NextResponse.json(
+        { error: 'SerpAPI key not configured' },
         { status: 400 }
       );
     }

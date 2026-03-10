@@ -17,6 +17,10 @@ export interface Choom {
   llmEndpoint: string | null;
   llmProviderId: string | null;
   llmTimeoutSec: number | null;
+  llmFallbackModel1: string | null;
+  llmFallbackProvider1: string | null;
+  llmFallbackModel2: string | null;
+  llmFallbackProvider2: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -337,9 +341,10 @@ export interface WeatherSettings {
 }
 
 export interface SearchSettings {
-  provider: 'brave' | 'searxng';
+  provider: 'brave' | 'searxng' | 'serpapi';
   braveApiKey?: string;
   searxngEndpoint?: string;
+  serpApiKey?: string;
   maxResults: number;
 }
 

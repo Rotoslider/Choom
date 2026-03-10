@@ -6,6 +6,7 @@ const defaultSearchSettings: SearchSettings = {
   provider: 'brave',
   braveApiKey: process.env.BRAVE_API_KEY || '',
   searxngEndpoint: process.env.SEARXNG_ENDPOINT || '',
+  serpApiKey: process.env.SERP_API_KEY || '',
   maxResults: 5,
 };
 
@@ -45,13 +46,16 @@ export default class WebSearchHandler extends BaseSkillHandler {
         ctx.settings?.search as Partial<SearchSettings> | undefined,
       );
 
-      console.log(`   🔍 Search settings: provider=${searchSettings.provider}, braveApiKey=${searchSettings.braveApiKey ? '***' + searchSettings.braveApiKey.slice(-4) : '(empty)'}, searxng=${searchSettings.searxngEndpoint || '(empty)'}`);
+      console.log(`   🔍 Search settings: provider=${searchSettings.provider}, braveApiKey=${searchSettings.braveApiKey ? '***' + searchSettings.braveApiKey.slice(-4) : '(empty)'}, serpApiKey=${searchSettings.serpApiKey ? '***' + searchSettings.serpApiKey.slice(-4) : '(empty)'}, searxng=${searchSettings.searxngEndpoint || '(empty)'}`);
 
       if (searchSettings.provider === 'brave' && !searchSettings.braveApiKey) {
         throw new Error('Brave Search API key not configured. Set BRAVE_API_KEY in .env or configure in Settings > Search.');
       }
       if (searchSettings.provider === 'searxng' && !searchSettings.searxngEndpoint) {
         throw new Error('SearXNG endpoint not configured. Set SEARXNG_ENDPOINT in .env or configure in Settings > Search.');
+      }
+      if (searchSettings.provider === 'serpapi' && !searchSettings.serpApiKey) {
+        throw new Error('SerpAPI key not configured. Set SERP_API_KEY in .env or configure in Settings > Search.');
       }
 
       const query = toolCall.arguments.query as string;

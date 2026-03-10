@@ -545,6 +545,10 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave }: ChoomEditP
   const [llmEndpoint, setLlmEndpoint] = useState('');
   const [llmProviderId, setLlmProviderId] = useState('');
   const [llmTimeoutSec, setLlmTimeoutSec] = useState('');
+  const [llmFallbackModel1, setLlmFallbackModel1] = useState('');
+  const [llmFallbackProvider1, setLlmFallbackProvider1] = useState('');
+  const [llmFallbackModel2, setLlmFallbackModel2] = useState('');
+  const [llmFallbackProvider2, setLlmFallbackProvider2] = useState('');
 
   // Image settings - now with two modes
   const [generalSettings, setGeneralSettings] = useState<ImageModeSettings>({ ...emptyModeSettings });
@@ -576,6 +580,10 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave }: ChoomEditP
       setLlmEndpoint(choom.llmEndpoint || '');
       setLlmProviderId(choom.llmProviderId || '');
       setLlmTimeoutSec(choom.llmTimeoutSec ? String(choom.llmTimeoutSec) : '');
+      setLlmFallbackModel1(choom.llmFallbackModel1 || '');
+      setLlmFallbackProvider1(choom.llmFallbackProvider1 || (choom.llmFallbackModel1 ? '_local' : ''));
+      setLlmFallbackModel2(choom.llmFallbackModel2 || '');
+      setLlmFallbackProvider2(choom.llmFallbackProvider2 || (choom.llmFallbackModel2 ? '_local' : ''));
 
       // Parse image settings
       const imgSettings = choom.imageSettings;
@@ -697,6 +705,10 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave }: ChoomEditP
         llmEndpoint: llmEndpoint || null,
         llmProviderId: llmProviderId || null,
         llmTimeoutSec: llmTimeoutSec ? parseInt(llmTimeoutSec, 10) : null,
+        llmFallbackModel1: llmFallbackModel1 || null,
+        llmFallbackProvider1: (llmFallbackProvider1 && llmFallbackProvider1 !== '_local') ? llmFallbackProvider1 : null,
+        llmFallbackModel2: llmFallbackModel2 || null,
+        llmFallbackProvider2: (llmFallbackProvider2 && llmFallbackProvider2 !== '_local') ? llmFallbackProvider2 : null,
         imageSettings: (cleanedGeneral || selfPortraitWithCharacter) ? {
           general: cleanedGeneral,
           selfPortrait: selfPortraitWithCharacter,
@@ -980,6 +992,136 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave }: ChoomEditP
                       max="600"
                     />
                     <p className="text-xs text-muted-foreground">Max time to wait for LLM response per iteration (default: 120s)</p>
+                  </div>
+
+                  <Separator />
+
+                  {/* Fallback Models */}
+                  <div className="space-y-4">
+                    <div>
+                      <h4 className="text-sm font-medium">Fallback Models</h4>
+                      <p className="text-xs text-muted-foreground mt-1">If the primary model times out or is unavailable, these models will be tried in order.</p>
+                    </div>
+
+                    {/* Fallback 1 */}
+                    <div className="space-y-3 rounded-md border p-3">
+                      <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Fallback 1</label>
+                      <Select
+                        value={llmFallbackProvider1 || '_none'}
+                        onValueChange={(v) => {
+                          if (v === '_none') {
+                            setLlmFallbackProvider1('');
+                            setLlmFallbackModel1('');
+                          } else if (v === '_local') {
+                            setLlmFallbackProvider1('_local');
+                            setLlmFallbackModel1('');
+                          } else {
+                            const provider = (settings.providers || []).find((p: LLMProviderConfig) => p.id === v);
+                            setLlmFallbackProvider1(v);
+                            setLlmFallbackModel1(provider?.models?.[0] || '');
+                          }
+                        }}
+                      >
+                        <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="_none">None (disabled)</SelectItem>
+                          <SelectItem value="_local">Local (LM Studio / Ollama)</SelectItem>
+                          {(settings.providers || []).map((p: LLMProviderConfig) => (
+                            <SelectItem key={p.id} value={p.id}>
+                              {p.name}
+                              <span className="ml-2 text-xs text-muted-foreground">({p.type})</span>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {llmFallbackProvider1 && llmFallbackProvider1 !== '_none' && (() => {
+                        const fb1Provider = llmFallbackProvider1 !== '_local' ? (settings.providers || []).find((p: LLMProviderConfig) => p.id === llmFallbackProvider1) : null;
+                        if (fb1Provider && fb1Provider.models.length > 0) {
+                          return (
+                            <Select value={llmFallbackModel1 || '_default'} onValueChange={(v) => setLlmFallbackModel1(v === '_default' ? '' : v)}>
+                              <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select model" /></SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="_default">Default ({fb1Provider.models[0]})</SelectItem>
+                                {fb1Provider.models.map((m: string) => (
+                                  <SelectItem key={m} value={m}>{m}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          );
+                        }
+                        return models.length > 0 ? (
+                          <Select value={llmFallbackModel1 || '__default__'} onValueChange={(v) => setLlmFallbackModel1(v === '__default__' ? '' : v)}>
+                            <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select model" /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="__default__">Same as primary</SelectItem>
+                              {models.map((model) => <SelectItem key={model.id} value={model.id}>{model.name}</SelectItem>)}
+                            </SelectContent>
+                          </Select>
+                        ) : (
+                          <Input value={llmFallbackModel1} onChange={(e) => setLlmFallbackModel1(e.target.value)} placeholder="Model name (leave empty = none)" className="h-8 text-xs" />
+                        );
+                      })()}
+                    </div>
+
+                    {/* Fallback 2 */}
+                    <div className="space-y-3 rounded-md border p-3">
+                      <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Fallback 2</label>
+                      <Select
+                        value={llmFallbackProvider2 || '_none'}
+                        onValueChange={(v) => {
+                          if (v === '_none') {
+                            setLlmFallbackProvider2('');
+                            setLlmFallbackModel2('');
+                          } else if (v === '_local') {
+                            setLlmFallbackProvider2('_local');
+                            setLlmFallbackModel2('');
+                          } else {
+                            const provider = (settings.providers || []).find((p: LLMProviderConfig) => p.id === v);
+                            setLlmFallbackProvider2(v);
+                            setLlmFallbackModel2(provider?.models?.[0] || '');
+                          }
+                        }}
+                      >
+                        <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="_none">None (disabled)</SelectItem>
+                          <SelectItem value="_local">Local (LM Studio / Ollama)</SelectItem>
+                          {(settings.providers || []).map((p: LLMProviderConfig) => (
+                            <SelectItem key={p.id} value={p.id}>
+                              {p.name}
+                              <span className="ml-2 text-xs text-muted-foreground">({p.type})</span>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {llmFallbackProvider2 && llmFallbackProvider2 !== '_none' && (() => {
+                        const fb2Provider = llmFallbackProvider2 !== '_local' ? (settings.providers || []).find((p: LLMProviderConfig) => p.id === llmFallbackProvider2) : null;
+                        if (fb2Provider && fb2Provider.models.length > 0) {
+                          return (
+                            <Select value={llmFallbackModel2 || '_default'} onValueChange={(v) => setLlmFallbackModel2(v === '_default' ? '' : v)}>
+                              <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select model" /></SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="_default">Default ({fb2Provider.models[0]})</SelectItem>
+                                {fb2Provider.models.map((m: string) => (
+                                  <SelectItem key={m} value={m}>{m}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          );
+                        }
+                        return models.length > 0 ? (
+                          <Select value={llmFallbackModel2 || '__default__'} onValueChange={(v) => setLlmFallbackModel2(v === '__default__' ? '' : v)}>
+                            <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select model" /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="__default__">Same as primary</SelectItem>
+                              {models.map((model) => <SelectItem key={model.id} value={model.id}>{model.name}</SelectItem>)}
+                            </SelectContent>
+                          </Select>
+                        ) : (
+                          <Input value={llmFallbackModel2} onChange={(e) => setLlmFallbackModel2(e.target.value)} placeholder="Model name (leave empty = none)" className="h-8 text-xs" />
+                        );
+                      })()}
+                    </div>
                   </div>
                 </div>
               </TabsContent>

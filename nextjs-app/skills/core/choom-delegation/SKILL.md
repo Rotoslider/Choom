@@ -40,7 +40,7 @@ This reuses the same chat, preserving full conversation history so the Choom can
 ## Important
 - Delegations use the target Choom's own model, endpoint, and system prompt
 - Each delegation creates a dedicated chat session for traceability
-- Delegations have a 300-second default timeout (configurable up to 600s) to prevent hanging
+- Delegations have a 600-second default timeout (configurable up to 900s) to allow LLM fallback retries
 - Delegated Chooms get up to 12 iterations to complete their task
 - If a delegation is incomplete, use `continue_delegation_id` to continue in the same chat
 - The delegating Choom's settings are forwarded (weather, search, etc.) so the target has access to shared services

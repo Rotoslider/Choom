@@ -11,8 +11,56 @@ export class WebSearchService {
   async search(query: string, maxResults?: number): Promise<SearchResponse> {
     const limit = maxResults || this.settings.maxResults;
 
-    if (this.settings.provider === 'brave') {
-      return this.searchBrave(query, limit);
+    if (this.settings.provider === 'serpapi') {
+      try {
+        return await this.searchSerpApi(query, limit);
+      } catch (error) {
+        // Auto-fallback: SerpAPI → Brave → SearXNG
+        const errMsg = error instanceof Error ? error.message : String(error);
+        if (this.settings.braveApiKey && /(?:429|5\d\d)/.test(errMsg)) {
+          console.warn(`   🔄 SerpAPI failed (${errMsg}), falling back to Brave`);
+          try {
+            return await this.searchBrave(query, limit);
+          } catch (braveError) {
+            const braveMsg = braveError instanceof Error ? braveError.message : String(braveError);
+            if (this.settings.searxngEndpoint && /(?:429|5\d\d)/.test(braveMsg)) {
+              console.warn(`   🔄 Brave also failed (${braveMsg}), falling back to SearXNG`);
+              return this.searchSearXNG(query, limit);
+            }
+            throw braveError;
+          }
+        }
+        if (this.settings.searxngEndpoint && /(?:429|5\d\d)/.test(errMsg)) {
+          console.warn(`   🔄 SerpAPI failed (${errMsg}), falling back to SearXNG`);
+          return this.searchSearXNG(query, limit);
+        }
+        throw error;
+      }
+    } else if (this.settings.provider === 'brave') {
+      try {
+        return await this.searchBrave(query, limit);
+      } catch (error) {
+        // Auto-fallback: Brave → SerpAPI → SearXNG
+        const errMsg = error instanceof Error ? error.message : String(error);
+        if (/(?:429|5\d\d)/.test(errMsg)) {
+          if (this.settings.serpApiKey) {
+            console.warn(`   🔄 Brave Search failed (${errMsg}), falling back to SerpAPI`);
+            try {
+              return await this.searchSerpApi(query, limit);
+            } catch (serpError) {
+              if (this.settings.searxngEndpoint) {
+                console.warn(`   🔄 SerpAPI also failed, falling back to SearXNG`);
+                return this.searchSearXNG(query, limit);
+              }
+              throw serpError;
+            }
+          } else if (this.settings.searxngEndpoint) {
+            console.warn(`   🔄 Brave Search failed (${errMsg}), falling back to SearXNG`);
+            return this.searchSearXNG(query, limit);
+          }
+        }
+        throw error;
+      }
     } else {
       return this.searchSearXNG(query, limit);
     }
@@ -57,6 +105,47 @@ export class WebSearchService {
     };
   }
 
+  private async searchSerpApi(query: string, limit: number): Promise<SearchResponse> {
+    if (!this.settings.serpApiKey) {
+      throw new Error('SerpAPI key not configured');
+    }
+
+    const params = new URLSearchParams({
+      q: query,
+      api_key: this.settings.serpApiKey,
+      engine: 'google',
+      num: String(limit),
+    });
+
+    const response = await fetch(`https://serpapi.com/search?${params}`);
+
+    if (!response.ok) {
+      throw new Error(`SerpAPI error: ${response.status}`);
+    }
+
+    const data = await response.json();
+
+    const results: SearchResult[] = (data.organic_results || [])
+      .slice(0, limit)
+      .map((r: {
+        title: string;
+        link: string;
+        snippet: string;
+        date?: string;
+      }) => ({
+        title: r.title,
+        url: r.link,
+        snippet: r.snippet,
+        publishedDate: r.date,
+      }));
+
+    return {
+      query,
+      results,
+      totalResults: data.search_information?.total_results || results.length,
+    };
+  }
+
   private async searchSearXNG(query: string, limit: number): Promise<SearchResponse> {
     if (!this.settings.searxngEndpoint) {
       throw new Error('SearXNG endpoint not configured');
@@ -67,7 +156,12 @@ export class WebSearchService {
       `/search?q=${encodeURIComponent(query)}&format=json&pageno=1`
     );
 
-    const response = await fetch(url);
+    const response = await fetch(url, {
+      headers: {
+        'Accept': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (compatible; Choom/1.0)',
+      },
+    });
 
     if (!response.ok) {
       throw new Error(`SearXNG error: ${response.status}`);

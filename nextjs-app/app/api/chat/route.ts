@@ -94,6 +94,7 @@ const defaultSearchSettings: SearchSettings = {
   provider: 'brave',
   braveApiKey: process.env.BRAVE_API_KEY || '',
   searxngEndpoint: process.env.SEARXNG_ENDPOINT || '',
+  serpApiKey: process.env.SERP_API_KEY || '',
   maxResults: 5,
 };
 
@@ -2692,6 +2693,12 @@ export async function POST(request: NextRequest) {
     console.log(`   Layer 2 (settings panel): model=${clientLLMSettings.model || '(not set)'}, endpoint=${clientLLMSettings.endpoint || '(not set)'}`);
     console.log(`   Layer 3 (Choom DB): llmModel=${choom.llmModel || '(not set)'}, llmEndpoint=${choom.llmEndpoint || '(not set)'}, llmProviderId=${choom.llmProviderId || '(not set)'}, timeout=${choom.llmTimeoutSec || 120}s`);
     console.log(`   ✅ RESOLVED: model=${llmSettings.model}, endpoint=${llmSettings.endpoint}`);
+    if (choom.llmFallbackModel1 || choom.llmFallbackProvider1) {
+      console.log(`   🔄 Fallback 1: model=${choom.llmFallbackModel1 || '(provider default)'}, provider=${choom.llmFallbackProvider1 || 'local'}`);
+    }
+    if (choom.llmFallbackModel2 || choom.llmFallbackProvider2) {
+      console.log(`   🔄 Fallback 2: model=${choom.llmFallbackModel2 || '(provider default)'}, provider=${choom.llmFallbackProvider2 || 'local'}`);
+    }
     if (choom.imageSettings) {
       try {
         const imgSettings = JSON.parse(choom.imageSettings);
@@ -3228,6 +3235,43 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
       }
     }
 
+    // Build fallback model configurations (tried in order if primary times out or errors)
+    type FallbackConfig = { model: string; providerId: string | null; label: string };
+    const fallbackConfigs: FallbackConfig[] = [];
+    const fbEntries = [
+      { model: choom.llmFallbackModel1, providerId: choom.llmFallbackProvider1 },
+      { model: choom.llmFallbackModel2, providerId: choom.llmFallbackProvider2 },
+    ];
+    for (const fb of fbEntries) {
+      if (!fb.model && !fb.providerId) continue; // Not configured
+      const provider = fb.providerId ? providers.find((p: LLMProviderConfig) => p.id === fb.providerId) : null;
+      const model = fb.model || provider?.models?.[0] || llmSettings.model;
+      const label = provider ? `${provider.name}/${model}` : `local/${model}`;
+      fallbackConfigs.push({ model, providerId: fb.providerId || null, label });
+    }
+    if (fallbackConfigs.length > 0) {
+      console.log(`   🔄 Fallback models: ${fallbackConfigs.map((f, i) => `#${i + 1} ${f.label}`).join(', ')}`);
+    }
+
+    // Helper to create an LLM client from a fallback config
+    async function createClientForFallback(fb: FallbackConfig): Promise<{ client: { streamChat: LLMClient['streamChat'] }; settings: LLMSettings }> {
+      const fbSettings: LLMSettings = { ...llmSettings, model: fb.model };
+      if (fb.providerId) {
+        const provider = providers.find((p: LLMProviderConfig) => p.id === fb.providerId);
+        if (provider && provider.apiKey) {
+          fbSettings.endpoint = provider.endpoint;
+          if (provider.type === 'anthropic') {
+            const { AnthropicClient } = await import('@/lib/anthropic-client');
+            return { client: new AnthropicClient(fbSettings, provider.apiKey, provider.endpoint), settings: fbSettings };
+          }
+          return { client: new LLMClient(fbSettings, provider.apiKey), settings: fbSettings };
+        }
+      }
+      // Local model fallback
+      fbSettings.endpoint = llmSettings.endpoint;
+      return { client: new LLMClient(fbSettings), settings: fbSettings };
+    }
+
     // Add current user message
     currentMessages.push({ role: 'user', content: enrichedMessage });
 
@@ -3258,6 +3302,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
         const sessionFileCount = { created: 0, maxAllowed: WORKSPACE_MAX_FILES_PER_SESSION };
         let maxIterations = MAX_ITERATIONS;
         let projectIterationLimitApplied = false;
+        let fallbackAttempt = 0; // Tracks which fallback to try next (0 = try #1, 1 = try #2)
 
         // Apply per-Choom iteration limit (from <!-- max_iterations: N --> in system prompt)
         if (choomMaxIterations > 0) {
@@ -3508,11 +3553,77 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             } catch (timeoutError) {
               const errMsg = timeoutError instanceof Error ? timeoutError.message : String(timeoutError);
               console.warn(`   ⚠️  LLM response error on iteration ${iteration}: ${errMsg}`);
-              if (!iterationContent && iteration === 1) {
-                iterationContent = "I'm sorry, the response timed out. Please try again.";
-                send({ type: 'content', content: iterationContent });
+
+              // Try fallback models if: no content was streamed yet (partial content = can't switch mid-stream)
+              // and we have fallback configs remaining
+              let fallbackSucceeded = false;
+              if (!iterationContent && fallbackAttempt < fallbackConfigs.length) {
+                for (let fbIdx = fallbackAttempt; fbIdx < fallbackConfigs.length; fbIdx++) {
+                  const fb = fallbackConfigs[fbIdx];
+                  console.log(`   🔄 ${choomTag} Trying fallback #${fbIdx + 1}: ${fb.label}`);
+                  send({ type: 'content', content: `\n*[Primary model unavailable — switching to ${fb.label}]*\n` });
+
+                  try {
+                    const { client: fbClient, settings: fbSettings } = await createClientForFallback(fb);
+                    // Reset iteration state for the fallback attempt
+                    iterationContent = '';
+                    toolCallsAccumulator = new Map();
+                    finishReason = 'stop';
+
+                    // Fallback timeout: half of primary (min 30s) — fail fast to stay within outer timeouts
+                    const fbTimeoutMs = Math.max(30000, Math.floor(timeoutMs / 2));
+                    const fbTimeoutPromise = new Promise<never>((_, reject) => {
+                      setTimeout(() => reject(new Error('LLM response timeout')), fbTimeoutMs);
+                    });
+                    console.log(`   ⏱️  Fallback timeout: ${fbTimeoutMs / 1000}s (primary was ${timeoutMs / 1000}s)`);
+                    const fbStreamPromise = (async () => {
+                      for await (const chunk of fbClient.streamChat(currentMessages, activeTools, undefined, toolChoiceOverride)) {
+                        const choice = chunk.choices[0];
+                        if (!choice) continue;
+                        if (choice.delta.content) {
+                          iterationContent += choice.delta.content;
+                          send({ type: 'content', content: choice.delta.content });
+                        }
+                        if (choice.delta.tool_calls) {
+                          accumulateToolCalls(toolCallsAccumulator, choice.delta);
+                        }
+                        if (choice.finish_reason) {
+                          finishReason = choice.finish_reason;
+                        }
+                      }
+                    })();
+
+                    await Promise.race([fbStreamPromise, fbTimeoutPromise]);
+
+                    // Fallback succeeded — switch llmClient for rest of this request
+                    llmClient = fbClient;
+                    llmSettings.model = fbSettings.model;
+                    llmSettings.endpoint = fbSettings.endpoint;
+                    fallbackSucceeded = true;
+                    fallbackAttempt = fbIdx + 1;
+                    console.log(`   ✅ ${choomTag} Fallback #${fbIdx + 1} succeeded: ${fb.label} (model=${fbSettings.model})`);
+                    break;
+                  } catch (fbError) {
+                    const fbErrMsg = fbError instanceof Error ? fbError.message : String(fbError);
+                    console.warn(`   ⚠️  ${choomTag} Fallback #${fbIdx + 1} (${fb.label}) also failed: ${fbErrMsg}`);
+                    fallbackAttempt = fbIdx + 1;
+                    // Clear any partial content from failed fallback
+                    iterationContent = '';
+                    toolCallsAccumulator = new Map();
+                    continue;
+                  }
+                }
               }
-              break;
+
+              if (!fallbackSucceeded) {
+                const triedFallbacks = fallbackAttempt > 0 ? ` (tried ${fallbackAttempt} fallback${fallbackAttempt > 1 ? 's' : ''})` : '';
+                if (!iterationContent && iteration === 1) {
+                  iterationContent = `I'm sorry, the response timed out${triedFallbacks}. Please try again.`;
+                  send({ type: 'content', content: iterationContent });
+                }
+                break;
+              }
+              // If fallback succeeded, continue processing this iteration's results normally
             }
 
             // Convert accumulated tool calls — parse each individually so one bad call

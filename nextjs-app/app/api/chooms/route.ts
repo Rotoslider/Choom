@@ -31,7 +31,7 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { name, description, avatarUrl, systemPrompt, voiceId, llmModel, llmEndpoint, llmProviderId, imageSettings, companionId } = body;
+    const { name, description, avatarUrl, systemPrompt, voiceId, llmModel, llmEndpoint, llmProviderId, imageSettings, companionId, llmFallbackModel1, llmFallbackProvider1, llmFallbackModel2, llmFallbackProvider2 } = body;
 
     if (!name) {
       return NextResponse.json(
@@ -50,6 +50,10 @@ export async function POST(request: NextRequest) {
         llmModel: llmModel || null,
         llmEndpoint: llmEndpoint || null,
         llmProviderId: llmProviderId || null,
+        llmFallbackModel1: llmFallbackModel1 || null,
+        llmFallbackProvider1: llmFallbackProvider1 || null,
+        llmFallbackModel2: llmFallbackModel2 || null,
+        llmFallbackProvider2: llmFallbackProvider2 || null,
         companionId: companionId || null,
         imageSettings: imageSettings ? JSON.stringify(imageSettings) : null,
       },

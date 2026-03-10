@@ -20,6 +20,10 @@ model Choom {
   llmEndpoint   String?   // Optional LLM endpoint override
   llmProviderId String?   // External provider ID (references settings.providers[])
   llmTimeoutSec Int?      // LLM response timeout in seconds (default 120)
+  llmFallbackModel1    String?  // First fallback model (on timeout/error)
+  llmFallbackProvider1 String?  // First fallback provider ID
+  llmFallbackModel2    String?  // Second fallback model (on timeout/error)
+  llmFallbackProvider2 String?  // Second fallback provider ID
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
   chats         Chat[]
