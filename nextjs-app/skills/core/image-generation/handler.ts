@@ -61,7 +61,7 @@ const defaultImageGenSettings: ImageGenSettings = {
 };
 
 const WORKSPACE_IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'];
-const WORKSPACE_ALL_EXTENSIONS = ['.md', '.txt', '.json', '.py', '.ts', '.js', '.html', '.css', '.csv', ...WORKSPACE_IMAGE_EXTENSIONS];
+const WORKSPACE_ALL_EXTENSIONS = ['.md', '.txt', '.json', '.py', '.ts', '.tsx', '.js', '.jsx', '.html', '.css', '.csv', '.sh', '.bash', '.yaml', '.yml', '.xml', '.sql', '.toml', '.ini', '.cfg', '.r', '.R', '.ipynb', '.log', ...WORKSPACE_IMAGE_EXTENSIONS];
 const MAX_IMAGE_FILE_SIZE_KB = 10 * 1024; // 10MB
 
 const TOOL_NAMES = new Set(['generate_image', 'save_generated_image']);
