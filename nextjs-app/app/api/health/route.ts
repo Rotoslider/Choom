@@ -70,13 +70,13 @@ async function checkService(
   };
 }
 
-// Check API-key-based services (weather, search) by making a lightweight API call
-async function checkApiKeyService(
+// Check cloud API services by verifying API key is configured
+// (don't make real API calls — they're slow, rate-limited, and waste quota)
+function checkApiKeyConfigured(
   name: string,
   provider: string,
   apiKey: string,
-  testUrl: string
-): Promise<HealthResult> {
+): HealthResult {
   if (!apiKey) {
     return {
       service: name,
@@ -84,37 +84,11 @@ async function checkApiKeyService(
       error: `No API key configured for ${provider}`,
     };
   }
-
-  const startTime = Date.now();
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000);
-
-    const response = await fetch(testUrl, {
-      method: 'GET',
-      signal: controller.signal,
-      headers: { 'Accept': 'application/json' },
-    });
-
-    clearTimeout(timeout);
-    const latency = Date.now() - startTime;
-
-    if (response.ok || response.status === 405) {
-      return { service: name, status: 'connected', latency, details: { provider } };
-    }
-
-    return {
-      service: name,
-      status: 'disconnected',
-      error: `${provider} returned ${response.status}`,
-    };
-  } catch {
-    return {
-      service: name,
-      status: 'disconnected',
-      error: `${provider} connection failed`,
-    };
-  }
+  return {
+    service: name,
+    status: 'connected',
+    details: { provider },
+  };
 }
 
 // Health check paths for each service (in order of preference)
@@ -137,42 +111,21 @@ const defaultEndpoints = {
   searxng: process.env.SEARXNG_ENDPOINT || 'http://localhost:8888',
 };
 
-function buildWeatherCheck(settings?: { provider?: string; apiKey?: string }): Promise<HealthResult> {
+function buildWeatherCheck(settings?: { provider?: string; apiKey?: string }): HealthResult {
   const provider = settings?.provider || 'openweathermap';
   const apiKey = settings?.apiKey || process.env.OPENWEATHERMAP_API_KEY || process.env.WEATHERAPI_KEY || '';
-
-  if (provider === 'openweathermap') {
-    return checkApiKeyService('weather', 'OpenWeatherMap', apiKey,
-      `https://api.openweathermap.org/data/2.5/weather?q=London&appid=${apiKey}`);
-  }
-  return checkApiKeyService('weather', 'WeatherAPI', apiKey,
-    `https://api.weatherapi.com/v1/current.json?key=${apiKey}&q=London`);
+  const label = provider === 'openweathermap' ? 'OpenWeatherMap' : 'WeatherAPI';
+  return checkApiKeyConfigured('weather', label, apiKey);
 }
 
-async function buildSearchCheck(settings?: { provider?: string; braveApiKey?: string; serpApiKey?: string }): Promise<HealthResult> {
+function buildSearchCheck(settings?: { provider?: string; braveApiKey?: string; serpApiKey?: string }): HealthResult {
   const provider = settings?.provider || 'brave';
   if (provider === 'brave') {
     const key = settings?.braveApiKey || process.env.BRAVE_API_KEY || '';
-    if (!key) return { service: 'search', status: 'disconnected', error: 'No Brave API key configured' };
-    const startTime = Date.now();
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 5000);
-      const resp = await fetch('https://api.search.brave.com/res/v1/web/search?q=test&count=1', {
-        signal: controller.signal,
-        headers: { 'Accept': 'application/json', 'X-Subscription-Token': key },
-      });
-      clearTimeout(timeout);
-      const latency = Date.now() - startTime;
-      if (resp.ok) return { service: 'search', status: 'connected', latency, details: { provider: 'Brave Search' } };
-      return { service: 'search', status: 'disconnected', error: `Brave returned ${resp.status}` };
-    } catch {
-      return { service: 'search', status: 'disconnected', error: 'Brave connection failed' };
-    }
+    return checkApiKeyConfigured('search', 'Brave Search', key);
   } else if (provider === 'serpapi') {
     const key = settings?.serpApiKey || process.env.SERPAPI_KEY || '';
-    return checkApiKeyService('search', 'SerpAPI', key,
-      `https://serpapi.com/search?engine=google&q=test&num=1&api_key=${key}`);
+    return checkApiKeyConfigured('search', 'SerpAPI', key);
   }
   // searxng as primary search — check via the searxng service check
   return { service: 'search', status: 'connected', details: { provider: 'SearXNG (see SearXNG service)' } };
