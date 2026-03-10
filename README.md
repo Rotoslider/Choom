@@ -323,6 +323,16 @@ Hybrid SQLite + ChromaDB storage via a Python HTTP server on port 8100.
 - Automatic backups (every 24 hours or 100 memories)
 - Per-Choom isolation via `companionId`
 
+### Second Brain Dashboard (`/memories`)
+- Browse, search, and manage all stored memories in a dedicated UI
+- **Semantic search** — find memories by meaning, not just keywords
+- **Type filters** — filter by fact, conversation, preference, event, task, ephemeral
+- **Choom filter** — view memories for a specific Choom or all Chooms combined
+- **Quick Capture** — zero-friction memory creation directly from the dashboard (Cmd+Enter to save)
+- **Cmd+K global search** — search memories from any page in the app
+- **Detail panel** — click any memory to view, edit, or delete it
+- Capture works from anywhere: text your Choom via Signal, use the chat GUI, or Quick Capture on the dashboard
+
 ### LLM Memory Tools (memory.db)
 - `remember` - Store a memory
 - `search_memories` - Semantic search
