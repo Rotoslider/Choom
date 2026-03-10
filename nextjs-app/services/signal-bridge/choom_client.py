@@ -483,7 +483,17 @@ class ChoomClient:
                     "tts": config.TTS_ENDPOINT,
                     "stt": config.STT_ENDPOINT,
                     "imageGen": "http://localhost:7860",
-                }
+                    "searxng": config.SEARXNG_ENDPOINT,
+                },
+                "weather": {
+                    "provider": "openweathermap",
+                    "apiKey": config.OPENWEATHER_API_KEY,
+                },
+                "search": {
+                    "provider": "brave" if config.BRAVE_API_KEY else "serpapi" if config.SERPAPI_KEY else "searxng",
+                    "braveApiKey": config.BRAVE_API_KEY,
+                    "serpApiKey": config.SERPAPI_KEY,
+                },
             })
             return response.json()
         except Exception as e:

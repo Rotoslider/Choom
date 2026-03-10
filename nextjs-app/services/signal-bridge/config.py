@@ -40,7 +40,9 @@ DEFAULT_CHOOM_NAME = os.getenv("DEFAULT_CHOOM_NAME", "Choom")
 
 # API Keys for external services
 BRAVE_API_KEY = os.getenv("BRAVE_API_KEY", "")
+SERPAPI_KEY = os.getenv("SERPAPI_KEY", "")
 OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY", "")
+SEARXNG_ENDPOINT = os.getenv("SEARXNG_ENDPOINT", "http://localhost:8888")
 
 # Available Chooms (name -> choomId mapping, populated from database)
 CHOOMS = {}
