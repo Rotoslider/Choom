@@ -32,10 +32,11 @@ All 82 tools are organized into 22 modular **skills** with progressive disclosur
 - **Web Scraping & Downloads**: Scrape webpages for image URLs (`scrape_page_images`), download images with WebP-to-PNG auto-conversion (`download_web_image`), and download files (`download_web_file` for PDFs, docs, etc.) from the web into workspace projects
 - **PDF Generation & Reading**: Markdown-to-PDF with embedded images (`![caption](path)` syntax + explicit images array) via pdfkit; text extraction from PDFs via `pdftotext` with optional page range
 - **Context Compaction**: Two-layer context window management — cross-turn summarization of old messages into a rolling LLM-generated summary, plus within-turn truncation of stale tool results during agentic loops
-- **External LLM Providers**: Connect to Anthropic, OpenAI, NVIDIA Build, or custom OpenAI-compatible APIs per-Choom or per-project with provider presets, API key management (with visibility toggle), and a full Anthropic Messages API adapter. Provider API keys are resolved from settings at chat time and read from `bridge-config.json` as fallback for Signal bridge parity
+- **External LLM Providers**: Connect to Anthropic, OpenAI, NVIDIA Build, or custom OpenAI-compatible APIs per-Choom or per-project with provider presets, API key management (with visibility toggle), and a full Anthropic Messages API adapter. Each Choom supports two fallback models (any mix of local and cloud) for automatic failover on timeout/error. Provider API keys are resolved from settings at chat time and read from `bridge-config.json` as fallback for Signal bridge parity
 - **Heartbeat Deferral**: Scheduled heartbeats automatically defer when the user is actively chatting, preventing concurrent responses to the same conversation
 - **Markdown Rendering**: Chat messages rendered with `react-markdown` and `react-syntax-highlighter` (oneDark theme) for proper code blocks, tables, lists, links, and headings
-- **Web Search**: Brave Search or self-hosted SearXNG
+- **LLM Fallback Redundancy**: Each Choom can have two fallback LLM models (local or cloud) that automatically activate on timeout or connection failure. Fallback timeouts are halved for fast failure cascade. Works across all execution paths — direct chat, Signal, delegation, cron jobs
+- **Web Search**: Brave Search, SerpAPI (Google), or self-hosted SearXNG with automatic cascading fallback (e.g., Brave → SerpAPI → SearXNG). Configure all three and the system auto-switches on 429/5xx errors
 - **Weather**: OpenWeatherMap integration with caching
 
 ## Project Structure
@@ -80,7 +81,7 @@ nextjs-app/
       choom-delegation/             3 tools (delegate_to_choom, list_team, get_delegation_result)
       memory-management/            9 tools (remember, search, update, delete, stats, etc.)
       image-generation/             1 tool (checkpoint switching, LoRA, self-portrait mode)
-      web-searching/                1 tool (Brave/SearXNG)
+      web-searching/                1 tool (Brave/SerpAPI/SearXNG with auto-fallback)
       weather-forecasting/          2 tools (current weather, 5-day forecast)
       google-calendar/              4 tools (CRUD events)
       google-tasks/                 4 tools (list, get, add, remove)
@@ -117,7 +118,7 @@ nextjs-app/
     stt-client.ts                   Speech-to-text client
     weather-service.ts              Weather with caching
     homeassistant-service.ts        Home Assistant REST API client (states, services, history, prompt injection)
-    web-search.ts                   Brave / SearXNG
+    web-search.ts                   Brave / SerpAPI / SearXNG (cascading fallback)
     tool-definitions.ts             LLM tool schemas + skill bridge functions
     vision-service.ts               Optic vision analysis (OpenAI vision API + sharp resize, configurable per-model dimensions)
     project-service.ts              Workspace project management (CRUD + rename)
@@ -138,8 +139,9 @@ nextjs-app/
     watcher-loop.ts                 Step evaluation, retry, rollback heuristics
     google-client.ts                Google API client (Calendar, Sheets, Docs, Drive, Gmail, Contacts, YouTube)
   prisma/
-    schema.prisma                   SQLite (Choom [+llmProviderId], Chat, Message, GeneratedImage, ActivityLog)
+    schema.prisma                   SQLite (Choom [+llmProviderId, +fallback models], Chat, Message, GeneratedImage, ActivityLog)
     create-views.sql                SQLite views with human-readable timestamps (npm run db:views)
+  services/searxng/                  Self-hosted SearXNG search engine (see services/searxng/README.md)
   services/signal-bridge/           Python Signal messaging daemon
     bridge.py                       Main daemon (signal-cli JSON-RPC socket)
     choom_client.py                 Choom API client with settings merging + user activity tracking
@@ -203,7 +205,7 @@ User-configurable at `/settings`. Persisted in localStorage through Zustand with
 2. **Audio** - TTS/STT endpoints, voice, language, VAD sensitivity
 3. **Image** - SD checkpoint, sampler, CFG scale, steps, dimensions, LoRA
 4. **Memory** - server endpoint, auto-recall
-5. **Search** - provider (Brave/SearXNG), API key, max results
+5. **Search** - provider (Brave/SerpAPI/SearXNG), API keys, fallback chain, max results
 6. **Weather** - API key, location, coordinates, units
 7. **Cron Jobs** - scheduled task times (morning briefing, weather, aurora)
 8. **Heartbeats** - health check interval, quiet hours (e.g. 9 PM - 6 AM)
@@ -553,7 +555,7 @@ skill-name/
 | `choom-delegation` | 3 | Multi-agent collaboration: delegate tasks to other Chooms, list team, retrieve results |
 | `memory-management` | 9 | Semantic memory (ChromaDB): store, search, update, delete, stats |
 | `image-generation` | 1 | Stable Diffusion Forge: checkpoint switching, LoRA, self-portrait mode |
-| `web-searching` | 1 | Brave Search / SearXNG |
+| `web-searching` | 1 | Brave / SerpAPI / SearXNG (cascading fallback) |
 | `weather-forecasting` | 2 | OpenWeatherMap: current weather + 5-day forecast |
 | `google-calendar` | 4 | Google Calendar CRUD |
 | `google-tasks` | 4 | Google Tasks: lists, items, add, remove |
@@ -1249,7 +1251,7 @@ sudo systemctl start signal-bridge.service
 | Fatterbox (quite_chatter) / Chatterbox | Text-to-Speech | 8004 |
 | Whisper (faster-whisper-server) | Speech-to-Text | 5000 |
 | Stable Diffusion Forge (neo) | Image Generation | 7860 |
-| SearXNG (optional) | Web Search | 8888 |
+| SearXNG (optional) | Web Search (self-hosted, unlimited fallback) | 8888 |
 | Home Assistant (optional) | Smart Home Control & Sensors | 8123 |
 
 ## License

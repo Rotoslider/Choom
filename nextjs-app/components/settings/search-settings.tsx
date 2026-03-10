@@ -41,6 +41,9 @@ export function SearchSettings() {
       if (settings.search.provider === 'searxng' && settings.search.searxngEndpoint) {
         params.set('searxngEndpoint', settings.search.searxngEndpoint);
       }
+      if (settings.search.provider === 'serpapi' && settings.search.serpApiKey) {
+        params.set('serpApiKey', settings.search.serpApiKey);
+      }
 
       const response = await fetch(`/api/search?${params}`);
       const data = await response.json();
@@ -62,7 +65,9 @@ export function SearchSettings() {
 
   const isConfigured = settings.search.provider === 'brave'
     ? !!settings.search.braveApiKey
-    : !!settings.search.searxngEndpoint;
+    : settings.search.provider === 'serpapi'
+      ? !!settings.search.serpApiKey
+      : !!settings.search.searxngEndpoint;
 
   return (
     <div className="space-y-6">
@@ -77,7 +82,7 @@ export function SearchSettings() {
           <label htmlFor="search-provider">Provider</label>
           <Select
             value={settings.search.provider}
-            onValueChange={(value: 'brave' | 'searxng') =>
+            onValueChange={(value: 'brave' | 'searxng' | 'serpapi') =>
               updateSearchSettings({ provider: value })
             }
           >
@@ -86,13 +91,16 @@ export function SearchSettings() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="brave">Brave Search</SelectItem>
+              <SelectItem value="serpapi">SerpAPI (Google)</SelectItem>
               <SelectItem value="searxng">SearXNG</SelectItem>
             </SelectContent>
           </Select>
           <p className="text-xs text-muted-foreground">
             {settings.search.provider === 'brave'
               ? 'Brave Search offers high-quality results with a free API tier'
-              : 'SearXNG is a self-hosted metasearch engine'}
+              : settings.search.provider === 'serpapi'
+                ? 'SerpAPI provides Google results — free tier: 100 searches/month'
+                : 'SearXNG is a self-hosted metasearch engine'}
           </p>
         </div>
       </div>
@@ -129,7 +137,40 @@ export function SearchSettings() {
         </div>
       )}
 
-      {/* SearXNG Endpoint */}
+      {/* SerpAPI Key */}
+      {settings.search.provider === 'serpapi' && (
+        <div className="space-y-4">
+          <h3 className="text-sm font-medium flex items-center gap-2">
+            <Key className="h-4 w-4" />
+            SerpAPI
+          </h3>
+
+          <div className="space-y-2">
+            <label htmlFor="serp-api-key">API Key</label>
+            <Input
+              id="serp-api-key"
+              type="password"
+              value={settings.search.serpApiKey || ''}
+              onChange={(e) => updateSearchSettings({ serpApiKey: e.target.value })}
+              placeholder="Enter your SerpAPI key"
+            />
+            <p className="text-xs text-muted-foreground">
+              Get your API key from{' '}
+              <a
+                href="https://serpapi.com/manage-api-key"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary hover:underline"
+              >
+                serpapi.com
+              </a>
+              {' '}— free tier: 100 searches/month
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* SearXNG Endpoint — primary config when selected */}
       {settings.search.provider === 'searxng' && (
         <div className="space-y-4">
           <h3 className="text-sm font-medium flex items-center gap-2">
@@ -143,14 +184,92 @@ export function SearchSettings() {
               id="searxng-endpoint"
               value={settings.search.searxngEndpoint || ''}
               onChange={(e) => updateSearchSettings({ searxngEndpoint: e.target.value })}
-              placeholder="e.g., https://searxng.example.com"
+              placeholder="e.g., https://search.example.com"
             />
             <p className="text-xs text-muted-foreground">
-              The base URL of your SearXNG instance
+              Any public SearXNG instance — no API key needed. Browse instances at{' '}
+              <a href="https://searx.space/" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">searx.space</a>
             </p>
           </div>
         </div>
       )}
+
+      {/* Fallback Providers — always visible, configure keys/endpoints for auto-fallback */}
+      <div className="space-y-4 pt-2 border-t">
+        <h3 className="text-sm font-medium flex items-center gap-2">
+          <RefreshCw className="h-4 w-4" />
+          Fallback Providers
+        </h3>
+        <p className="text-xs text-muted-foreground">
+          Configure additional providers below. If the primary returns 429 or 5xx errors, these will be tried automatically in order.
+        </p>
+
+        {/* Brave fallback — show when not primary */}
+        {settings.search.provider !== 'brave' && (
+          <div className="space-y-2 rounded-md border p-3">
+            <label className="text-xs font-medium">Brave Search API Key</label>
+            <Input
+              type="password"
+              value={settings.search.braveApiKey || ''}
+              onChange={(e) => updateSearchSettings({ braveApiKey: e.target.value })}
+              placeholder="Optional — enables Brave as fallback"
+              className="h-8 text-xs"
+            />
+          </div>
+        )}
+
+        {/* SerpAPI fallback — show when not primary */}
+        {settings.search.provider !== 'serpapi' && (
+          <div className="space-y-2 rounded-md border p-3">
+            <label className="text-xs font-medium">SerpAPI Key</label>
+            <Input
+              type="password"
+              value={settings.search.serpApiKey || ''}
+              onChange={(e) => updateSearchSettings({ serpApiKey: e.target.value })}
+              placeholder="Optional — enables SerpAPI as fallback"
+              className="h-8 text-xs"
+            />
+          </div>
+        )}
+
+        {/* SearXNG fallback — show when not primary */}
+        {settings.search.provider !== 'searxng' && (
+          <div className="space-y-2 rounded-md border p-3">
+            <label className="text-xs font-medium">SearXNG Endpoint</label>
+            <Input
+              value={settings.search.searxngEndpoint || ''}
+              onChange={(e) => updateSearchSettings({ searxngEndpoint: e.target.value })}
+              placeholder="e.g., https://search.example.com"
+              className="h-8 text-xs"
+            />
+            <p className="text-xs text-muted-foreground">
+              Free, no API key needed. Pick a public instance from{' '}
+              <a href="https://searx.space/" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">searx.space</a>
+            </p>
+          </div>
+        )}
+
+        {/* Active fallback summary */}
+        {(() => {
+          const fallbacks: string[] = [];
+          if (settings.search.provider !== 'brave' && settings.search.braveApiKey) fallbacks.push('Brave');
+          if (settings.search.provider !== 'serpapi' && settings.search.serpApiKey) fallbacks.push('SerpAPI');
+          if (settings.search.provider !== 'searxng' && settings.search.searxngEndpoint) fallbacks.push('SearXNG');
+          const primary = settings.search.provider === 'brave' ? 'Brave' : settings.search.provider === 'serpapi' ? 'SerpAPI' : 'SearXNG';
+          if (fallbacks.length > 0) {
+            return (
+              <p className="text-xs text-green-500 bg-green-500/10 rounded-md px-3 py-2">
+                Fallback chain: {primary} → {fallbacks.join(' → ')}
+              </p>
+            );
+          }
+          return (
+            <p className="text-xs text-yellow-500 bg-yellow-500/10 rounded-md px-3 py-2">
+              No fallbacks configured — if {primary} fails, searches will error
+            </p>
+          );
+        })()}
+      </div>
 
       {/* Max Results */}
       <div className="space-y-4">
@@ -209,7 +328,7 @@ export function SearchSettings() {
 
         {!isConfigured && (
           <p className="text-xs text-yellow-500">
-            Please configure your {settings.search.provider === 'brave' ? 'API key' : 'endpoint'} to test search
+            Please configure your {settings.search.provider === 'brave' ? 'API key' : settings.search.provider === 'serpapi' ? 'API key' : 'endpoint'} to test search
           </p>
         )}
 

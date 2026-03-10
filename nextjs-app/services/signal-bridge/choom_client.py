@@ -396,11 +396,13 @@ class ChoomClient:
             payload["noTools"] = True
 
         # Use streaming endpoint
+        # timeout=(connect, read) — connect fast, read generous for LLM fallback retries
         response = self._make_request(
             "POST",
             "/api/chat",
             json=payload,
-            stream=True
+            stream=True,
+            timeout=(10, 600)
         )
 
         # Parse SSE response (use larger chunk_size for efficiency with large image payloads)

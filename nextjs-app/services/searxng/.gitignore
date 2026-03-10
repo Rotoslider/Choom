@@ -1,0 +1,5 @@
+venv/
+searxng-src/
+__pycache__/
+*.pyc
+limiter.toml

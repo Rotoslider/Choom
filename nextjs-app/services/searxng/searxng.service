@@ -1,0 +1,15 @@
+[Unit]
+Description=SearXNG Local Search Engine for Choom
+After=network.target
+
+[Service]
+Type=simple
+User=nuc1
+WorkingDirectory=/home/nuc1/projects/Choom/nextjs-app/services/searxng/searxng-src
+Environment=SEARXNG_SETTINGS_PATH=/home/nuc1/projects/Choom/nextjs-app/services/searxng/settings.yml
+ExecStart=/home/nuc1/projects/Choom/nextjs-app/services/searxng/venv/bin/python -m searx.webapp
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

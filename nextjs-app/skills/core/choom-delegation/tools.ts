@@ -22,7 +22,7 @@ export const tools: ToolDefinition[] = [
         },
         timeout_seconds: {
           type: 'number',
-          description: 'Max seconds to wait for response (default 300, max 600).',
+          description: 'Max seconds to wait for response (default 600, max 900).',
         },
         continue_delegation_id: {
           type: 'string',
