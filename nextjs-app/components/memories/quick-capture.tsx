@@ -110,6 +110,28 @@ export function QuickCapture({ memoryEndpoint, companionId, onCaptured }: QuickC
           <div>
             <label className="text-[10px] text-muted-foreground mb-0.5 block">Tags</label>
             <Input value={tags} onChange={(e) => setTags(e.target.value)} className="h-7 text-xs" placeholder="comma, separated" />
+            <div className="flex gap-1 mt-1">
+              {['goal', 'non-profit', 'homestead', 'dev'].map((preset) => (
+                <button
+                  key={preset}
+                  onClick={() => {
+                    const current = tags.split(',').map((t) => t.trim()).filter(Boolean);
+                    if (!current.includes(preset)) {
+                      setTags(current.length ? `${tags}, ${preset}` : preset);
+                    }
+                    if (preset === 'goal') { setImportance(Math.max(importance, 7)); }
+                  }}
+                  className={cn(
+                    'text-[9px] px-1.5 py-0.5 rounded-full border transition-colors',
+                    tags.includes(preset)
+                      ? 'border-primary/50 bg-primary/10 text-primary'
+                      : 'border-border text-muted-foreground hover:text-foreground'
+                  )}
+                >
+                  {preset}
+                </button>
+              ))}
+            </div>
           </div>
           <div>
             <label className="text-[10px] text-muted-foreground mb-0.5 block">Importance ({importance})</label>
