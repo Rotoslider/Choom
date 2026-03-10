@@ -109,6 +109,18 @@ class ScheduledTaskManager:
                 minute=minute
             )
 
+        # Goal review — Aloy reviews goals and delegates tasks
+        gr = tasks.get("goal_review", {})
+        if gr.get("enabled", False):
+            gr_time = gr.get("time", "09:00")
+            hour, minute = map(int, gr_time.split(':'))
+            self.add_cron_task(
+                "goal_review",
+                self._goal_review,
+                hour=hour,
+                minute=minute
+            )
+
         # YouTube Music download
         yt_dl = tasks.get("yt_download", {})
         if yt_dl.get("enabled", False):
@@ -517,6 +529,36 @@ class ScheduledTaskManager:
             except Exception as e:
                 logger.warning(f"Could not fetch reminders for briefing: {e}")
 
+            # Fetch goals from memory server
+            goals_text = ""
+            try:
+                import requests as req_lib
+                memory_endpoint = config.MEMORY_ENDPOINT
+                # Search for memories tagged with "goal"
+                goal_res = req_lib.post(f"{memory_endpoint}/memory/search_by_tags", json={
+                    "tags": "goal",
+                    "limit": 20,
+                }, timeout=10)
+                if goal_res.ok:
+                    goal_data = goal_res.json()
+                    goals = goal_data.get("data", [])
+                    if goals:
+                        goal_lines = []
+                        for g in goals:
+                            title = g.get("title", "")
+                            content = g.get("content", "")
+                            tags = g.get("tags", [])
+                            if isinstance(tags, list):
+                                tags = [t for t in tags if t.lower() != "goal"]
+                            area = f"[{', '.join(tags)}] " if tags else ""
+                            # Use title if available, otherwise first line of content
+                            display = title or content.split('\n')[0][:80]
+                            goal_lines.append(f"- {area}{display}")
+                        goals_text = "\n\nActive Goals:\n" + "\n".join(goal_lines)
+                        logger.info(f"Included {len(goals)} goals in morning briefing")
+            except Exception as e:
+                logger.warning(f"Could not fetch goals for briefing: {e}")
+
             # Fetch recent conversation context from yesterday
             recent_context = ""
             try:
@@ -536,9 +578,9 @@ Weather: {weather_text}
 
 Calendar: {calendar_text}
 
-Reminders: {reminders_text}{recent_context}
+Reminders: {reminders_text}{goals_text}{recent_context}
 
-Include a warm greeting, the weather summary (mention if wind under 15mph is good for drone flying), calendar events, and any reminders. If there are recent conversations, briefly mention any unfinished tasks, plans for today, or anything relevant from yesterday's discussions (be aware that yesterday's context is from the previous day — reference it naturally, like "you mentioned yesterday..." or "following up on..."). Keep it conversational for speaking aloud, no markdown. Do NOT repeat these instructions or mention that you were given data."""
+Include a warm greeting, the weather summary (mention if wind under 15mph is good for drone flying), calendar events, and any reminders. If there are active goals listed, suggest 3-5 small actionable things {owner_name} could focus on today that move those goals forward — keep suggestions realistic and specific (research tasks, outreach, writing, coding, etc.). If there are recent conversations, briefly mention any unfinished tasks or anything relevant from yesterday. Keep it conversational for speaking aloud, no markdown. Do NOT repeat these instructions or mention that you were given data."""
 
             response = self.choom.send_message(self.default_choom, prompt, fresh_chat=True, no_tools=True)
 
@@ -602,6 +644,91 @@ Include a warm greeting, the weather summary (mention if wind under 15mph is goo
 
         except Exception as e:
             logger.error(f"Basic morning briefing also failed: {e}")
+
+    def _goal_review(self):
+        """Aloy reviews goals and autonomously delegates tasks to other Chooms"""
+        logger.info("Running goal review")
+
+        try:
+            # Find the orchestrator Choom (Aloy by default, configurable)
+            task_config = load_task_config()
+            goal_cfg = task_config.get("tasks", {}).get("goal_review", {})
+            orchestrator = goal_cfg.get("choom_name", "Aloy")
+
+            # Check if the orchestrator Choom exists
+            choom = self.choom.get_choom_by_name(orchestrator)
+            if not choom:
+                logger.warning(f"Goal review orchestrator '{orchestrator}' not found — skipping")
+                return
+
+            # Fetch goals from memory server
+            import requests as req_lib
+            memory_endpoint = config.MEMORY_ENDPOINT
+            goal_res = req_lib.post(f"{memory_endpoint}/memory/search_by_tags", json={
+                "tags": "goal",
+                "limit": 20,
+            }, timeout=10)
+
+            if not goal_res.ok or not goal_res.json().get("data"):
+                logger.info("No goals found in memory — skipping goal review")
+                return
+
+            goals = goal_res.json()["data"]
+            goal_lines = []
+            for g in goals:
+                title = g.get("title", "")
+                content = g.get("content", "")
+                tags = g.get("tags", [])
+                importance = g.get("importance", 5)
+                if isinstance(tags, list):
+                    tags = [t for t in tags if t.lower() != "goal"]
+                area = f"[{', '.join(tags)}] " if tags else ""
+                display = title or content.split('\n')[0][:100]
+                detail = content if content != title else ""
+                goal_lines.append(f"- {area}{display} (importance: {importance}){': ' + detail[:150] if detail else ''}")
+
+            goals_block = "\n".join(goal_lines)
+            now = datetime.now()
+
+            prompt = f"""It's {now.strftime('%A, %B %d at %I:%M %p')}. You are reviewing the owner's goals to see if there's anything you can work on autonomously right now.
+
+## Current Goals
+{goals_block}
+
+## Your Task
+1. First, use search_memories to check what work has been done recently on these goals (search for "goal progress" or specific goal topics)
+2. Pick 1-3 tasks that can be completed RIGHT NOW using available tools — prioritize by importance
+3. For each task, decide the best approach:
+   - **Research tasks** (finding information, papers, repos, contacts, resources) → delegate to Genesis
+   - **Coding tasks** (writing scripts, building tools, analyzing data) → delegate to Anya
+   - **Writing/analysis** (drafting documents, plans, outreach emails) → handle yourself
+   - **Nothing actionable right now** → that's fine, just log that you reviewed and nothing needed attention
+4. After completing or delegating tasks, use the remember tool to log what was done (tag: "goal-progress")
+
+Be practical. Only work on things that can actually be accomplished with the tools available. Don't force work if nothing needs attention. Quality over quantity."""
+
+            # Send to orchestrator with tools enabled (NOT no_tools, NOT fresh_chat — use persistent context)
+            response = self.choom.send_message(orchestrator, prompt, fresh_chat=True)
+
+            if response.content:
+                # Send a summary to the owner via Signal
+                summary = response.content
+                # Only notify if actual work was done (not just "nothing to do")
+                nothing_phrases = ["nothing needs attention", "no tasks to work on", "nothing actionable", "no immediate tasks"]
+                if not any(phrase in summary.lower() for phrase in nothing_phrases):
+                    self.send_message_to_owner(
+                        f"Goal review completed:\n\n{summary}",
+                        include_audio=False,
+                        choom_name=orchestrator
+                    )
+                    logger.info(f"Goal review completed with action taken — notified owner")
+                else:
+                    logger.info("Goal review completed — no action needed")
+            else:
+                logger.warning("Goal review returned empty response")
+
+        except Exception as e:
+            logger.error(f"Goal review failed: {e}")
 
     def _weather_check(self):
         """Periodic weather check"""
@@ -843,6 +970,7 @@ Include a warm greeting, the weather summary (mention if wind under 15mph is goo
         """Run a cron task on demand"""
         task_map = {
             "morning_briefing": self._morning_briefing,
+            "goal_review": self._goal_review,
             "weather_check_07:00": self._weather_check,
             "weather_check_12:00": self._weather_check,
             "weather_check_18:00": self._weather_check,

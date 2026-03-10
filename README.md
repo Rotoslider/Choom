@@ -332,6 +332,19 @@ Hybrid SQLite + ChromaDB storage via a Python HTTP server on port 8100.
 - **Cmd+K global search** — search memories from any page in the app
 - **Detail panel** — click any memory to view, edit, or delete it
 - Capture works from anywhere: text your Choom via Signal, use the chat GUI, or Quick Capture on the dashboard
+- **Tag presets** — one-click tags for `goal`, `non-profit`, `homestead`, `dev` in Quick Capture
+
+### Goal-Driven Autonomous Tasks
+- **Brain dump goals** via Signal or Quick Capture — tag with `goal` and optional area tags (`non-profit`, `homestead`, `dev`)
+- **Goal-aware morning briefing** — Genesis includes active goals and suggests 3-5 actionable daily focus items
+- **Autonomous goal review** — Aloy runs on a configurable cron schedule (`goal_review` task, default disabled), searches goal memories, decides what needs work, and delegates:
+  - Research tasks → Genesis
+  - Coding tasks → Anya
+  - Writing/analysis → handles directly
+- Progress logged back to memory with `goal-progress` tag
+- Only notifies via Signal when actual work was completed (skips "nothing to do" reviews)
+- Configurable in Settings > Cron Jobs: enable `goal_review`, set time, and assign orchestrator Choom
+- Manual trigger via "Run Now" button in the cron job panel
 
 ### LLM Memory Tools (memory.db)
 - `remember` - Store a memory
