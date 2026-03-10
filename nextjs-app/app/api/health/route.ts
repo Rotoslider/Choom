@@ -70,6 +70,53 @@ async function checkService(
   };
 }
 
+// Check API-key-based services (weather, search) by making a lightweight API call
+async function checkApiKeyService(
+  name: string,
+  provider: string,
+  apiKey: string,
+  testUrl: string
+): Promise<HealthResult> {
+  if (!apiKey) {
+    return {
+      service: name,
+      status: 'disconnected',
+      error: `No API key configured for ${provider}`,
+    };
+  }
+
+  const startTime = Date.now();
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+
+    const response = await fetch(testUrl, {
+      method: 'GET',
+      signal: controller.signal,
+      headers: { 'Accept': 'application/json' },
+    });
+
+    clearTimeout(timeout);
+    const latency = Date.now() - startTime;
+
+    if (response.ok || response.status === 405) {
+      return { service: name, status: 'connected', latency, details: { provider } };
+    }
+
+    return {
+      service: name,
+      status: 'disconnected',
+      error: `${provider} returned ${response.status}`,
+    };
+  } catch {
+    return {
+      service: name,
+      status: 'disconnected',
+      error: `${provider} connection failed`,
+    };
+  }
+}
+
 // Health check paths for each service (in order of preference)
 const healthPaths: Record<string, string[]> = {
   llm: ['/models', '/v1/models', '/'],
@@ -77,6 +124,7 @@ const healthPaths: Record<string, string[]> = {
   tts: ['/v1/voices', '/voices', '/', '/health'],
   stt: ['/health', '/', '/v1/audio/transcriptions'],
   imageGen: ['/sdapi/v1/options', '/sdapi/v1/sd-models', '/'],
+  searxng: ['/', '/healthz', '/search?q=test&format=json'],
 };
 
 // Default endpoints from environment
@@ -86,7 +134,49 @@ const defaultEndpoints = {
   tts: process.env.TTS_ENDPOINT || 'http://localhost:8004',
   stt: process.env.STT_ENDPOINT || 'http://localhost:5000',
   imageGen: process.env.IMAGE_GEN_ENDPOINT || 'http://localhost:7860',
+  searxng: process.env.SEARXNG_ENDPOINT || 'http://localhost:8888',
 };
+
+function buildWeatherCheck(settings?: { provider?: string; apiKey?: string }): Promise<HealthResult> {
+  const provider = settings?.provider || 'openweathermap';
+  const apiKey = settings?.apiKey || process.env.OPENWEATHERMAP_API_KEY || process.env.WEATHERAPI_KEY || '';
+
+  if (provider === 'openweathermap') {
+    return checkApiKeyService('weather', 'OpenWeatherMap', apiKey,
+      `https://api.openweathermap.org/data/2.5/weather?q=London&appid=${apiKey}`);
+  }
+  return checkApiKeyService('weather', 'WeatherAPI', apiKey,
+    `https://api.weatherapi.com/v1/current.json?key=${apiKey}&q=London`);
+}
+
+async function buildSearchCheck(settings?: { provider?: string; braveApiKey?: string; serpApiKey?: string }): Promise<HealthResult> {
+  const provider = settings?.provider || 'brave';
+  if (provider === 'brave') {
+    const key = settings?.braveApiKey || process.env.BRAVE_API_KEY || '';
+    if (!key) return { service: 'search', status: 'disconnected', error: 'No Brave API key configured' };
+    const startTime = Date.now();
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
+      const resp = await fetch('https://api.search.brave.com/res/v1/web/search?q=test&count=1', {
+        signal: controller.signal,
+        headers: { 'Accept': 'application/json', 'X-Subscription-Token': key },
+      });
+      clearTimeout(timeout);
+      const latency = Date.now() - startTime;
+      if (resp.ok) return { service: 'search', status: 'connected', latency, details: { provider: 'Brave Search' } };
+      return { service: 'search', status: 'disconnected', error: `Brave returned ${resp.status}` };
+    } catch {
+      return { service: 'search', status: 'disconnected', error: 'Brave connection failed' };
+    }
+  } else if (provider === 'serpapi') {
+    const key = settings?.serpApiKey || process.env.SERPAPI_KEY || '';
+    return checkApiKeyService('search', 'SerpAPI', key,
+      `https://serpapi.com/search?engine=google&q=test&num=1&api_key=${key}`);
+  }
+  // searxng as primary search — check via the searxng service check
+  return { service: 'search', status: 'connected', details: { provider: 'SearXNG (see SearXNG service)' } };
+}
 
 // GET /api/health - Check all services (uses env defaults)
 export async function GET(request: NextRequest) {
@@ -108,6 +198,9 @@ export async function GET(request: NextRequest) {
     checkService('tts', defaultEndpoints.tts, healthPaths.tts),
     checkService('stt', defaultEndpoints.stt, healthPaths.stt),
     checkService('imageGen', defaultEndpoints.imageGen, healthPaths.imageGen),
+    buildWeatherCheck(),
+    buildSearchCheck(),
+    checkService('searxng', defaultEndpoints.searxng, healthPaths.searxng),
   ]);
 
   const healthMap = results.reduce(
@@ -131,7 +224,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { endpoints } = body;
+    const { endpoints, weather, search } = body;
 
     // Use provided endpoints or fall back to defaults
     const serviceEndpoints = {
@@ -140,6 +233,7 @@ export async function POST(request: NextRequest) {
       tts: endpoints?.tts || defaultEndpoints.tts,
       stt: endpoints?.stt || defaultEndpoints.stt,
       imageGen: endpoints?.imageGen || defaultEndpoints.imageGen,
+      searxng: endpoints?.searxng || defaultEndpoints.searxng,
     };
 
     // Check all services in parallel
@@ -149,6 +243,9 @@ export async function POST(request: NextRequest) {
       checkService('tts', serviceEndpoints.tts, healthPaths.tts),
       checkService('stt', serviceEndpoints.stt, healthPaths.stt),
       checkService('imageGen', serviceEndpoints.imageGen, healthPaths.imageGen),
+      buildWeatherCheck(weather),
+      buildSearchCheck(search),
+      checkService('searxng', serviceEndpoints.searxng, healthPaths.searxng),
     ]);
 
     const healthMap = results.reduce(

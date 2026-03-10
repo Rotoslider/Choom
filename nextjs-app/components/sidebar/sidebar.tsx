@@ -63,12 +63,11 @@ export function Sidebar({
     services,
   } = useAppStore();
 
-  // Count connected services (only the 5 implemented ones)
-  const implementedServices = ['llm', 'tts', 'stt', 'imageGen', 'memory'] as const;
-  const connectedCount = implementedServices.filter(
-    (s) => services[s] === 'connected'
+  // Count connected services
+  const connectedCount = Object.values(services).filter(
+    (s) => s === 'connected'
   ).length;
-  const totalServices = implementedServices.length;
+  const totalServices = Object.keys(services).length;
 
   return (
     <>

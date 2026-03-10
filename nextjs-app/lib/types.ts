@@ -384,6 +384,7 @@ export interface ServiceHealth {
   memory: ServiceStatus;
   weather: ServiceStatus;
   search: ServiceStatus;
+  searxng: ServiceStatus;
 }
 
 export interface HealthCheckResult {

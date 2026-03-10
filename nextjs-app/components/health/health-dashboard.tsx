@@ -11,6 +11,7 @@ import {
   Brain,
   Cloud,
   Search,
+  Globe,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -70,6 +71,27 @@ const services: ServiceInfo[] = [
     description: 'Stable Diffusion image generation',
     defaultPort: '7860',
   },
+  {
+    name: 'Weather',
+    key: 'weather',
+    icon: Cloud,
+    description: 'Weather data (OpenWeatherMap / WeatherAPI)',
+    defaultPort: 'API',
+  },
+  {
+    name: 'Web Search',
+    key: 'search',
+    icon: Search,
+    description: 'Primary search (Brave / SerpAPI)',
+    defaultPort: 'API',
+  },
+  {
+    name: 'SearXNG',
+    key: 'searxng',
+    icon: Globe,
+    description: 'Self-hosted metasearch engine (fallback)',
+    defaultPort: '8888',
+  },
 ];
 
 interface HealthDashboardProps {
@@ -99,6 +121,16 @@ export function HealthDashboard({ open, onOpenChange }: HealthDashboardProps) {
             tts: settings.tts.endpoint,
             stt: settings.stt.endpoint,
             imageGen: settings.imageGen.endpoint,
+            searxng: settings.search.searxngEndpoint || undefined,
+          },
+          weather: {
+            provider: settings.weather.provider,
+            apiKey: settings.weather.apiKey,
+          },
+          search: {
+            provider: settings.search.provider,
+            braveApiKey: settings.search.braveApiKey,
+            serpApiKey: settings.search.serpApiKey,
           },
         }),
       });
@@ -106,7 +138,7 @@ export function HealthDashboard({ open, onOpenChange }: HealthDashboardProps) {
         const data = await response.json();
         setDetails(data.services);
 
-        const serviceKeys: (keyof ServiceHealth)[] = ['llm', 'memory', 'tts', 'stt', 'imageGen', 'weather', 'search'];
+        const serviceKeys: (keyof ServiceHealth)[] = ['llm', 'memory', 'tts', 'stt', 'imageGen', 'weather', 'search', 'searxng'];
         serviceKeys.forEach((service) => {
           const info = data.services[service] as { status: string } | undefined;
           const status = info?.status === 'connected' ? 'connected' : 'disconnected';
@@ -175,12 +207,12 @@ export function HealthDashboard({ open, onOpenChange }: HealthDashboardProps) {
           </div>
 
           {/* Service list */}
-          <ScrollArea className="h-[300px]">
+          <ScrollArea className="h-[400px]">
             <div className="space-y-2">
               {services.map((service) => {
                 const status = serviceStatus[service.key];
                 const detail = details[service.key] as
-                  | { latency?: number; error?: string }
+                  | { latency?: number; error?: string; details?: { provider?: string } }
                   | undefined;
                 const Icon = service.icon;
 
@@ -220,7 +252,7 @@ export function HealthDashboard({ open, onOpenChange }: HealthDashboardProps) {
                           {service.description}
                         </p>
                         <p className="text-xs text-muted-foreground/70 mt-0.5">
-                          Default port: {service.defaultPort}
+                          {service.defaultPort === 'API' ? 'Cloud API' : `Default port: ${service.defaultPort}`}
                         </p>
                         {detail?.latency && (
                           <p className="text-xs text-green-500 mt-1">
@@ -246,6 +278,7 @@ export function HealthDashboard({ open, onOpenChange }: HealthDashboardProps) {
             <ul className="list-disc list-inside space-y-0.5">
               <li>Make sure services are running on their default ports</li>
               <li>Check firewall settings if services are on remote machines</li>
+              <li>Weather and Search require API keys in Settings</li>
               <li>The app will gracefully degrade if services are unavailable</li>
             </ul>
           </div>
