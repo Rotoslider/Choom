@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { Clock, Calendar, Sun, Zap, Music, ChevronDown, ChevronRight, Info, Play, RefreshCw } from 'lucide-react';
+import { Clock, Calendar, Sun, Zap, Music, ChevronDown, ChevronRight, Info, Play, RefreshCw, Plus, Target } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -69,6 +69,13 @@ const TASK_META: Record<string, { name: string; description: string; details: st
     details: 'Checks each configured YouTube channel for new videos, downloads them as high-quality MP3s with full ID3 tags (artist, title, album, year) and embedded album art. Per-channel download history prevents re-downloading. Configure channels in the YouTube DL settings tab.',
     choom: 'System (no Choom)',
     icon: <Music className="h-4 w-4 text-red-500" />,
+  },
+  goal_review: {
+    name: 'Goal Review',
+    description: 'Aloy reviews goals and autonomously delegates tasks',
+    details: 'Searches for goal-tagged memories, checks recent progress, picks 1-3 actionable tasks, and delegates to the appropriate Choom (Genesis for research, Anya for code). Logs progress to memory with goal-progress tag. Only sends a Signal notification when actual work was completed.',
+    choom: 'Aloy (orchestrator)',
+    icon: <Target className="h-4 w-4 text-emerald-500" />,
   },
   db_backup: {
     name: 'Database Backup',
@@ -191,6 +198,31 @@ export function CronSettings() {
   // Sort tasks: cron jobs only (exclude system_health)
   const cronTasks = Object.entries(config.tasks).filter(([id]) => id !== 'system_health');
 
+  // Find tasks that are defined in TASK_META but not yet in the config
+  const availableToAdd = Object.keys(TASK_META).filter(
+    (id) => !config.tasks[id]
+  );
+
+  const addTask = useCallback(
+    (taskId: string) => {
+      if (!config) return;
+      const defaultTime = taskId === 'goal_review' ? '09:00' : '08:00';
+      const updated = {
+        ...config,
+        tasks: {
+          ...config.tasks,
+          [taskId]: {
+            enabled: false,
+            time: defaultTime,
+          },
+        },
+      };
+      setConfig(updated);
+      saveConfig(updated);
+    },
+    [config, saveConfig]
+  );
+
   return (
     <div className="space-y-4">
       <div>
@@ -286,6 +318,32 @@ export function CronSettings() {
           );
         })}
       </div>
+
+      {/* Add new tasks */}
+      {availableToAdd.length > 0 && (
+        <div className="mt-4">
+          <p className="text-sm text-muted-foreground mb-2">Available tasks to add:</p>
+          <div className="space-y-2">
+            {availableToAdd.map((taskId) => {
+              const meta = TASK_META[taskId];
+              return (
+                <button
+                  key={taskId}
+                  onClick={() => addTask(taskId)}
+                  className="w-full flex items-center gap-3 p-3 rounded-lg border border-dashed border-border hover:border-primary/50 hover:bg-primary/5 transition-colors text-left"
+                >
+                  <Plus className="h-4 w-4 text-muted-foreground" />
+                  {meta.icon}
+                  <div className="flex-1">
+                    <span className="text-sm font-medium">{meta.name}</span>
+                    <p className="text-xs text-muted-foreground">{meta.description}</p>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       <div className="mt-6">
         <h3 className="text-lg font-medium mb-2 flex items-center gap-2">
