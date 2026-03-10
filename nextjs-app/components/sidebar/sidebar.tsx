@@ -10,6 +10,7 @@ import {
   Image as ImageIcon,
   ScrollText,
   Blocks,
+  Brain,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
@@ -185,6 +186,16 @@ export function Sidebar({
               Activity Log
             </Button>
           )}
+
+          {/* Memories / Second Brain */}
+          <Button
+            variant="ghost"
+            onClick={() => router.push('/memories')}
+            className="w-full justify-start gap-2 mb-1"
+          >
+            <Brain className="h-4 w-4" />
+            Second Brain
+          </Button>
 
           {/* Skills button - navigates to skills management page */}
           <Button
