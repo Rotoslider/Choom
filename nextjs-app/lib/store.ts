@@ -119,8 +119,9 @@ const defaultServiceHealth: ServiceHealth = {
   stt: 'checking',
   imageGen: 'checking',
   memory: 'checking',
-  weather: 'disconnected',
-  search: 'disconnected',
+  weather: 'checking',
+  search: 'checking',
+  searxng: 'checking',
 };
 
 // ============================================================================
@@ -385,6 +386,7 @@ export const useAppStore = create<AppState>()(
             memory: 'checking',
             weather: 'checking',
             search: 'checking',
+            searxng: 'checking',
           },
         }),
 
