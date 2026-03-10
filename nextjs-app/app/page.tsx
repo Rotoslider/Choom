@@ -215,12 +215,22 @@ export default function Home() {
               tts: settings.tts.endpoint,
               stt: settings.stt.endpoint,
               imageGen: settings.imageGen.endpoint,
+              searxng: settings.search.searxngEndpoint || undefined,
+            },
+            weather: {
+              provider: settings.weather.provider,
+              apiKey: settings.weather.apiKey,
+            },
+            search: {
+              provider: settings.search.provider,
+              braveApiKey: settings.search.braveApiKey,
+              serpApiKey: settings.search.serpApiKey,
             },
           }),
         });
         if (res.ok) {
           const data = await res.json();
-          const serviceKeys: (keyof ServiceHealth)[] = ['llm', 'memory', 'tts', 'stt', 'imageGen', 'weather', 'search'];
+          const serviceKeys: (keyof ServiceHealth)[] = ['llm', 'memory', 'tts', 'stt', 'imageGen', 'weather', 'search', 'searxng'];
           serviceKeys.forEach((service) => {
             const info = data.services[service] as { status: string } | undefined;
             const status = info?.status === 'connected' ? 'connected' : 'disconnected';
