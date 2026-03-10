@@ -18,7 +18,7 @@ import { MemoryDetailPanel } from '@/components/memories/memory-detail-panel';
 import { QuickCapture } from '@/components/memories/quick-capture';
 import { useAppStore } from '@/lib/store';
 import { cn } from '@/lib/utils';
-import type { Memory, MemoryType, MemoryStats } from '@/lib/types';
+import type { Memory, MemoryType, MemoryStats, Choom } from '@/lib/types';
 
 type FilterType = 'all' | MemoryType;
 
@@ -45,9 +45,29 @@ export default function MemoriesPage() {
   const [filterType, setFilterType] = useState<FilterType>('all');
   const [selectedMemoryId, setSelectedMemoryId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [chooms, setChooms] = useState<Choom[]>([]);
+  const [selectedChoomId, setSelectedChoomId] = useState<string>('all');
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   const headers = { 'x-memory-endpoint': memoryEndpoint };
+
+  // The companion_id used for memory scoping (choom.companionId or choom.id)
+  const activeCompanionId = selectedChoomId === 'all'
+    ? undefined
+    : chooms.find((c) => c.id === selectedChoomId)?.companionId || selectedChoomId;
+
+  // Fetch Choom list
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch('/api/chooms');
+        if (res.ok) {
+          const data = await res.json();
+          setChooms(Array.isArray(data) ? data : []);
+        }
+      } catch { /* ignore */ }
+    })();
+  }, []);
 
   // Handle ?id= query parameter (from Cmd+K navigation)
   useEffect(() => {
@@ -59,9 +79,10 @@ export default function MemoriesPage() {
   }, [searchParams, router]);
 
   // Fetch memories based on current filters
-  const fetchMemories = useCallback(async (opts?: { query?: string; type?: FilterType; silent?: boolean }) => {
+  const fetchMemories = useCallback(async (opts?: { query?: string; type?: FilterType; choomId?: string; silent?: boolean }) => {
     const q = opts?.query ?? searchQuery;
     const t = opts?.type ?? filterType;
+    const cid = opts?.choomId !== undefined ? opts.choomId : activeCompanionId;
     if (!opts?.silent) setLoading(true);
     setError(null);
 
@@ -72,18 +93,19 @@ export default function MemoriesPage() {
         res = await fetch('/api/memories', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...headers },
-          body: JSON.stringify({ action: 'search', query: q, limit: 50 }),
+          body: JSON.stringify({ action: 'search', query: q, limit: 50, companion_id: cid }),
         });
       } else if (t !== 'all') {
         // Filter by type
         res = await fetch('/api/memories', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...headers },
-          body: JSON.stringify({ action: 'search_by_type', memory_type: t, limit: 100 }),
+          body: JSON.stringify({ action: 'search_by_type', memory_type: t, limit: 100, companion_id: cid }),
         });
       } else {
         // Recent
-        res = await fetch('/api/memories?action=recent&limit=100', { headers });
+        const cidParam = cid ? `&companion_id=${encodeURIComponent(cid)}` : '';
+        res = await fetch(`/api/memories?action=recent&limit=100${cidParam}`, { headers });
       }
 
       if (res.ok) {
@@ -105,12 +127,13 @@ export default function MemoriesPage() {
       setLoading(false);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchQuery, filterType, memoryEndpoint]);
+  }, [searchQuery, filterType, memoryEndpoint, activeCompanionId]);
 
   // Fetch stats
   const fetchStats = useCallback(async () => {
     try {
-      const res = await fetch('/api/memories?action=stats', { headers });
+      const cidParam = activeCompanionId ? `&companion_id=${encodeURIComponent(activeCompanionId)}` : '';
+      const res = await fetch(`/api/memories?action=stats${cidParam}`, { headers });
       if (res.ok) {
         const data = await res.json();
         if (data.data) {
@@ -120,7 +143,7 @@ export default function MemoriesPage() {
       }
     } catch { /* ignore */ }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [memoryEndpoint]);
+  }, [memoryEndpoint, activeCompanionId]);
 
   // Initial load
   useEffect(() => {
@@ -143,6 +166,16 @@ export default function MemoriesPage() {
     setFilterType(type);
     setSearchQuery('');
     fetchMemories({ query: '', type });
+  };
+
+  // Choom filter change
+  const handleChoomChange = (choomId: string) => {
+    setSelectedChoomId(choomId);
+    const cid = choomId === 'all'
+      ? undefined
+      : chooms.find((c) => c.id === choomId)?.companionId || choomId;
+    fetchMemories({ choomId: cid });
+    // Re-fetch stats with new companion_id — will happen via useEffect on activeCompanionId change
   };
 
   const handleSelect = (id: string) => {
@@ -223,8 +256,8 @@ export default function MemoriesPage() {
           </div>
 
           {/* Search + filter bar */}
-          <div className="flex items-center gap-3">
-            <div className="relative flex-1 max-w-sm">
+          <div className="flex items-center gap-3 flex-wrap">
+            <div className="relative flex-1 max-w-sm min-w-[200px]">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input
                 value={searchQuery}
@@ -233,6 +266,20 @@ export default function MemoriesPage() {
                 className="pl-9 h-8 text-sm"
               />
             </div>
+
+            {/* Choom filter */}
+            {chooms.length > 1 && (
+              <select
+                value={selectedChoomId}
+                onChange={(e) => handleChoomChange(e.target.value)}
+                className="h-8 text-xs rounded-md bg-muted border border-border px-2 min-w-[120px]"
+              >
+                <option value="all">All Chooms</option>
+                {chooms.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            )}
 
             <div className="flex items-center gap-1 rounded-lg border border-border p-0.5 overflow-x-auto">
               {FILTER_BUTTONS.map((fb) => (
@@ -260,7 +307,7 @@ export default function MemoriesPage() {
         </header>
 
         {/* Quick Capture */}
-        <QuickCapture memoryEndpoint={memoryEndpoint} onCaptured={handleCaptured} />
+        <QuickCapture memoryEndpoint={memoryEndpoint} companionId={activeCompanionId} onCaptured={handleCaptured} />
 
         {/* Memory grid */}
         <ScrollArea className="flex-1">
