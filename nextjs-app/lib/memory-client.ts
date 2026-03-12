@@ -185,7 +185,7 @@ export async function executeMemoryTool(
         content,
         {
           tags: args.tags as string,
-          importance: args.importance as number,
+          importance: args.importance != null ? Math.round(args.importance as number) : undefined,
           memory_type: args.memory_type as MemoryType,
           companion_id: companionId,
         }
@@ -232,7 +232,7 @@ export async function executeMemoryTool(
         title: args.title as string,
         content: args.content as string,
         tags: args.tags as string,
-        importance: args.importance as number,
+        importance: args.importance != null ? Math.round(args.importance as number) : undefined,
         memory_type: args.memory_type as MemoryType,
       });
 
