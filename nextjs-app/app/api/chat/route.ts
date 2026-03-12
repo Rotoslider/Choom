@@ -3253,8 +3253,10 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
       console.log(`   🔄 Fallback models: ${fallbackConfigs.map((f, i) => `#${i + 1} ${f.label}`).join(', ')}`);
     }
 
-    // Save original local endpoint before any fallback can mutate llmSettings
-    const originalLocalEndpoint = llmSettings.endpoint;
+    // The actual local LM Studio endpoint — from settings panel or code defaults,
+    // BEFORE any provider (NVIDIA, Anthropic, etc.) overwrites llmSettings.endpoint.
+    const localLMStudioEndpoint = (clientLLMSettings as Record<string, unknown>)?.endpoint as string
+      || defaultLLMSettings.endpoint;
 
     // Helper to create an LLM client from a fallback config
     async function createClientForFallback(fb: FallbackConfig): Promise<{ client: { streamChat: LLMClient['streamChat'] }; settings: LLMSettings }> {
@@ -3270,9 +3272,10 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           return { client: new LLMClient(fbSettings, provider.apiKey), settings: fbSettings };
         }
       }
-      // Local model fallback — use the ORIGINAL local endpoint (not potentially-mutated llmSettings.endpoint)
-      fbSettings.endpoint = originalLocalEndpoint;
-      console.log(`   🔧 Local fallback: endpoint=${originalLocalEndpoint}, model=${fb.model}`);
+      // Local model fallback — use the pre-provider local endpoint (LM Studio),
+      // NOT llmSettings.endpoint which may point to NVIDIA/Anthropic after provider assignment
+      fbSettings.endpoint = localLMStudioEndpoint;
+      console.log(`   🔧 Local fallback: endpoint=${localLMStudioEndpoint}, model=${fb.model}`);
       return { client: new LLMClient(fbSettings), settings: fbSettings };
     }
 

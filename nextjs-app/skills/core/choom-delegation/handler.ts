@@ -289,6 +289,45 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
             }
           }
         }
+      } catch (streamErr) {
+        // AbortController fired during stream read = timeout
+        clearTimeout(timeout);
+        reader.releaseLock();
+        const elapsed = Math.round((Date.now() - startTime) / 1000);
+        if ((streamErr as Error).name === 'AbortError') {
+          // If we got partial content, return it as a partial result instead of failing
+          if (content.trim().length > 20 || toolCallsUsed.length > 0) {
+            console.warn(`   ⚠️  [${targetChoom.name}] Delegation timed out after ${elapsed}s but has partial results (${content.length} chars, ${toolCallsUsed.length} tool calls) — returning partial`);
+            const partialResponse = content.trim() || `[${targetChoom.name} timed out after ${elapsed}s with ${toolCallsUsed.length} tool calls but no text response]`;
+            const result: DelegationResult = {
+              id: delegationId,
+              choomName: targetChoom.name,
+              task,
+              response: partialResponse,
+              toolCalls: toolCallsUsed,
+              timestamp: Date.now(),
+              durationMs: Date.now() - startTime,
+              chatId: delegationChatId,
+              choomId: targetChoom.id,
+              incomplete: true,
+              iterationsUsed: doneIterations,
+              maxIterations: doneMaxIterations,
+            };
+            delegationResults.set(delegationId, result);
+            return this.success(toolCall, {
+              success: true,
+              delegation_id: delegationId,
+              choom_name: targetChoom.name,
+              response: partialResponse,
+              tools_used: toolCallsUsed.map(tc => tc.name),
+              duration_seconds: elapsed,
+              incomplete: true,
+              message: `${targetChoom.name} timed out after ${elapsed}s but partial work was captured. You can continue with continue_delegation_id="${delegationId}".`,
+            });
+          }
+          return this.error(toolCall, `Delegation to "${targetChoom.name}" timed out after ${elapsed}s (${timeoutSeconds}s limit). ${toolCallsUsed.length > 0 ? `${toolCallsUsed.length} tools were called before timeout.` : 'No tools were called.'}`);
+        }
+        throw streamErr;
       } finally {
         clearTimeout(timeout);
         reader.releaseLock();
