@@ -239,6 +239,10 @@ function syncSettingsToBridgeConfig(settings: AppSettings) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          llm: {
+            model: settings.llm.model,
+            endpoint: settings.llm.endpoint,
+          },
           weather: settings.weather,
           search: settings.search,
           imageGen: {
@@ -253,7 +257,14 @@ function syncSettingsToBridgeConfig(settings: AppSettings) {
             defaultHeight: settings.imageGen.defaultHeight,
             defaultNegativePrompt: settings.imageGen.defaultNegativePrompt,
           },
-          vision: settings.vision,
+          // Explicitly include optional fields as null so deepMerge removes stale values
+          // (JSON.stringify strips undefined, causing deepMerge to preserve old values)
+          vision: {
+            ...settings.vision,
+            visionProviderId: settings.vision.visionProviderId || null,
+            apiKey: settings.vision.apiKey || null,
+          },
+          visionProfiles: settings.visionProfiles || [],
           homeAssistant: {
             baseUrl: settings.homeAssistant.baseUrl,
             accessToken: settings.homeAssistant.accessToken,

@@ -309,9 +309,13 @@ class ChoomClient:
         search_cfg = bridge_cfg.get("search", {})
         image_cfg = bridge_cfg.get("imageGen", {})
 
+        # Get default LLM model from bridge config (synced from GUI settings)
+        llm_cfg = bridge_cfg.get("llm", {})
+
         default_settings = {
             "llm": {
                 "endpoint": config.LLM_ENDPOINT,
+                "model": llm_cfg.get("model", ""),
                 "temperature": 0.7,
                 "maxTokens": 4096,
             },
@@ -363,6 +367,11 @@ class ChoomClient:
         if providers_cfg:
             default_settings["providers"] = providers_cfg
 
+        # Pass vision profiles so heartbeat tasks get model-specific image settings
+        vision_profiles_cfg = bridge_cfg.get("visionProfiles", [])
+        if vision_profiles_cfg:
+            default_settings["visionProfiles"] = vision_profiles_cfg
+
         # Merge with any provided settings
         if settings:
             for key, value in settings.items():
@@ -380,7 +389,9 @@ class ChoomClient:
             img_settings = choom.image_settings if isinstance(choom.image_settings, dict) else {}
             default_settings["imageGen"] = {**default_settings.get("imageGen", {}), **img_settings}
 
+        vision_s = default_settings.get("vision", {})
         logger.info(f"Sending to {choom_name} with LLM model={default_settings['llm'].get('model', 'default')}, endpoint={default_settings['llm'].get('endpoint', 'default')}")
+        logger.info(f"  Vision: model={vision_s.get('model', 'none')}, endpoint={vision_s.get('endpoint', 'none')}, provider={vision_s.get('visionProviderId', 'none')}")
 
         # Send message to chat API
         # suppressNotifications: the bridge/scheduler always delivers the response
