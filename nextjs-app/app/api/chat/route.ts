@@ -3457,6 +3457,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           let imageGenCount = 0; // Track images generated across plan + loop (cap at 3)
           let planExecuted = false;
           let planFullySucceeded = false;
+          let planHadDelegations = false;
           if (skillDispatch && !isDelegation && isMultiStepRequest(message)) {
             try {
               console.log(`   📋 Multi-step request detected — creating plan...`);
@@ -3508,6 +3509,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 // A completely failed plan should let the model recover via the agentic loop.
                 planExecuted = planResult.succeeded > 0;
                 planFullySucceeded = planResult.failed === 0 && planResult.succeeded > 0;
+                planHadDelegations = plan.steps.some((s: { type?: string }) => s.type === 'delegate');
 
                 // Inject plan summary into conversation context so the LLM can reference it
                 const planSummaryText = summarizePlan(plan);
@@ -3592,10 +3594,9 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           // results are often partial and the orchestrator needs room to continue work.
           // Never override a per-project or request-level maxIterations setting.
           if (planFullySucceeded && !projectIterationLimitApplied) {
-            const hasDelegations = plan.steps.some(s => s.type === 'delegate');
-            const postPlanCap = hasDelegations ? 15 : 5;
+            const postPlanCap = planHadDelegations ? 15 : 5;
             maxIterations = Math.min(maxIterations, postPlanCap);
-            console.log(`   📋 Post-plan iteration cap: ${maxIterations} (${hasDelegations ? 'has delegations' : 'no delegations'})`);
+            console.log(`   📋 Post-plan iteration cap: ${maxIterations} (${planHadDelegations ? 'has delegations' : 'no delegations'})`);
           }
 
           // Preserve any pre-loop content (e.g., plan summaries) so the final iteration can prefix it
@@ -4184,12 +4185,42 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             }
           }
 
-          // If we hit the max iterations limit, append a note
+          // If we hit the max iterations limit, append a progress summary so "continue"
+          // messages have context about what was already done (prevents redoing work)
           if (iteration >= maxIterations) {
-            const note = '\n\n[Reached maximum tool iterations]';
-            fullContent += note;
-            send({ type: 'content', content: note });
-            console.log(`   ⚠️  Hit maxIterations (${maxIterations}${projectIterationLimitApplied ? ' — per-project override' : ''})`);
+            // Build progress summary from completed tool calls
+            const toolSummaryLines: string[] = [];
+            const delegationSummaries: string[] = [];
+            const filesWritten: string[] = [];
+            const filesRead: string[] = [];
+            for (const tc of allToolCalls) {
+              if (tc.name === 'delegate_to_choom') {
+                const choomName = tc.arguments.choom_name || 'unknown';
+                const task = (tc.arguments.task as string || '').slice(0, 100);
+                delegationSummaries.push(`- Delegated to ${choomName}: ${task}`);
+              } else if (tc.name === 'workspace_write_file') {
+                filesWritten.push(tc.arguments.path as string || 'unknown');
+              } else if (tc.name === 'workspace_read_file') {
+                filesRead.push(tc.arguments.path as string || 'unknown');
+              }
+            }
+            if (delegationSummaries.length > 0) toolSummaryLines.push('**Delegations completed:**\n' + delegationSummaries.join('\n'));
+            if (filesWritten.length > 0) toolSummaryLines.push(`**Files written:** ${filesWritten.join(', ')}`);
+            if (filesRead.length > 0) toolSummaryLines.push(`**Files read:** ${filesRead.join(', ')}`);
+
+            const otherTools = allToolCalls.filter(tc => !['delegate_to_choom', 'workspace_write_file', 'workspace_read_file', 'workspace_list_files'].includes(tc.name));
+            if (otherTools.length > 0) {
+              const otherNames = [...new Set(otherTools.map(tc => tc.name))];
+              toolSummaryLines.push(`**Other tools used:** ${otherNames.join(', ')}`);
+            }
+
+            const progressNote = toolSummaryLines.length > 0
+              ? `\n\n[Reached maximum tool iterations — ${allToolCalls.length} tool calls completed]\n\n**Progress so far:**\n${toolSummaryLines.join('\n')}\n\nIf the user says "continue", pick up from where this left off. Do NOT redo completed work.`
+              : '\n\n[Reached maximum tool iterations]';
+
+            fullContent += progressNote;
+            send({ type: 'content', content: progressNote });
+            console.log(`   ⚠️  Hit maxIterations (${maxIterations}${projectIterationLimitApplied ? ' — per-project override' : ''}) — injected progress summary (${allToolCalls.length} tool calls)`);
           }
 
           // Post-process: strip absolute file paths from response
