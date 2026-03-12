@@ -4085,9 +4085,12 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             const withinTurnResult = compactionService.compactWithinTurn(currentMessages, systemPromptWithSummary, activeTools, 2);
             if (withinTurnResult.truncatedCount > 0) {
               // Replace currentMessages contents in-place
+              const beforeTokens = approxTokens;
               currentMessages.length = 0;
               currentMessages.push(...withinTurnResult.messages);
-              console.log(`   🗜️  Within-turn compaction: truncated ${withinTurnResult.truncatedCount} tool results, recovered ~${withinTurnResult.tokensRecovered.toLocaleString()} tokens`);
+              const afterTokens = Math.ceil(currentMessages.map(m => m.content || '').join('').length / 4);
+              const budget = compactionService.calculateBudget(systemPromptWithSummary, activeTools);
+              console.log(`   🗜️  Within-turn compaction: truncated ${withinTurnResult.truncatedCount} tool results, recovered ~${withinTurnResult.tokensRecovered.toLocaleString()} tokens (~${beforeTokens.toLocaleString()} → ~${afterTokens.toLocaleString()}, budget: ~${budget.availableForMessages.toLocaleString()})`);
             }
           }
 

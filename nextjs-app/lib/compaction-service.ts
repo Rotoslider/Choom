@@ -253,7 +253,7 @@ export class CompactionService {
       }
     }
 
-    // Truncate tool result messages BEFORE the boundary that are >200 tokens
+    // Pass 1: Stub tool result messages BEFORE the boundary that are >200 tokens
     const compacted = [...currentMessages];
     let truncatedCount = 0;
     let tokensRecovered = 0;
@@ -275,6 +275,47 @@ export class CompactionService {
         compacted[i] = { ...msg, content: stub };
         truncatedCount++;
         tokensRecovered += recovered;
+      }
+    }
+
+    // Pass 2: If still over budget after stubbing, aggressively drop old tool results
+    // and their corresponding assistant tool_calls messages
+    let currentTotal = totalTokens - tokensRecovered;
+    if (currentTotal > availableForMessages) {
+      for (let i = 1; i < preserveBoundary; i++) {
+        if (currentTotal <= availableForMessages) break;
+        const msg = compacted[i];
+        if (msg.role === 'tool') {
+          const toks = estimateTokens(msg.content || '');
+          compacted[i] = { ...msg, content: '[result dropped — context too large]' };
+          const saved = toks - estimateTokens('[result dropped — context too large]');
+          if (saved > 0) {
+            tokensRecovered += saved;
+            currentTotal -= saved;
+            truncatedCount++;
+          }
+        }
+      }
+    }
+
+    // Pass 3: If STILL over budget, drop older assistant+user message pairs
+    // (keep system at 0, keep everything from preserveBoundary onward)
+    if (currentTotal > availableForMessages) {
+      // Find droppable pairs: user messages and their preceding/following context
+      for (let i = 1; i < preserveBoundary; i++) {
+        if (currentTotal <= availableForMessages) break;
+        const msg = compacted[i];
+        // Skip already-dropped tool messages, skip system
+        if (msg.content === '[result dropped — context too large]') continue;
+        const toks = messageTokens(msg);
+        const stub = `[${msg.role} message dropped — context compaction]`;
+        compacted[i] = { role: msg.role as 'user' | 'assistant', content: stub };
+        const saved = toks - estimateTokens(stub);
+        if (saved > 0) {
+          tokensRecovered += saved;
+          currentTotal -= saved;
+          truncatedCount++;
+        }
       }
     }
 
