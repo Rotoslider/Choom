@@ -3593,8 +3593,10 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                     toolCallsAccumulator = new Map();
                     finishReason = 'stop';
 
-                    // Fallback timeout: 75% of primary (min 60s) — enough time for large models
-                    const fbTimeoutMs = Math.max(60000, Math.floor(timeoutMs * 0.75));
+                    // Fallback timeout: local models get FULL primary timeout (they're slower
+                    // than cloud with large context). Cloud fallbacks get 75% (min 60s).
+                    const isLocalFallback = !fb.providerId;
+                    const fbTimeoutMs = isLocalFallback ? timeoutMs : Math.max(60000, Math.floor(timeoutMs * 0.75));
                     const fbTimeoutPromise = new Promise<never>((_, reject) => {
                       setTimeout(() => reject(new Error('LLM response timeout')), fbTimeoutMs);
                     });
