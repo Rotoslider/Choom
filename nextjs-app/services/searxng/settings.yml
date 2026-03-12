@@ -1,4 +1,55 @@
-use_default_settings: true
+use_default_settings:
+  engines:
+    keep_only:
+      # -- General web search --
+      - google
+      - duckduckgo
+      - brave
+      - startpage
+      - mojeek
+      - yahoo
+      - bing
+      # -- News --
+      - google news
+      - duckduckgo news
+      - bing news
+      - brave.news
+      # -- Images --
+      - google images
+      - duckduckgo images
+      - bing images
+      - brave.images
+      - unsplash
+      - pexels
+      # -- Videos --
+      - google videos
+      - duckduckgo videos
+      - bing videos
+      - youtube
+      - vimeo
+      # -- Science / academic --
+      - arxiv
+      - google scholar
+      - pubmed
+      - semantic scholar
+      # -- Code / tech --
+      - github
+      - stackoverflow
+      - superuser
+      - npm
+      - pypi
+      - crates.io
+      - mdn
+      # -- Reference --
+      - wikipedia
+      - wiktionary
+      # -- Other useful --
+      - reddit
+      - hackernews
+      - imdb
+      - openstreetmap
+      - currency
+      - wolframalpha
 
 general:
   instance_name: "Choom SearXNG"

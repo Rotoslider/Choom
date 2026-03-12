@@ -24,7 +24,7 @@ class ScheduledTaskManager:
     """Manages scheduled tasks, heartbeats, and cron jobs"""
 
     def __init__(self):
-        self.scheduler = BackgroundScheduler()
+        self.scheduler = BackgroundScheduler(timezone='America/Denver')
         self.signal = get_signal_handler()
         self.choom = get_choom_client()
         self.tts = get_tts_client()
@@ -167,6 +167,13 @@ class ScheduledTaskManager:
         self.add_interval_task(
             "reload_automations",
             self._reload_automations,
+            seconds=60
+        )
+
+        # Reload cron task schedules from config every 60 seconds
+        self.add_interval_task(
+            "reload_cron_tasks",
+            self._reload_cron_tasks,
             seconds=60
         )
 
@@ -674,8 +681,44 @@ Include a warm greeting, the weather summary (mention if wind under 15mph is goo
                 return
 
             goals = goal_res.json()["data"]
-            goal_lines = []
+
+            # Filter out completed goals (tagged "completed", "done", or content indicates completion)
+            completed_tags = {"completed", "done", "finished", "achieved"}
+            active_goals = []
             for g in goals:
+                tags = g.get("tags", [])
+                if isinstance(tags, list):
+                    tag_set = {t.lower() for t in tags}
+                    if tag_set & completed_tags:
+                        continue  # Skip completed goals
+                active_goals.append(g)
+
+            if not active_goals:
+                logger.info("All goals are completed — skipping goal review")
+                return
+
+            # Fetch recent goal-progress memories to avoid re-delegating same work
+            recent_progress = ""
+            try:
+                progress_res = req_lib.post(f"{memory_endpoint}/memory/search_by_tags", json={
+                    "tags": "goal-progress",
+                    "limit": 10,
+                }, timeout=10)
+                if progress_res.ok and progress_res.json().get("data"):
+                    progress_entries = progress_res.json()["data"]
+                    progress_lines = []
+                    for p in progress_entries[:10]:
+                        p_title = p.get("title", "")
+                        p_content = p.get("content", "")
+                        p_display = p_title or p_content.split('\n')[0][:150]
+                        progress_lines.append(f"- {p_display}")
+                    if progress_lines:
+                        recent_progress = "\n## Recent Goal Progress (already done — do NOT repeat)\n" + "\n".join(progress_lines)
+            except Exception as e:
+                logger.warning(f"Failed to fetch recent goal progress: {e}")
+
+            goal_lines = []
+            for g in active_goals:
                 title = g.get("title", "")
                 content = g.get("content", "")
                 tags = g.get("tags", [])
@@ -692,20 +735,23 @@ Include a warm greeting, the weather summary (mention if wind under 15mph is goo
 
             prompt = f"""It's {now.strftime('%A, %B %d at %I:%M %p')}. You are reviewing the owner's goals to see if there's anything you can work on autonomously right now.
 
-## Current Goals
+## Active Goals (not yet completed)
 {goals_block}
+{recent_progress}
 
 ## Your Task
 1. First, use search_memories to check what work has been done recently on these goals (search for "goal progress" or specific goal topics)
-2. Pick 1-3 tasks that can be completed RIGHT NOW using available tools — prioritize by importance
-3. For each task, decide the best approach:
+2. SKIP any goal that already has recent progress entries above — do NOT re-delegate the same research or task
+3. Pick 1-3 NEW tasks that can be completed RIGHT NOW using available tools — prioritize by importance
+4. For each task, decide the best approach:
    - **Research tasks** (finding information, papers, repos, contacts, resources) → delegate to Genesis
    - **Coding tasks** (writing scripts, building tools, analyzing data) → delegate to Anya
    - **Writing/analysis** (drafting documents, plans, outreach emails) → handle yourself
    - **Nothing actionable right now** → that's fine, just log that you reviewed and nothing needed attention
-4. After completing or delegating tasks, use the remember tool to log what was done (tag: "goal-progress")
+5. After completing or delegating tasks, use the remember tool to log what was done (tag: "goal-progress")
+6. If a goal is fully completed, use remember to update it with tags including "completed" so it won't appear in future reviews
 
-Be practical. Only work on things that can actually be accomplished with the tools available. Don't force work if nothing needs attention. Quality over quantity."""
+Be practical. Only work on things that can actually be accomplished with the tools available. Don't repeat work that was already done. Don't force work if nothing needs attention. Quality over quantity."""
 
             # Send to orchestrator with tools enabled (NOT no_tools, NOT fresh_chat — use persistent context)
             response = self.choom.send_message(orchestrator, prompt, fresh_chat=True)
@@ -932,6 +978,68 @@ Be practical. Only work on things that can actually be accomplished with the too
             if job.id.startswith("custom_hb_") and job.id not in current_ids:
                 self.remove_task(job.id)
                 logger.info(f"Removed stale custom heartbeat: {job.id}")
+
+    def _reload_cron_tasks(self):
+        """Reload cron task schedules from bridge-config.json (picks up UI changes)"""
+        try:
+            task_config = load_task_config()
+            tasks = task_config.get("tasks", {})
+
+            # Map of cron task IDs to their config keys and handler functions
+            cron_defs = {
+                "morning_briefing": {
+                    "cfg": tasks.get("morning_briefing", {}),
+                    "default_enabled": True,
+                    "default_time": "07:00",
+                    "func": self._morning_briefing,
+                },
+                "db_backup": {
+                    "cfg": tasks.get("db_backup", {}),
+                    "default_enabled": True,
+                    "default_time": "03:00",
+                    "func": self._backup_databases,
+                },
+                "goal_review": {
+                    "cfg": tasks.get("goal_review", {}),
+                    "default_enabled": False,
+                    "default_time": "09:00",
+                    "func": self._goal_review,
+                },
+                "yt_download": {
+                    "cfg": tasks.get("yt_download", {}),
+                    "default_enabled": False,
+                    "default_time": "04:00",
+                    "func": self._yt_download,
+                },
+            }
+
+            for task_id, defn in cron_defs.items():
+                cfg = defn["cfg"]
+                enabled = cfg.get("enabled", defn["default_enabled"])
+                time_str = cfg.get("time", defn["default_time"])
+                hour, minute = map(int, time_str.split(':'))
+
+                existing = self.scheduler.get_job(task_id)
+                if not enabled:
+                    if existing:
+                        self.remove_task(task_id)
+                        logger.info(f"Cron task disabled: {task_id}")
+                    continue
+
+                # Check if schedule changed
+                if existing and hasattr(existing.trigger, 'fields'):
+                    fields = {f.name: f for f in existing.trigger.fields}
+                    cur_hour = int(str(fields.get('hour', '')))
+                    cur_minute = int(str(fields.get('minute', '')))
+                    if cur_hour == hour and cur_minute == minute:
+                        continue  # No change
+
+                # Add or reschedule
+                self.add_cron_task(task_id, defn["func"], hour=hour, minute=minute)
+                logger.info(f"Cron task rescheduled: {task_id} → {time_str}")
+
+        except Exception as e:
+            logger.error(f"Failed to reload cron tasks: {e}")
 
     def _check_triggers(self):
         """Check for manual triggers from the web GUI"""

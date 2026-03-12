@@ -389,9 +389,42 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
     const delegationId = toolCall.arguments.delegation_id as string;
     if (!delegationId) return this.error(toolCall, 'delegation_id is required');
 
-    const result = delegationResults.get(delegationId);
+    // Exact match first
+    let result = delegationResults.get(delegationId);
+
+    // Fuzzy match: try by choom name (most recent), or partial ID match
     if (!result) {
-      return this.error(toolCall, `Delegation "${delegationId}" not found. Results are only available within the current session.`);
+      const idLower = delegationId.toLowerCase();
+      const allResults = Array.from(delegationResults.values());
+
+      // Try matching by choom name (e.g., "Genesis", "Anya")
+      const byName = allResults
+        .filter(r => r.choomName.toLowerCase() === idLower)
+        .sort((a, b) => b.timestamp - a.timestamp);
+      if (byName.length > 0) {
+        result = byName[0];
+      }
+
+      // Try partial ID match (e.g., "d1" matches "deleg_1_xxx")
+      if (!result) {
+        const numMatch = idLower.match(/^d(\d+)$/);
+        if (numMatch) {
+          const targetNum = numMatch[1];
+          const byNum = allResults.find(r => r.id.match(new RegExp(`deleg_${targetNum}_`)));
+          if (byNum) result = byNum;
+        }
+      }
+
+      // Try substring match as last resort
+      if (!result) {
+        const bySubstring = allResults.find(r => r.id.includes(idLower) || idLower.includes(r.id));
+        if (bySubstring) result = bySubstring;
+      }
+    }
+
+    if (!result) {
+      const available = Array.from(delegationResults.values()).map(r => `${r.id} (${r.choomName})`).join(', ');
+      return this.error(toolCall, `Delegation "${delegationId}" not found. Available: ${available || 'none'}`);
     }
 
     return this.success(toolCall, {

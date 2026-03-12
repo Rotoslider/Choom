@@ -7,9 +7,19 @@ Type=simple
 User=nuc1
 WorkingDirectory=/home/nuc1/projects/Choom/nextjs-app/services/searxng/searxng-src
 Environment=SEARXNG_SETTINGS_PATH=/home/nuc1/projects/Choom/nextjs-app/services/searxng/settings.yml
+
+# Kill any orphan process holding port 8888 before starting
+ExecStartPre=/bin/bash -c 'fuser -k 8888/tcp 2>/dev/null || true'
+ExecStartPre=/bin/sleep 1
+
 ExecStart=/home/nuc1/projects/Choom/nextjs-app/services/searxng/venv/bin/python -m searx.webapp
+
 Restart=on-failure
-RestartSec=5
+# Wait 30s between restarts (not 5s) to avoid CPU hammering
+RestartSec=30
+# Max 5 restarts in 10 minutes, then give up
+StartLimitBurst=5
+StartLimitIntervalSec=600
 
 [Install]
 WantedBy=multi-user.target
