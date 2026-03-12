@@ -265,7 +265,7 @@ class ChoomClient:
             logger.warning(f"Failed to fetch recent conversations: {e}")
             return ""
 
-    def send_message(self, choom_name: str, message: str, settings: Optional[Dict] = None, fresh_chat: bool = False, no_tools: bool = False) -> ChatResponse:
+    def send_message(self, choom_name: str, message: str, settings: Optional[Dict] = None, fresh_chat: bool = False, no_tools: bool = False, max_iterations: Optional[int] = None) -> ChatResponse:
         """
         Send a message to a Choom and get the response
 
@@ -394,6 +394,8 @@ class ChoomClient:
         }
         if no_tools:
             payload["noTools"] = True
+        if max_iterations:
+            payload["maxIterationsOverride"] = max_iterations
 
         # Use streaming endpoint
         # timeout=(connect, read) — connect fast, read generous for LLM fallback retries

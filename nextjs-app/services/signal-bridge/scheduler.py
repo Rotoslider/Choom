@@ -753,8 +753,9 @@ Include a warm greeting, the weather summary (mention if wind under 15mph is goo
 
 Be practical. Only work on things that can actually be accomplished with the tools available. Don't repeat work that was already done. Don't force work if nothing needs attention. Quality over quantity."""
 
-            # Send to orchestrator with tools enabled (NOT no_tools, NOT fresh_chat — use persistent context)
-            response = self.choom.send_message(orchestrator, prompt, fresh_chat=True)
+            # Send to orchestrator with tools enabled and higher iteration limit
+            # Goal review involves delegation chains that need many iterations
+            response = self.choom.send_message(orchestrator, prompt, fresh_chat=True, max_iterations=100)
 
             if response.content:
                 # Send a summary to the owner via Signal

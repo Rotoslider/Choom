@@ -2633,7 +2633,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { choomId, chatId, message, settings, isDelegation, suppressNotifications, noTools } = body;
+    const { choomId, chatId, message, settings, isDelegation, suppressNotifications, noTools, maxIterationsOverride } = body;
 
     if (!choomId || !chatId || !message) {
       return new Response(
@@ -3315,6 +3315,13 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
         if (choomMaxIterations > 0) {
           maxIterations = choomMaxIterations;
           console.log(`   🔒 [${choom.name}] maxIterations → ${maxIterations} (from system prompt directive)`);
+        }
+
+        // Request-level override (e.g., scheduler goal_review sends maxIterationsOverride=100)
+        // Takes priority over system prompt directive but NOT over delegation cap
+        if (maxIterationsOverride && typeof maxIterationsOverride === 'number' && maxIterationsOverride > 0) {
+          maxIterations = maxIterationsOverride;
+          console.log(`   🔒 [${choom.name}] maxIterations → ${maxIterations} (from request override)`);
         }
 
         // Apply per-project iteration limit from pre-detected project (detected above from message or chat history)
