@@ -240,6 +240,16 @@ export const BUILTIN_VISION_PROFILES: VisionModelProfile[] = [
     maxImageSizeBytes: 20 * 1024 * 1024,
     supportedFormats: ['png', 'jpeg', 'webp'],
   },
+  {
+    modelId: 'qwen/qwen3.5-35b-a3b',
+    label: 'Qwen 3.5 35B-A3B Vision (MoE 3B active)',
+    builtIn: true,
+    maxTokens: 4096,
+    temperature: 0.7,
+    maxImageDimension: 1280,
+    maxImageSizeBytes: 20 * 1024 * 1024,
+    supportedFormats: ['png', 'jpeg', 'webp', 'gif'],
+  },
 ];
 
 // ============================================================================

@@ -46,11 +46,15 @@ export default class ImageAnalysisHandler extends BaseSkillHandler {
         const visionProvider = visionProviders.find(
           (p: LLMProviderConfig) => p.id === visionProviderId
         );
-        if (visionProvider?.apiKey) {
-          visionApiKey = visionProvider.apiKey;
-        }
-        if (visionProvider?.endpoint) {
-          visionEndpoint = visionProvider.endpoint.replace(/\/v1\/?$/, '');
+        if (visionProvider) {
+          if (visionProvider.apiKey) {
+            visionApiKey = visionProvider.apiKey;
+          }
+          if (visionProvider.endpoint) {
+            visionEndpoint = visionProvider.endpoint.replace(/\/v1\/?$/, '');
+          }
+        } else {
+          console.warn(`   ⚠️  Vision provider "${visionProviderId}" not found in ${visionProviders.length} providers (available: ${visionProviders.map((p: LLMProviderConfig) => p.id).join(', ')}). Falling back to endpoint: ${visionEndpoint}`);
         }
       }
 
@@ -68,6 +72,7 @@ export default class ImageAnalysisHandler extends BaseSkillHandler {
         temperature: (ctx.settings?.vision as Record<string, unknown>)?.temperature as number || 0.3,
         apiKey: visionApiKey,
       };
+      console.log(`   👁️  Vision config: model=${visionModel}, endpoint=${visionEndpoint}, provider=${visionProviderId || 'none'}, hasApiKey=${!!visionApiKey}`);
 
       // Apply vision profile if available
       const userVisionProfiles = (ctx.settings?.visionProfiles as VisionModelProfile[]) || [];

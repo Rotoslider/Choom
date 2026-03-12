@@ -2328,12 +2328,16 @@ async function executeToolCall(
         const visionProvider = visionProviders.find(
           (p: LLMProviderConfig) => p.id === visionProviderId
         );
-        if (visionProvider?.apiKey) {
-          visionApiKey = visionProvider.apiKey;
-        }
-        if (visionProvider?.endpoint) {
-          // Use provider endpoint — strip /v1 suffix since VisionService adds it
-          visionEndpoint = visionProvider.endpoint.replace(/\/v1\/?$/, '');
+        if (visionProvider) {
+          if (visionProvider.apiKey) {
+            visionApiKey = visionProvider.apiKey;
+          }
+          if (visionProvider.endpoint) {
+            // Use provider endpoint — strip /v1 suffix since VisionService adds it
+            visionEndpoint = visionProvider.endpoint.replace(/\/v1\/?$/, '');
+          }
+        } else {
+          console.warn(`   ⚠️  Vision provider "${visionProviderId}" not found in ${visionProviders.length} providers (available: ${visionProviders.map(p => p.id).join(', ')}). Falling back to endpoint: ${visionEndpoint}`);
         }
       }
       const rawVisionModel = (settings?.vision as Record<string, unknown>)?.model as string;
@@ -2348,6 +2352,7 @@ async function executeToolCall(
         temperature: (settings?.vision as Record<string, unknown>)?.temperature as number || 0.3,
         apiKey: visionApiKey,
       };
+      console.log(`   👁️  Vision config: model=${visionModel}, endpoint=${visionEndpoint}, provider=${visionProviderId || 'none'}, hasApiKey=${!!visionApiKey}`);
 
       // Apply vision profile if available
       const userVisionProfiles = (settings?.visionProfiles as VisionModelProfile[]) || [];
@@ -3885,7 +3890,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               'search_memories', 'search_by_type', 'search_by_tags', 'get_recent_memories',
               'search_by_date_range', 'get_memory_stats',
               'workspace_read_file', 'workspace_list_files',
-              'analyze_image', 'scrape_page_images',
+              'scrape_page_images',
               'ha_get_state', 'ha_list_entities', 'ha_get_history', 'ha_get_home_status',
               'list_team', 'get_delegation_result',
               'list_emails', 'read_email', 'search_emails',

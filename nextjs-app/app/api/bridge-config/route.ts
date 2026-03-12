@@ -77,7 +77,11 @@ export async function POST(request: NextRequest) {
 function deepMerge(base: Record<string, unknown>, override: Record<string, unknown>): Record<string, unknown> {
   const result = { ...base };
   for (const key of Object.keys(override)) {
-    if (
+    // null means "delete this key" — prevents stale values from persisting
+    // when the UI clears a field (e.g. switching vision provider to Local)
+    if (override[key] === null) {
+      delete result[key];
+    } else if (
       result[key] &&
       typeof result[key] === 'object' &&
       !Array.isArray(result[key]) &&

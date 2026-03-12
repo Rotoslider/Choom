@@ -276,6 +276,7 @@ function resolveTemplateVars(
 
   for (const [key, value] of Object.entries(args)) {
     if (typeof value === 'string') {
+      // Handle {{step_N.result.field}} — access a specific field
       resolved[key] = value.replace(/\{\{(\w+)\.result\.(\w+)\}\}/g, (_match, stepId, field) => {
         const stepResult = completedSteps.get(stepId);
         if (!stepResult?.result || typeof stepResult.result !== 'object') {
@@ -284,6 +285,22 @@ function resolveTemplateVars(
         const resultObj = stepResult.result as Record<string, unknown>;
         const val = resultObj[field];
         return val !== undefined ? String(val) : `[unresolved: ${stepId}.${field}]`;
+      });
+      // Handle {{step_N.result}} — entire result (no field name)
+      resolved[key] = (resolved[key] as string).replace(/\{\{(\w+)\.result\}\}/g, (_match, stepId) => {
+        const stepResult = completedSteps.get(stepId);
+        if (!stepResult?.result) {
+          return `[unresolved: ${stepId}]`;
+        }
+        const r = stepResult.result;
+        if (typeof r === 'string') return r;
+        // For objects, prefer 'formatted' field (human-readable), then JSON
+        if (typeof r === 'object' && r !== null) {
+          const obj = r as Record<string, unknown>;
+          if (typeof obj.formatted === 'string') return obj.formatted;
+          return JSON.stringify(r);
+        }
+        return String(r);
       });
       // Also handle {{prev.result.field}} as shorthand for the immediately preceding step
       resolved[key] = (resolved[key] as string).replace(/\{\{prev\.result\.(\w+)\}\}/g, (_match, field) => {
@@ -298,6 +315,22 @@ function resolveTemplateVars(
         const resultObj = lastResult.result as Record<string, unknown>;
         const val = resultObj[field];
         return val !== undefined ? String(val) : `[unresolved: prev.${field}]`;
+      });
+      // Handle {{prev.result}} — entire result of preceding step
+      resolved[key] = (resolved[key] as string).replace(/\{\{prev\.result\}\}/g, () => {
+        let lastResult: ToolResult | undefined;
+        for (const [, r] of completedSteps) {
+          lastResult = r;
+        }
+        if (!lastResult?.result) return '[unresolved: prev]';
+        const r = lastResult.result;
+        if (typeof r === 'string') return r;
+        if (typeof r === 'object' && r !== null) {
+          const obj = r as Record<string, unknown>;
+          if (typeof obj.formatted === 'string') return obj.formatted;
+          return JSON.stringify(r);
+        }
+        return String(r);
       });
     } else {
       resolved[key] = value;
