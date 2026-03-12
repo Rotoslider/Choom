@@ -172,6 +172,63 @@ function tryRepairJSON(raw: string | undefined): Record<string, unknown> | null 
   try { return JSON.parse(s); } catch { return null; }
 }
 
+/**
+ * Rescue workspace_write_file tool calls with broken JSON arguments.
+ * Models often fail to properly escape code content in JSON strings, producing
+ * arguments like raw code mixed with partial JSON. This extracts the path and
+ * content from the mangled arguments using regex patterns.
+ */
+function tryRescueWriteFile(raw: string | undefined): Record<string, unknown> | null {
+  if (!raw || raw.length < 10) return null;
+
+  // Strategy 1: Extract path from JSON-like prefix, treat rest as content
+  // Pattern: {"path": "some/file.ext", "content": "...broken code..."
+  const pathMatch = raw.match(/"path"\s*:\s*"([^"]+)"/);
+  if (pathMatch) {
+    const filePath = pathMatch[1];
+    // Find where content value starts
+    const contentKeyMatch = raw.match(/"content"\s*:\s*"/);
+    if (contentKeyMatch && contentKeyMatch.index !== undefined) {
+      const contentStart = contentKeyMatch.index + contentKeyMatch[0].length;
+      // Everything after "content": " is the raw content (may have broken escaping)
+      let content = raw.slice(contentStart);
+      // Strip trailing "} or similar JSON artifacts
+      content = content.replace(/"\s*\}\s*$/, '');
+      // Unescape what we can
+      content = content.replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\"/g, '"');
+      if (content.length > 0) {
+        console.log(`   🔧 Rescued workspace_write_file: path="${filePath}", content=${content.length} chars`);
+        return { path: filePath, content };
+      }
+    }
+  }
+
+  // Strategy 2: Path embedded in raw code dump — find path-like patterns
+  // Model output: raw code... {"path": "file.ext"... (JSON mixed into end)
+  const latePathMatch = raw.match(/\{"path"\s*:\s*"([^"]+)"/);
+  if (latePathMatch && latePathMatch.index !== undefined) {
+    const filePath = latePathMatch[1];
+    // Everything before the JSON is likely the content
+    const content = raw.slice(0, latePathMatch.index);
+    if (content.length > 10) {
+      console.log(`   🔧 Rescued workspace_write_file (late path): path="${filePath}", content=${content.length} chars`);
+      return { path: filePath, content };
+    }
+  }
+
+  // Strategy 3: No JSON structure at all, but we know it's workspace_write_file.
+  // Check if the raw string looks like code with a recognizable file path in the
+  // first or last few lines (models sometimes include the filename as a comment)
+  const firstLine = raw.split('\n')[0] || '';
+  const fileExtMatch = firstLine.match(/(?:\/\/|#|--)\s*(?:File:\s*)?(\S+\.(?:ino|py|ts|js|cpp|c|h|yaml|yml|json|md))/i);
+  if (fileExtMatch) {
+    console.log(`   🔧 Rescued workspace_write_file (comment path): path="${fileExtMatch[1]}", content=${raw.length} chars`);
+    return { path: fileExtMatch[1], content: raw };
+  }
+
+  return null;
+}
+
 // Extract tool calls from the LLM's text when it describes tool actions but doesn't
 // emit structured tool_calls (common with local models that ignore tool_choice=required).
 // Instead of nudging and hoping the model will emit structured calls, we parse what
@@ -3673,6 +3730,14 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                   if (repaired !== null) {
                     toolCalls.push({ id: callId, name: tc.name, arguments: repaired });
                     console.warn(`   🔧 Repaired malformed JSON for ${tc.name}`);
+                  } else if (tc.name === 'workspace_write_file') {
+                    // Special rescue for write_file: models often break JSON when content is large code
+                    const rescued = tryRescueWriteFile(tc.arguments);
+                    if (rescued) {
+                      toolCalls.push({ id: callId, name: tc.name, arguments: rescued });
+                    } else {
+                      console.warn(`   ⚠️  Dropping tool call ${tc.name} — unrecoverable JSON: ${tc.arguments?.slice(0, 100)}`);
+                    }
                   } else {
                     console.warn(`   ⚠️  Dropping tool call ${tc.name} — unrecoverable JSON: ${tc.arguments?.slice(0, 100)}`);
                   }
