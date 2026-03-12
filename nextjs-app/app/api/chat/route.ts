@@ -3587,11 +3587,15 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             });
           }
 
-          // If plan fully succeeded, reduce remaining iterations (just summary/follow-up).
-          // If plan partially failed, keep full iterations so the model can finish remaining work.
-          // Never override a per-project maxIterations setting.
+          // If plan fully succeeded, allow some follow-up iterations for summary, cleanup,
+          // and handling incomplete delegations. Don't cap too aggressively — delegation
+          // results are often partial and the orchestrator needs room to continue work.
+          // Never override a per-project or request-level maxIterations setting.
           if (planFullySucceeded && !projectIterationLimitApplied) {
-            maxIterations = Math.min(maxIterations, 3);
+            const hasDelegations = plan.steps.some(s => s.type === 'delegate');
+            const postPlanCap = hasDelegations ? 15 : 5;
+            maxIterations = Math.min(maxIterations, postPlanCap);
+            console.log(`   📋 Post-plan iteration cap: ${maxIterations} (${hasDelegations ? 'has delegations' : 'no delegations'})`);
           }
 
           // Preserve any pre-loop content (e.g., plan summaries) so the final iteration can prefix it
