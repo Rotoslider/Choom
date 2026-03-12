@@ -132,7 +132,28 @@ import { WORKSPACE_ROOT } from '@/lib/config';
 
 const WORKSPACE_MAX_FILES_PER_SESSION = 50;
 const WORKSPACE_MAX_FILE_SIZE_KB = 1024;
-const WORKSPACE_ALLOWED_EXTENSIONS = ['.md', '.txt', '.json', '.py', '.ts', '.tsx', '.js', '.jsx', '.html', '.css', '.csv', '.sh', '.bash', '.yaml', '.yml', '.xml', '.sql', '.toml', '.ini', '.cfg', '.r', '.R', '.ipynb', '.log', '.ino', '.c', '.cpp', '.h', '.hpp', '.rs', '.go', '.java', '.kt', '.swift', '.rb', '.pl', '.lua', '.m', '.proto', '.cmake', '.makefile', '.dockerfile'];
+const WORKSPACE_ALLOWED_EXTENSIONS = [
+  // Documents & data
+  '.md', '.txt', '.json', '.csv', '.tsv', '.log', '.rst', '.tex', '.bib', '.diff', '.patch',
+  // Web & scripting
+  '.py', '.ts', '.tsx', '.js', '.jsx', '.html', '.css', '.scss', '.sass', '.less', '.graphql', '.gql',
+  // Shell & system
+  '.sh', '.bash', '.ps1', '.bat', '.cmd', '.conf', '.rules', '.service',
+  // Config
+  '.yaml', '.yml', '.xml', '.sql', '.toml', '.ini', '.cfg', '.env.example',
+  // Notebooks
+  '.r', '.R', '.ipynb',
+  // Systems programming
+  '.c', '.cpp', '.h', '.hpp', '.rs', '.go', '.java', '.kt', '.swift', '.rb', '.pl', '.lua', '.m',
+  // Microcontroller & embedded
+  '.ino', '.pde', '.s', '.S', '.asm', '.ld', '.dts', '.dtsi', '.kconfig', '.mk',
+  // FPGA
+  '.v', '.sv', '.tcl',
+  // Build & infra
+  '.proto', '.cmake', '.makefile', '.dockerfile', '.tf', '.hcl',
+  // ROS2
+  '.msg', '.srv', '.action', '.urdf', '.xacro', '.sdf', '.world', '.rviz', '.repos',
+];
 const WORKSPACE_IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp'];
 const WORKSPACE_DOWNLOAD_EXTENSIONS = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.pptx', '.zip', '.tar', '.gz', '.xml', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.log', '.sh', '.bash', '.sql', '.r', '.R', '.ipynb'];
 
