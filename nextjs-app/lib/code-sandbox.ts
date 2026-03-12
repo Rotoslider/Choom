@@ -23,6 +23,33 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_TIMEOUT_MS = 600_000; // 10 min — package installs (PyTorch, CUDA) need time
 const MAX_OUTPUT_BYTES = 50 * 1024; // 50KB
 
+/** Commands that hang or are dangerous in non-interactive sandbox */
+const BLOCKED_COMMAND_PATTERNS = [
+  /\bsudo\b/,           // hangs waiting for password on stdin
+  /\bsu\b\s/,           // switch user — same problem
+  /\bsystemctl\b/,      // needs root, can affect host services
+  /\breboot\b/,
+  /\bshutdown\b/,
+  /\bpoweroff\b/,
+  /\bhalt\b/,
+  /\brm\s+(-[^\s]*)?-rf?\s+\/(?!\w)/,  // rm -rf / (root filesystem)
+  /\bmkfs\b/,           // format filesystem
+  /\bdd\b\s.*of=\/dev/,  // raw disk write
+];
+
+function validateCommand(command: string): void {
+  for (const pattern of BLOCKED_COMMAND_PATTERNS) {
+    if (pattern.test(command)) {
+      throw new Error(
+        `Blocked command: "${command.slice(0, 80)}" — ` +
+        `matched "${pattern.source}". ` +
+        `Commands requiring sudo/root cannot run in the sandbox (they hang waiting for a password). ` +
+        `If this command requires elevated privileges, ask the user to run it manually.`
+      );
+    }
+  }
+}
+
 export class CodeSandbox {
   private workspaceRoot: string;
 
@@ -71,6 +98,7 @@ export class CodeSandbox {
 
   /** Run a shell command in a project folder */
   async runCommand(projectFolder: string, command: string, timeoutMs?: number): Promise<ExecutionResult> {
+    validateCommand(command);
     const projectDir = this.resolveProject(projectFolder);
     const timeout = Math.min(timeoutMs || DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS);
     const start = Date.now();

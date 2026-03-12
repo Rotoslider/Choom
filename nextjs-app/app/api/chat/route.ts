@@ -3253,6 +3253,9 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
       console.log(`   🔄 Fallback models: ${fallbackConfigs.map((f, i) => `#${i + 1} ${f.label}`).join(', ')}`);
     }
 
+    // Save original local endpoint before any fallback can mutate llmSettings
+    const originalLocalEndpoint = llmSettings.endpoint;
+
     // Helper to create an LLM client from a fallback config
     async function createClientForFallback(fb: FallbackConfig): Promise<{ client: { streamChat: LLMClient['streamChat'] }; settings: LLMSettings }> {
       const fbSettings: LLMSettings = { ...llmSettings, model: fb.model };
@@ -3267,8 +3270,9 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           return { client: new LLMClient(fbSettings, provider.apiKey), settings: fbSettings };
         }
       }
-      // Local model fallback
-      fbSettings.endpoint = llmSettings.endpoint;
+      // Local model fallback — use the ORIGINAL local endpoint (not potentially-mutated llmSettings.endpoint)
+      fbSettings.endpoint = originalLocalEndpoint;
+      console.log(`   🔧 Local fallback: endpoint=${originalLocalEndpoint}, model=${fb.model}`);
       return { client: new LLMClient(fbSettings), settings: fbSettings };
     }
 
@@ -3419,9 +3423,21 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
 
                 // Inject plan summary into conversation context so the LLM can reference it
                 const planSummaryText = summarizePlan(plan);
-                const stepSummaries = plan.steps.map(s =>
-                  `- ${s.description}: ${s.status}${s.result?.error ? ` (error: ${s.result.error})` : ''}`
-                ).join('\n');
+                const stepSummaries = plan.steps.map(s => {
+                  let line = `- ${s.description}: ${s.status}`;
+                  if (s.result?.error) line += ` (error: ${s.result.error})`;
+                  // For delegation steps, include the actual response so the LLM
+                  // doesn't need to call get_delegation_result separately
+                  if (s.type === 'delegate' && s.result?.result && typeof s.result.result === 'object') {
+                    const delegResult = s.result.result as Record<string, unknown>;
+                    const response = delegResult.response as string | undefined;
+                    if (response && response.length > 0) {
+                      const truncated = response.length > 1500 ? response.slice(0, 1500) + '...[truncated]' : response;
+                      line += `\n  Response from ${delegResult.choom_name || s.choomName || 'delegate'}:\n  ${truncated}`;
+                    }
+                  }
+                  return line;
+                }).join('\n');
 
                 currentMessages.push({
                   role: 'assistant',
@@ -3530,8 +3546,8 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
 
             const streamPromise = (async () => {
               for await (const chunk of llmClient.streamChat(currentMessages, activeTools, undefined, toolChoiceOverride)) {
+                if (!chunk.choices || !chunk.choices[0]) continue;
                 const choice = chunk.choices[0];
-                if (!choice) continue;
 
                 if (choice.delta.content) {
                   iterationContent += choice.delta.content;
@@ -3554,10 +3570,14 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               const errMsg = timeoutError instanceof Error ? timeoutError.message : String(timeoutError);
               console.warn(`   ⚠️  LLM response error on iteration ${iteration}: ${errMsg}`);
 
-              // Try fallback models if: no content was streamed yet (partial content = can't switch mid-stream)
-              // and we have fallback configs remaining
+              // Try fallback models on timeout/error. Even if partial content was streamed,
+              // a broken response is worse than switching models. Partial text was already
+              // sent to the user; we clear iterationContent and retry with the fallback.
               let fallbackSucceeded = false;
-              if (!iterationContent && fallbackAttempt < fallbackConfigs.length) {
+              if (fallbackAttempt < fallbackConfigs.length) {
+                if (iterationContent) {
+                  console.log(`   ⚠️  ${choomTag} Partial content (${iterationContent.length} chars) streamed before error — clearing for fallback attempt`);
+                }
                 for (let fbIdx = fallbackAttempt; fbIdx < fallbackConfigs.length; fbIdx++) {
                   const fb = fallbackConfigs[fbIdx];
                   console.log(`   🔄 ${choomTag} Trying fallback #${fbIdx + 1}: ${fb.label}`);
@@ -3570,16 +3590,16 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                     toolCallsAccumulator = new Map();
                     finishReason = 'stop';
 
-                    // Fallback timeout: half of primary (min 30s) — fail fast to stay within outer timeouts
-                    const fbTimeoutMs = Math.max(30000, Math.floor(timeoutMs / 2));
+                    // Fallback timeout: 75% of primary (min 60s) — enough time for large models
+                    const fbTimeoutMs = Math.max(60000, Math.floor(timeoutMs * 0.75));
                     const fbTimeoutPromise = new Promise<never>((_, reject) => {
                       setTimeout(() => reject(new Error('LLM response timeout')), fbTimeoutMs);
                     });
                     console.log(`   ⏱️  Fallback timeout: ${fbTimeoutMs / 1000}s (primary was ${timeoutMs / 1000}s)`);
                     const fbStreamPromise = (async () => {
                       for await (const chunk of fbClient.streamChat(currentMessages, activeTools, undefined, toolChoiceOverride)) {
+                        if (!chunk.choices || !chunk.choices[0]) continue;
                         const choice = chunk.choices[0];
-                        if (!choice) continue;
                         if (choice.delta.content) {
                           iterationContent += choice.delta.content;
                           send({ type: 'content', content: choice.delta.content });

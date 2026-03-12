@@ -205,7 +205,10 @@ export class LLMClient {
     }
 
     const data = await response.json();
-    const choice = data.choices[0];
+    const choice = data.choices?.[0];
+    if (!choice) {
+      throw new Error(`LLM returned unexpected response format: ${JSON.stringify(data).slice(0, 200)}`);
+    }
 
     let toolCalls: ToolCall[] | null = null;
     if (choice.message.tool_calls) {

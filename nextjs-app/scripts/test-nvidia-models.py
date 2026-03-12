@@ -237,12 +237,12 @@ def main():
     models = [args.model] if args.model else MODELS
     test_tools = not args.quick
 
-    print(f"\n{'='*80}")
+    print(f"\n{'='*60}")
     print(f"  NVIDIA Build API Model Tester")
     print(f"  Endpoint: {ENDPOINT}")
     print(f"  Models: {len(models)}  |  Timeout: {args.timeout}s  |  Tools: {'yes' if test_tools else 'skip'}")
     print(f"  Key: {api_key[:12]}...{api_key[-4:]}")
-    print(f"{'='*80}\n")
+    print(f"{'='*60}\n")
 
     results = []
     for i, model in enumerate(models, 1):
@@ -257,8 +257,8 @@ def main():
 
         if result["error"]:
             print(f"           └─ {result['error']}")
-        if result["tools"]:
-            print(f"           └─ Tools: {result['tools']}")
+        # if result["tools"]:
+            # print(f"           └─ Tools: {result['tools']}")
 
     # --- Summary ---
     ok = [r for r in results if r["status"] == "ok"]
@@ -266,7 +266,7 @@ def main():
     tools_yes = [r for r in ok if (r.get("tools") or "").startswith("yes")]
     tools_no = [r for r in ok if (r.get("tools") or "").startswith("no")]
 
-    print(f"\n{'='*80}")
+    print(f"\n{'='*60}")
     print(f"  Summary: {len(ok)}/{len(results)} models available")
     if test_tools and ok:
         print(f"  Tool calling: {len(tools_yes)} supported, {len(tools_no)} text-only")
@@ -279,7 +279,7 @@ def main():
         for r in failed:
             short = r["model"].split("/")[-1]
             print(f"    {r['status']:>12}  {short}: {r['error']}")
-    print(f"{'='*80}\n")
+    print(f"{'='*60}\n")
 
 
 if __name__ == "__main__":

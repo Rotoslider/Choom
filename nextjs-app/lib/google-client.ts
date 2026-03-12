@@ -130,11 +130,14 @@ class GoogleClient {
 
   private async apiFetch(url: string, options: RequestInit = {}): Promise<Response> {
     const token = await this.getAccessToken();
-    const headers = {
+    const headers: Record<string, string> = {
       Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-      ...options.headers,
+      ...(options.headers as Record<string, string>),
     };
+    // Only add Content-Type for requests with a body (POST/PUT/PATCH)
+    if (options.body) {
+      headers['Content-Type'] = headers['Content-Type'] || 'application/json';
+    }
 
     let res = await fetch(url, { ...options, headers });
 
@@ -142,11 +145,13 @@ class GoogleClient {
     if (res.status === 401) {
       console.log('   🔑 Google API 401 — refreshing token and retrying');
       await this.refreshAccessToken();
-      const retryHeaders = {
+      const retryHeaders: Record<string, string> = {
         Authorization: `Bearer ${this.accessToken}`,
-        'Content-Type': 'application/json',
-        ...options.headers,
+        ...(options.headers as Record<string, string>),
       };
+      if (options.body) {
+        retryHeaders['Content-Type'] = retryHeaders['Content-Type'] || 'application/json';
+      }
       res = await fetch(url, { ...options, headers: retryHeaders });
     }
 
