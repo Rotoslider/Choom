@@ -176,10 +176,19 @@ export class AnthropicClient {
       model: this.settings.model,
       messages: anthropicMessages,
       max_tokens: this.settings.maxTokens || 4096,
-      temperature: this.settings.temperature,
-      top_p: this.settings.topP,
       stream: true,
     };
+
+    // Anthropic does NOT allow both temperature and top_p simultaneously.
+    // Only include temperature (Anthropic's preferred default). Skip top_p
+    // unless temperature is absent AND top_p is explicitly set.
+    if (this.settings.temperature !== undefined && this.settings.temperature !== null) {
+      body.temperature = this.settings.temperature;
+    } else if (this.settings.topP !== undefined && this.settings.topP !== null) {
+      body.top_p = this.settings.topP;
+    } else {
+      body.temperature = 0.7;
+    }
 
     if (system) {
       body.system = system;
@@ -316,10 +325,19 @@ export class AnthropicClient {
       model: this.settings.model,
       messages: anthropicMessages,
       max_tokens: this.settings.maxTokens || 4096,
-      temperature: this.settings.temperature,
-      top_p: this.settings.topP,
       stream: false,
     };
+
+    // Anthropic does NOT allow both temperature and top_p simultaneously.
+    // Only include temperature (Anthropic's preferred default). Skip top_p
+    // unless temperature is absent AND top_p is explicitly set.
+    if (this.settings.temperature !== undefined && this.settings.temperature !== null) {
+      body.temperature = this.settings.temperature;
+    } else if (this.settings.topP !== undefined && this.settings.topP !== null) {
+      body.top_p = this.settings.topP;
+    } else {
+      body.temperature = 0.7;
+    }
 
     if (system) {
       body.system = system;
