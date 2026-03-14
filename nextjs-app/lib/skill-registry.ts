@@ -435,7 +435,7 @@ export class SkillRegistry {
         [/\b(image|picture|photo|selfie|portrait|draw|generate)\b/i, ['image-generation']],
         [/\b(search|look up|find out|google)\b/i, ['web-searching']],
         [/\b(weather|temperature|forecast|rain|wind|humid)\b/i, ['weather-forecasting']],
-        [/\b(calendar|schedule|meeting|appointment|event)\b/i, ['google-calendar']],
+        [/\b(calendar|(?:my |the |check |what'?s (?:on )?(?:my )?)schedule|(?:book|cancel|reschedule) (?:a |an |the )?(?:meeting|appointment))\b/i, ['google-calendar']],
         [/\b(task|todo|list|groceries|shopping)\b/i, ['google-tasks']],
         [/\b(spreadsheet|sheet|budget|tracker|csv)\b/i, ['google-sheets']],
         [/\b(document|doc|report|letter|write)\b/i, ['google-docs']],
