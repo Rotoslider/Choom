@@ -20,9 +20,11 @@ PROJECT_NAME = "YouTube_Music"
 PROJECT_DIR = os.path.join(WORKSPACE_ROOT, PROJECT_NAME)
 
 YT_DLP_BIN = "/usr/bin/yt-dlp"
+YT_DLP_COOKIES = os.path.join(os.path.dirname(__file__), "youtube-cookies.txt")
 YT_DLP_EXTRA_ARGS = [
     "--js-runtimes", "node",
     "--remote-components", "ejs:github",
+    *(["--cookies", YT_DLP_COOKIES] if os.path.exists(YT_DLP_COOKIES) else []),
 ]
 
 
@@ -151,8 +153,10 @@ class YouTubeDownloader:
             logger.error(f"yt-dlp list error for {url}: {e}")
             return []
 
-    def get_video_metadata(self, video_id: str) -> Optional[Dict[str, Any]]:
-        """Fetch full metadata for a video via yt-dlp --dump-json."""
+    def get_video_metadata(self, video_id: str, retries: int = 2) -> Optional[Dict[str, Any]]:
+        """Fetch full metadata for a video via yt-dlp --dump-json.
+        Retries with exponential backoff to handle transient YouTube blocks.
+        """
         cmd = [
             YT_DLP_BIN,
             *YT_DLP_EXTRA_ARGS,
@@ -161,17 +165,27 @@ class YouTubeDownloader:
             "--no-warnings",
             f"https://www.youtube.com/watch?v={video_id}",
         ]
-        try:
-            result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=60
-            )
-            if result.returncode != 0:
-                logger.error(f"yt-dlp metadata failed for {video_id}: {result.stderr[:300]}")
-                return None
-            return json.loads(result.stdout)
-        except Exception as e:
-            logger.error(f"yt-dlp metadata error for {video_id}: {e}")
-            return None
+        last_err = ""
+        for attempt in range(1 + retries):
+            try:
+                if attempt > 0:
+                    delay = 5 * (2 ** (attempt - 1))  # 5s, 10s
+                    logger.info(f"  Retry {attempt}/{retries} for {video_id} metadata (waiting {delay}s)")
+                    import time
+                    time.sleep(delay)
+                result = subprocess.run(
+                    cmd, capture_output=True, text=True, timeout=60
+                )
+                if result.returncode != 0:
+                    last_err = result.stderr[:300]
+                    logger.warning(f"yt-dlp metadata attempt {attempt + 1} failed for {video_id}: {last_err}")
+                    continue
+                return json.loads(result.stdout)
+            except Exception as e:
+                last_err = str(e)
+                logger.warning(f"yt-dlp metadata attempt {attempt + 1} error for {video_id}: {e}")
+        logger.error(f"yt-dlp metadata failed after {1 + retries} attempts for {video_id}: {last_err}")
+        return None
 
     def download_as_mp3(self, video_id: str, output_dir: str) -> Optional[str]:
         """Download a video as high-quality MP3 with thumbnail.
@@ -181,7 +195,7 @@ class YouTubeDownloader:
         cmd = [
             YT_DLP_BIN,
             *YT_DLP_EXTRA_ARGS,
-            "--format", "bestaudio*/bestaudio/best",
+            "--format", "bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio",
             "-x",
             "--audio-format", "mp3",
             "--audio-quality", "0",
@@ -194,7 +208,7 @@ class YouTubeDownloader:
         ]
         try:
             result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=300
+                cmd, capture_output=True, text=True, timeout=600
             )
             if result.returncode != 0:
                 logger.error(f"yt-dlp download failed for {video_id}: {result.stderr[:500]}")
@@ -239,13 +253,14 @@ class YouTubeDownloader:
                 ID3, TIT2, TPE1, TALB, TCON, TDRC, APIC, COMM, ID3NoHeaderError
             )
 
-            # Load or create ID3 tags
+            # Load or create ID3 tags — use ID3=None to skip header parsing
+            # on files without an existing ID3 header (avoids ID3NoHeaderError)
             try:
                 audio = MP3(mp3_path)
                 if audio.tags is None:
                     audio.add_tags()
             except ID3NoHeaderError:
-                audio = MP3(mp3_path)
+                audio = MP3(mp3_path, ID3=None)
                 audio.add_tags()
 
             tags = audio.tags
@@ -358,6 +373,7 @@ class YouTubeDownloader:
 
         downloaded_count = 0
         consecutive_meta_failures = 0
+        videos_processed = 0
         for video in videos:
             vid_id = video["id"]
 
@@ -367,6 +383,12 @@ class YouTubeDownloader:
 
             if downloaded_count >= max_videos:
                 break
+
+            # Delay between videos to avoid YouTube rate-limiting
+            if videos_processed > 0:
+                import time
+                time.sleep(3)
+            videos_processed += 1
 
             logger.info(f"  Downloading: {video['title']} ({vid_id})")
 

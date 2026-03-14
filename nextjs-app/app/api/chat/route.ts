@@ -3612,6 +3612,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
 
           // Preserve any pre-loop content (e.g., plan summaries) so the final iteration can prefix it
           const preLoopContent = fullContent;
+          let fallbackActivated = false; // Set when a fallback model takes over mid-request
 
           while (iteration < maxIterations) {
             iteration++;
@@ -3726,7 +3727,12 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                     llmSettings.model = fbSettings.model;
                     llmSettings.endpoint = fbSettings.endpoint;
                     fallbackSucceeded = true;
+                    fallbackActivated = true;
                     fallbackAttempt = fbIdx + 1;
+                    // Allow nudge logic on the next iteration even if tools were already called,
+                    // since the fallback model hasn't had a chance to call tools yet and may
+                    // narrate instead of acting on its first try.
+                    nudgeCount = 0;
                     console.log(`   ✅ ${choomTag} Fallback #${fbIdx + 1} succeeded: ${fb.label} (model=${fbSettings.model})`);
                     break;
                   } catch (fbError) {
@@ -3800,7 +3806,9 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             // Still no tool calls after extraction — check if we should nudge or stop
             if (toolCalls.length === 0) {
               // If tools were already called this request, accept text as final response
-              if (allToolCalls.length > 0) {
+              // BUT: after a fallback switch the new model may narrate on its first try —
+              // allow the nudge logic below to fire if nudgeCount was reset by fallback.
+              if (allToolCalls.length > 0 && !(fallbackActivated && nudgeCount === 0)) {
                 fullContent = preLoopContent
                   ? preLoopContent + '\n\n' + iterationContent
                   : iterationContent;
@@ -3845,7 +3853,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 if (/(?:email|gmail|inbox|message)/i.test(lowerContent)) {
                   toolHints.push('for email use list_emails, read_email, or send_email');
                 }
-                if (/(?:calendar|schedule|event|appointment)/i.test(lowerContent)) {
+                if (/(?:calendar|check (?:my |the )?schedule|book (?:a |an )?(?:meeting|appointment))/i.test(lowerContent)) {
                   toolHints.push('for calendar use get_calendar_events');
                 }
                 if (/(?:delegat|ask|forward|pass.*to)/i.test(lowerContent)) {
