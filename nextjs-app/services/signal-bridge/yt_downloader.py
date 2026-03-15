@@ -171,7 +171,6 @@ class YouTubeDownloader:
                 if attempt > 0:
                     delay = 5 * (2 ** (attempt - 1))  # 5s, 10s
                     logger.info(f"  Retry {attempt}/{retries} for {video_id} metadata (waiting {delay}s)")
-                    import time
                     time.sleep(delay)
                 result = subprocess.run(
                     cmd, capture_output=True, text=True, timeout=60
@@ -386,7 +385,6 @@ class YouTubeDownloader:
 
             # Delay between videos to avoid YouTube rate-limiting
             if videos_processed > 0:
-                import time
                 time.sleep(3)
             videos_processed += 1
 

@@ -3604,10 +3604,10 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           // and handling incomplete delegations. Don't cap too aggressively — delegation
           // results are often partial and the orchestrator needs room to continue work.
           // Never override a per-project or request-level maxIterations setting.
-          if (planFullySucceeded && !projectIterationLimitApplied) {
-            const postPlanCap = planHadDelegations ? 15 : 5;
+          if (planFullySucceeded && !projectIterationLimitApplied && !maxIterationsOverride) {
+            const postPlanCap = 15;
             maxIterations = Math.min(maxIterations, postPlanCap);
-            console.log(`   📋 Post-plan iteration cap: ${maxIterations} (${planHadDelegations ? 'has delegations' : 'no delegations'})`);
+            console.log(`   📋 Post-plan iteration cap: ${maxIterations}`);
           }
 
           // Preserve any pre-loop content (e.g., plan summaries) so the final iteration can prefix it
