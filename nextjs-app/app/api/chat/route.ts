@@ -3236,8 +3236,8 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           }
         }
 
-        if (mentionsImages && imagePaths.length > 0) {
-          // Image-specific: inject image paths with analyze_image instructions
+        if (mentionsImages && mentionsReview && imagePaths.length > 0) {
+          // Image-specific: inject image paths with analyze_image instructions (only when user asks to review/analyze)
           const fileList = imagePaths.map(p => `- ${p}`).join('\n');
           enrichedMessage = `${enrichedMessage}\n\n[System: Found ${imagePaths.length} image(s) in ${detectedProject ? `project "${detectedProject.folder}"` : 'workspace'}:\n${fileList}\nUse the analyze_image tool with image_path for each image listed above.]`;
           console.log(`   🖼️  Pre-injected ${imagePaths.length} workspace image paths into message${detectedProject ? ` (scoped to ${detectedProject.folder})` : ''}`);
