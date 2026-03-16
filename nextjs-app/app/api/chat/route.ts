@@ -3336,10 +3336,10 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
       console.log(`   🔄 Fallback models: ${fallbackConfigs.map((f, i) => `#${i + 1} ${f.label}`).join(', ')}`);
     }
 
-    // The actual local LM Studio endpoint — from settings panel or code defaults,
-    // BEFORE any provider (NVIDIA, Anthropic, etc.) overwrites llmSettings.endpoint.
-    const localLMStudioEndpoint = (clientLLMSettings as Record<string, unknown>)?.endpoint as string
-      || defaultLLMSettings.endpoint;
+    // The actual local LM Studio endpoint — always from env/code defaults.
+    // clientLLMSettings.endpoint can be overwritten to NVIDIA/cloud by Choom or global
+    // provider settings, so it's NOT reliable for "local" fallbacks.
+    const localLMStudioEndpoint = defaultLLMSettings.endpoint;
 
     // Helper to create an LLM client from a fallback config
     async function createClientForFallback(fb: FallbackConfig): Promise<{ client: { streamChat: LLMClient['streamChat'] }; settings: LLMSettings }> {
