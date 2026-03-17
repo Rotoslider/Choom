@@ -3788,6 +3788,19 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               }
             }
 
+            // Drop tool calls with empty/invalid names — weak models sometimes emit these,
+            // causing 400 errors from the API on the next iteration
+            if (toolCalls.length > 0) {
+              const validToolCalls = toolCalls.filter(tc => {
+                if (!tc.name || !/^[a-zA-Z0-9_-]+$/.test(tc.name)) {
+                  console.warn(`   ⚠️  Dropping tool call with invalid name: "${tc.name || '(empty)'}"`);
+                  return false;
+                }
+                return true;
+              });
+              toolCalls = validToolCalls;
+            }
+
             // Text extraction and nudging: ONLY when no tools have been called yet.
             // Once any tool succeeds, the model's next text response is the final answer.
             // This prevents loops where confirmations ("I've saved that") get misread
