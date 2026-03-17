@@ -396,7 +396,7 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
       });
 
       const resultPayload: Record<string, unknown> = {
-        success: true,
+        success: !incomplete,
         delegation_id: delegationId,
         choom_name: targetChoom.name,
         response: effectiveResponse,
