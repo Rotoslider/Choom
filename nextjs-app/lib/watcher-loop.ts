@@ -73,6 +73,16 @@ export class WatcherLoop {
           };
         }
 
+        // Incomplete delegations should skip, not retry — retrying with the same
+        // iteration cap will produce the same result. The orchestrator can use
+        // continue_delegation_id to resume if needed.
+        if (resultObj.incomplete === true) {
+          return {
+            action: 'skip',
+            reason: `Delegation incomplete: ${resultObj.message || 'ran out of iterations'}`,
+          };
+        }
+
         // Treat as retryable error
         const msg = (resultObj.message || resultObj.error || '') as string;
         return {

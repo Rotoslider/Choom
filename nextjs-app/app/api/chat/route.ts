@@ -3423,7 +3423,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
         // Delegation mode: cap iterations AFTER project limit to prevent sub-tasks
         // from running unbounded. This must come last to always win.
         if (isDelegation) {
-          maxIterations = Math.min(maxIterations, 12);
+          maxIterations = Math.min(maxIterations, 25);
           projectIterationLimitApplied = true; // Prevent mid-loop project detection from overriding
           console.log(`   🔒 [${choom.name}] Delegation mode: maxIterations capped at ${maxIterations}`);
         }
