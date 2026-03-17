@@ -32,7 +32,25 @@ export class WorkspaceService {
    */
   resolveSafe(relativePath: string): string {
     // Decode URL-encoded characters (LLMs sometimes encode spaces as %20)
-    let cleaned = decodeURIComponent(relativePath);
+    let cleaned: string;
+    try {
+      cleaned = decodeURIComponent(relativePath);
+    } catch {
+      // Invalid percent-encoding (e.g., "file%_name") — strip malformed % sequences
+      cleaned = relativePath.replace(/%(?![0-9A-Fa-f]{2})/g, '');
+    }
+
+    // Strip characters that are never valid in file paths.
+    // Allow: alphanumeric, hyphen, underscore, dot, forward slash, space, parentheses
+    const sanitized = cleaned.replace(/[^a-zA-Z0-9\-_./\s()]/g, '');
+    if (sanitized !== cleaned) {
+      console.warn(`   ⚠️ Path sanitized: "${relativePath}" → "${sanitized}"`);
+      cleaned = sanitized;
+    }
+
+    // Collapse multiple consecutive slashes or spaces, trim spaces around slashes
+    cleaned = cleaned.replace(/\/{2,}/g, '/').replace(/\s*\/\s*/g, '/').replace(/\s{2,}/g, '_');
+
     // Strip leading slashes to prevent absolute path injection
     cleaned = cleaned.replace(/^[/\\]+/, '');
 

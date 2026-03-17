@@ -42,6 +42,24 @@ export default class WorkspaceFilesHandler extends BaseSkillHandler {
     }
   }
 
+  /**
+   * Sanitize a file path from LLM output.
+   * Weak models sometimes hallucinate characters like %, {, }, etc.
+   * Instead of erroring, clean the path so the operation succeeds.
+   */
+  private sanitizePath(filePath: string): string {
+    // Strip characters that are never valid in file paths
+    let cleaned = filePath.replace(/[{}%<>|*?"\\;=+~`!@#$^&:]/g, '');
+    // Collapse multiple spaces into underscore, trim
+    cleaned = cleaned.replace(/\s{2,}/g, '_').trim();
+    // Collapse multiple slashes
+    cleaned = cleaned.replace(/\/{2,}/g, '/');
+    if (cleaned !== filePath) {
+      console.warn(`   ⚠️ Path auto-sanitized: "${filePath}" → "${cleaned}"`);
+    }
+    return cleaned;
+  }
+
   private async writeFile(toolCall: ToolCall, ctx: SkillHandlerContext): Promise<ToolResult> {
     try {
       const { sessionFileCount } = ctx;
@@ -60,15 +78,19 @@ export default class WorkspaceFilesHandler extends BaseSkillHandler {
         return this.error(toolCall, 'path is required. Provide a relative file path (e.g., "my_project/file.md")');
       }
 
+      // Auto-sanitize garbled paths from weak models (e.g., "home %_assistant/good_m}orning.yaml")
+      const sanitizedPath = this.sanitizePath(filePath);
+
       const ws = new WorkspaceService(WORKSPACE_ROOT, WORKSPACE_MAX_FILE_SIZE_KB, WORKSPACE_ALLOWED_EXTENSIONS);
-      const result = await ws.writeFile(filePath, content);
+      const result = await ws.writeFile(sanitizedPath, content);
 
       sessionFileCount.created++;
 
-      ctx.send({ type: 'file_created', path: filePath });
+      ctx.send({ type: 'file_created', path: sanitizedPath });
 
-      console.log(`   📝 Workspace write: ${filePath}`);
-      return this.success(toolCall, { success: true, message: result });
+      const pathNote = sanitizedPath !== filePath ? ` (path corrected from "${filePath}" to "${sanitizedPath}")` : '';
+      console.log(`   📝 Workspace write: ${sanitizedPath}${pathNote}`);
+      return this.success(toolCall, { success: true, message: result + pathNote });
     } catch (err) {
       console.error('   ❌ Workspace write error:', err instanceof Error ? err.message : err);
       return this.error(toolCall, `Failed to write file: ${err instanceof Error ? err.message : 'Unknown error'}`);
@@ -77,7 +99,7 @@ export default class WorkspaceFilesHandler extends BaseSkillHandler {
 
   private async readFile(toolCall: ToolCall): Promise<ToolResult> {
     try {
-      const filePath = toolCall.arguments.path as string;
+      const filePath = this.sanitizePath((toolCall.arguments.path || toolCall.arguments.file_path || toolCall.arguments.filename) as string || '');
 
       const ws = new WorkspaceService(WORKSPACE_ROOT, WORKSPACE_MAX_FILE_SIZE_KB, WORKSPACE_ALLOWED_EXTENSIONS);
       const content = await ws.readFile(filePath);
@@ -92,7 +114,7 @@ export default class WorkspaceFilesHandler extends BaseSkillHandler {
 
   private async listFiles(toolCall: ToolCall): Promise<ToolResult> {
     try {
-      const dirPath = (toolCall.arguments.path as string) || '';
+      const dirPath = this.sanitizePath((toolCall.arguments.path as string) || '');
 
       const ws = new WorkspaceService(WORKSPACE_ROOT, WORKSPACE_MAX_FILE_SIZE_KB, WORKSPACE_ALLOWED_EXTENSIONS);
       const entries = await ws.listFiles(dirPath);
@@ -125,10 +147,11 @@ export default class WorkspaceFilesHandler extends BaseSkillHandler {
       }
 
       // Accept common aliases: path, folder, name, project_name, folder_name
-      const folderPath = (toolCall.arguments.path || toolCall.arguments.folder || toolCall.arguments.name || toolCall.arguments.project_name || toolCall.arguments.folder_name) as string;
-      if (!folderPath) {
+      const rawPath = (toolCall.arguments.path || toolCall.arguments.folder || toolCall.arguments.name || toolCall.arguments.project_name || toolCall.arguments.folder_name) as string;
+      if (!rawPath) {
         return this.error(toolCall, 'path is required. Provide a relative folder path (e.g., "my_project")');
       }
+      const folderPath = this.sanitizePath(rawPath);
 
       const ws = new WorkspaceService(WORKSPACE_ROOT, WORKSPACE_MAX_FILE_SIZE_KB, WORKSPACE_ALLOWED_EXTENSIONS);
       const result = await ws.createFolder(folderPath);
@@ -152,13 +175,14 @@ export default class WorkspaceFilesHandler extends BaseSkillHandler {
         return this.error(toolCall, `Session file creation limit reached.`);
       }
 
-      const name = (toolCall.arguments.name || toolCall.arguments.project_name) as string;
+      const rawName = (toolCall.arguments.name || toolCall.arguments.project_name) as string;
       const description = (toolCall.arguments.description || '') as string;
       const assignedChoom = (toolCall.arguments.assigned_choom || (ctx.choom as Record<string, unknown>).name || '') as string;
 
-      if (!name) {
+      if (!rawName) {
         return this.error(toolCall, 'name is required. Provide a snake_case project name (e.g., "my_project")');
       }
+      const name = this.sanitizePath(rawName);
 
       const projectService = new ProjectService(WORKSPACE_ROOT);
       const project = await projectService.createProject(name, {
@@ -186,7 +210,7 @@ export default class WorkspaceFilesHandler extends BaseSkillHandler {
 
   private async deleteFile(toolCall: ToolCall): Promise<ToolResult> {
     try {
-      const filePath = toolCall.arguments.path as string;
+      const filePath = this.sanitizePath((toolCall.arguments.path as string) || '');
 
       const ws = new WorkspaceService(WORKSPACE_ROOT, WORKSPACE_MAX_FILE_SIZE_KB, WORKSPACE_ALLOWED_EXTENSIONS);
       await ws.deleteFile(filePath);
