@@ -158,7 +158,7 @@ const WORKSPACE_IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.
 const WORKSPACE_DOWNLOAD_EXTENSIONS = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.pptx', '.zip', '.tar', '.gz', '.xml', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.log', '.sh', '.bash', '.sql', '.r', '.R', '.ipynb'];
 
 // Maximum agentic loop iterations
-const MAX_ITERATIONS = 25;
+const MAX_ITERATIONS = 100;
 
 // Global lock for image generation to prevent checkpoint race conditions
 // when multiple requests try to switch checkpoints simultaneously
@@ -3576,8 +3576,8 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           const toolFailureCounts = new Map<string, number>(); // Per-tool name failure counter
           let consecutiveFailures = 0; // Abort after MAX_CONSECUTIVE_FAILURES
           const MAX_CONSECUTIVE_FAILURES = 6;
-          const MAX_CALLS_PER_TOOL = 10; // Max times any single tool can be called per request
-          const MAX_CALLS_PER_READONLY_TOOL = 25; // Higher limit for read-only (PARALLEL_SAFE) tools
+          const MAX_CALLS_PER_TOOL = 25; // Max times any single mutating tool can be called per request
+          const MAX_CALLS_PER_READONLY_TOOL = 50; // Higher limit for read-only (PARALLEL_SAFE) tools
           const MAX_FAILURES_PER_TOOL = 2; // Block tool after this many failures (any error)
           const choomTag = `[${choom.name}]`;
           console.log(`   🛠️  ${choomTag} Tools available: ${activeTools.length} (${activeTools.map(t => t.name).join(', ')})${skillDispatch ? ' [skill dispatch]' : ''}`);
