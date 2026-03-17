@@ -3352,9 +3352,9 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             // Reset sampling params to Anthropic defaults — don't inherit
             // the primary local model's topP/topK which cause API errors
             fbSettings.temperature = 0.7;
-            delete (fbSettings as Record<string, unknown>).topP;
-            delete (fbSettings as Record<string, unknown>).topK;
-            delete (fbSettings as Record<string, unknown>).repetitionPenalty;
+            delete (fbSettings as any).topP;
+            delete (fbSettings as any).topK;
+            delete (fbSettings as any).repetitionPenalty;
             const { AnthropicClient } = await import('@/lib/anthropic-client');
             return { client: new AnthropicClient(fbSettings, provider.apiKey, provider.endpoint), settings: fbSettings };
           }

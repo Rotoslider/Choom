@@ -19,7 +19,7 @@ export async function GET(
     }
 
     // Parse data URI: data:<mime>;base64,<data>
-    const match = image.imageUrl.match(/^data:([^;]+);base64,(.+)$/s);
+    const match = image.imageUrl.match(/^data:([^;]+);base64,([\s\S]+)$/);
     if (!match) {
       // Not a data URI — redirect to the URL directly
       return NextResponse.redirect(image.imageUrl);
