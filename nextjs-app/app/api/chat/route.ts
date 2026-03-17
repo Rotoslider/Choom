@@ -3725,6 +3725,16 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                     llmClient = fbClient;
                     llmSettings.model = fbSettings.model;
                     llmSettings.endpoint = fbSettings.endpoint;
+
+                    // Chinese-origin models (DeepSeek, GLM, Baichuan, Qwen) sometimes
+                    // respond in Chinese. Inject a language enforcement reminder.
+                    const modelLower = (fbSettings.model || '').toLowerCase();
+                    if (/deepseek|glm|baichuan|qwen|chatglm/.test(modelLower)) {
+                      currentMessages.push({
+                        role: 'system',
+                        content: '[IMPORTANT] You MUST respond in English only. Do not use Chinese or any other language.',
+                      });
+                    }
                     fallbackSucceeded = true;
                     fallbackActivated = true;
                     fallbackAttempt = fbIdx + 1;
