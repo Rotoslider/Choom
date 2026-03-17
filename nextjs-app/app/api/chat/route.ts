@@ -3025,7 +3025,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
     let choomMaxIterations = 0; // 0 = use default
     const maxIterMatch = (choom.systemPrompt || '').match(/<!--\s*max_iterations:\s*(\d+)\s*-->/);
     if (maxIterMatch) {
-      choomMaxIterations = Math.min(25, Math.max(3, parseInt(maxIterMatch[1])));
+      choomMaxIterations = Math.max(3, parseInt(maxIterMatch[1]));
     }
 
     // All tools are always available. slimToolDefinition() in llm-client.ts
