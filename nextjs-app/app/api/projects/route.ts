@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { stat } from 'fs/promises';
+import path from 'path';
 import { ProjectService } from '@/lib/project-service';
 import { WORKSPACE_ROOT } from '@/lib/config';
 
@@ -68,15 +70,24 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
-    const service = new ProjectService(WORKSPACE_ROOT);
-    const existing = await service.getProject(folder);
-    if (!existing) {
+    // Quick existence check without expensive recursive file scan
+    const folderPath = path.join(WORKSPACE_ROOT, decodeURIComponent(folder));
+    try {
+      const stats = await stat(folderPath);
+      if (!stats.isDirectory()) {
+        return NextResponse.json(
+          { success: false, error: `Project "${folder}" not found` },
+          { status: 404 }
+        );
+      }
+    } catch {
       return NextResponse.json(
         { success: false, error: `Project "${folder}" not found` },
         { status: 404 }
       );
     }
 
+    const service = new ProjectService(WORKSPACE_ROOT);
     const metadata = await service.updateProjectMetadata(folder, updates);
     return NextResponse.json({ success: true, metadata });
   } catch (error) {
@@ -100,15 +111,24 @@ export async function DELETE(request: NextRequest) {
       );
     }
 
-    const service = new ProjectService(WORKSPACE_ROOT);
-    const existing = await service.getProject(folder);
-    if (!existing) {
+    // Quick existence check without expensive recursive file scan
+    const delFolderPath = path.join(WORKSPACE_ROOT, decodeURIComponent(folder));
+    try {
+      const delStats = await stat(delFolderPath);
+      if (!delStats.isDirectory()) {
+        return NextResponse.json(
+          { success: false, error: `Project "${folder}" not found` },
+          { status: 404 }
+        );
+      }
+    } catch {
       return NextResponse.json(
         { success: false, error: `Project "${folder}" not found` },
         { status: 404 }
       );
     }
 
+    const service = new ProjectService(WORKSPACE_ROOT);
     await service.deleteProject(folder);
     return NextResponse.json({ success: true, message: `Project "${folder}" deleted` });
   } catch (error) {
