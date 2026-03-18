@@ -225,7 +225,16 @@ export class ProjectService {
     }
   }
 
-  /** Count files and total size in a folder (non-recursive, top-level only) */
+  /** Directories to skip during recursive file counting (heavy/generated content) */
+  private static SKIP_DIRS = new Set([
+    'node_modules', 'venv', '.venv', 'env', '.env', '__pycache__',
+    '.git', '.svn', '.hg', 'dist', 'build', '.next', '.cache',
+    '.tox', '.mypy_cache', '.pytest_cache', 'eggs', '*.egg-info',
+    'bower_components', 'vendor', '.gradle', 'target',
+    'site-packages', 'lib', 'lib64',
+  ]);
+
+  /** Count files and total size in a folder, skipping heavy generated directories */
   private async getFolderStats(folderPath: string): Promise<{ fileCount: number; totalSize: number }> {
     let fileCount = 0;
     let totalSize = 0;
@@ -240,7 +249,8 @@ export class ProjectService {
             totalSize += stats.size;
           } catch { /* skip unreadable files */ }
         } else if (entry.isDirectory()) {
-          // Recursively count subdirectory contents
+          // Skip known heavy/generated directories
+          if (ProjectService.SKIP_DIRS.has(entry.name)) continue;
           const sub = await this.getFolderStats(path.join(folderPath, entry.name));
           fileCount += sub.fileCount;
           totalSize += sub.totalSize;

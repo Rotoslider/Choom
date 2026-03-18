@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { FolderOpen, Plus, RefreshCw, ChevronDown, ChevronRight, Trash2 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -66,6 +66,9 @@ export function ProjectsSettings() {
   const [creating, setCreating] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+  // Local state for text inputs to avoid API calls on every keystroke
+  const [localDescriptions, setLocalDescriptions] = useState<Record<string, string>>({});
+  const [localMaxIter, setLocalMaxIter] = useState<Record<string, string>>({});
 
   const fetchProjects = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -87,9 +90,9 @@ export function ProjectsSettings() {
     fetchProjects();
   }, [fetchProjects]);
 
-  // Auto-refresh every 15s to pick up workspace activity
+  // Auto-refresh every 60s to pick up workspace activity (was 15s — too aggressive with recursive scan)
   useEffect(() => {
-    const interval = setInterval(() => fetchProjects(true), 15000);
+    const interval = setInterval(() => fetchProjects(true), 60000);
     return () => clearInterval(interval);
   }, [fetchProjects]);
 
@@ -135,6 +138,9 @@ export function ProjectsSettings() {
     }
   };
 
+  // Debounce timer for text/number input saves
+  const debounceTimers = useRef<Record<string, NodeJS.Timeout>>({});
+
   const updateProject = async (folder: string, updates: Partial<ProjectMetadata>) => {
     try {
       await fetch('/api/projects', {
@@ -142,11 +148,26 @@ export function ProjectsSettings() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ folder, ...updates }),
       });
-      await fetchProjects();
+      // Don't re-fetch all projects for metadata-only changes — just update local state
+      setProjects(prev => prev.map(p =>
+        p.folder === folder
+          ? { ...p, metadata: { ...p.metadata, ...updates, lastModified: new Date().toISOString() } }
+          : p
+      ));
     } catch (error) {
       console.error('Failed to update project:', error);
     }
   };
+
+  /** Debounced update — saves after 800ms of inactivity */
+  const debouncedUpdateProject = useCallback((folder: string, updates: Partial<ProjectMetadata>) => {
+    const key = `${folder}-${Object.keys(updates).join(',')}`;
+    if (debounceTimers.current[key]) clearTimeout(debounceTimers.current[key]);
+    debounceTimers.current[key] = setTimeout(() => {
+      updateProject(folder, updates);
+      delete debounceTimers.current[key];
+    }, 800);
+  }, []);
 
   return (
     <div className="space-y-6">
@@ -294,10 +315,11 @@ export function ProjectsSettings() {
                       <div className="space-y-2">
                         <label className="text-xs font-medium">Description</label>
                         <Textarea
-                          value={project.metadata.description || ''}
-                          onChange={(e) =>
-                            updateProject(project.folder, { description: e.target.value })
-                          }
+                          value={localDescriptions[project.folder] ?? project.metadata.description ?? ''}
+                          onChange={(e) => {
+                            setLocalDescriptions(prev => ({ ...prev, [project.folder]: e.target.value }));
+                            debouncedUpdateProject(project.folder, { description: e.target.value });
+                          }}
                           placeholder="Project description..."
                           rows={2}
                           className="text-sm"
@@ -329,18 +351,19 @@ export function ProjectsSettings() {
                           <Input
                             type="number"
                             min={0}
-                            max={100}
-                            value={project.metadata.maxIterations || ''}
-                            onChange={(e) =>
-                              updateProject(project.folder, {
+                            max={500}
+                            value={localMaxIter[project.folder] ?? (project.metadata.maxIterations || '')}
+                            onChange={(e) => {
+                              setLocalMaxIter(prev => ({ ...prev, [project.folder]: e.target.value }));
+                              debouncedUpdateProject(project.folder, {
                                 maxIterations: e.target.value ? parseInt(e.target.value) : undefined,
-                              })
-                            }
-                            placeholder="Default (15)"
+                              });
+                            }}
+                            placeholder="Global default (100)"
                             className="text-sm"
                           />
                           <p className="text-xs text-muted-foreground">
-                            0 or empty = use global default (15)
+                            0 or empty = use global default (100). Choom system prompt can also set this.
                           </p>
                         </div>
                       </div>
