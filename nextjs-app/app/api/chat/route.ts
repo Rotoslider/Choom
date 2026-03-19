@@ -3414,10 +3414,15 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
         }
 
         // Apply per-project iteration limit from pre-detected project (detected above from message or chat history)
+        // Only apply if neither the Choom directive nor a request override already set a HIGHER limit
         if (detectedProject?.metadata?.maxIterations && detectedProject.metadata.maxIterations > 0) {
-          maxIterations = detectedProject.metadata.maxIterations;
-          projectIterationLimitApplied = true;
-          console.log(`   📂 Project "${detectedProject.folder}": maxIterations → ${maxIterations}`);
+          if (maxIterations > detectedProject.metadata.maxIterations) {
+            console.log(`   📂 Project "${detectedProject.folder}": maxIterations ${detectedProject.metadata.maxIterations} skipped (current limit is higher: ${maxIterations})`);
+          } else {
+            maxIterations = detectedProject.metadata.maxIterations;
+            projectIterationLimitApplied = true;
+            console.log(`   📂 Project "${detectedProject.folder}": maxIterations → ${maxIterations}`);
+          }
         }
 
         // Delegation mode: use the Choom's own directive as the cap (or global default).
@@ -4078,9 +4083,14 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                   const projectService = new ProjectService(WORKSPACE_ROOT);
                   const project = await projectService.getProject(topFolder);
                   if (project?.metadata.maxIterations && project.metadata.maxIterations > 0) {
-                    maxIterations = project.metadata.maxIterations;
-                    projectIterationLimitApplied = true;
-                    console.log(`   📂 Project "${topFolder}": maxIterations overridden to ${maxIterations}`);
+                    if (maxIterations > project.metadata.maxIterations) {
+                      projectIterationLimitApplied = true; // Don't check again
+                      console.log(`   📂 Project "${topFolder}": maxIterations ${project.metadata.maxIterations} skipped (current limit is higher: ${maxIterations})`);
+                    } else {
+                      maxIterations = project.metadata.maxIterations;
+                      projectIterationLimitApplied = true;
+                      console.log(`   📂 Project "${topFolder}": maxIterations overridden to ${maxIterations}`);
+                    }
                   }
                 } catch { /* ignore project read errors */ }
               }

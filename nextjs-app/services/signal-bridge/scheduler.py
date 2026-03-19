@@ -177,6 +177,14 @@ class ScheduledTaskManager:
             seconds=60
         )
 
+        # Signal linked device keepalive — sync every 12 hours to prevent
+        # "inactive linked device" expiration (Signal expires after ~30 days)
+        self.add_interval_task(
+            "signal_device_sync",
+            self._signal_device_sync,
+            hours=12
+        )
+
         # Poll for manual triggers from the web GUI (every 10s)
         self.add_interval_task('trigger_poll', self._check_triggers, seconds=10)
 
@@ -1808,6 +1816,20 @@ Be practical. Only work on things that can actually be accomplished with the too
 
         except Exception as e:
             logger.error(f"YouTube download failed: {e}")
+
+    def _signal_device_sync(self):
+        """Send a sync request to keep the linked device active and prevent expiration"""
+        try:
+            if self.signal.connected:
+                success = self.signal.send_sync_request()
+                if success:
+                    logger.info("Signal device sync completed — linked device keepalive OK")
+                else:
+                    logger.warning("Signal device sync failed — device may expire if not resolved")
+            else:
+                logger.warning("Signal device sync skipped — not connected to daemon")
+        except Exception as e:
+            logger.error(f"Signal device sync error: {e}")
 
     def _system_health_check(self):
         """Check system health and alert on issues (respects quiet period)"""

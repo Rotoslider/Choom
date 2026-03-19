@@ -341,6 +341,20 @@ class SignalHandler:
             logger.error(f"Failed to get contacts: {e}")
             return []
 
+    def send_sync_request(self) -> bool:
+        """
+        Send a sync request to the primary device.
+        This keeps the linked device active and prevents Signal from
+        marking it as inactive/expired.
+        """
+        try:
+            self._send_request("sendSyncRequest", timeout=30)
+            logger.info("Sync request sent — linked device keepalive OK")
+            return True
+        except Exception as e:
+            logger.error(f"Sync request failed: {e}")
+            return False
+
     def is_registered(self) -> bool:
         """Check if the account is registered (daemon is running = registered)"""
         return self._connected
