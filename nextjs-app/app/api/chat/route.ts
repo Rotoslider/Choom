@@ -806,7 +806,10 @@ async function executeToolCall(
       // "meeting with Bob" correctly return "no events found" as a normal result.
       if (events.length === 0 && query) {
         const qLower = query.toLowerCase();
-        const isGeneralKnowledge = /\b(first day of|last day of|start of|end of|beginning of|spring|summer|autumn|fall|winter|equinox|solstice|easter|christmas|hanukkah|kwanzaa|ramadan|diwali|thanksgiving|new year|independence day|memorial day|labor day|martin luther king|presidents day|veterans day|holiday|season)\b/i.test(qLower);
+        // Only match phrases that are unambiguously general knowledge date questions.
+        // Bare words like "spring", "christmas" are NOT matched — those could be
+        // personal event searches ("any spring events?", "Christmas party?").
+        const isGeneralKnowledge = /\b((?:first|last) day of (?:spring|summer|autumn|fall|winter)|(?:start|end|beginning) of (?:spring|summer|autumn|fall|winter)|(?:spring|vernal|autumnal|fall) equinox|(?:summer|winter) solstice|when is (?:easter|christmas|thanksgiving|hanukkah|kwanzaa|ramadan|diwali|new year|independence day|memorial day|labor day))\b/i.test(qLower);
         if (isGeneralKnowledge) {
           console.log(`   📅 Calendar: 0 events for general knowledge query "${query}" — returning as error`);
           return {
