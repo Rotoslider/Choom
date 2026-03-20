@@ -458,6 +458,25 @@ class ChoomClient:
                     except json.JSONDecodeError as e:
                         logger.warning(f"JSON decode error in SSE: {e} (line_len={len(line)})")
 
+        # Dedup safety net: if the accumulated content contains the same text
+        # repeated (model repeated its response across agentic iterations), trim it.
+        # Check several split points around the midpoint to handle whitespace variance.
+        if len(content) > 200:
+            mid = len(content) // 2
+            for offset in range(0, min(50, mid)):
+                for pos in [mid + offset, mid - offset]:
+                    if pos < 50 or pos >= len(content) - 50:
+                        continue
+                    first = content[:pos].strip()
+                    second = content[pos:].strip()
+                    if first == second:
+                        logger.info(f"Deduped repeated content: {len(content)} → {len(first)} chars")
+                        content = first
+                        break
+                else:
+                    continue
+                break
+
         logger.info(f"Chat complete - content: {len(content)} chars, tool_calls: {len(tool_calls)}, tool_results: {len(tool_results)}, images: {len(images)}")
 
         return ChatResponse(

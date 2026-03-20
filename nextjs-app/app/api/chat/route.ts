@@ -800,7 +800,9 @@ async function executeToolCall(
       const events = await googleClient.getCalendarEvents(daysAhead, query, daysBack);
 
       const formatted = events.length === 0
-        ? daysBack ? 'No events found in that time range.' : 'No upcoming events found.'
+        ? (query
+          ? `No calendar events found matching "${query}". If the user is asking about a date, holiday, season, or astronomical event, answer from your general knowledge instead.`
+          : daysBack ? 'No events found in that time range.' : 'No upcoming events found.')
         : events.map(e => {
             const start = e.start ? new Date(e.start).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'America/Denver' }) : 'All day';
             return `- ${e.summary} (${start})${e.location ? ` @ ${e.location}` : ''}`;
@@ -3616,6 +3618,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
 
           // Preserve any pre-loop content (e.g., plan summaries) so the final iteration can prefix it
           const preLoopContent = fullContent;
+          const iterationTexts: string[] = []; // Track each iteration's text for dedup
           let fallbackActivated = false; // Set when a fallback model takes over mid-request
 
           while (iteration < maxIterations) {
@@ -3815,6 +3818,11 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               toolCalls = validToolCalls;
             }
 
+            // Track this iteration's text for post-loop dedup & assembly
+            if (iterationContent.trim()) {
+              iterationTexts.push(iterationContent);
+            }
+
             // Text extraction and nudging: ONLY when no tools have been called yet.
             // Once any tool succeeds, the model's next text response is the final answer.
             // This prevents loops where confirmations ("I've saved that") get misread
@@ -3836,10 +3844,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               // BUT: after a fallback switch the new model may narrate on its first try —
               // allow the nudge logic below to fire if nudgeCount was reset by fallback.
               if (allToolCalls.length > 0 && !(fallbackActivated && nudgeCount === 0)) {
-                fullContent = preLoopContent
-                  ? preLoopContent + '\n\n' + iterationContent
-                  : iterationContent;
-                break;
+                break; // fullContent built from iterationTexts after loop
               }
 
               // No tools called yet — check if model is narrating instead of acting
@@ -3903,24 +3908,11 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 forceToolCall = true;
                 continue;
               }
-              // Final iteration (no tools, no nudge) — use only this iteration's content
-              // as the saved response. Previous iterations' text was preamble (already streamed
-              // but shouldn't be saved to DB since the LLM tends to repeat it).
-              // Preserve any pre-loop content (e.g., plan summaries).
-              fullContent = preLoopContent
-                ? preLoopContent + '\n\n' + iterationContent
-                : iterationContent;
-              break;
+              break; // fullContent built from iterationTexts after loop
             }
 
-            // Iteration has tool calls — the text is just preamble ("Let me check...").
-            // It was already streamed to the user but we don't accumulate it into fullContent
-            // because the LLM will produce the real response after getting tool results.
-            // Only keep it if this is the first iteration and no prior content exists,
-            // as a fallback in case the loop exits unexpectedly.
-            if (!fullContent && iterationContent) {
-              fullContent = iterationContent;
-            }
+            // Iteration has tool calls — text is preamble ("Let me check...").
+            // Already tracked in iterationTexts above; fullContent built after loop.
 
             // Track all tool calls for DB save
             allToolCalls = [...allToolCalls, ...toolCalls];
@@ -4233,6 +4225,30 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               const afterTokens = Math.ceil(currentMessages.map(m => m.content || '').join('').length / 4);
               const budget = compactionService.calculateBudget(systemPromptWithSummary, activeTools);
               console.log(`   🗜️  Within-turn compaction: truncated ${withinTurnResult.truncatedCount} tool results, recovered ~${withinTurnResult.tokensRecovered.toLocaleString()} tokens (~${beforeTokens.toLocaleString()} → ~${afterTokens.toLocaleString()}, budget: ~${budget.availableForMessages.toLocaleString()})`);
+            }
+          }
+
+          // Assemble fullContent from all iterations, deduplicating repeated text.
+          // Streaming already sent each iteration's content to clients in real-time;
+          // this ensures the DB-saved version matches (minus exact duplicates where
+          // the model repeated itself across iterations).
+          if (iterationTexts.length > 0) {
+            const seen = new Set<string>();
+            const deduped: string[] = [];
+            // Walk backwards so the LAST occurrence of duplicated text wins
+            for (let i = iterationTexts.length - 1; i >= 0; i--) {
+              const normalized = iterationTexts[i].trim();
+              if (normalized && !seen.has(normalized)) {
+                seen.add(normalized);
+                deduped.unshift(iterationTexts[i]);
+              }
+            }
+            const joined = deduped.join('\n\n');
+            fullContent = preLoopContent
+              ? preLoopContent + '\n\n' + joined
+              : joined;
+            if (deduped.length < iterationTexts.length) {
+              console.log(`   🔄 ${choomTag} Deduped iteration texts: ${iterationTexts.length} → ${deduped.length} unique`);
             }
           }
 
