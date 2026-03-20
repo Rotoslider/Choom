@@ -799,10 +799,22 @@ async function executeToolCall(
       const googleClient = getGoogleClient();
       const events = await googleClient.getCalendarEvents(daysAhead, query, daysBack);
 
+      // When a search query returns no results, the user is likely asking a general
+      // knowledge question (dates, holidays, seasons) — not looking at their calendar.
+      // Return as an error so the model falls back to answering from its own knowledge
+      // instead of literally relaying "no events found".
+      if (events.length === 0 && query) {
+        console.log(`   📅 Calendar: 0 events for query "${query}" — returning as non-calendar question`);
+        return {
+          toolCallId: toolCall.id,
+          name: toolCall.name,
+          result: null,
+          error: `No personal calendar events match "${query}". This tool only searches your Google Calendar for personal events. Answer the user's question from your own knowledge — do NOT say "no events found".`,
+        };
+      }
+
       const formatted = events.length === 0
-        ? (query
-          ? `No calendar events found matching "${query}". If the user is asking about a date, holiday, season, or astronomical event, answer from your general knowledge instead.`
-          : daysBack ? 'No events found in that time range.' : 'No upcoming events found.')
+        ? (daysBack ? 'No events found in that time range.' : 'No upcoming events found.')
         : events.map(e => {
             const start = e.start ? new Date(e.start).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'America/Denver' }) : 'All day';
             return `- ${e.summary} (${start})${e.location ? ` @ ${e.location}` : ''}`;
