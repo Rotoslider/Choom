@@ -805,12 +805,12 @@ async function executeToolCall(
       // Only triggers for date/holiday patterns — personal queries like "dentist" or
       // "meeting with Bob" correctly return "no events found" as a normal result.
       if (events.length === 0 && query) {
-        const qLower = query.toLowerCase();
-        // Only match phrases that are unambiguously general knowledge date questions.
-        // Bare words like "spring", "christmas" are NOT matched — those could be
-        // personal event searches ("any spring events?", "Christmas party?").
-        const isGeneralKnowledge = /\b((?:first|last) day of (?:spring|summer|autumn|fall|winter)|(?:start|end|beginning) of (?:spring|summer|autumn|fall|winter)|(?:spring|vernal|autumnal|fall) equinox|(?:summer|winter) solstice|when is (?:easter|christmas|thanksgiving|hanukkah|kwanzaa|ramadan|diwali|new year|independence day|memorial day|labor day))\b/i.test(qLower);
-        if (isGeneralKnowledge) {
+        // Multi-word phrases are always general knowledge. Bare holiday names
+        // only match when they're the entire query (not "christmas party").
+        const isPhraseGK = /(?:first|last) day of (?:spring|summer|autumn|fall|winter)|(?:start|end|beginning) of (?:spring|summer|autumn|fall|winter)|(?:spring|vernal|autumnal|fall) equinox|(?:summer|winter) solstice/i.test(query);
+        const termStripped = query.replace(/\b\d{4}\b/g, '').trim();
+        const isBareHoliday = /^(?:easter|christmas|hanukkah|kwanzaa|ramadan|diwali|thanksgiving|new year|independence day|memorial day|labor day|martin luther king|presidents day|veterans day)$/i.test(termStripped);
+        if (isPhraseGK || isBareHoliday) {
           console.log(`   📅 Calendar: 0 events for general knowledge query "${query}" — returning as error`);
           return {
             toolCallId: toolCall.id,

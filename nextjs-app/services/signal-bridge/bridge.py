@@ -488,6 +488,30 @@ class SignalBridge:
                     search_term = search_match.group(1).strip()
                     # Remove common words that aren't helpful for searching
                     search_term = re.sub(r"\b(the|a|an|is|on|for|my|calendar)\b", "", search_term).strip()
+
+                    # Skip general knowledge date questions — let the Choom answer these
+                    # from its own knowledge instead of searching the calendar.
+                    # Multi-word phrases (e.g. "first day of spring") are always general knowledge.
+                    # Bare holiday names (e.g. "easter") are only general knowledge when they're
+                    # the entire search term — "christmas party" is a real calendar search.
+                    term_stripped = re.sub(r'\b\d{4}\b', '', search_term).strip()  # remove year
+                    is_phrase_gk = bool(re.search(
+                        r'(?:first|last) day of (?:spring|summer|autumn|fall|winter)'
+                        r'|(?:start|end|beginning) of (?:spring|summer|autumn|fall|winter)'
+                        r'|(?:spring|vernal|autumnal|fall) equinox'
+                        r'|(?:summer|winter) solstice',
+                        search_term, re.IGNORECASE
+                    ))
+                    is_bare_holiday = bool(re.match(
+                        r'^(?:easter|christmas|hanukkah|kwanzaa|ramadan|diwali'
+                        r'|thanksgiving|new year|independence day|memorial day'
+                        r'|labor day|martin luther king|presidents day|veterans day)$',
+                        term_stripped, re.IGNORECASE
+                    ))
+                    if is_phrase_gk or is_bare_holiday:
+                        logger.info(f"Skipping calendar search for general knowledge query: '{search_term}'")
+                        return None  # Let the Choom handle it
+
                     logger.info(f"Calendar search for: '{search_term}'")
 
                     # Extend search range for birthdays/anniversaries to full year
