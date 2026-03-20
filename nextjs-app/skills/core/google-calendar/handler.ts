@@ -37,8 +37,20 @@ export default class GoogleCalendarHandler extends BaseSkillHandler {
       const googleClient = getGoogleClient();
       const events = await googleClient.getCalendarEvents(daysAhead, query, daysBack);
 
+      // Detect general-knowledge date queries (holidays, seasons, astronomical events)
+      // that the model mistakenly sent to the calendar tool. Return as an error so the
+      // model answers from its own knowledge instead of relaying "no events found".
+      if (events.length === 0 && query) {
+        const qLower = query.toLowerCase();
+        const isGeneralKnowledge = /\b(first day of|last day of|start of|end of|beginning of|spring|summer|autumn|fall|winter|equinox|solstice|easter|christmas|hanukkah|kwanzaa|ramadan|diwali|thanksgiving|new year|independence day|memorial day|labor day|martin luther king|presidents day|veterans day|holiday|season)\b/i.test(qLower);
+        if (isGeneralKnowledge) {
+          console.log(`   📅 Calendar: 0 events for general knowledge query "${query}" — returning as error`);
+          return this.error(toolCall, `No personal calendar events match "${query}". This tool only searches your Google Calendar for personal events. Answer the user's question from your own knowledge — do NOT say "no events found".`);
+        }
+      }
+
       const formatted = events.length === 0
-        ? daysBack ? 'No events found in that time range.' : 'No upcoming events found.'
+        ? (daysBack ? 'No events found in that time range.' : 'No upcoming events found.')
         : events.map(e => {
             const start = e.start ? new Date(e.start).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'America/Denver' }) : 'All day';
             return `- ${e.summary} (${start})${e.location ? ` @ ${e.location}` : ''}`;
