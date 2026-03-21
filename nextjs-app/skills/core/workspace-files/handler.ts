@@ -4,7 +4,7 @@ import { WorkspaceService } from '@/lib/workspace-service';
 import { ProjectService } from '@/lib/project-service';
 import { WORKSPACE_ROOT } from '@/lib/config';
 const WORKSPACE_MAX_FILE_SIZE_KB = 1024;
-const WORKSPACE_ALLOWED_EXTENSIONS = ['.md', '.txt', '.json', '.py', '.ts', '.tsx', '.js', '.jsx', '.html', '.css', '.csv', '.sh', '.bash', '.yaml', '.yml', '.xml', '.sql', '.toml', '.ini', '.cfg', '.r', '.R', '.ipynb', '.log'];
+const WORKSPACE_ALLOWED_EXTENSIONS = ['.md', '.txt', '.json', '.py', '.ts', '.tsx', '.js', '.jsx', '.html', '.css', '.csv', '.tsv', '.sh', '.bash', '.yaml', '.yml', '.xml', '.sql', '.toml', '.ini', '.cfg', '.r', '.R', '.ipynb', '.log'];
 
 const TOOL_NAMES = new Set([
   'workspace_write_file',

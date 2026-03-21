@@ -157,9 +157,11 @@ let loaded = false;
  * Safe to call multiple times — only loads once.
  */
 export function loadCoreSkills(): void {
-  if (loaded) return;
-
+  // Check both the loaded flag AND that the registry actually has tools.
+  // HMR can reset the registry singleton while `loaded` stays true,
+  // resulting in 0 tools. Re-load if the registry is unexpectedly empty.
   const registry = getSkillRegistry();
+  if (loaded && registry.getToolCount() > 0) return;
   const skillsDir = path.join(process.cwd(), 'skills', 'core');
 
   for (const skill of CORE_SKILLS) {

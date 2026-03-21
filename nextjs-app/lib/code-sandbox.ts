@@ -19,7 +19,7 @@ interface ExecutionResult {
   durationMs: number;
 }
 
-const DEFAULT_TIMEOUT_MS = 30_000;
+const DEFAULT_TIMEOUT_MS = 330_000; // 5.5 min — autoresearch and training scripts need time
 const MAX_TIMEOUT_MS = 600_000; // 10 min — package installs (PyTorch, CUDA) need time
 const MAX_OUTPUT_BYTES = 50 * 1024; // 50KB
 

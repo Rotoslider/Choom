@@ -3040,7 +3040,13 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
     // Dynamic tool filtering: local models degrade with too many tools (>20).
     // Send ~15-25 tools: essential base + dynamically matched from message/context/history.
     // slimToolDefinition() in llm-client.ts further reduces token overhead per tool.
-    const allToolDefs: ToolDefinition[] = skillDispatch ? getAllToolsFromSkills() : allTools;
+    let allToolDefs: ToolDefinition[] = skillDispatch ? getAllToolsFromSkills() : allTools;
+    // Safety fallback: if skill dispatch returned 0 tools (e.g., registry reset by HMR),
+    // fall back to the static allTools array so the Choom isn't left tool-less.
+    if (allToolDefs.length === 0 && allTools.length > 0) {
+      console.warn(`   ⚠️  getAllToolsFromSkills() returned 0 tools — falling back to static allTools (${allTools.length})`);
+      allToolDefs = allTools;
+    }
     let activeTools: ToolDefinition[] = allToolDefs;
 
     // <!-- max_iterations: N --> to cap agentic loop iterations per Choom
@@ -4184,7 +4190,10 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 role: 'user',
                 content: '[System] Multiple tool calls have failed. STOP retrying. Tell the user what went wrong and suggest they check their settings. Do NOT call any more tools.',
               });
-              console.log(`   🛑 All tools failed this iteration (${failedCallCache.size} total failures) — injected abort hint`);
+              // Strip all tools so the LLM physically cannot call them on the next iteration.
+              // Previously we only injected a hint but the LLM would ignore it and keep looping.
+              activeTools = [];
+              console.log(`   🛑 All tools failed this iteration (${failedCallCache.size} total failures) — stripped tools, 1 final iteration to summarize`);
             }
 
             // Build messages for next iteration: append assistant message + tool results
@@ -4226,10 +4235,10 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 role: 'user',
                 content: `[System] Multiple consecutive tool calls have failed. STOP retrying. Do NOT call any more tools. Instead, summarize what you were able to accomplish and explain to the user what went wrong. If you couldn't complete the task, suggest an alternative approach the user could try.`,
               });
-              console.log(`   🛑 Injected abort message after ${consecutiveFailures} consecutive failures — 1 final iteration to summarize`);
-              // Allow one more iteration for the LLM to produce a summary, then force-exit
-              // We don't break here — the loop will continue, but with no tools the LLM should
-              // produce text only, which will hit the break at the toolCalls.length===0 check
+              // Strip all tools so the LLM physically cannot call them on the next iteration.
+              // Previously we relied on the LLM obeying the hint, but it often ignores it.
+              activeTools = [];
+              console.log(`   🛑 ${consecutiveFailures} consecutive failures — stripped tools, 1 final iteration to summarize`);
             }
 
             const approxTokens = Math.ceil(currentMessages.map(m => m.content).join('').length / 4);
