@@ -68,6 +68,7 @@ export const BUILTIN_LLM_PROFILES: LLMModelProfile[] = [
     contextLength: 131072,
     topK: 20,
     repetitionPenalty: 1.05,
+    enableThinking: false,
   },
   {
     modelId: 'qwen/qwen3-next-80b-a3b-instruct',
@@ -146,6 +147,7 @@ export const BUILTIN_LLM_PROFILES: LLMModelProfile[] = [
     maxTokens: 4096,
     contextLength: 131072,
     topK: 20,
+    enableThinking: false,
   },
   {
     modelId: 'minimaxai/minimax-m2.5',
