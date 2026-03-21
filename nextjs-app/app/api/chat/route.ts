@@ -4074,8 +4074,13 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 // - Other errors → count toward per-tool cap and consecutive failures
                 const isConfigError = /not configured|api key|unauthorized|forbidden|invalid.*(?:model|endpoint|key)|ECONNREFUSED/i.test(result.error);
                 const isParamError = /missing required parameter|is required|must provide|please provide/i.test(result.error);
+                const isGpuBusy = /GPU is busy|GPU is currently busy/i.test(result.error);
                 failedCallCache.set(dedupKey, result.error);
-                if (isParamError) {
+                if (isGpuBusy) {
+                  // GPU busy is temporary — don't count as failure, don't block the tool.
+                  // The model should stop retrying and inform the user.
+                  console.log(`   ⏳ ${tc.name}: GPU busy (temporary, not counted as failure)`);
+                } else if (isParamError) {
                   // Param errors are recoverable — don't count toward consecutiveFailures
                   // The LLM can fix by providing the correct params on the next call
                   console.log(`   ⚠️  ${tc.name}: param error (recoverable, not counted as failure)`);
