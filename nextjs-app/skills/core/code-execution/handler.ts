@@ -33,9 +33,9 @@ export default class CodeExecutionHandler extends BaseSkillHandler {
     try {
       const { CodeSandbox } = await import('@/lib/code-sandbox');
       const sandbox = new CodeSandbox(WORKSPACE_ROOT);
-      const projectFolder = (toolCall.arguments.project_folder || toolCall.arguments.projectFolder) as string;
-      const language = toolCall.arguments.language as 'python' | 'node';
-      const code = toolCall.arguments.code as string;
+      const projectFolder = (toolCall.arguments.project_folder || toolCall.arguments.projectFolder || toolCall.arguments.folder) as string;
+      const language = (toolCall.arguments.language || 'python') as 'python' | 'node';
+      const code = (toolCall.arguments.code || toolCall.arguments.command) as string;
       const timeoutSeconds = toolCall.arguments.timeout_seconds as number | undefined;
       const timeoutMs = timeoutSeconds ? Math.min(timeoutSeconds * 1000, 600_000) : undefined;
 
