@@ -26,6 +26,7 @@ import json
 import sqlite3
 import hashlib
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 import logging
 from logging.handlers import TimedRotatingFileHandler
 import asyncio
@@ -160,6 +161,10 @@ class Result:
     data: Optional[List[Dict]] = None
 
 
+# Display timezone for memory timestamps — matches the Choom system prompt timezone
+DISPLAY_TZ = ZoneInfo("America/Denver")
+
+
 class RobustMemorySystem:
     """
     Hybrid memory system combining:
@@ -167,6 +172,17 @@ class RobustMemorySystem:
     2. SQLite for structured queries and metadata
     3. JSON backup files for portability
     """
+
+    @staticmethod
+    def _localize_timestamp(iso_str: str) -> str:
+        """Convert a UTC ISO timestamp to the display timezone for human-readable output."""
+        try:
+            dt = datetime.fromisoformat(iso_str)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(DISPLAY_TZ).isoformat()
+        except (ValueError, TypeError):
+            return iso_str  # return as-is if unparseable
 
     def __init__(self, data_folder: Path = DATA_FOLDER):
         self.data_folder = Path(data_folder)
@@ -518,7 +534,7 @@ class RobustMemorySystem:
 
             self.logger.info("Memory stored successfully: %s", memory_id)
             rec = asdict(record)
-            rec["timestamp"] = record.timestamp.isoformat()
+            rec["timestamp"] = self._localize_timestamp(record.timestamp.isoformat())
             return Result(success=True, data=[rec])
 
         except Exception as e:
@@ -655,7 +671,7 @@ class RobustMemorySystem:
             result_data = []
             for sr in search_results:
                 result_dict = asdict(sr.record)
-                result_dict["timestamp"] = sr.record.timestamp.isoformat()
+                result_dict["timestamp"] = self._localize_timestamp(sr.record.timestamp.isoformat())
                 result_dict["relevance_score"] = sr.relevance_score
                 result_dict["match_type"] = sr.match_type
                 result_data.append(result_dict)
@@ -758,7 +774,7 @@ class RobustMemorySystem:
                 )
 
                 result_dict = asdict(record)
-                result_dict["timestamp"] = record.timestamp.isoformat()
+                result_dict["timestamp"] = self._localize_timestamp(record.timestamp.isoformat())
                 result_dict["match_type"] = "structured"
                 results.append(result_dict)
 
@@ -773,8 +789,67 @@ class RobustMemorySystem:
             return Result(success=False, reason=f"Search error: {str(e)}")
 
     def get_recent(self, limit: int = 20, companion_id: Optional[str] = None) -> Result:
-        """Get most recent memories, optionally filtered by companion_id"""
-        return self.search_structured(limit=limit, companion_id=companion_id)
+        """Get most recent memories sorted by timestamp (newest first)"""
+        try:
+            conditions = []
+            params = []
+
+            if companion_id:
+                conditions.append("companion_id = ?")
+                params.append(companion_id)
+
+            where_clause = " AND ".join(conditions) if conditions else "1=1"
+
+            query = f"""
+                SELECT * FROM memories
+                WHERE {where_clause}
+                ORDER BY timestamp DESC
+                LIMIT ?
+            """
+            params.append(limit)
+
+            cursor = self.sqlite_conn.execute(query, params)
+            rows = cursor.fetchall()
+
+            # Update last_accessed for retrieved memories
+            now_iso = datetime.now(timezone.utc).isoformat()
+            memory_ids = [row["id"] for row in rows]
+
+            if memory_ids:
+                placeholders = ",".join(["?" for _ in memory_ids])
+                self.sqlite_conn.execute(
+                    f"UPDATE memories SET last_accessed = ? WHERE id IN ({placeholders})",
+                    [now_iso] + memory_ids,
+                )
+                self.sqlite_conn.commit()
+
+            # Convert to MemoryRecord objects
+            results = []
+            for row in rows:
+                self._maybe_decay(row)
+                self._maybe_reinforce(row)
+                record = MemoryRecord(
+                    id=row["id"],
+                    title=row["title"],
+                    content=row["content"],
+                    timestamp=datetime.fromisoformat(row["timestamp"]),
+                    tags=json.loads(row["tags"]),
+                    importance=row["importance"],
+                    memory_type=row["memory_type"],
+                    metadata=json.loads(row["metadata"]),
+                )
+
+                result_dict = asdict(record)
+                result_dict["timestamp"] = self._localize_timestamp(record.timestamp.isoformat())
+                result_dict["match_type"] = "recent"
+                results.append(result_dict)
+
+            self.logger.info("get_recent returned %d results", len(results))
+            return Result(success=True, data=results)
+
+        except Exception as e:
+            self.logger.error("get_recent failed: %s", e)
+            return Result(success=False, reason=f"Recent query error: {str(e)}")
 
     def update_memory(
         self,
@@ -1480,7 +1555,9 @@ def _jsonify_result(res: Result) -> dict:
             # Normalize timestamp fields (top-level)
             ts = obj.get("timestamp")
             if isinstance(ts, datetime):
-                obj["timestamp"] = ts.isoformat()
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                obj["timestamp"] = ts.astimezone(DISPLAY_TZ).isoformat()
             # Normalize nested fields you might have added in searches
             # (e.g., 'relevance_score', 'match_type' already JSON-safe)
             data.append(obj)
