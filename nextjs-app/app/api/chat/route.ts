@@ -4080,9 +4080,18 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                   failedCallCache.set(dedupKey, result.error);
                 }
                 if (isParamError) {
-                  // Param errors are recoverable — don't count toward any failure cap
-                  // The LLM can fix by providing the correct params on the next call
-                  console.log(`   ⚠️  ${tc.name}: param error (recoverable, not counted as failure)`);
+                  // Param errors are recoverable — the LLM can fix by providing correct params.
+                  // But after 3 param errors for the same tool, treat as a real failure
+                  // to prevent infinite loops when the model keeps making the same mistake.
+                  const paramFails = (toolFailureCounts.get(`${tc.name}:param`) || 0) + 1;
+                  toolFailureCounts.set(`${tc.name}:param`, paramFails);
+                  if (paramFails >= 3) {
+                    consecutiveFailures++;
+                    failedCallCache.set(dedupKey, result.error);
+                    console.log(`   ⚠️  ${tc.name}: param error #${paramFails} — now counting as failure`);
+                  } else {
+                    console.log(`   ⚠️  ${tc.name}: param error ${paramFails}/3 (recoverable, not counted as failure)`);
+                  }
                 } else if (isConfigError && !brokenTools.has(tc.name)) {
                   consecutiveFailures++;
                   brokenTools.add(tc.name);
