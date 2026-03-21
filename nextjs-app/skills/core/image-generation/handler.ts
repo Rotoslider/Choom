@@ -5,7 +5,7 @@ import prisma from '@/lib/db';
 import { computeImageDimensions } from '@/lib/types';
 import type { ImageSize, ImageAspect, ImageGenSettings, ToolCall, ToolResult } from '@/lib/types';
 import { WORKSPACE_ROOT } from '@/lib/config';
-import { isGpuBusy } from '@/lib/gpu-lock';
+import { waitForGpu } from '@/lib/gpu-lock';
 
 // ============================================================================
 // Module-level image generation lock (serializes checkpoint switching)
@@ -84,12 +84,12 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
   }
 
   private async handleGenerateImage(toolCall: ToolCall, ctx: SkillHandlerContext): Promise<ToolResult> {
-    // Check if GPU is occupied by a long-running command (training, inference).
-    // If so, skip image gen rather than fighting for GPU resources and timing out.
-    const gpuStatus = isGpuBusy();
-    if (gpuStatus.busy) {
-      console.log(`   🚫 Image generation skipped — GPU busy: ${gpuStatus.reason}`);
-      return this.error(toolCall, `GPU is currently busy with: ${gpuStatus.reason}. Image generation deferred — try again when the GPU is free.`);
+    // Wait for GPU if it's occupied by a long-running command (training, inference).
+    // Polls every 10s for up to 3 minutes before giving up.
+    const gpuWait = await waitForGpu(180_000, 10_000);
+    if (!gpuWait.free) {
+      console.log(`   🚫 Image generation skipped — GPU still busy after ${Math.round(gpuWait.waitedMs / 1000)}s: ${gpuWait.reason}`);
+      return this.error(toolCall, `GPU is busy with: ${gpuWait.reason}. Waited ${Math.round(gpuWait.waitedMs / 1000)}s but it didn't free up. Try again later.`);
     }
 
     try {
