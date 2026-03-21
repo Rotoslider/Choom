@@ -198,7 +198,6 @@ export class LLMClient {
     } else if (this.settings.enableThinking !== undefined) {
       body.chat_template_kwargs = { enable_thinking: this.settings.enableThinking };
     }
-    }
 
     const chatHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
     if (this.apiKey) chatHeaders['Authorization'] = `Bearer ${this.apiKey}`;
