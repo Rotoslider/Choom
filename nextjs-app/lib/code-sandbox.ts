@@ -112,10 +112,12 @@ export class CodeSandbox {
       shellCommand = `source "${path.join(venvDir, 'bin', 'activate')}" && ${command}`;
     }
 
-    // Track long-running commands as GPU-busy (training, inference scripts often use GPU).
-    // Commands with timeout > 60s are likely compute-intensive, not quick reads.
+    // Track GPU-intensive commands. Two patterns:
+    // 1. Long-running foreground commands (timeout > 60s) — training, inference
+    // 2. Background commands (nohup/&) that launch GPU processes and return immediately
     const isLongRunning = timeout > 60_000;
-    if (isLongRunning) {
+    const isBackgroundGpu = /\b(nohup|&\s*$)/.test(command) && /\b(python|train|inference|torch|cuda)\b/i.test(command);
+    if (isLongRunning || isBackgroundGpu) {
       markGpuBusy(`run_command: ${command.slice(0, 80)}`);
     }
 
@@ -127,7 +129,15 @@ export class CodeSandbox {
         shell: '/bin/bash',
         env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
       }, (error, stdout, stderr) => {
-        if (isLongRunning) markGpuFree();
+        if (isLongRunning && !isBackgroundGpu) markGpuFree();
+        // Background GPU commands: don't release here — the process is still running.
+        // GPU will be released when the next nvidia-smi/ps check shows it's idle,
+        // or after a timeout. Schedule a delayed release as a safety net.
+        if (isBackgroundGpu) {
+          const bgTimeout = 600_000; // 10 min safety net
+          console.log(`   🔒 Background GPU process detected — GPU lock held for up to ${bgTimeout / 1000}s`);
+          setTimeout(() => markGpuFree(), bgTimeout);
+        }
         const durationMs = Date.now() - start;
         const timedOut = error?.killed === true;
         const stdoutResult = this.truncateOutput(stdout || '');
