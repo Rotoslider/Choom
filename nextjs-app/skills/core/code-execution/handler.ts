@@ -1,6 +1,44 @@
 import { BaseSkillHandler, SkillHandlerContext } from '@/lib/skill-handler';
 import type { ToolCall, ToolResult } from '@/lib/types';
 import { WORKSPACE_ROOT } from '@/lib/config';
+import * as fs from 'fs';
+import * as path from 'path';
+
+/**
+ * Try to infer project_folder from code content by checking which workspace
+ * project contains files referenced in the code (e.g., "train.py", "run.log").
+ */
+function inferProjectFolder(code: string): string | null {
+  // Extract filenames referenced in the code (open("file.py"), "file.log", etc.)
+  const fileRefs = new Set<string>();
+  const patterns = [
+    /open\(["']([^"'/]+\.\w+)["']/g,          // open("train.py")
+    /["']([^"'/]+\.(?:py|log|tsv|csv|json|txt|yaml|toml))["']/g,  // "train.py", "run.log"
+  ];
+  for (const pattern of patterns) {
+    let match;
+    while ((match = pattern.exec(code)) !== null) {
+      fileRefs.add(match[1]);
+    }
+  }
+  if (fileRefs.size === 0) return null;
+
+  // Scan workspace directories for matches
+  try {
+    const entries = fs.readdirSync(WORKSPACE_ROOT, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const projectDir = path.join(WORKSPACE_ROOT, entry.name);
+      for (const ref of fileRefs) {
+        if (fs.existsSync(path.join(projectDir, ref))) {
+          console.log(`   🔍 Inferred project_folder="${entry.name}" from file reference "${ref}" in code`);
+          return entry.name;
+        }
+      }
+    }
+  } catch { /* ignore */ }
+  return null;
+}
 
 const CODE_TOOLS = new Set([
   'execute_code',
@@ -33,9 +71,9 @@ export default class CodeExecutionHandler extends BaseSkillHandler {
     try {
       const { CodeSandbox } = await import('@/lib/code-sandbox');
       const sandbox = new CodeSandbox(WORKSPACE_ROOT);
-      const projectFolder = (toolCall.arguments.project_folder || toolCall.arguments.projectFolder || toolCall.arguments.folder) as string;
-      const language = (toolCall.arguments.language || 'python') as 'python' | 'node';
       const code = (toolCall.arguments.code || toolCall.arguments.command) as string;
+      const projectFolder = (toolCall.arguments.project_folder || toolCall.arguments.projectFolder || toolCall.arguments.folder || (code && inferProjectFolder(code))) as string;
+      const language = (toolCall.arguments.language || 'python') as 'python' | 'node';
       const timeoutSeconds = toolCall.arguments.timeout_seconds as number | undefined;
       const timeoutMs = timeoutSeconds ? Math.min(timeoutSeconds * 1000, 600_000) : undefined;
 
@@ -100,6 +138,10 @@ export default class CodeExecutionHandler extends BaseSkillHandler {
           command = cdMatch[2];
           console.log(`   🔄 Extracted project_folder="${projectFolder}" from cd prefix in command`);
         }
+      }
+      // Last resort: infer from file references in the command
+      if (!projectFolder && command) {
+        projectFolder = inferProjectFolder(command) || projectFolder;
       }
       const timeoutSeconds = toolCall.arguments.timeout_seconds as number | undefined;
       const timeoutMs = timeoutSeconds ? Math.min(timeoutSeconds * 1000, 600_000) : undefined;
