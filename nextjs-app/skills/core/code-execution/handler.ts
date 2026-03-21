@@ -33,7 +33,7 @@ export default class CodeExecutionHandler extends BaseSkillHandler {
     try {
       const { CodeSandbox } = await import('@/lib/code-sandbox');
       const sandbox = new CodeSandbox(WORKSPACE_ROOT);
-      const projectFolder = toolCall.arguments.project_folder as string;
+      const projectFolder = (toolCall.arguments.project_folder || toolCall.arguments.projectFolder) as string;
       const language = toolCall.arguments.language as 'python' | 'node';
       const code = toolCall.arguments.code as string;
       const timeoutSeconds = toolCall.arguments.timeout_seconds as number | undefined;
@@ -88,8 +88,19 @@ export default class CodeExecutionHandler extends BaseSkillHandler {
     try {
       const { CodeSandbox } = await import('@/lib/code-sandbox');
       const sandbox = new CodeSandbox(WORKSPACE_ROOT);
-      const projectFolder = toolCall.arguments.project_folder as string;
-      const command = toolCall.arguments.command as string;
+      let projectFolder = toolCall.arguments.project_folder as string;
+      let command = toolCall.arguments.command as string;
+
+      // LLMs often put "cd <folder> && ..." in the command instead of using project_folder.
+      // Extract the folder and strip the cd prefix so the sandbox runs in the right directory.
+      if (!projectFolder && command) {
+        const cdMatch = command.match(/^cd\s+([^\s;&]+)\s*&&\s*(.*)/s);
+        if (cdMatch) {
+          projectFolder = cdMatch[1];
+          command = cdMatch[2];
+          console.log(`   🔄 Extracted project_folder="${projectFolder}" from cd prefix in command`);
+        }
+      }
       const timeoutSeconds = toolCall.arguments.timeout_seconds as number | undefined;
       const timeoutMs = timeoutSeconds ? Math.min(timeoutSeconds * 1000, 600_000) : undefined;
 
