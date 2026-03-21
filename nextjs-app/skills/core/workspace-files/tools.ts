@@ -4,7 +4,7 @@ export const tools: ToolDefinition[] = [
   {
     name: 'workspace_write_file',
     description:
-      'Write or overwrite a file in the project workspace. Supports .md, .txt, .json, .py, .ts, .tsx, .js, .jsx, .html, .css, .csv, .sh, .bash, .yaml, .yml, .xml, .sql, .toml, .ini, .cfg, .r, .ipynb, .log extensions. Parent directories are created automatically.',
+      'Write or overwrite a file in the project workspace. Supports .md, .txt, .json, .py, .ts, .tsx, .js, .jsx, .html, .css, .csv, .tsv, .sh, .bash, .yaml, .yml, .xml, .sql, .toml, .ini, .cfg, .r, .ipynb, .log extensions. Parent directories are created automatically.',
     parameters: {
       type: 'object',
       properties: {
