@@ -4040,13 +4040,17 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 consecutiveFailures = 0;
               } else {
                 console.log(`   ❌ ${choomTag} ${tc.name} failed: ${result.error.slice(0, 200)}`);
-                failedCallCache.set(dedupKey, result.error);
                 // Classify the error to decide blocking and counting strategy:
                 // - Config/auth errors → block immediately (model can't fix these)
                 // - Missing param errors → DON'T count toward any failure cap (model can fix by providing params)
                 // - Other errors → count toward per-tool cap and consecutive failures
                 const isConfigError = /not configured|api key|unauthorized|forbidden|invalid.*(?:model|endpoint|key)|ECONNREFUSED/i.test(result.error);
                 const isParamError = /missing required parameter|is required|must provide|please provide/i.test(result.error);
+                // Only add non-param errors to failedCallCache — param errors are recoverable
+                // and should NOT trigger the all-failed abort that strips tools.
+                if (!isParamError) {
+                  failedCallCache.set(dedupKey, result.error);
+                }
                 if (isParamError) {
                   // Param errors are recoverable — don't count toward any failure cap
                   // The LLM can fix by providing the correct params on the next call
