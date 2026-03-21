@@ -3396,9 +3396,16 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
         if (fbProfile.topP !== undefined) fbSettings.topP = fbProfile.topP;
         if (fbProfile.maxTokens !== undefined) fbSettings.maxTokens = fbProfile.maxTokens;
         if (fbProfile.topK !== undefined) fbSettings.topK = fbProfile.topK;
+        if (fbProfile.frequencyPenalty !== undefined) fbSettings.frequencyPenalty = fbProfile.frequencyPenalty;
+        if (fbProfile.presencePenalty !== undefined) fbSettings.presencePenalty = fbProfile.presencePenalty;
         if (fbProfile.repetitionPenalty !== undefined) fbSettings.repetitionPenalty = fbProfile.repetitionPenalty;
         if (fbProfile.enableThinking !== undefined) fbSettings.enableThinking = fbProfile.enableThinking;
         console.log(`   📋 Applied profile for fallback model ${fb.model}`);
+      } else {
+        // No profile found — reset sampling params to safe defaults so the
+        // fallback doesn't inherit the primary model's potentially aggressive tuning
+        fbSettings.presencePenalty = 0;
+        fbSettings.frequencyPenalty = 0;
       }
 
       if (fb.providerId) {
