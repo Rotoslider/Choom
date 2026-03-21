@@ -95,6 +95,11 @@ export class LLMClient {
     if (this.settings.topK !== undefined) body.top_k = this.settings.topK;
     if (this.settings.repetitionPenalty !== undefined) body.repetition_penalty = this.settings.repetitionPenalty;
 
+    // enableThinking: only send chat_template_kwargs when explicitly set in profile
+    if (this.settings.enableThinking !== undefined) {
+      body.chat_template_kwargs = { enable_thinking: this.settings.enableThinking };
+    }
+
     if (tools && tools.length > 0) {
       // Slim down tool definitions: truncate descriptions and strip parameter
       // descriptions to reduce token overhead for local models.
@@ -103,15 +108,6 @@ export class LLMClient {
         function: slimToolDefinition(t),
       }));
       body.tool_choice = toolChoice || 'auto';
-
-      // Disable thinking when tools are present — thinking models (Qwen 3.5, etc.)
-      // burn timeout on reasoning and can confuse conversation context with tool
-      // arguments. Tool calling doesn't benefit from chain-of-thought.
-      if (this.settings.enableThinking !== false) {
-        body.chat_template_kwargs = { enable_thinking: false };
-      }
-    } else if (this.settings.enableThinking !== undefined) {
-      body.chat_template_kwargs = { enable_thinking: this.settings.enableThinking };
     }
 
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -185,18 +181,17 @@ export class LLMClient {
     if (this.settings.topK !== undefined) body.top_k = this.settings.topK;
     if (this.settings.repetitionPenalty !== undefined) body.repetition_penalty = this.settings.repetitionPenalty;
 
+    // enableThinking: only send chat_template_kwargs when explicitly set in profile
+    if (this.settings.enableThinking !== undefined) {
+      body.chat_template_kwargs = { enable_thinking: this.settings.enableThinking };
+    }
+
     if (tools && tools.length > 0) {
       body.tools = tools.map((t) => ({
         type: 'function' as const,
         function: slimToolDefinition(t),
       }));
       body.tool_choice = 'auto';
-      // Disable thinking when tools are present (see streamChat for rationale)
-      if (this.settings.enableThinking !== false) {
-        body.chat_template_kwargs = { enable_thinking: false };
-      }
-    } else if (this.settings.enableThinking !== undefined) {
-      body.chat_template_kwargs = { enable_thinking: this.settings.enableThinking };
     }
 
     const chatHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
