@@ -3381,6 +3381,12 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
     async function createClientForFallback(fb: FallbackConfig): Promise<{ client: { streamChat: LLMClient['streamChat'] }; settings: LLMSettings }> {
       const fbSettings: LLMSettings = { ...llmSettings, model: fb.model };
 
+      // Clear enableThinking inherited from the primary model — it causes
+      // chat_template_kwargs to be sent to backends that don't support it
+      // (e.g., LM Studio's Qwen template breaks tool calling with this flag).
+      // Only re-add if the fallback's own profile explicitly sets it.
+      (fbSettings as any).enableThinking = undefined;
+
       // Apply the fallback model's profile (temperature, topP, etc.) instead of
       // inheriting the primary model's tuning which may be wrong for this model.
       const userProfiles = (settings?.modelProfiles as LLMModelProfile[]) || [];
