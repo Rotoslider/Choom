@@ -8,6 +8,7 @@ import { exec } from 'child_process';
 import { writeFile, unlink, access } from 'fs/promises';
 import path from 'path';
 import { randomBytes } from 'crypto';
+import { markGpuBusy, markGpuFree } from './gpu-lock';
 
 interface ExecutionResult {
   success: boolean;
@@ -111,6 +112,13 @@ export class CodeSandbox {
       shellCommand = `source "${path.join(venvDir, 'bin', 'activate')}" && ${command}`;
     }
 
+    // Track long-running commands as GPU-busy (training, inference scripts often use GPU).
+    // Commands with timeout > 60s are likely compute-intensive, not quick reads.
+    const isLongRunning = timeout > 60_000;
+    if (isLongRunning) {
+      markGpuBusy(`run_command: ${command.slice(0, 80)}`);
+    }
+
     return new Promise<ExecutionResult>((resolve) => {
       const proc = exec(shellCommand, {
         cwd: projectDir,
@@ -119,6 +127,7 @@ export class CodeSandbox {
         shell: '/bin/bash',
         env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
       }, (error, stdout, stderr) => {
+        if (isLongRunning) markGpuFree();
         const durationMs = Date.now() - start;
         const timedOut = error?.killed === true;
         const stdoutResult = this.truncateOutput(stdout || '');

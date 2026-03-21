@@ -18,6 +18,7 @@ import type { SkillHandlerContext } from '@/lib/skill-handler';
 import { getGoogleClient } from '@/lib/google-client';
 import { CompactionService } from '@/lib/compaction-service';
 import { getTimeContext, formatTimeContextForPrompt } from '@/lib/time-context';
+import { isGpuBusy } from '@/lib/gpu-lock';
 import { isMultiStepRequest, createPlan, executePlan, summarizePlan } from '@/lib/planner-loop';
 import { WatcherLoop } from '@/lib/watcher-loop';
 import type { LLMSettings, ToolCall, ToolResult, ToolDefinition, ImageGenSettings, WeatherSettings, SearchSettings, ImageSize, ImageAspect } from '@/lib/types';
@@ -578,6 +579,13 @@ async function executeToolCall(
   }
 
   if (toolCall.name === 'generate_image') {
+    // Check if GPU is occupied by a long-running command (training, inference)
+    const gpuStatus = isGpuBusy();
+    if (gpuStatus.busy) {
+      console.log(`   🚫 Image generation skipped — GPU busy: ${gpuStatus.reason}`);
+      return { toolCallId: toolCall.id, name: toolCall.name, result: { success: false }, error: `GPU is currently busy with: ${gpuStatus.reason}. Image generation deferred — try again when the GPU is free.` };
+    }
+
     try {
       const imageGenEndpoint = (settings?.imageGen as Record<string, unknown>)?.endpoint as string || DEFAULT_IMAGE_GEN_ENDPOINT;
       const imageGenSettings: ImageGenSettings = {
@@ -3608,7 +3616,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           const toolFailureCounts = new Map<string, number>(); // Per-tool name failure counter
           let consecutiveFailures = 0; // Abort after MAX_CONSECUTIVE_FAILURES
           const MAX_CONSECUTIVE_FAILURES = 6;
-          const MAX_CALLS_PER_TOOL = 25; // Max times any single mutating tool can be called per request
+          const MAX_CALLS_PER_TOOL = 50; // Max times any single tool can be called per request
           const MAX_CALLS_PER_READONLY_TOOL = 50; // Higher limit for read-only (PARALLEL_SAFE) tools
           const MAX_FAILURES_PER_TOOL = 2; // Block tool after this many failures (any error)
           const choomTag = `[${choom.name}]`;

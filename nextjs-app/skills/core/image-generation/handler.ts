@@ -5,6 +5,7 @@ import prisma from '@/lib/db';
 import { computeImageDimensions } from '@/lib/types';
 import type { ImageSize, ImageAspect, ImageGenSettings, ToolCall, ToolResult } from '@/lib/types';
 import { WORKSPACE_ROOT } from '@/lib/config';
+import { isGpuBusy } from '@/lib/gpu-lock';
 
 // ============================================================================
 // Module-level image generation lock (serializes checkpoint switching)
@@ -83,6 +84,14 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
   }
 
   private async handleGenerateImage(toolCall: ToolCall, ctx: SkillHandlerContext): Promise<ToolResult> {
+    // Check if GPU is occupied by a long-running command (training, inference).
+    // If so, skip image gen rather than fighting for GPU resources and timing out.
+    const gpuStatus = isGpuBusy();
+    if (gpuStatus.busy) {
+      console.log(`   🚫 Image generation skipped — GPU busy: ${gpuStatus.reason}`);
+      return this.error(toolCall, `GPU is currently busy with: ${gpuStatus.reason}. Image generation deferred — try again when the GPU is free.`);
+    }
+
     try {
       const { choomId, message, settings, send } = ctx;
       // choom.imageSettings is stored as a JSON string in the DB — must parse it
