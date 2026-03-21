@@ -18,7 +18,7 @@ import type { SkillHandlerContext } from '@/lib/skill-handler';
 import { getGoogleClient } from '@/lib/google-client';
 import { CompactionService } from '@/lib/compaction-service';
 import { getTimeContext, formatTimeContextForPrompt } from '@/lib/time-context';
-import { isGpuBusy } from '@/lib/gpu-lock';
+import { waitForGpu } from '@/lib/gpu-lock';
 import { isMultiStepRequest, createPlan, executePlan, summarizePlan } from '@/lib/planner-loop';
 import { WatcherLoop } from '@/lib/watcher-loop';
 import type { LLMSettings, ToolCall, ToolResult, ToolDefinition, ImageGenSettings, WeatherSettings, SearchSettings, ImageSize, ImageAspect } from '@/lib/types';
@@ -579,11 +579,11 @@ async function executeToolCall(
   }
 
   if (toolCall.name === 'generate_image') {
-    // Check if GPU is occupied by a long-running command (training, inference)
-    const gpuStatus = isGpuBusy();
-    if (gpuStatus.busy) {
-      console.log(`   🚫 Image generation skipped — GPU busy: ${gpuStatus.reason}`);
-      return { toolCallId: toolCall.id, name: toolCall.name, result: { success: false }, error: `GPU is currently busy with: ${gpuStatus.reason}. Image generation deferred — try again when the GPU is free.` };
+    // Wait for GPU if it's occupied by a long-running command (training, inference)
+    const gpuWait = await waitForGpu(180_000, 10_000);
+    if (!gpuWait.free) {
+      console.log(`   🚫 Image generation skipped — GPU still busy after ${Math.round(gpuWait.waitedMs / 1000)}s: ${gpuWait.reason}`);
+      return { toolCallId: toolCall.id, name: toolCall.name, result: { success: false }, error: `GPU is busy with: ${gpuWait.reason}. Waited ${Math.round(gpuWait.waitedMs / 1000)}s but it didn't free up. Try again later.` };
     }
 
     try {
