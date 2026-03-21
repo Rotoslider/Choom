@@ -3380,6 +3380,21 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
     // Helper to create an LLM client from a fallback config
     async function createClientForFallback(fb: FallbackConfig): Promise<{ client: { streamChat: LLMClient['streamChat'] }; settings: LLMSettings }> {
       const fbSettings: LLMSettings = { ...llmSettings, model: fb.model };
+
+      // Apply the fallback model's profile (temperature, topP, etc.) instead of
+      // inheriting the primary model's tuning which may be wrong for this model.
+      const userProfiles = (settings?.modelProfiles as LLMModelProfile[]) || [];
+      const fbProfile = findLLMProfile(fb.model, userProfiles);
+      if (fbProfile) {
+        if (fbProfile.temperature !== undefined) fbSettings.temperature = fbProfile.temperature;
+        if (fbProfile.topP !== undefined) fbSettings.topP = fbProfile.topP;
+        if (fbProfile.maxTokens !== undefined) fbSettings.maxTokens = fbProfile.maxTokens;
+        if (fbProfile.topK !== undefined) fbSettings.topK = fbProfile.topK;
+        if (fbProfile.repetitionPenalty !== undefined) fbSettings.repetitionPenalty = fbProfile.repetitionPenalty;
+        if (fbProfile.enableThinking !== undefined) fbSettings.enableThinking = fbProfile.enableThinking;
+        console.log(`   📋 Applied profile for fallback model ${fb.model}`);
+      }
+
       if (fb.providerId) {
         const provider = providers.find((p: LLMProviderConfig) => p.id === fb.providerId);
         if (provider && provider.apiKey) {
