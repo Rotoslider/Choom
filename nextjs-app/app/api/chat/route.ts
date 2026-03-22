@@ -179,18 +179,53 @@ function detectCheckpointType(checkpointName: string): 'pony' | 'flux' | 'other'
   return 'other';
 }
 
-// Attempt basic JSON repair for malformed tool call arguments from local models
+// Attempt JSON repair for malformed tool call arguments from local models.
+// Uses a state machine to properly track string context so braces/brackets
+// inside strings are not miscounted (common when content contains code).
 function tryRepairJSON(raw: string | undefined): Record<string, unknown> | null {
   if (!raw) return null;
   let s = raw.trim();
-  // Add missing closing braces (common with truncated streaming)
-  const opens = (s.match(/{/g) || []).length;
-  const closes = (s.match(/}/g) || []).length;
-  if (opens > closes) s += '}'.repeat(opens - closes);
-  // Remove trailing commas before }
+
+  // State machine: track whether we're inside a JSON string value
+  let inString = false;
+  let braceDepth = 0;
+  let bracketDepth = 0;
+
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (inString) {
+      if (ch === '\\') {
+        i++; // skip escaped character
+      } else if (ch === '"') {
+        inString = false;
+      }
+    } else {
+      if (ch === '"') inString = true;
+      else if (ch === '{') braceDepth++;
+      else if (ch === '}') braceDepth--;
+      else if (ch === '[') bracketDepth++;
+      else if (ch === ']') bracketDepth--;
+    }
+  }
+
+  // Close unterminated string (e.g. truncated "content": "# E)
+  if (inString) {
+    // Remove trailing incomplete escape sequence (lone backslash at end)
+    s = s.replace(/\\$/, '');
+    s += '"';
+  }
+
+  // Remove trailing commas before closing brackets/braces
+  s = s.replace(/,\s*$/g, '');
+
+  // Close open structures
+  if (bracketDepth > 0) s += ']'.repeat(bracketDepth);
+  if (braceDepth > 0) s += '}'.repeat(braceDepth);
+
+  // Clean up trailing commas inside structures
   s = s.replace(/,\s*}/g, '}');
-  // Remove trailing commas before ]
   s = s.replace(/,\s*]/g, ']');
+
   try { return JSON.parse(s); } catch { return null; }
 }
 
@@ -289,6 +324,67 @@ function tryRescueWriteFile(raw: string | undefined): Record<string, unknown> | 
   }
 
   return null;
+}
+
+/**
+ * Generic rescue for any tool call with content-heavy fields (title+content,
+ * name+body, etc.) where JSON was truncated mid-value. Extracts all parseable
+ * key-value pairs from the broken JSON using regex.
+ *
+ * Handles patterns like: {"title": "My Report", "content": "# Intro...
+ * where the last string value is truncated and the JSON is invalid.
+ */
+function tryRescueContentTool(raw: string | undefined): Record<string, unknown> | null {
+  if (!raw || raw.length < 10) return null;
+
+  const result: Record<string, unknown> = {};
+
+  // Extract all complete "key": "value" pairs (value fully closed with ")
+  const completePairs = raw.matchAll(/"([a-zA-Z_]\w*)"\s*:\s*"((?:[^"\\]|\\.)*)"/g);
+  for (const match of completePairs) {
+    let value = match[2];
+    // Unescape JSON string escapes
+    value = value.replace(/\\n/g, '\n').replace(/\\t/g, '\t')
+      .replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+    result[match[1]] = value;
+  }
+
+  // Extract complete "key": number/boolean/null pairs
+  const literalPairs = raw.matchAll(/"([a-zA-Z_]\w*)"\s*:\s*(true|false|null|-?\d+(?:\.\d+)?)/g);
+  for (const match of literalPairs) {
+    const val = match[2];
+    if (val === 'true') result[match[1]] = true;
+    else if (val === 'false') result[match[1]] = false;
+    else if (val === 'null') result[match[1]] = null;
+    else result[match[1]] = Number(val);
+  }
+
+  // Try to rescue the last truncated string value (the one that was cut off)
+  // Find the last "key": " that doesn't have a matching close quote
+  const lastKeyMatch = [...raw.matchAll(/"([a-zA-Z_]\w*)"\s*:\s*"/g)].pop();
+  if (lastKeyMatch && lastKeyMatch.index !== undefined) {
+    const key = lastKeyMatch[1];
+    const valueStart = lastKeyMatch.index + lastKeyMatch[0].length;
+    // Check if this key already has a complete value (was captured above)
+    if (!result[key] || (typeof result[key] === 'string' && (result[key] as string).length === 0)) {
+      let truncatedValue = raw.slice(valueStart);
+      // Strip trailing broken JSON artifacts
+      truncatedValue = truncatedValue.replace(/\\$/, ''); // trailing backslash
+      truncatedValue = truncatedValue.replace(/"\s*[}\]]*\s*$/, ''); // trailing close
+      // Unescape
+      truncatedValue = truncatedValue.replace(/\\n/g, '\n').replace(/\\t/g, '\t')
+        .replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+      if (truncatedValue.length > 0) {
+        result[key] = truncatedValue;
+      }
+    }
+  }
+
+  // Must have extracted at least one field to be useful
+  if (Object.keys(result).length === 0) return null;
+
+  console.log(`   🔧 Rescued tool call via content extraction: ${JSON.stringify(Object.keys(result))}`);
+  return result;
 }
 
 // Extract tool calls from the LLM's text when it describes tool actions but doesn't
@@ -3749,8 +3845,11 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             // Two-tier timeout: (1) inactivity timer resets on each chunk — catches
             // stuck connections fast (60s). (2) Wall-clock cap limits total response
             // time — prevents infinite thinking loops in reasoning models like Qwen 3.x.
+            // Delegated tasks get a longer wall-clock timeout (300s) because they often
+            // involve code generation with large context (50K+ tokens) that exceeds 180s.
             const INACTIVITY_MS = 60000;
-            const timeoutMs = (choom.llmTimeoutSec ? choom.llmTimeoutSec * 1000 : 180000);
+            const DEFAULT_TIMEOUT_MS = isDelegation ? 300000 : 180000;
+            const timeoutMs = (choom.llmTimeoutSec ? choom.llmTimeoutSec * 1000 : DEFAULT_TIMEOUT_MS);
             let inactivityTimer: ReturnType<typeof setTimeout>;
             let rejectInactivity: (err: Error) => void;
             const inactivityPromise = new Promise<never>((_, reject) => {
@@ -3926,6 +4025,8 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             // Convert accumulated tool calls — parse each individually so one bad call
             // doesn't drop ALL of them. Includes basic JSON repair for common LLM errors.
             let toolCalls: { id: string; name: string; arguments: Record<string, unknown> }[] = [];
+            let droppedToolCalls: string[] = []; // track names of dropped calls for retry logic
+            let repairedToolCalls = 0;
             if (toolCallsAccumulator.size > 0) {
               for (const tc of toolCallsAccumulator.values()) {
                 const callId = tc.id || `fallback_${Date.now()}_${toolCalls.length}`;
@@ -3933,21 +4034,32 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                   const args = JSON.parse(tc.arguments || '{}');
                   toolCalls.push({ id: callId, name: tc.name, arguments: args });
                 } catch {
-                  // Try basic JSON repair: trailing commas, missing closing braces
+                  // Tier 1: State-machine JSON repair (handles truncated strings, missing braces)
                   const repaired = tryRepairJSON(tc.arguments);
                   if (repaired !== null) {
                     toolCalls.push({ id: callId, name: tc.name, arguments: repaired });
+                    repairedToolCalls++;
                     console.warn(`   🔧 Repaired malformed JSON for ${tc.name}`);
                   } else if (tc.name === 'workspace_write_file') {
-                    // Special rescue for write_file: models often break JSON when content is large code
+                    // Tier 2a: Special rescue for write_file (regex-based path+content extraction)
                     const rescued = tryRescueWriteFile(tc.arguments);
                     if (rescued) {
                       toolCalls.push({ id: callId, name: tc.name, arguments: rescued });
+                      repairedToolCalls++;
                     } else {
+                      droppedToolCalls.push(tc.name);
                       console.warn(`   ⚠️  Dropping tool call ${tc.name} — unrecoverable JSON: ${tc.arguments?.slice(0, 100)}`);
                     }
                   } else {
-                    console.warn(`   ⚠️  Dropping tool call ${tc.name} — unrecoverable JSON: ${tc.arguments?.slice(0, 100)}`);
+                    // Tier 2b: Generic content rescue (extracts key-value pairs from broken JSON)
+                    const rescued = tryRescueContentTool(tc.arguments);
+                    if (rescued) {
+                      toolCalls.push({ id: callId, name: tc.name, arguments: rescued });
+                      repairedToolCalls++;
+                    } else {
+                      droppedToolCalls.push(tc.name);
+                      console.warn(`   ⚠️  Dropping tool call ${tc.name} — unrecoverable JSON: ${tc.arguments?.slice(0, 100)}`);
+                    }
                   }
                 }
               }
@@ -3964,6 +4076,46 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 return true;
               });
               toolCalls = validToolCalls;
+            }
+
+            // ── finish_reason === 'length' recovery ──
+            // When the LLM's output was truncated due to max_tokens AND tool calls
+            // were dropped or repaired (truncated content), retry with higher max_tokens
+            // instead of proceeding with incomplete results.
+            if (finishReason === 'length' && (droppedToolCalls.length > 0 || repairedToolCalls > 0)) {
+              const currentMax = llmSettings.maxTokens || 4096;
+              const bumpedMax = Math.min(currentMax * 2, 16384);
+              const hasDropped = droppedToolCalls.length > 0;
+
+              if (currentMax < 16384) {
+                console.log(`   ⚠️  ${choomTag} Output truncated (finish_reason=length) — ${hasDropped ? `dropped: [${droppedToolCalls.join(', ')}]` : `${repairedToolCalls} repaired`}. Bumping max_tokens ${currentMax} → ${bumpedMax} and retrying.`);
+
+                // Bump max_tokens for rest of this request
+                llmSettings.maxTokens = bumpedMax;
+                // Also update the active client's settings (may differ from llmSettings after fallback)
+                if ('settings' in llmClient && (llmClient as LLMClient).settings) {
+                  (llmClient as LLMClient).settings.maxTokens = bumpedMax;
+                }
+
+                // If we had to drop tool calls entirely, discard everything from this
+                // iteration and ask the model to retry — partial content was likely just
+                // preamble ("Let me create a document...") anyway.
+                if (hasDropped) {
+                  // Don't execute any tool calls from this truncated response
+                  toolCalls = [];
+                  currentMessages.push({ role: 'assistant', content: iterationContent || '' });
+                  currentMessages.push({
+                    role: 'user',
+                    content: `[System] Your previous response was truncated because it exceeded the output token limit. The following tool calls had incomplete/unparseable arguments and were dropped: [${droppedToolCalls.join(', ')}]. The output limit has been increased. Please retry your tool call — if the content is very long, consider breaking it into smaller parts or being more concise.`,
+                  });
+                  console.log(`   🔄 ${choomTag} Retrying iteration after output truncation`);
+                  continue;
+                }
+                // If all calls were repaired (not dropped), proceed — but log the bump
+                // so the next iteration benefits from higher limit
+              } else {
+                console.warn(`   ⚠️  ${choomTag} Output truncated but max_tokens already at ${currentMax} — proceeding with ${hasDropped ? 'dropped' : 'repaired'} tool calls`);
+              }
             }
 
             // Track this iteration's text for post-loop dedup & assembly
@@ -4161,8 +4313,14 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 const isConfigError = /not configured|api key|unauthorized|forbidden|invalid.*(?:model|endpoint|key)|ECONNREFUSED/i.test(result.error);
                 const isParamError = /missing required parameter|is required|must provide|please provide/i.test(result.error);
                 const isGpuBusy = /GPU is busy|GPU is currently busy/i.test(result.error);
+                // "No data/history/results" is informational, not a tool failure — don't count
+                const isNoData = /no (?:history |data |results? )(?:data |found )?for /i.test(result.error);
                 failedCallCache.set(dedupKey, result.error);
-                if (isGpuBusy) {
+                if (isNoData) {
+                  // No data found is informational — the tool works, the entity just has no data.
+                  // Don't count toward failure caps (prevents blocking ha_get_history etc.)
+                  console.log(`   ℹ️  ${tc.name}: no data found (informational, not counted as failure)`);
+                } else if (isGpuBusy) {
                   // GPU busy is temporary — don't count as failure, don't block the tool.
                   // The model should stop retrying and inform the user.
                   console.log(`   ⏳ ${tc.name}: GPU busy (temporary, not counted as failure)`);

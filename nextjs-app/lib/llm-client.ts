@@ -56,7 +56,7 @@ export interface ChatCompletionChunk {
 
 export class LLMClient {
   private endpoint: string;
-  private settings: LLMSettings;
+  public settings: LLMSettings;
   private apiKey?: string;
 
   constructor(settings: LLMSettings, apiKey?: string) {
