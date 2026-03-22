@@ -394,8 +394,9 @@ class ScheduledTaskManager:
                     message = notif.get("message", "")
                     include_audio = notif.get("includeAudio", True)
                     images = notif.get("images", [])  # Resolved by API: [{id, url}]
+                    file_paths = notif.get("filePaths", [])  # Absolute workspace paths
 
-                    if not message and not images:
+                    if not message and not images and not file_paths:
                         delivered_ids.append(notif["id"])
                         continue
 
@@ -420,8 +421,12 @@ class ScheduledTaskManager:
                     if images:
                         self._send_notification_images(images, choom_name)
 
+                    # Send attached workspace files via Signal
+                    if file_paths:
+                        self._send_notification_files(file_paths, choom_name)
+
                     delivered_ids.append(notif["id"])
-                    logger.info(f"Delivered notification {notif['id']}: {message[:50]}... (images: {len(images)})")
+                    logger.info(f"Delivered notification {notif['id']}: {message[:50]}... (images: {len(images)}, files: {len(file_paths)})")
 
                 except Exception as e:
                     logger.warning(f"Failed to deliver notification {notif.get('id')}: {e}")
@@ -483,6 +488,36 @@ class ScheduledTaskManager:
 
             except Exception as e:
                 logger.error(f"Failed to send notification image {i}: {e}")
+
+    def _send_notification_files(self, file_paths: list, choom_name: str = None):
+        """Send workspace file attachments via Signal.
+
+        Args:
+            file_paths: List of absolute file paths (validated by API at creation time)
+            choom_name: Choom name for logging
+        """
+        import time
+
+        for i, fpath in enumerate(file_paths):
+            if not isinstance(fpath, str) or not fpath.strip():
+                continue
+
+            if not os.path.exists(fpath):
+                logger.warning(f"Notification file {i} not found: {fpath}")
+                continue
+
+            try:
+                file_size = os.path.getsize(fpath)
+                file_name = os.path.basename(fpath)
+                time.sleep(1)  # Small delay between messages for signal-cli
+                self.signal.send_message(
+                    self.owner_phone,
+                    "",  # Empty message — just the file
+                    attachments=[fpath]
+                )
+                logger.info(f"Sent notification file: {file_name} ({file_size:,} bytes) for {choom_name}")
+            except Exception as e:
+                logger.error(f"Failed to send notification file {i} ({fpath}): {e}")
 
     # =========================================================================
     # Default Task Implementations

@@ -139,6 +139,16 @@ export default class CodeExecutionHandler extends BaseSkillHandler {
           console.log(`   🔄 Extracted project_folder="${projectFolder}" from cd prefix in command`);
         }
       }
+      // Try to extract project folder from absolute workspace paths in the command
+      // e.g., "/home/nuc1/choom-projects/autoresearch-GLM5/file.py" → "autoresearch-GLM5"
+      if (!projectFolder && command) {
+        const wsEscaped = WORKSPACE_ROOT.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const absMatch = command.match(new RegExp(wsEscaped + '/([^/\\s]+)'));
+        if (absMatch) {
+          projectFolder = absMatch[1];
+          console.log(`   🔄 Extracted project_folder="${projectFolder}" from absolute path in command`);
+        }
+      }
       // Last resort: infer from file references in the command
       if (!projectFolder && command) {
         projectFolder = inferProjectFolder(command) || projectFolder;

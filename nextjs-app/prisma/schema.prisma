@@ -81,6 +81,7 @@ model Notification {
   choomId      String
   message      String
   imageIds     String?  // JSON array of GeneratedImage IDs to attach
+  filePaths    String?  // JSON array of absolute workspace file paths to attach
   includeAudio Boolean  @default(true)
   delivered    Boolean  @default(false)
   createdAt    DateTime @default(now())

@@ -195,6 +195,46 @@ function tryRepairJSON(raw: string | undefined): Record<string, unknown> | null 
 }
 
 /**
+ * Create a streaming filter that strips <think>...</think> blocks emitted by
+ * reasoning models (Qwen 3.x, DeepSeek-R1, etc.). Call filter() on each content
+ * chunk; it returns only the visible (non-thinking) portion. Maintains state
+ * across calls so tags that span chunk boundaries are handled correctly.
+ */
+function createThinkFilter(): (text: string) => string {
+  let inThinkBlock = false;
+
+  return function filter(text: string): string {
+    if (!text) return '';
+    let result = '';
+    let pos = 0;
+
+    while (pos < text.length) {
+      if (inThinkBlock) {
+        const closeIdx = text.indexOf('</think>', pos);
+        if (closeIdx !== -1) {
+          inThinkBlock = false;
+          pos = closeIdx + 8; // '</think>'.length
+        } else {
+          break; // rest is inside think block — discard
+        }
+      } else {
+        const openIdx = text.indexOf('<think>', pos);
+        if (openIdx !== -1) {
+          result += text.slice(pos, openIdx);
+          inThinkBlock = true;
+          pos = openIdx + 7; // '<think>'.length
+        } else {
+          result += text.slice(pos);
+          break;
+        }
+      }
+    }
+
+    return result;
+  };
+}
+
+/**
  * Rescue workspace_write_file tool calls with broken JSON arguments.
  * Models often fail to properly escape code content in JSON strings, producing
  * arguments like raw code mixed with partial JSON. This extracts the path and
@@ -3706,11 +3746,26 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             >();
             let finishReason = 'stop';
 
-            // Create timeout for this iteration (per-Choom override or default 120s)
-            const timeoutMs = (choom.llmTimeoutSec ? choom.llmTimeoutSec * 1000 : 120000);
-            const timeoutPromise = new Promise<never>((_, reject) => {
+            // Two-tier timeout: (1) inactivity timer resets on each chunk — catches
+            // stuck connections fast (60s). (2) Wall-clock cap limits total response
+            // time — prevents infinite thinking loops in reasoning models like Qwen 3.x.
+            const INACTIVITY_MS = 60000;
+            const timeoutMs = (choom.llmTimeoutSec ? choom.llmTimeoutSec * 1000 : 180000);
+            let inactivityTimer: ReturnType<typeof setTimeout>;
+            let rejectInactivity: (err: Error) => void;
+            const inactivityPromise = new Promise<never>((_, reject) => {
+              rejectInactivity = reject;
+              inactivityTimer = setTimeout(() => reject(new Error('LLM response timeout (no data for 60s)')), INACTIVITY_MS);
+            });
+            inactivityPromise.catch(() => {}); // suppress unhandled rejection after race
+            const resetInactivity = () => {
+              clearTimeout(inactivityTimer);
+              inactivityTimer = setTimeout(() => rejectInactivity(new Error('LLM response timeout (no data for 60s)')), INACTIVITY_MS);
+            };
+            const wallClockPromise = new Promise<never>((_, reject) => {
               setTimeout(() => reject(new Error('LLM response timeout')), timeoutMs);
             });
+            wallClockPromise.catch(() => {}); // suppress unhandled rejection after race
 
             const toolChoiceOverride = forceToolCall ? 'required' as const : undefined;
             if (forceToolCall) {
@@ -3718,14 +3773,24 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               forceToolCall = false; // Reset after use
             }
 
+            // Think-block filter: strips <think>...</think> from reasoning models
+            const thinkFilter = createThinkFilter();
+            let thinkTokensFiltered = false;
+
             const streamPromise = (async () => {
               for await (const chunk of llmClient.streamChat(currentMessages, activeTools, undefined, toolChoiceOverride)) {
+                resetInactivity(); // chunk received — connection alive
                 if (!chunk.choices || !chunk.choices[0]) continue;
                 const choice = chunk.choices[0];
 
                 if (choice.delta.content) {
-                  iterationContent += choice.delta.content;
-                  send({ type: 'content', content: choice.delta.content });
+                  const visible = thinkFilter(choice.delta.content);
+                  if (visible) {
+                    iterationContent += visible;
+                    send({ type: 'content', content: visible });
+                  } else if (choice.delta.content.length > 0) {
+                    thinkTokensFiltered = true;
+                  }
                 }
 
                 if (choice.delta.tool_calls) {
@@ -3736,10 +3801,13 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                   finishReason = choice.finish_reason;
                 }
               }
+              if (thinkTokensFiltered) {
+                console.log(`   🧠 ${choomTag} Think tokens filtered from response`);
+              }
             })();
 
             try {
-              await Promise.race([streamPromise, timeoutPromise]);
+              await Promise.race([streamPromise, inactivityPromise, wallClockPromise]);
             } catch (timeoutError) {
               const errMsg = timeoutError instanceof Error ? timeoutError.message : String(timeoutError);
               console.warn(`   ⚠️  LLM response error on iteration ${iteration}: ${errMsg}`);
@@ -3764,21 +3832,39 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                     toolCallsAccumulator = new Map();
                     finishReason = 'stop';
 
-                    // Fallback timeout: local models get FULL primary timeout (they're slower
-                    // than cloud with large context). Cloud fallbacks get 75% (min 60s).
+                    // Fallback timeout: same two-tier approach (inactivity + wall-clock).
+                    // Local models get FULL primary timeout, cloud gets 75% (min 60s).
                     const isLocalFallback = !fb.providerId;
                     const fbTimeoutMs = isLocalFallback ? timeoutMs : Math.max(60000, Math.floor(timeoutMs * 0.75));
-                    const fbTimeoutPromise = new Promise<never>((_, reject) => {
+                    let fbInactivityTimer: ReturnType<typeof setTimeout>;
+                    let fbRejectInactivity: (err: Error) => void;
+                    const fbInactivityPromise = new Promise<never>((_, reject) => {
+                      fbRejectInactivity = reject;
+                      fbInactivityTimer = setTimeout(() => reject(new Error('LLM response timeout (no data for 60s)')), INACTIVITY_MS);
+                    });
+                    fbInactivityPromise.catch(() => {});
+                    const resetFbInactivity = () => {
+                      clearTimeout(fbInactivityTimer);
+                      fbInactivityTimer = setTimeout(() => fbRejectInactivity(new Error('LLM response timeout (no data for 60s)')), INACTIVITY_MS);
+                    };
+                    const fbWallClockPromise = new Promise<never>((_, reject) => {
                       setTimeout(() => reject(new Error('LLM response timeout')), fbTimeoutMs);
                     });
-                    console.log(`   ⏱️  Fallback timeout: ${fbTimeoutMs / 1000}s (primary was ${timeoutMs / 1000}s)`);
+                    fbWallClockPromise.catch(() => {});
+                    console.log(`   ⏱️  Fallback timeout: ${fbTimeoutMs / 1000}s wall-clock, 60s inactivity (primary was ${timeoutMs / 1000}s)`);
+
+                    const fbThinkFilter = createThinkFilter();
                     const fbStreamPromise = (async () => {
                       for await (const chunk of fbClient.streamChat(currentMessages, activeTools, undefined, toolChoiceOverride)) {
+                        resetFbInactivity();
                         if (!chunk.choices || !chunk.choices[0]) continue;
                         const choice = chunk.choices[0];
                         if (choice.delta.content) {
-                          iterationContent += choice.delta.content;
-                          send({ type: 'content', content: choice.delta.content });
+                          const visible = fbThinkFilter(choice.delta.content);
+                          if (visible) {
+                            iterationContent += visible;
+                            send({ type: 'content', content: visible });
+                          }
                         }
                         if (choice.delta.tool_calls) {
                           accumulateToolCalls(toolCallsAccumulator, choice.delta);
@@ -3789,7 +3875,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                       }
                     })();
 
-                    await Promise.race([fbStreamPromise, fbTimeoutPromise]);
+                    await Promise.race([fbStreamPromise, fbInactivityPromise, fbWallClockPromise]);
 
                     // Fallback succeeded — switch llmClient for rest of this request
                     llmClient = fbClient;
