@@ -187,9 +187,12 @@ function tryRepairJSON(raw: string | undefined): Record<string, unknown> | null 
   let s = raw.trim();
 
   // State machine: track whether we're inside a JSON string value
+  // Also detect where the first root-level object ends, so we can
+  // truncate concatenated objects like "{}{}" or '{"a":1}{"b":2}'
   let inString = false;
   let braceDepth = 0;
   let bracketDepth = 0;
+  let firstObjectEnd = -1;
 
   for (let i = 0; i < s.length; i++) {
     const ch = s[i];
@@ -202,10 +205,22 @@ function tryRepairJSON(raw: string | undefined): Record<string, unknown> | null 
     } else {
       if (ch === '"') inString = true;
       else if (ch === '{') braceDepth++;
-      else if (ch === '}') braceDepth--;
+      else if (ch === '}') {
+        braceDepth--;
+        if (braceDepth === 0 && bracketDepth === 0 && firstObjectEnd === -1) {
+          firstObjectEnd = i;
+        }
+      }
       else if (ch === '[') bracketDepth++;
       else if (ch === ']') bracketDepth--;
     }
+  }
+
+  // If the first root object closed before the end of the string,
+  // there's trailing garbage (e.g. "{}{}", '{"a":1}extra'). Truncate.
+  if (firstObjectEnd !== -1 && firstObjectEnd < s.length - 1) {
+    s = s.slice(0, firstObjectEnd + 1);
+    try { return JSON.parse(s); } catch { /* fall through to other repairs */ }
   }
 
   // Close unterminated string (e.g. truncated "content": "# E)
