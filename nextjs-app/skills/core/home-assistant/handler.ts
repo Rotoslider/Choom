@@ -110,6 +110,9 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
             entity_id: summary.entity_id,
             friendly_name: summary.friendly_name,
             period: `${hours} hours`,
+            ...(summary.samples === 0 && {
+              note: `No history data recorded for ${entityId} in the last ${hours} hours`,
+            }),
             ...(summary.min !== null && {
               min: `${summary.min}${summary.unit}`,
               max: `${summary.max}${summary.unit}`,

@@ -181,7 +181,21 @@ export class HomeAssistantService {
     );
 
     if (!data || data.length === 0 || data[0].length === 0) {
-      throw new Error(`No history data for ${entityId}`);
+      // Return empty summary instead of throwing — "no data" is informational,
+      // not a failure. Throwing caused brokenTools blocking after 2 entities
+      // had no history, preventing queries for remaining entities.
+      return {
+        entity_id: entityId,
+        friendly_name: entityId,
+        min: null,
+        max: null,
+        avg: null,
+        trend: 'unknown' as const,
+        samples: 0,
+        unit: '',
+        first: 'no data',
+        last: 'no data',
+      };
     }
 
     const entries = data[0];

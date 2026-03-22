@@ -6,6 +6,9 @@ const TOOL_NAMES = new Set(['delegate_to_choom', 'list_team', 'get_delegation_re
 
 // Cache delegation results for retrieval within the session
 const delegationResults = new Map<string, DelegationResult>();
+// Track timed-out delegations per-choom to prevent retry loops
+// Key: choomName (lowercase), Value: { delegationId, timestamp }
+const recentTimeouts = new Map<string, { delegationId: string; timestamp: number }>();
 let delegationCounter = 0;
 
 interface DelegationResult {
@@ -87,7 +90,8 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
     const choomName = toolCall.arguments.choom_name as string;
     const task = toolCall.arguments.task as string;
     const extraContext = toolCall.arguments.context as string | undefined;
-    const timeoutSeconds = Math.min(900, Math.max(30, (toolCall.arguments.timeout_seconds as number) || 600));
+    // Min 120s (was 30s — models often pass low values that cause premature timeouts)
+    const timeoutSeconds = Math.min(900, Math.max(120, (toolCall.arguments.timeout_seconds as number) || 600));
     const continueDelegationId = toolCall.arguments.continue_delegation_id as string | undefined;
 
     if (!choomName) return this.error(toolCall, 'choom_name is required');
@@ -134,15 +138,37 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
           return this.error(toolCall, 'Cannot delegate to yourself. Use tools directly instead.');
         }
 
-        // Create a dedicated delegation chat
-        delegationId = `deleg_${++delegationCounter}_${Date.now()}`;
-        const delegationChat = await prisma.chat.create({
-          data: {
-            choomId: targetChoom.id,
-            title: `[Delegation] ${task.slice(0, 50)}...`,
-          },
-        });
-        delegationChatId = delegationChat.id;
+        // Prevent delegation retry loops: if this choom just timed out on a
+        // delegation (within last 10 min), force continuation instead of fresh start.
+        // This prevents Aloy → Anya timeout → Aloy re-delegates → Anya timeout → loop.
+        const choomKey = targetChoom.name.toLowerCase();
+        const recentTimeout = recentTimeouts.get(choomKey);
+        if (recentTimeout && (Date.now() - recentTimeout.timestamp) < 600000) {
+          console.log(`   🔄 ${targetChoom.name} timed out recently (${recentTimeout.delegationId}) — auto-converting to continuation`);
+          const prev = delegationResults.get(recentTimeout.delegationId);
+          if (prev) {
+            // Reuse the existing chat so the choom has its full context
+            delegationChatId = prev.chatId;
+            delegationId = `${recentTimeout.delegationId}_cont_${Date.now()}`;
+            isContinuation = true;
+            recentTimeouts.delete(choomKey); // clear so third attempt is fresh
+          } else {
+            // Previous result was cleaned up — proceed with fresh delegation
+            delegationId = `deleg_${++delegationCounter}_${Date.now()}`;
+          }
+        }
+
+        if (!isContinuation) {
+          // Create a dedicated delegation chat
+          delegationId = `deleg_${++delegationCounter}_${Date.now()}`;
+          const delegationChat = await prisma.chat.create({
+            data: {
+              choomId: targetChoom.id,
+              title: `[Delegation] ${task.slice(0, 50)}...`,
+            },
+          });
+          delegationChatId = delegationChat.id;
+        }
       }
 
       // 3. Build the delegation message with context
@@ -314,6 +340,8 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
               maxIterations: doneMaxIterations,
             };
             delegationResults.set(delegationId, result);
+            // Track the timeout so the next delegation to this choom auto-continues
+            recentTimeouts.set(targetChoom.name.toLowerCase(), { delegationId, timestamp: Date.now() });
             return this.success(toolCall, {
               success: true,
               delegation_id: delegationId,
@@ -322,7 +350,7 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
               tools_used: toolCallsUsed.map(tc => tc.name),
               duration_seconds: elapsed,
               incomplete: true,
-              message: `${targetChoom.name} timed out after ${elapsed}s but partial work was captured. You can continue with continue_delegation_id="${delegationId}".`,
+              message: `${targetChoom.name} timed out after ${elapsed}s but partial work was captured. IMPORTANT: If you re-delegate to ${targetChoom.name}, use continue_delegation_id="${delegationId}" to resume where they left off instead of starting over.`,
             });
           }
           return this.error(toolCall, `Delegation to "${targetChoom.name}" timed out after ${elapsed}s (${timeoutSeconds}s limit). ${toolCallsUsed.length > 0 ? `${toolCallsUsed.length} tools were called before timeout.` : 'No tools were called.'}`);
