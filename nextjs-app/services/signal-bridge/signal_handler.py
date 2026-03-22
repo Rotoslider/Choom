@@ -344,16 +344,37 @@ class SignalHandler:
     def send_sync_request(self) -> bool:
         """
         Send a sync request to the primary device.
-        This keeps the linked device active and prevents Signal from
-        marking it as inactive/expired.
+        NOTE: This does NOT reset Signal's account inactivity timer.
+        Use refresh_account() for keepalive instead.
         """
         try:
             self._send_request("sendSyncRequest", timeout=30)
-            logger.info("Sync request sent — linked device keepalive OK")
+            logger.info("Sync request sent")
             return True
         except Exception as e:
             logger.error(f"Sync request failed: {e}")
             return False
+
+    def refresh_account(self) -> bool:
+        """
+        Refresh account registration with Signal's servers.
+        This refreshes pre-keys and account attributes, which resets
+        the inactivity timer and prevents the 'open Signal on your phone'
+        warning. Equivalent to what 'signal-cli receive' does server-side.
+        """
+        try:
+            self._send_request("updateAccount", timeout=30)
+            logger.info("Account refresh successful — server-side keepalive OK")
+            return True
+        except Exception as e:
+            logger.warning(f"updateAccount failed ({e}), trying sendContacts as fallback")
+            try:
+                self._send_request("sendContacts", timeout=30)
+                logger.info("sendContacts fallback successful — server activity registered")
+                return True
+            except Exception as e2:
+                logger.error(f"Account refresh failed completely: {e2}")
+                return False
 
     def is_registered(self) -> bool:
         """Check if the account is registered (daemon is running = registered)"""

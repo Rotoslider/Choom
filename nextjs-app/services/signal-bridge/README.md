@@ -18,8 +18,18 @@ Connect your Chooms to Signal for remote access via your phone.
 ## Architecture
 
 ```
-Phone (Signal) → Ngrok → Signal Bridge → Choom API → LLM/STT/TTS/Memory
+Phone (Signal) → signal-cli daemon (JSON-RPC/Unix socket) → Signal Bridge → Choom API → LLM/STT/TTS/Memory
 ```
+
+### Services
+
+The bridge runs as three systemd services:
+
+| Service | Purpose |
+|---------|---------|
+| `signal-cli-daemon` | signal-cli in daemon mode, listens on Unix socket at `/run/user/1000/signal-cli/socket` |
+| `signal-bridge` | Python bridge — routes messages between signal-cli and the Choom API |
+| `ngrok` | HTTPS tunnel for external webhook access |
 
 ## Setup Instructions
 
@@ -32,8 +42,8 @@ chmod +x setup.sh
 ```
 
 This installs:
-- Java 21 (required by signal-cli)
-- signal-cli v0.13.2
+- Java 25 (required by signal-cli ≥ 0.14.x; older versions used Java 21)
+- signal-cli
 - Python dependencies
 - Creates necessary directories
 
@@ -251,6 +261,139 @@ If you want extra protection:
 2. **Rate Limiting** - Add to bridge if needed
 3. **Message Logging** - All messages are logged for audit
 
+## Updating signal-cli
+
+### Step-by-Step
+
+```bash
+# 1. Back up account data (do this FIRST)
+cp -r ~/.local/share/signal-cli ~/.local/share/signal-cli.bak
+
+# 2. Stop services
+systemctl stop signal-bridge signal-cli-daemon
+
+# 3. Download and install latest version
+VERSION=$(curl -Ls -o /dev/null -w %{url_effective} https://github.com/AsamK/signal-cli/releases/latest | sed -e 's/^.*\/v//')
+echo "Installing signal-cli v${VERSION}"
+curl -L -O https://github.com/AsamK/signal-cli/releases/download/v"${VERSION}"/signal-cli-"${VERSION}".tar.gz
+sudo tar xf signal-cli-"${VERSION}".tar.gz -C /opt
+sudo ln -sf /opt/signal-cli-"${VERSION}"/bin/signal-cli /usr/local/bin/
+
+# 4. Update the systemd service to point to the new version
+# Replace the old version path with the new one
+sudo sed -i "s|/opt/signal-cli-[0-9.]*/|/opt/signal-cli-${VERSION}/|g" /etc/systemd/system/signal-cli-daemon.service
+sudo systemctl daemon-reload
+
+# 5. Start daemon and verify logs
+systemctl start signal-cli-daemon
+journalctl -u signal-cli-daemon -f
+# Watch for errors — Ctrl-C when it looks stable
+
+# 6. Start the bridge
+systemctl start signal-bridge
+
+# 7. Clean up
+rm signal-cli-"${VERSION}".tar.gz
+```
+
+### Java Version Gotcha
+
+signal-cli is a Java application. Major version bumps may require a newer Java runtime:
+
+| signal-cli | Required Java |
+|------------|---------------|
+| 0.13.x | Java 21 (`openjdk-21-jre-headless`) |
+| 0.14.x | Java 25 (`openjdk-25-jre-headless`) |
+
+If you see this error after upgrading:
+```
+UnsupportedClassVersionError: org/asamk/signal/Main has been compiled by a more recent version of the Java Runtime
+```
+
+Install the required Java version:
+```bash
+sudo apt install openjdk-25-jre-headless
+```
+
+### Rollback
+
+If the new version breaks something:
+```bash
+systemctl stop signal-bridge signal-cli-daemon
+
+# Restore the old version path in the service file (e.g. back to 0.13.24)
+sudo sed -i 's|/opt/signal-cli-NEW_VERSION/|/opt/signal-cli-OLD_VERSION/|g' /etc/systemd/system/signal-cli-daemon.service
+sudo systemctl daemon-reload
+
+# Restore account data if needed
+cp -r ~/.local/share/signal-cli.bak ~/.local/share/signal-cli
+
+systemctl start signal-cli-daemon signal-bridge
+```
+
+The old install remains untouched at `/opt/signal-cli-OLD_VERSION/` — rollback is just changing one path.
+
+### Profile Name
+
+signal-cli 0.14+ warns if no profile name is set. Set one via the daemon socket (no restart needed):
+
+```bash
+signal-cli --output=json jsonRpc <<< '{"jsonrpc":"2.0","id":1,"method":"updateProfile","params":{"givenName":"Choom"}}'
+```
+
+Or stop the daemon and set it directly:
+```bash
+systemctl stop signal-cli-daemon
+signal-cli -a +1YOUR_NUMBER updateProfile --given-name "Choom"
+systemctl start signal-cli-daemon
+```
+
+## Account Keepalive
+
+Signal marks accounts as inactive after ~30 days without server-side activity, showing an "Open Signal on your phone or your account will be deleted" warning.
+
+### How It Works
+
+The bridge runs an automatic keepalive task every 6 hours that calls `updateAccount` via the daemon's JSON-RPC socket. This refreshes pre-keys and account attributes on Signal's servers, resetting the inactivity timer.
+
+**Important:** The correct JSON-RPC method is `updateAccount`, NOT `sendSyncRequest`. `sendSyncRequest` is a device-to-device sync message that does not register as account activity with Signal's servers. Only `updateAccount` (or actually sending/receiving messages) resets the inactivity timer.
+
+### Verify Keepalive Is Running
+
+Check the bridge logs for keepalive activity:
+```bash
+journalctl -u signal-bridge | grep -i keepalive
+```
+
+You should see entries like:
+```
+Signal account keepalive OK — inactivity timer reset
+```
+
+### Manual Keepalive
+
+If you need to trigger it immediately:
+```bash
+signal-cli --output=json jsonRpc <<< '{"jsonrpc":"2.0","id":1,"method":"updateAccount"}'
+```
+
+Or via raw socket (when another client is connected):
+```python
+import socket, json
+sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+sock.connect('/run/user/1000/signal-cli/socket')
+sock.settimeout(15)
+sock.sendall((json.dumps({"jsonrpc":"2.0","id":1,"method":"updateAccount"}) + "\n").encode())
+print(sock.makefile('r').readline())
+sock.close()
+```
+
+### Reference
+
+- [signal-cli issue #1728](https://github.com/AsamK/signal-cli/issues/1728) — original discussion of the inactivity warning
+- Signal expires accounts after ~30 days idle, warns at ~7-day intervals
+- Daemon mode maintains a WebSocket to Signal servers but this alone may not prevent the warning
+
 ## Troubleshooting
 
 ### signal-cli Issues
@@ -306,6 +449,7 @@ signal-bridge/
 │   ├── credentials.json
 │   └── token.json
 ├── systemd/
+│   ├── signal-cli-daemon.service
 │   ├── signal-bridge.service
 │   └── ngrok.service
 └── install-services.sh
