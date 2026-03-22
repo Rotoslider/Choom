@@ -50,8 +50,9 @@ export default class WorkspaceFilesHandler extends BaseSkillHandler {
   private sanitizePath(filePath: string): string {
     // Strip characters that are never valid in file paths
     let cleaned = filePath.replace(/[{}%<>|*?"\\;=+~`!@#$^&:]/g, '');
-    // Collapse multiple spaces into underscore, trim
-    cleaned = cleaned.replace(/\s{2,}/g, '_').trim();
+    // Collapse multiple spaces into underscore, trim each path segment
+    cleaned = cleaned.replace(/\s{2,}/g, '_');
+    cleaned = cleaned.split('/').map(s => s.trim()).filter(Boolean).join('/');
     // Collapse multiple slashes
     cleaned = cleaned.replace(/\/{2,}/g, '/');
     if (cleaned !== filePath) {
@@ -102,9 +103,22 @@ export default class WorkspaceFilesHandler extends BaseSkillHandler {
       const filePath = this.sanitizePath((toolCall.arguments.path || toolCall.arguments.file_path || toolCall.arguments.filename) as string || '');
 
       const ws = new WorkspaceService(WORKSPACE_ROOT, WORKSPACE_MAX_FILE_SIZE_KB, WORKSPACE_ALLOWED_EXTENSIONS);
-      const content = await ws.readFile(filePath);
+      let content = await ws.readFile(filePath);
 
-      console.log(`   📖 Workspace read: ${filePath}`);
+      // Truncate large reads to prevent context bloat that causes LLM timeouts.
+      // Data files get a tighter limit since models rarely need full content.
+      const ext = filePath.split('.').pop()?.toLowerCase() || '';
+      const dataExts = new Set(['json', 'csv', 'tsv', 'xml', 'log']);
+      const maxChars = dataExts.has(ext) ? 12000 : 30000;
+      let truncated = false;
+      if (content.length > maxChars) {
+        const originalLen = content.length;
+        content = content.slice(0, maxChars);
+        truncated = true;
+        content += `\n\n[... truncated — showing first ${maxChars.toLocaleString()} of ${originalLen.toLocaleString()} chars. File is too large to include fully in context.]`;
+      }
+
+      console.log(`   📖 Workspace read: ${filePath}${truncated ? ` (truncated to ${maxChars} chars)` : ''}`);
       return this.success(toolCall, { success: true, content });
     } catch (err) {
       console.error('   ❌ Workspace read error:', err instanceof Error ? err.message : err);

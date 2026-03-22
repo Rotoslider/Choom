@@ -1790,7 +1790,15 @@ async function executeToolCall(
     try {
       const ws = new WorkspaceService(WORKSPACE_ROOT, WORKSPACE_MAX_FILE_SIZE_KB, WORKSPACE_ALLOWED_EXTENSIONS);
       const filePath = toolCall.arguments.path as string;
-      const content = await ws.readFile(filePath);
+      let content = await ws.readFile(filePath);
+      // Truncate large reads to prevent context bloat / LLM timeouts
+      const ext = filePath.split('.').pop()?.toLowerCase() || '';
+      const dataExts = new Set(['json', 'csv', 'tsv', 'xml', 'log']);
+      const maxChars = dataExts.has(ext) ? 12000 : 30000;
+      if (content.length > maxChars) {
+        const originalLen = content.length;
+        content = content.slice(0, maxChars) + `\n\n[... truncated — showing first ${maxChars.toLocaleString()} of ${originalLen.toLocaleString()} chars]`;
+      }
       return {
         toolCallId: toolCall.id,
         name: toolCall.name,
@@ -4621,13 +4629,43 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           );
 
           // Save assistant message with all tool calls/results
+          // Cap serialized sizes to prevent multi-MB rows that crash Prisma Studio / bloat DB
+          const MAX_DB_FIELD_CHARS = 100_000;
+          let toolCallsJson = allToolCalls.length > 0 ? JSON.stringify(allToolCalls) : null;
+          let toolResultsJson = allToolResults.length > 0 ? JSON.stringify(allToolResults) : null;
+          // Truncate by dropping trailing array entries to keep valid JSON (not slicing mid-string)
+          const truncateJsonArray = (json: string, label: string): string => {
+            if (json.length <= MAX_DB_FIELD_CHARS) return json;
+            try {
+              const arr = JSON.parse(json) as unknown[];
+              while (arr.length > 1) {
+                arr.pop();
+                const attempt = JSON.stringify(arr);
+                if (attempt.length <= MAX_DB_FIELD_CHARS) {
+                  console.warn(`   ⚠️ ${label} trimmed for DB save: ${arr.length} entries kept (${json.length.toLocaleString()} → ${attempt.length.toLocaleString()} chars)`);
+                  return attempt;
+                }
+              }
+              // Even single entry too large — store null
+              console.warn(`   ⚠️ ${label} too large even with 1 entry (${json.length.toLocaleString()} chars) — dropping`);
+              return '[]';
+            } catch {
+              return json.slice(0, MAX_DB_FIELD_CHARS); // fallback
+            }
+          };
+          if (toolCallsJson && toolCallsJson.length > MAX_DB_FIELD_CHARS) {
+            toolCallsJson = truncateJsonArray(toolCallsJson, 'toolCalls');
+          }
+          if (toolResultsJson && toolResultsJson.length > MAX_DB_FIELD_CHARS) {
+            toolResultsJson = truncateJsonArray(toolResultsJson, 'toolResults');
+          }
           await prisma.message.create({
             data: {
               chatId,
               role: 'assistant',
               content: cleanedContent,
-              toolCalls: allToolCalls.length > 0 ? JSON.stringify(allToolCalls) : null,
-              toolResults: allToolResults.length > 0 ? JSON.stringify(allToolResults) : null,
+              toolCalls: toolCallsJson,
+              toolResults: toolResultsJson,
             },
           });
 
