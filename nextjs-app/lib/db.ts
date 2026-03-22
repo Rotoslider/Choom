@@ -16,4 +16,16 @@ if (process.env.NODE_ENV !== 'production') {
   globalForPrisma.prisma = prisma;
 }
 
+// Clean orphaned records that bypass Prisma's cascade (e.g. direct SQLite inserts).
+// Runs once per process startup. Prevents Prisma Studio crashes from dangling FKs.
+const cleanupKey = Symbol.for('prisma_orphan_cleanup_done');
+if (!(globalThis as Record<symbol, boolean>)[cleanupKey]) {
+  (globalThis as Record<symbol, boolean>)[cleanupKey] = true;
+  prisma.$executeRawUnsafe(
+    `DELETE FROM Message WHERE chatId NOT IN (SELECT id FROM Chat)`
+  ).then((count: number) => {
+    if (count > 0) console.log(`   🧹 Cleaned ${count} orphaned Message rows`);
+  }).catch(() => { /* table may not exist yet */ });
+}
+
 export default prisma;

@@ -54,15 +54,31 @@ export class WorkspaceService {
     // Strip leading slashes to prevent absolute path injection
     cleaned = cleaned.replace(/^[/\\]+/, '');
 
-    // Case-insensitive top-folder matching: redirect to the canonical project folder.
-    // Prevents LLMs creating duplicates like "my_photos" vs "My_Photos".
+    // Trim each path segment — trailing spaces break extension detection (".py " ≠ ".py")
+    cleaned = cleaned.split('/').map(s => s.trim()).filter(Boolean).join('/');
+
+    // Case-insensitive + fuzzy top-folder matching: redirect to the canonical project folder.
+    // Prevents LLMs creating duplicates like "my_photos" vs "My_Photos" or typos
+    // like "local_model._development" vs "local_model_development".
     // When multiple case variants exist, prefer the one with maxIterations in metadata
     // (user-configured), then fall back to the one with more files (the real project).
     const segments = cleaned.split(/[/\\]/);
     if (segments.length > 0 && segments[0]) {
       try {
         const existing = readdirSync(this.rootPath);
-        const ciMatches = existing.filter(e => e.toLowerCase() === segments[0].toLowerCase());
+        // Exact case-insensitive match first
+        let ciMatches = existing.filter(e => e.toLowerCase() === segments[0].toLowerCase());
+        // Fuzzy match: strip non-alphanumeric and compare (catches typos like extra dots/underscores)
+        if (ciMatches.length === 0) {
+          const normalize = (s: string) => s.replace(/[^a-z0-9]/gi, '').toLowerCase();
+          const targetNorm = normalize(segments[0]);
+          if (targetNorm.length >= 3) { // avoid matching on very short strings
+            ciMatches = existing.filter(e => normalize(e) === targetNorm);
+            if (ciMatches.length > 0) {
+              console.warn(`   ⚠️ Fuzzy folder match: "${segments[0]}" → "${ciMatches[0]}"`);
+            }
+          }
+        }
 
         if (ciMatches.length === 1) {
           // Single match — use it regardless of casing
