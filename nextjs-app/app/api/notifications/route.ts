@@ -8,7 +8,7 @@ import prisma from '@/lib/db';
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { choomId, message, includeAudio, imageIds } = body;
+    const { choomId, message, includeAudio, imageIds, filePaths } = body;
 
     if (!choomId || !message) {
       return NextResponse.json({ error: 'choomId and message are required' }, { status: 400 });
@@ -20,6 +20,7 @@ export async function POST(request: NextRequest) {
         message,
         includeAudio: includeAudio !== false,
         imageIds: Array.isArray(imageIds) && imageIds.length > 0 ? JSON.stringify(imageIds) : null,
+        filePaths: Array.isArray(filePaths) && filePaths.length > 0 ? JSON.stringify(filePaths) : null,
       },
     });
 
@@ -61,6 +62,15 @@ export async function GET() {
             }
           } catch {
             // Invalid JSON in imageIds — skip
+          }
+        }
+
+        // Include file paths (already absolute, validated at creation time)
+        if (notif.filePaths) {
+          try {
+            result.filePaths = JSON.parse(notif.filePaths) as string[];
+          } catch {
+            // Invalid JSON in filePaths — skip
           }
         }
 
