@@ -177,12 +177,14 @@ class ScheduledTaskManager:
             seconds=60
         )
 
-        # Signal linked device keepalive — sync every 12 hours to prevent
-        # "inactive linked device" expiration (Signal expires after ~30 days)
+        # Signal account keepalive — refresh account with Signal's servers
+        # every 6 hours to prevent "open Signal on your phone" warning.
+        # Uses updateAccount (not sendSyncRequest) to actually reset the
+        # server-side inactivity timer. Signal expires after ~30 days idle.
         self.add_interval_task(
-            "signal_device_sync",
-            self._signal_device_sync,
-            hours=12
+            "signal_account_keepalive",
+            self._signal_account_keepalive,
+            hours=6
         )
 
         # Poll for manual triggers from the web GUI (every 10s)
@@ -1852,19 +1854,23 @@ Be practical. Only work on things that can actually be accomplished with the too
         except Exception as e:
             logger.error(f"YouTube download failed: {e}")
 
-    def _signal_device_sync(self):
-        """Send a sync request to keep the linked device active and prevent expiration"""
+    def _signal_account_keepalive(self):
+        """Refresh account with Signal servers to reset inactivity timer.
+        Uses updateAccount (refreshes pre-keys + account attributes) instead of
+        sendSyncRequest (which only syncs between devices and doesn't count as
+        server-side activity).
+        """
         try:
             if self.signal.connected:
-                success = self.signal.send_sync_request()
+                success = self.signal.refresh_account()
                 if success:
-                    logger.info("Signal device sync completed — linked device keepalive OK")
+                    logger.info("Signal account keepalive OK — inactivity timer reset")
                 else:
-                    logger.warning("Signal device sync failed — device may expire if not resolved")
+                    logger.warning("Signal account keepalive FAILED — account may show inactivity warning")
             else:
-                logger.warning("Signal device sync skipped — not connected to daemon")
+                logger.warning("Signal account keepalive skipped — not connected to daemon")
         except Exception as e:
-            logger.error(f"Signal device sync error: {e}")
+            logger.error(f"Signal account keepalive error: {e}")
 
     def _system_health_check(self):
         """Check system health and alert on issues (respects quiet period)"""
