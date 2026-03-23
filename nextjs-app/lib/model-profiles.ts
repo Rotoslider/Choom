@@ -105,7 +105,7 @@ export const BUILTIN_LLM_PROFILES: LLMModelProfile[] = [
     temperature: 0.7,
     topP: 0.9,
     maxTokens: 4096,
-    contextLength: 32768,
+    contextLength: 131072,
     topK: 20,
   },
   {
@@ -139,6 +139,16 @@ export const BUILTIN_LLM_PROFILES: LLMModelProfile[] = [
   {
     modelId: 'qwen/qwen3.5-122b-a10b',
     label: 'Qwen 3.5 122B-A10B',
+    builtIn: true,
+    temperature: 0.7,
+    topP: 0.9,
+    maxTokens: 4096,
+    contextLength: 131072,
+    topK: 20,
+  },
+  {
+    modelId: 'qwen3.5-122b-a10b',
+    label: 'Qwen 3.5 122B-A10B (Local)',
     builtIn: true,
     temperature: 0.7,
     topP: 0.9,

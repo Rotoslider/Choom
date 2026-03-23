@@ -3002,8 +3002,13 @@ export async function POST(request: NextRequest) {
       } catch { /* ignore */ }
     }
     // Layer 2b: Global provider override (if LLM settings have a provider selected)
+    // SKIP if Choom has an explicit local model (llmModel set, no llmProviderId) —
+    // the user chose a specific local model for this Choom, and applying the global
+    // cloud provider would send the local model name to the wrong endpoint.
     const globalProviderId = (clientLLMSettings as Record<string, unknown>)?.llmProviderId as string | undefined;
-    if (globalProviderId && providers.length > 0) {
+    const choomHasExplicitLocalModel = !!(choom.llmModel && !choom.llmProviderId);
+    let usingCloudProvider = false;
+    if (globalProviderId && providers.length > 0 && !choomHasExplicitLocalModel) {
       const globalProvider = providers.find(
         (p: LLMProviderConfig) => p.id === globalProviderId
       );
@@ -3021,7 +3026,10 @@ export async function POST(request: NextRequest) {
           console.log(`   🔌 Layer 2b (global provider): ${globalProvider.name} (openai) model=${llmSettings.model}`);
         }
         llmSettings.endpoint = globalProvider.endpoint;
+        usingCloudProvider = true;
       }
+    } else if (choomHasExplicitLocalModel && globalProviderId) {
+      console.log(`   ⏭️  Layer 2b skipped: Choom has explicit local model "${choom.llmModel}" (no provider) — keeping local endpoint`);
     }
 
     // Layer 3b: Choom-level provider override (if Choom has a provider assigned)
@@ -3047,6 +3055,7 @@ export async function POST(request: NextRequest) {
         }
         llmSettings.model = choomModel;
         llmSettings.endpoint = choomProvider.endpoint;
+        usingCloudProvider = true;
       }
     }
     const memoryClient = new MemoryClient(memoryEndpoint);
@@ -3471,6 +3480,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
         }
         llmSettings.model = projectModel;
         llmSettings.endpoint = provider.endpoint;
+        usingCloudProvider = true;
       }
     }
 
@@ -3491,20 +3501,27 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
         if (profile.repetitionPenalty !== undefined) llmSettings.repetitionPenalty = profile.repetitionPenalty;
         if (profile.enableThinking !== undefined) llmSettings.enableThinking = profile.enableThinking;
 
-        // Reconstruct llmClient with updated settings
-        // Re-check which provider type is active to use the right client class
-        const activeProviderId = choom.llmProviderId
-          || detectedProject?.metadata?.llmProviderId
-          || globalProviderId;
-        const activeProvider = activeProviderId && providers.length > 0
-          ? providers.find((p: LLMProviderConfig) => p.id === activeProviderId)
-          : null;
+        // Reconstruct llmClient with updated settings.
+        // Use the actual resolved provider state (usingCloudProvider) to determine
+        // which client class and credentials to use — NOT the provider chain, which
+        // can misleadingly pick up a global provider for a Choom that's using local.
+        if (usingCloudProvider) {
+          // Find the provider that was actually applied (Choom > Project > Global)
+          const activeProviderId = choom.llmProviderId
+            || detectedProject?.metadata?.llmProviderId
+            || globalProviderId;
+          const activeProvider = activeProviderId && providers.length > 0
+            ? providers.find((p: LLMProviderConfig) => p.id === activeProviderId)
+            : null;
 
-        if (activeProvider?.type === 'anthropic' && activeProvider.apiKey) {
-          const { AnthropicClient } = await import('@/lib/anthropic-client');
-          llmClient = new AnthropicClient(llmSettings, activeProvider.apiKey, activeProvider.endpoint);
-        } else if (activeProvider?.apiKey) {
-          llmClient = new LLMClient(llmSettings, activeProvider.apiKey);
+          if (activeProvider?.type === 'anthropic' && activeProvider.apiKey) {
+            const { AnthropicClient } = await import('@/lib/anthropic-client');
+            llmClient = new AnthropicClient(llmSettings, activeProvider.apiKey, activeProvider.endpoint);
+          } else if (activeProvider?.apiKey) {
+            llmClient = new LLMClient(llmSettings, activeProvider.apiKey);
+          } else {
+            llmClient = new LLMClient(llmSettings);
+          }
         } else {
           llmClient = new LLMClient(llmSettings);
         }
@@ -3531,10 +3548,14 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
       console.log(`   🔄 Fallback models: ${fallbackConfigs.map((f, i) => `#${i + 1} ${f.label}`).join(', ')}`);
     }
 
-    // The actual local LM Studio endpoint — always from env/code defaults.
-    // clientLLMSettings.endpoint can be overwritten to NVIDIA/cloud by Choom or global
-    // provider settings, so it's NOT reliable for "local" fallbacks.
-    const localLMStudioEndpoint = defaultLLMSettings.endpoint;
+    // The actual local LM Studio endpoint for local fallbacks.
+    // If the Choom has a custom local endpoint (e.g., different LM Studio instance),
+    // use that; otherwise fall back to the env/code default.
+    // Do NOT use llmSettings.endpoint here — it may have been overwritten by a cloud
+    // provider in Layers 2b/3b/4.
+    const localLMStudioEndpoint = (!choom.llmProviderId && choom.llmEndpoint)
+      ? choom.llmEndpoint
+      : defaultLLMSettings.endpoint;
 
     // Helper to create an LLM client from a fallback config
     async function createClientForFallback(fb: FallbackConfig): Promise<{ client: { streamChat: LLMClient['streamChat'] }; settings: LLMSettings }> {
@@ -3871,20 +3892,18 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             //     Cloud: 60s (cloud APIs should start responding faster).
             //     Starts immediately, cleared once the first chunk arrives.
             // (2) Between-token inactivity — catches stalled streams mid-generation.
-            //     60s for all models. Only armed after first chunk received.
+            //     Local: 120s (local models can pause during complex tool-call generation).
+            //     Cloud: 60s (cloud APIs have consistent throughput).
+            //     Only armed after first chunk received.
             // (3) Wall-clock cap — absolute limit on total response time.
             //     180s regular, 300s delegation. Prevents infinite thinking loops.
-            // Determine if primary model is local (no cloud provider configured).
-            // Check all provider layers: choom-specific → project → global.
-            const primaryProviderId = choom.llmProviderId
-              || detectedProject?.metadata?.llmProviderId
-              || globalProviderId;
-            const primaryProvider = primaryProviderId && providers.length > 0
-              ? providers.find((p: LLMProviderConfig) => p.id === primaryProviderId)
-              : null;
-            const isLocalPrimary = !primaryProvider;
+            // Use the actual resolved provider state (usingCloudProvider) instead of
+            // re-checking the provider chain, which can be misleading — e.g., a Choom
+            // with an explicit local model and no provider was wrongly classified as
+            // cloud when a global provider was configured.
+            const isLocalPrimary = !usingCloudProvider;
             const FIRST_TOKEN_MS = isLocalPrimary ? 120000 : 60000;
-            const BETWEEN_TOKEN_MS = 60000;
+            const BETWEEN_TOKEN_MS = isLocalPrimary ? 120000 : 60000;
             const DEFAULT_TIMEOUT_MS = isDelegation ? 300000 : 180000;
             const timeoutMs = (choom.llmTimeoutSec ? choom.llmTimeoutSec * 1000 : DEFAULT_TIMEOUT_MS);
             let firstTokenReceived = false;
@@ -3980,7 +3999,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                     const isLocalFallback = !fb.providerId;
                     const fbTimeoutMs = isLocalFallback ? timeoutMs : Math.max(60000, Math.floor(timeoutMs * 0.75));
                     const fbFirstTokenMs = isLocalFallback ? 120000 : 60000;
-                    const fbBetweenTokenMs = 60000;
+                    const fbBetweenTokenMs = isLocalFallback ? 120000 : 60000;
                     let fbFirstTokenReceived = false;
                     let fbInactivityTimer: ReturnType<typeof setTimeout>;
                     let fbRejectInactivity: (err: Error) => void;
@@ -4517,10 +4536,18 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             // called (allToolCalls.length > 0), nudging and extraction are skipped
             // entirely — the model's next text response is accepted as the final answer.
 
-            // If ALL tools in this iteration failed and we've seen 2+ total failures,
-            // inject an abort hint so the LLM doesn't loop endlessly.
+            // If ALL tools in this iteration had REAL failures (not temporary conditions
+            // like GPU-busy or no-data), inject an abort hint so the LLM doesn't loop.
+            // GPU-busy is transient (another tool is using the GPU) and no-data is
+            // informational — neither indicates a broken tool that warrants aborting.
+            const TEMPORARY_ERROR = /GPU is busy|GPU is currently busy|no (?:history |data |results? )(?:data |found )?for /i;
             const allFailedThisIteration = iterationResults.length > 0 &&
-              iterationResults.every(r => r.error || (r.result && typeof r.result === 'object' && (r.result as Record<string, unknown>).success === false));
+              iterationResults.every(r => {
+                const hasError = r.error || (r.result && typeof r.result === 'object' && (r.result as Record<string, unknown>).success === false);
+                if (!hasError) return false; // success — not a failure
+                if (r.error && TEMPORARY_ERROR.test(r.error)) return false; // temporary — not a real failure
+                return true; // real failure
+              });
             if (allFailedThisIteration && failedCallCache.size >= 2) {
               currentMessages.push({
                 role: 'user',
