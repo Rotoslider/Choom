@@ -19,7 +19,7 @@ export function MemorySettingsPanel() {
 
   const fetchStats = async () => {
     try {
-      const response = await fetch(`${memory.endpoint}/memory/stats`);
+      const response = await fetch(`/api/services/memory?action=stats&endpoint=${encodeURIComponent(memory.endpoint)}`);
       if (response.ok) {
         const data = await response.json();
         if (data.success && data.data?.[0]) {
@@ -39,7 +39,7 @@ export function MemorySettingsPanel() {
     setIsLoading(true);
     setActionStatus(null);
     try {
-      const response = await fetch(`${memory.endpoint}/memory/backup`, {
+      const response = await fetch(`/api/services/memory?action=backup&endpoint=${encodeURIComponent(memory.endpoint)}`, {
         method: 'POST',
       });
       if (response.ok) {
@@ -58,7 +58,7 @@ export function MemorySettingsPanel() {
     setIsLoading(true);
     setActionStatus(null);
     try {
-      const response = await fetch(`${memory.endpoint}/memory/rebuild_vectors`, {
+      const response = await fetch(`/api/services/memory?action=rebuild_vectors&endpoint=${encodeURIComponent(memory.endpoint)}`, {
         method: 'POST',
       });
       if (response.ok) {

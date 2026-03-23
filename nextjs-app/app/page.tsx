@@ -33,11 +33,15 @@ export default function Home() {
     setStreamingContent,
     clearStreamingContent,
     updateServiceHealth,
+    mergeServerDefaults,
     chooms,
     chats,
     messages,
     settings,
   } = useAppStore();
+
+  // Track whether server defaults have been synced (avoids health checks with wrong endpoints)
+  const [serverDefaultsSynced, setServerDefaultsSynced] = useState(false);
 
   const [isLoading, setIsLoading] = useState(true);
   const [healthOpen, setHealthOpen] = useState(false);
@@ -200,8 +204,30 @@ export default function Home() {
     }
   }, [currentChoomId, currentChatId]);
 
-  // Check service health periodically
+  // Sync server-side .env defaults into store on mount.
+  // Remote browsers (e.g. via ngrok) start with localhost defaults that can't reach
+  // services on the LAN. This fetches the server's actual config and merges it in
+  // for any values still at factory defaults, before health checks fire.
   useEffect(() => {
+    const syncDefaults = async () => {
+      try {
+        const res = await fetch('/api/settings/defaults');
+        if (res.ok) {
+          const serverDefaults = await res.json();
+          mergeServerDefaults(serverDefaults);
+        }
+      } catch {
+        // Non-critical — store keeps whatever it already has
+      }
+      setServerDefaultsSynced(true);
+    };
+    syncDefaults();
+  }, [mergeServerDefaults]);
+
+  // Check service health periodically (waits for server defaults sync first)
+  useEffect(() => {
+    if (!serverDefaultsSynced) return;
+
     const checkHealth = async () => {
       try {
         // Use POST with configured endpoints from settings
@@ -248,7 +274,7 @@ export default function Home() {
     checkHealth();
     const interval = setInterval(checkHealth, 30000);
     return () => clearInterval(interval);
-  }, [updateServiceHealth, settings]);
+  }, [updateServiceHealth, settings, serverDefaultsSynced]);
 
   // Handle choom selection
   const handleSelectChoom = useCallback(
