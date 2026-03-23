@@ -3865,24 +3865,45 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             >();
             let finishReason = 'stop';
 
-            // Two-tier timeout: (1) inactivity timer resets on each chunk — catches
-            // stuck connections fast (60s). (2) Wall-clock cap limits total response
-            // time — prevents infinite thinking loops in reasoning models like Qwen 3.x.
-            // Delegated tasks get a longer wall-clock timeout (300s) because they often
-            // involve code generation with large context (50K+ tokens) that exceeds 180s.
-            const INACTIVITY_MS = 60000;
+            // Three-tier timeout system:
+            // (1) First-token timeout — catches crashed/frozen LLM during prefill.
+            //     Local: 120s (large models like qwen3.5-122b need extended prefill).
+            //     Cloud: 60s (cloud APIs should start responding faster).
+            //     Starts immediately, cleared once the first chunk arrives.
+            // (2) Between-token inactivity — catches stalled streams mid-generation.
+            //     60s for all models. Only armed after first chunk received.
+            // (3) Wall-clock cap — absolute limit on total response time.
+            //     180s regular, 300s delegation. Prevents infinite thinking loops.
+            // Determine if primary model is local (no cloud provider configured).
+            // Check all provider layers: choom-specific → project → global.
+            const primaryProviderId = choom.llmProviderId
+              || detectedProject?.metadata?.llmProviderId
+              || globalProviderId;
+            const primaryProvider = primaryProviderId && providers.length > 0
+              ? providers.find((p: LLMProviderConfig) => p.id === primaryProviderId)
+              : null;
+            const isLocalPrimary = !primaryProvider;
+            const FIRST_TOKEN_MS = isLocalPrimary ? 120000 : 60000;
+            const BETWEEN_TOKEN_MS = 60000;
             const DEFAULT_TIMEOUT_MS = isDelegation ? 300000 : 180000;
             const timeoutMs = (choom.llmTimeoutSec ? choom.llmTimeoutSec * 1000 : DEFAULT_TIMEOUT_MS);
+            let firstTokenReceived = false;
             let inactivityTimer: ReturnType<typeof setTimeout>;
             let rejectInactivity: (err: Error) => void;
             const inactivityPromise = new Promise<never>((_, reject) => {
               rejectInactivity = reject;
-              inactivityTimer = setTimeout(() => reject(new Error('LLM response timeout (no data for 60s)')), INACTIVITY_MS);
+              // Start with first-token timeout (covers prefill phase)
+              inactivityTimer = setTimeout(() => reject(new Error(`LLM response timeout (no first token for ${FIRST_TOKEN_MS / 1000}s)`)), FIRST_TOKEN_MS);
             });
             inactivityPromise.catch(() => {}); // suppress unhandled rejection after race
             const resetInactivity = () => {
               clearTimeout(inactivityTimer);
-              inactivityTimer = setTimeout(() => rejectInactivity(new Error('LLM response timeout (no data for 60s)')), INACTIVITY_MS);
+              if (!firstTokenReceived) {
+                firstTokenReceived = true;
+                console.log(`   ⚡ ${choomTag} First token received — switching to ${BETWEEN_TOKEN_MS / 1000}s between-token timeout`);
+              }
+              // After first token, use shorter between-token timeout
+              inactivityTimer = setTimeout(() => rejectInactivity(new Error(`LLM response timeout (no data for ${BETWEEN_TOKEN_MS / 1000}s)`)), BETWEEN_TOKEN_MS);
             };
             const wallClockPromise = new Promise<never>((_, reject) => {
               setTimeout(() => reject(new Error('LLM response timeout')), timeoutMs);
@@ -3954,26 +3975,33 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                     toolCallsAccumulator = new Map();
                     finishReason = 'stop';
 
-                    // Fallback timeout: same two-tier approach (inactivity + wall-clock).
-                    // Local models get FULL primary timeout, cloud gets 75% (min 60s).
+                    // Fallback timeout: same three-tier approach as primary.
+                    // Local fallbacks get FULL primary wall-clock timeout, cloud gets 75% (min 60s).
                     const isLocalFallback = !fb.providerId;
                     const fbTimeoutMs = isLocalFallback ? timeoutMs : Math.max(60000, Math.floor(timeoutMs * 0.75));
+                    const fbFirstTokenMs = isLocalFallback ? 120000 : 60000;
+                    const fbBetweenTokenMs = 60000;
+                    let fbFirstTokenReceived = false;
                     let fbInactivityTimer: ReturnType<typeof setTimeout>;
                     let fbRejectInactivity: (err: Error) => void;
                     const fbInactivityPromise = new Promise<never>((_, reject) => {
                       fbRejectInactivity = reject;
-                      fbInactivityTimer = setTimeout(() => reject(new Error('LLM response timeout (no data for 60s)')), INACTIVITY_MS);
+                      fbInactivityTimer = setTimeout(() => reject(new Error(`LLM response timeout (no first token for ${fbFirstTokenMs / 1000}s)`)), fbFirstTokenMs);
                     });
                     fbInactivityPromise.catch(() => {});
                     const resetFbInactivity = () => {
                       clearTimeout(fbInactivityTimer);
-                      fbInactivityTimer = setTimeout(() => fbRejectInactivity(new Error('LLM response timeout (no data for 60s)')), INACTIVITY_MS);
+                      if (!fbFirstTokenReceived) {
+                        fbFirstTokenReceived = true;
+                        console.log(`   ⚡ ${choomTag} Fallback first token received — switching to ${fbBetweenTokenMs / 1000}s between-token timeout`);
+                      }
+                      fbInactivityTimer = setTimeout(() => fbRejectInactivity(new Error(`LLM response timeout (no data for ${fbBetweenTokenMs / 1000}s)`)), fbBetweenTokenMs);
                     };
                     const fbWallClockPromise = new Promise<never>((_, reject) => {
                       setTimeout(() => reject(new Error('LLM response timeout')), fbTimeoutMs);
                     });
                     fbWallClockPromise.catch(() => {});
-                    console.log(`   ⏱️  Fallback timeout: ${fbTimeoutMs / 1000}s wall-clock, 60s inactivity (primary was ${timeoutMs / 1000}s)`);
+                    console.log(`   ⏱️  Fallback timeout: ${fbTimeoutMs / 1000}s wall-clock, ${fbFirstTokenMs / 1000}s first-token, ${fbBetweenTokenMs / 1000}s between-token (primary was ${timeoutMs / 1000}s)`);
 
                     const fbThinkFilter = createThinkFilter();
                     const fbStreamPromise = (async () => {
