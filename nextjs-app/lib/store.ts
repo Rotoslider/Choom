@@ -210,6 +210,7 @@ interface AppState {
   updateModelProfiles: (profiles: LLMModelProfile[]) => void;
   updateVisionProfiles: (profiles: VisionModelProfile[]) => void;
   resetSettings: () => void;
+  mergeServerDefaults: (serverDefaults: Record<string, Record<string, unknown>>) => void;
 
   // Actions - Streaming
   setStreamingContent: (content: string) => void;
@@ -478,6 +479,83 @@ export const useAppStore = create<AppState>()(
         syncSettingsToBridgeConfig(get().settings);
       },
       resetSettings: () => set({ settings: defaultSettings }),
+
+      // Merge server-side .env defaults into store for any values still at factory defaults.
+      // This allows remote browsers (e.g. via ngrok) to inherit the server's actual config
+      // without overwriting user customizations.
+      mergeServerDefaults: (serverDefaults) =>
+        set((state) => {
+          const s = state.settings;
+          const updated = { ...s };
+          let changed = false;
+
+          // Helper: if current value matches factory default, replace with server value
+          const maybe = <T>(current: T, factoryDefault: T, serverValue: T): T => {
+            if (current === factoryDefault && serverValue && serverValue !== factoryDefault) {
+              changed = true;
+              return serverValue;
+            }
+            return current;
+          };
+
+          // LLM
+          const sd = serverDefaults;
+          updated.llm = {
+            ...s.llm,
+            endpoint: maybe(s.llm.endpoint, 'http://localhost:1234/v1', sd.llm?.endpoint as string),
+            model: maybe(s.llm.model, 'local-model', sd.llm?.model as string),
+          };
+
+          // TTS
+          updated.tts = {
+            ...s.tts,
+            endpoint: maybe(s.tts.endpoint, 'http://localhost:8004', sd.tts?.endpoint as string),
+          };
+
+          // STT
+          updated.stt = {
+            ...s.stt,
+            endpoint: maybe(s.stt.endpoint, 'http://localhost:5000', sd.stt?.endpoint as string),
+          };
+
+          // Image Gen
+          updated.imageGen = {
+            ...s.imageGen,
+            endpoint: maybe(s.imageGen.endpoint, 'http://localhost:7860', sd.imageGen?.endpoint as string),
+          };
+
+          // Memory
+          updated.memory = {
+            ...s.memory,
+            endpoint: maybe(s.memory.endpoint, 'http://localhost:8100', sd.memory?.endpoint as string),
+          };
+
+          // Vision
+          updated.vision = {
+            ...s.vision,
+            endpoint: maybe(s.vision.endpoint, 'http://localhost:1234', sd.vision?.endpoint as string),
+          };
+
+          // Weather (API key + location)
+          updated.weather = {
+            ...s.weather,
+            apiKey: maybe(s.weather.apiKey, '', sd.weather?.apiKey as string),
+            location: maybe(s.weather.location, '', sd.weather?.location as string),
+            latitude: maybe(s.weather.latitude, 0, sd.weather?.latitude as number),
+            longitude: maybe(s.weather.longitude, 0, sd.weather?.longitude as number),
+          };
+
+          // Search (API keys)
+          updated.search = {
+            ...s.search,
+            braveApiKey: maybe(s.search.braveApiKey, '', sd.search?.braveApiKey as string),
+            serpApiKey: maybe(s.search.serpApiKey, '', sd.search?.serpApiKey as string),
+            searxngEndpoint: maybe(s.search.searxngEndpoint, '', sd.search?.searxngEndpoint as string),
+          };
+
+          if (!changed) return state;
+          return { settings: updated };
+        }),
 
       // Streaming actions
       setStreamingContent: (content) => set({ streamingContent: content }),
