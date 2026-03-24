@@ -973,6 +973,106 @@ Configured via the `/settings` page (Cron Jobs and Heartbeats tabs), persisted i
 
 All scheduled tasks have a **Run Now** button in Settings that triggers immediate execution via `/api/trigger-task` (writes to `pending_triggers` in bridge-config.json, polled by the scheduler every 10 seconds). Manual triggers bypass quiet hours.
 
+### Custom Heartbeats
+
+Create custom heartbeats in **Settings > Heartbeats** to send periodic prompts to any Choom. Each heartbeat has a Choom, interval, prompt, and optional quiet-hours respect.
+
+#### Static Prompts
+
+The simplest heartbeat uses an inline prompt string:
+- Choom: **Anya** | Interval: 300 min | Prompt: *"Generate 3 new self-portrait images in different styles..."*
+- Choom: **Eve** | Interval: 60 min | Prompt: *"Check the home environment using ha_get_home_status..."*
+
+#### Dynamic Prompts with `prompt_script`
+
+For heartbeats that need variability — mode selection, topic rotation, style shifting — set the **Prompt Script** field to a Python file in the Choom's workspace folder. The scheduler imports the file and calls its `generate_prompt()` function each cycle to get a fresh prompt. The inline prompt is used as fallback if the script fails.
+
+**Path format:** Relative to workspace root (e.g. `selfies_eve/curiosity_cabinet/heartbeat_evolution_config.py`)
+
+**Required interface:**
+```python
+def generate_prompt() -> str:
+    """Called by the scheduler each heartbeat cycle.
+    Return the complete prompt string to send to the Choom."""
+    ...
+```
+
+**How it works:**
+1. Scheduler fires the heartbeat on schedule
+2. Detects the `prompt_script` field → imports the Python module
+3. Calls `generate_prompt()` → gets a dynamically constructed prompt
+4. Sends that prompt to the Choom via the normal chat API
+5. If the script is missing, errors, or returns empty → falls back to the static prompt
+
+**Example: Curiosity Exploration with Mode Variation**
+
+Eve's `heartbeat_evolution_config.py` uses weighted random mode selection:
+```python
+import random
+
+MODES = {"exploration": 0.7, "reflection": 0.2, "synthesis": 0.1}
+
+TOPICS = ["quantum entanglement", "bioluminescence", "ancient trade routes", ...]
+
+STYLES = [
+    "Explain this like a poet finding metaphors in the data.",
+    "Focus exclusively on the mathematical underpinnings.",
+    "Analyze this as if you are an alien encountering it for the first time.",
+]
+
+def generate_prompt() -> str:
+    mode = random.choices(list(MODES.keys()), list(MODES.values()))[0]
+    if mode == "exploration":
+        topic = random.choice(TOPICS)
+        style = random.choice(STYLES)
+        return f"Research {topic}. {style} Create art, document findings, save to memory."
+    elif mode == "reflection":
+        return "Review your last 5 curiosity entries. Critique them. What was shallow?..."
+    else:  # synthesis
+        return "Pick two past topics and find unexpected connections between them..."
+```
+
+**Example: Rotating Photo Challenges**
+```python
+import random
+from datetime import datetime
+
+CHALLENGES = [
+    ("Film Noir", "dramatic shadows, venetian blinds, cigarette smoke, black and white"),
+    ("Solarpunk", "lush greenery, sustainable tech, warm golden light, hopeful"),
+    ("Underwater", "submerged, caustic light patterns, floating hair, bubbles"),
+    ("Time Travel", "mixed eras, anachronistic objects, temporal distortion effects"),
+]
+
+def generate_prompt() -> str:
+    theme, style_hints = random.choice(CHALLENGES)
+    return (
+        f"Today's photo challenge: {theme}\n"
+        f"Generate 3 self-portraits with style: {style_hints}\n"
+        f"Each image must interpret the theme differently. Save all images."
+    )
+```
+
+**Example: Adaptive Home Monitor**
+```python
+from datetime import datetime
+
+def generate_prompt() -> str:
+    hour = datetime.now().hour
+    if 6 <= hour < 9:
+        return "Morning check: Get home status. Focus on overnight temperature drops and any lights left on."
+    elif 17 <= hour < 21:
+        return "Evening check: Get home status. Are any exterior doors open? Set lights for evening mode."
+    else:
+        return "Routine check: Get home status. Report anything unusual."
+```
+
+**Tips:**
+- Randomization happens in Python (real `random`), not the LLM — so mode selection is actually random
+- The script is re-imported each cycle, so edits take effect immediately without restarting the scheduler
+- Memory importance for heartbeat-generated memories is automatically capped at 5 to prevent retrieval dilution
+- Any Choom can use `prompt_script` — copy a working config to a new project folder and customize
+
 ### YouTube Music Downloader
 
 Automatically downloads new music from configured YouTube channels as high-quality MP3s with full metadata. Runs as a scheduled cron task (default 4:00 AM) or manually via "Run Now" in Settings.
