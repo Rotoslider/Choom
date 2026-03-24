@@ -4388,11 +4388,19 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 const isGpuBusy = /GPU is busy|GPU is currently busy/i.test(result.error);
                 // "No data/history/results" is informational, not a tool failure — don't count
                 const isNoData = /no (?:history |data |results? )(?:data |found )?for /i.test(result.error);
+                // File/path not found is recoverable — LLM guessed wrong filename, can list dir and retry
+                const isPathError = /ENOENT|no such file or directory|file not found|path not found|does not exist|not found in project/i.test(result.error);
                 failedCallCache.set(dedupKey, result.error);
                 if (isNoData) {
                   // No data found is informational — the tool works, the entity just has no data.
                   // Don't count toward failure caps (prevents blocking ha_get_history etc.)
                   console.log(`   ℹ️  ${tc.name}: no data found (informational, not counted as failure)`);
+                } else if (isPathError) {
+                  // File/path not found is recoverable — LLM guessed wrong filename.
+                  // Don't count toward failure caps. LLM can list the directory and retry
+                  // with the correct path. Blocking workspace_read_file after ENOENT
+                  // prevents the LLM from reading ANY files for the rest of the request.
+                  console.log(`   📁 ${tc.name}: path not found (recoverable, not counted as failure)`);
                 } else if (isGpuBusy) {
                   // GPU busy is temporary — don't count as failure, don't block the tool.
                   // The model should stop retrying and inform the user.
