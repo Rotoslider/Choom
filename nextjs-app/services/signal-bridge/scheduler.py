@@ -1155,6 +1155,46 @@ Be practical. Only work on things that can actually be accomplished with the too
                 return
         logger.warning(f"Custom heartbeat not found: {task_id}")
 
+    def _resolve_heartbeat_prompt(self, task: dict, fallback_prompt: str) -> str:
+        """Resolve the prompt for a heartbeat task.
+        If the task has a prompt_script field pointing to a Python file with a
+        generate_prompt() function, call it to get a dynamic prompt.
+        Otherwise fall back to the static prompt string."""
+        script_path = task.get("prompt_script", "")
+        if not script_path:
+            return fallback_prompt
+
+        try:
+            import importlib.util
+            from paths import WORKSPACE_ROOT
+
+            # Resolve path relative to WORKSPACE_ROOT
+            full_path = os.path.join(WORKSPACE_ROOT, script_path)
+            if not os.path.isfile(full_path):
+                logger.warning(f"Heartbeat prompt_script not found: {full_path}")
+                return fallback_prompt
+
+            # Import the module dynamically
+            spec = importlib.util.spec_from_file_location("heartbeat_prompt_script", full_path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+
+            if not hasattr(mod, "generate_prompt"):
+                logger.warning(f"prompt_script {script_path} has no generate_prompt() function")
+                return fallback_prompt
+
+            dynamic_prompt = mod.generate_prompt()
+            if not dynamic_prompt or not isinstance(dynamic_prompt, str):
+                logger.warning(f"prompt_script {script_path} returned invalid prompt: {type(dynamic_prompt)}")
+                return fallback_prompt
+
+            logger.info(f"Dynamic prompt generated from {script_path} ({len(dynamic_prompt)} chars)")
+            return dynamic_prompt
+
+        except Exception as e:
+            logger.error(f"Failed to run prompt_script {script_path}: {e}")
+            return fallback_prompt
+
     def _execute_custom_heartbeat(self, task_id: str, choom_name: str, prompt: str, respect_quiet: bool):
         """Execute a single custom heartbeat"""
         if respect_quiet and is_quiet_period():
@@ -1164,11 +1204,17 @@ Be practical. Only work on things that can actually be accomplished with the too
         # Re-read config to get the latest prompt and choom_name
         # (closure values from setup time may be stale after settings edits)
         custom_tasks = get_custom_heartbeats()
+        task_config = None
         for task in custom_tasks:
             if task.get("id") == task_id:
                 choom_name = task.get("choom_name", choom_name)
                 prompt = task.get("prompt", prompt)
+                task_config = task
                 break
+
+        # If the task has a prompt_script, use it to generate a dynamic prompt
+        if task_config:
+            prompt = self._resolve_heartbeat_prompt(task_config, prompt)
 
         # Skip if user is actively chatting with this Choom (avoid concurrent responses)
         if self.choom.is_user_active(choom_name, window_seconds=120):
