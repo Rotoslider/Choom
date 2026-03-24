@@ -21,6 +21,7 @@ interface CustomHeartbeat {
   choom_name: string;
   interval_minutes: number;
   prompt: string;
+  prompt_script?: string;
   respect_quiet: boolean;
   enabled: boolean;
 }
@@ -381,6 +382,19 @@ export function HeartbeatSettings() {
                   className="text-sm"
                   rows={2}
                 />
+                <div className="space-y-1">
+                  <Input
+                    value={task.prompt_script || ''}
+                    onChange={(e) => updateCustomHeartbeat(task.id, { prompt_script: e.target.value })}
+                    onBlur={() => saveCustomHeartbeat(task.id, { prompt_script: task.prompt_script })}
+                    placeholder="e.g. selfies_eve/curiosity_cabinet/heartbeat_evolution_config.py"
+                    className="text-sm font-mono"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Prompt script (optional) — path relative to workspace root. Python file with a <code className="text-primary">generate_prompt()</code> function.
+                    When set, the script generates a dynamic prompt each cycle. The prompt above is used as fallback if the script fails.
+                  </p>
+                </div>
                 <div className="flex items-center gap-2">
                   <Switch
                     checked={task.respect_quiet}
