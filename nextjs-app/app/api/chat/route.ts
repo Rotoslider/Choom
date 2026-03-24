@@ -602,6 +602,7 @@ interface ToolContext {
   send: (data: Record<string, unknown>) => void;
   sessionFileCount: { created: number; maxAllowed: number };
   suppressNotifications?: boolean;
+  isHeartbeat?: boolean;
   activeProjectFolder?: string;
 }
 
@@ -621,7 +622,8 @@ async function executeToolCall(
       memoryClient,
       toolCall.name,
       toolCall.arguments,
-      memoryCompanionId
+      memoryCompanionId,
+      { isHeartbeat: ctx.isHeartbeat }
     );
     return {
       toolCallId: toolCall.id,
@@ -2905,7 +2907,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { choomId, chatId, message, settings, isDelegation, suppressNotifications, noTools, maxIterationsOverride } = body;
+    const { choomId, chatId, message, settings, isDelegation, suppressNotifications, noTools, maxIterationsOverride, isHeartbeat } = body;
 
     if (!choomId || !chatId || !message) {
       return new Response(
@@ -3693,6 +3695,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           send,
           sessionFileCount,
           suppressNotifications: !!suppressNotifications,
+          isHeartbeat: !!isHeartbeat,
           activeProjectFolder: detectedProject?.folder,
         };
 

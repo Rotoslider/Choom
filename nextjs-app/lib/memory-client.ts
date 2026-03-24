@@ -168,24 +168,40 @@ export class MemoryClient {
   }
 }
 
+// Options that influence how memory tools behave based on calling context
+interface MemoryToolOptions {
+  isHeartbeat?: boolean;
+}
+
+// Max importance for memories created during heartbeat/autonomous tasks.
+// LLMs consistently inflate importance; this prevents heartbeat-generated
+// memories from crowding out user-conversation memories during retrieval.
+const HEARTBEAT_MAX_IMPORTANCE = 5;
+
 // Execute a memory tool by name
 export async function executeMemoryTool(
   client: MemoryClient,
   toolName: string,
   args: Record<string, unknown>,
-  companionId?: string
+  companionId?: string,
+  options?: MemoryToolOptions
 ): Promise<MemoryServerResult> {
   switch (toolName) {
     case 'remember': {
       const content = args.content as string;
       // Auto-generate title from content if model omits it
       const title = (args.title as string) || (content ? content.slice(0, 60).replace(/[^\w\s'-]/g, '').trim() : 'Untitled memory');
+      let importance = args.importance != null ? Math.round(args.importance as number) : undefined;
+      // Cap importance for heartbeat tasks to prevent memory dilution
+      if (options?.isHeartbeat && importance !== undefined && importance > HEARTBEAT_MAX_IMPORTANCE) {
+        importance = HEARTBEAT_MAX_IMPORTANCE;
+      }
       return client.remember(
         title,
         content,
         {
           tags: args.tags as string,
-          importance: args.importance != null ? Math.round(args.importance as number) : undefined,
+          importance,
           memory_type: args.memory_type as MemoryType,
           companion_id: companionId,
         }
