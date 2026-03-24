@@ -1177,7 +1177,7 @@ Be practical. Only work on things that can actually be accomplished with the too
 
         logger.info(f"Running custom heartbeat: {task_id} -> {choom_name}")
         try:
-            response = self.choom.send_message(choom_name, prompt)
+            response = self.choom.send_message(choom_name, prompt, is_heartbeat=True)
 
             if response.content:
                 self.send_message_to_owner(
