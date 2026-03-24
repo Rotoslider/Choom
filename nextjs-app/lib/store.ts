@@ -534,6 +534,9 @@ export const useAppStore = create<AppState>()(
           updated.vision = {
             ...s.vision,
             endpoint: maybe(s.vision.endpoint, 'http://localhost:1234', sd.vision?.endpoint as string),
+            model: maybe(s.vision.model, '', sd.vision?.model as string),
+            maxTokens: maybe(s.vision.maxTokens, 1024, sd.vision?.maxTokens as number),
+            temperature: maybe(s.vision.temperature, 0.3, sd.vision?.temperature as number),
           };
 
           // Weather (API key + location)
