@@ -99,3 +99,62 @@ model Settings {
   appearance String   // JSON string - Theme, dark mode
   updatedAt  DateTime @updatedAt
 }
+
+// ============================================================================
+// Habit Tracker
+// ============================================================================
+
+model HabitEntry {
+  id        String   @id @default(cuid())
+  choomId   String   // Which Choom recorded this entry
+  category  String   // e.g. "vehicle", "hygiene", "shopping", "outdoor", "maintenance", "health"
+  activity  String   // e.g. "filled gas", "shower", "went to Walmart"
+  location  String?  // Optional: "Lake Tahoe", "Shell on 5th"
+  notes     String?  // Optional freeform notes
+  quantity  Float?   // Optional: 15.5 gallons, $47.50
+  unit      String?  // Optional: "gallons", "$", "miles"
+  timestamp DateTime @default(now()) // When the activity happened
+  createdAt DateTime @default(now())
+
+  @@index([choomId])
+  @@index([category])
+  @@index([timestamp])
+  @@index([activity])
+}
+
+model HabitCategory {
+  id          String  @id @default(cuid())
+  name        String  @unique // "vehicle", "hygiene", etc.
+  icon        String? // Emoji for display (e.g. "🚗")
+  color       String? // Hex color for charts (e.g. "#3b82f6")
+  description String?
+}
+
+// ============================================================================
+// Token Usage Tracking
+// ============================================================================
+
+model TokenUsage {
+  id               String   @id @default(cuid())
+  choomId          String   // Which Choom made the request
+  choomName        String   // Choom display name (denormalized for easy querying)
+  chatId           String?  // Chat session (null for delegation/heartbeat)
+  model            String   // LLM model name used
+  provider         String   // Provider: "local", "anthropic", "openai", etc.
+  endpoint         String?  // API endpoint URL
+  promptTokens     Int      @default(0) // Input tokens
+  completionTokens Int      @default(0) // Output tokens
+  totalTokens      Int      @default(0) // Total tokens (prompt + completion)
+  iterations       Int      @default(1) // Agentic loop iterations
+  toolCalls        Int      @default(0) // Number of tool calls in request
+  toolNames        String?  // JSON array of tool names used
+  durationMs       Int?     // Wall-clock duration in milliseconds
+  source           String   @default("chat") // "chat", "delegation", "heartbeat", "compaction"
+  timestamp        DateTime @default(now())
+
+  @@index([choomId])
+  @@index([model])
+  @@index([provider])
+  @@index([timestamp])
+  @@index([source])
+}
