@@ -11,6 +11,7 @@ import {
   ScrollText,
   Blocks,
   Brain,
+  Gauge,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
@@ -194,6 +195,26 @@ export function Sidebar({
           >
             <Brain className="h-4 w-4" />
             Second Brain
+          </Button>
+
+          {/* Habit Tracker */}
+          <Button
+            variant="ghost"
+            onClick={() => router.push('/habits')}
+            className="w-full justify-start gap-2 mb-1"
+          >
+            <Activity className="h-4 w-4" />
+            Habits
+          </Button>
+
+          {/* Token Usage */}
+          <Button
+            variant="ghost"
+            onClick={() => router.push('/usage')}
+            className="w-full justify-start gap-2 mb-1"
+          >
+            <Gauge className="h-4 w-4" />
+            Token Usage
           </Button>
 
           {/* Skills button - navigates to skills management page */}

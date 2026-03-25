@@ -39,6 +39,7 @@ import { tools as youtubeTools } from '@/skills/core/google-youtube/tools';
 import { tools as planModeTools } from '@/skills/core/plan-mode/tools';
 import { tools as homeAssistantTools } from '@/skills/core/home-assistant/tools';
 import { tools as delegationTools } from '@/skills/core/choom-delegation/tools';
+import { tools as habitTools } from '@/skills/core/habit-tracker/tools';
 
 // Import all core skill handlers
 import { default as MemoryHandler } from '@/skills/core/memory-management/handler';
@@ -63,6 +64,7 @@ import { default as YouTubeHandler } from '@/skills/core/google-youtube/handler'
 import { default as PlanModeHandler } from '@/skills/core/plan-mode/handler';
 import { default as HomeAssistantHandler } from '@/skills/core/home-assistant/handler';
 import { default as DelegationHandler } from '@/skills/core/choom-delegation/handler';
+import { default as HabitHandler } from '@/skills/core/habit-tracker/handler';
 
 // ============================================================================
 // YAML Frontmatter Parser (minimal)
@@ -148,6 +150,7 @@ const CORE_SKILLS: SkillDef[] = [
   { dirName: 'plan-mode', tools: planModeTools, handler: PlanModeHandler },
   { dirName: 'home-assistant', tools: homeAssistantTools, handler: HomeAssistantHandler },
   { dirName: 'choom-delegation', tools: delegationTools, handler: DelegationHandler },
+  { dirName: 'habit-tracker', tools: habitTools, handler: HabitHandler },
 ];
 
 let loaded = false;

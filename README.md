@@ -4,7 +4,7 @@ A self-hosted AI companion framework with persistent memory, image generation, t
 
 Each AI persona ("Choom") can have its own LLM model, voice, image style, and memory space. Chooms are agentic — they autonomously chain tools across multi-step tasks, searching the web, writing files, generating images, running code, and managing your calendar without manual prompting between steps. **Chooms can also delegate tasks to each other** — an orchestrator Choom can assign research to one agent, coding to another, and image analysis to a third, then synthesize the results. Talk to them through the web UI or via Signal messages.
 
-All 82 tools are organized into 22 modular **skills** with progressive disclosure — the LLM only sees detailed documentation for skills relevant to the current request, saving ~3,400 tokens per message. Skills can be enabled/disabled, custom skills can be created via a visual builder, and external skills can be installed from GitHub with safety verification.
+All 87 tools are organized into 23 modular **skills** with progressive disclosure — the LLM only sees detailed documentation for skills relevant to the current request, saving ~3,400 tokens per message. Skills can be enabled/disabled, custom skills can be created via a visual builder, and external skills can be installed from GitHub with safety verification.
 
 ![Chat Interface](docs/screenshots/chat-interface.png)
 
@@ -20,7 +20,7 @@ All 82 tools are organized into 22 modular **skills** with progressive disclosur
 - **Smart Home (Home Assistant)**: Full integration with Home Assistant for reading sensors, controlling lights/switches/climate, viewing history trends, and ambient home awareness. Three-layer environmental awareness: system prompt injection (every LLM call knows the current home state), heartbeat monitoring (periodic checks with intelligent reasoning), and conditional automations (trigger actions based on sensor thresholds). Includes an Entity Browser in Settings and works from both the web UI and Signal. See the [Smart Home Guide](#smart-home-home-assistant-1) for setup and usage
 - **Scheduled Tasks**: Cron-driven morning briefings, weather checks, aurora forecasts, health heartbeats, and YouTube music downloads
 - **Google Integration**: Full Google Workspace access — Calendar (CRUD), Tasks, Sheets, Docs, Drive, Gmail (read/send/draft/search/archive/reply), Contacts (search/lookup), and YouTube (search/video details/channel info/playlists) — 35 tools via OAuth2
-- **Skills Architecture**: 82 tools organized into 22 modular skills with 3-level progressive disclosure — Level 1 (one-line summaries, always sent), Level 2 (full docs, injected on match), Level 3 (reference files, on demand). Custom skills via visual builder, external skills from GitHub with safety scanning. See the [Skills Guide](SKILLS-GUIDE.md) for details
+- **Skills Architecture**: 87 tools organized into 23 modular skills with 3-level progressive disclosure — Level 1 (one-line summaries, always sent), Level 2 (full docs, injected on match), Level 3 (reference files, on demand). Custom skills via visual builder, external skills from GitHub with safety scanning. See the [Skills Guide](SKILLS-GUIDE.md) for details
 - **Agentic Tool Loop**: Chooms autonomously execute up to 10 tool calls per turn — chaining memory lookups, web searches, image generation, file operations, calendar updates, and more in a single response. Includes automatic nudging (retries with `tool_choice=required` if the LLM describes a tool instead of calling it), tool call deduplication, and smart completion detection
 - **Planner Mode**: Complex multi-step requests (e.g., "research solar panels and write a comparison report") are automatically detected and broken into structured execution plans with real-time progress display, step-by-step watcher evaluation, and automatic retry/rollback on failure
 - **Automation Builder**: Visual drag-and-drop builder for creating scheduled task chains — combine any tools into multi-step automations with cron scheduling, interval triggers, template variables (`{{prev.result.field}}`), per-Choom targeting, and **conditional triggers** (weather, time range, day of week, calendar) with cooldown support. See the [Conditional Triggers Guide](CONDITIONAL-TRIGGERS.md) for details. Managed from Settings > Automations
@@ -37,6 +37,8 @@ All 82 tools are organized into 22 modular **skills** with progressive disclosur
 - **Markdown Rendering**: Chat messages rendered with `react-markdown` and `react-syntax-highlighter` (oneDark theme) for proper code blocks, tables, lists, links, and headings
 - **LLM Fallback Redundancy**: Each Choom can have two fallback LLM models (local or cloud) that automatically activate on timeout or connection failure. Fallback timeouts are halved for fast failure cascade. Works across all execution paths — direct chat, Signal, delegation, cron jobs
 - **Web Search**: Brave Search, SerpAPI (Google), or self-hosted SearXNG with automatic cascading fallback (e.g., Brave → SerpAPI → SearXNG). Configure all three and the system auto-switches on 429/5xx errors
+- **Habit Tracker**: Log daily activities via Signal or chat (e.g., "habit went to Walmart", "habit took a shower"). Structured storage in SQLite (not vector memory) with category auto-detection, location/quantity extraction, streak tracking, and a dedicated `/habits` dashboard with GitHub-style activity heatmap, daily trend charts, category pie charts, and top activities breakdown. 10 default categories (vehicle, hygiene, shopping, outdoor, maintenance, health, food, travel, social, finance) with customizable icons and colors. 5 tools: `log_habit`, `query_habits`, `habit_stats`, `manage_categories`, `delete_habit`
+- **Token Usage Tracking**: Per-request token counting across all LLM providers (local and cloud). Captures prompt tokens, completion tokens, iterations, tool calls, duration, and source (chat/delegation/heartbeat). Exact counts from providers that return usage data (Anthropic, OpenAI); character-based estimation (~4 chars/token) for providers that don't (LM Studio, NVIDIA). Dedicated `/usage` dashboard with breakdowns by Choom, model, provider, and source; daily trend area charts; cost estimates for paid providers. Filter by period, Choom, model, or provider
 - **Weather**: OpenWeatherMap integration with caching
 
 ## Project Structure
@@ -47,6 +49,8 @@ nextjs-app/
     page.tsx                        Main chat interface
     settings/page.tsx               Settings page (17 sections)
     skills/page.tsx                 Skills management page
+    habits/page.tsx                 Habit tracker dashboard (heatmap, trends, categories)
+    usage/page.tsx                  Token usage dashboard (by Choom, model, provider)
     api/
       chat/route.ts                 LLM streaming + agentic tool loop (dedup, nudge, image cap, model profile resolution)
       tts/route.ts                  TTS proxy
@@ -76,8 +80,10 @@ nextjs-app/
           test/route.ts             POST: execute tool with test args
           eval/route.ts             GET: auto-generate evals, POST: run evals
       automations/route.ts          CRUD + trigger for scheduled automations
+      habits/route.ts               Habit tracker API (entries, stats, heatmap, categories)
+      token-usage/route.ts          Token usage API (stats, filters, breakdowns)
   skills/
-    core/                           22 built-in skill modules (SKILL.md + tools.ts + handler.ts)
+    core/                           23 built-in skill modules (SKILL.md + tools.ts + handler.ts)
       choom-delegation/             3 tools (delegate_to_choom, list_team, get_delegation_result)
       memory-management/            9 tools (remember, search, update, delete, stats, etc.)
       image-generation/             1 tool (checkpoint switching, LoRA, self-portrait mode)
@@ -100,6 +106,7 @@ nextjs-app/
       reminders/                    2 tools (create, list reminders)
       plan-mode/                    3 tools (create, execute, adjust plans)
       home-assistant/               5 tools (get state, list entities, call service, history, home status)
+      habit-tracker/                5 tools (log_habit, query_habits, habit_stats, manage_categories, delete_habit)
   components/
     chat/                           Message display, input, image attachment, typing indicator, plan display
     sidebar/                        Choom list, chat list, edit panel, skills nav
@@ -139,7 +146,7 @@ nextjs-app/
     watcher-loop.ts                 Step evaluation, retry, rollback heuristics
     google-client.ts                Google API client (Calendar, Sheets, Docs, Drive, Gmail, Contacts, YouTube)
   prisma/
-    schema.prisma                   SQLite (Choom [+llmProviderId, +fallback models], Chat, Message, GeneratedImage, ActivityLog)
+    schema.prisma                   SQLite (Choom, Chat, Message, GeneratedImage, ActivityLog, HabitEntry, HabitCategory, TokenUsage)
     create-views.sql                SQLite views with human-readable timestamps (npm run db:views)
   services/searxng/                  Self-hosted SearXNG search engine (see services/searxng/README.md)
   services/signal-bridge/           Python Signal messaging daemon

@@ -3154,6 +3154,10 @@ ALWAYS call tools via function calls when a request requires them. Do NOT narrat
 5. When you hit errors, API failures, or broken tools — try alternate approaches (web search, fetch docs, try different parameters, use a different tool) before giving up
 No "sorry I can't do that" energy. Figure it out and deliver.
 
+## HABIT TRACKING
+When the user starts a message with "habit" (e.g., "habit went to Walmart", "habit took a shower", "habit filled the truck with gas", "habit used outdoor shower", "habit went camping at Lake Tahoe"), ALWAYS call the log_habit tool to record it. Parse the text after "habit" into category, activity, location, quantity, and unit fields. Do NOT just acknowledge it conversationally — log it first, then respond briefly.
+Also use habit tools when the user asks "habit stats", "habit summary", or queries like "how often do I shower?".
+
 ## AGENTIC BEHAVIOR
 You can call tools multiple times across multiple steps. After receiving tool results, you may:
 - Call additional tools based on the results
@@ -3813,12 +3817,15 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           // ================================================================
           let iteration = 0;
           let nudgeCount = 0; // Track how many times we've nudged (max 5)
+          // Token usage accumulator — captures usage from each LLM call across iterations
+          let totalPromptTokens = 0;
+          let totalCompletionTokens = 0;
 
           // Proactive tool_choice='required': if the user message has strong tool intent,
           // force the LLM to call a tool on the first iteration instead of narrating.
           // This is the biggest reliability win for local models that tend to describe actions.
           const msgLower = message.toLowerCase();
-          const strongToolIntent = /\b(what(?:'s| is) the weather|weather (?:like|today|tomorrow|forecast)|search (?:for|the web)|look up|find (?:me|out)|generate (?:an? |some )?(?:image|picture|photo|selfie|portrait)|take a (?:selfie|photo|picture)|create (?:a |an )?(?:image|picture)|make (?:me |an? )?(?:image|picture|selfie)|(?:please |can you |you should )remember (?:that|this|my|i |the |for )|(?<!i )(?<!i'll )remember (?:that |this |my |i |the |for )|(?:don'?t |never )forget (?:that|this|my|i )|(?:save|store|note|keep) (?:this|that|my|the |it )(?:in |to |as )?(?:memory|mind)?|use (?:the )?remember(?: tool)?|remind me|set (?:a )?reminder|send (?:a )?(?:notification|message|alert)|check (?:the |my )?(?:calendar|schedule|tasks|email|inbox)|write (?:a |an )?(?:file|document|report)|read (?:the |my |this )?(?:file|document|pdf|report)|(?:look|take a look|glance) at (?:the |this |that )?(?:file|document|pdf|report)|open (?:the |this |that )?(?:pdf|report|document)|review (?:the |this |that )?(?:file|document|pdf|report)|list (?:my |the )?(?:files|projects|tasks)|download|scrape|analyze (?:this|the|that) (?:image|photo|picture)|turn (?:on|off) (?:the )?|(?:open|close) (?:the )?|(?:lights?|switch|fan|heater|thermostat) (?:on|off)|delegate|get (?:the )?(?:weather|forecast)|search (?:youtube|email|gmail|contacts)|draft (?:an? )?email|compose (?:an? )?email)\b/i.test(msgLower);
+          const strongToolIntent = /\b(what(?:'s| is) the weather|weather (?:like|today|tomorrow|forecast)|search (?:for|the web)|look up|find (?:me|out)|generate (?:an? |some )?(?:image|picture|photo|selfie|portrait)|take a (?:selfie|photo|picture)|create (?:a |an )?(?:image|picture)|make (?:me |an? )?(?:image|picture|selfie)|(?:please |can you |you should )remember (?:that|this|my|i |the |for )|(?<!i )(?<!i'll )remember (?:that |this |my |i |the |for )|(?:don'?t |never )forget (?:that|this|my|i )|(?:save|store|note|keep) (?:this|that|my|the |it )(?:in |to |as )?(?:memory|mind)?|use (?:the )?remember(?: tool)?|remind me|set (?:a )?reminder|send (?:a )?(?:notification|message|alert)|check (?:the |my )?(?:calendar|schedule|tasks|email|inbox)|write (?:a |an )?(?:file|document|report)|read (?:the |my |this )?(?:file|document|pdf|report)|(?:look|take a look|glance) at (?:the |this |that )?(?:file|document|pdf|report)|open (?:the |this |that )?(?:pdf|report|document)|review (?:the |this |that )?(?:file|document|pdf|report)|list (?:my |the )?(?:files|projects|tasks)|download|scrape|analyze (?:this|the|that) (?:image|photo|picture)|turn (?:on|off) (?:the )?|(?:open|close) (?:the )?|(?:lights?|switch|fan|heater|thermostat) (?:on|off)|delegate|get (?:the )?(?:weather|forecast)|search (?:youtube|email|gmail|contacts)|draft (?:an? )?email|compose (?:an? )?email|^habit\b|habit (?:stats|summary|report|breakdown)|how (?:often|many times) (?:do|did|have) i |when (?:did|was the last time) i )\b/i.test(msgLower);
           let forceToolCall = strongToolIntent; // Force tool_choice:'required' on first iteration if intent is strong
           const executedToolCache = new Map<string, unknown>(); // Dedup: normalizedKey → result
           const failedCallCache = new Map<string, string>(); // Cache: dedupKey → error message
@@ -3840,6 +3847,10 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             intentToolHint = 'create_reminder';
           } else if (/\b(?:check (?:the |my )?(?:calendar|schedule)|what(?:\'s| is) on my calendar)\b/i.test(msgLower)) {
             intentToolHint = 'get_calendar_events';
+          } else if (/^habit\b/i.test(msgLower)) {
+            intentToolHint = 'log_habit';
+          } else if (/\b(?:habit (?:stats|summary|report|breakdown)|how (?:often|many times) (?:do|did|have) i |when (?:did|was the last time) i )\b/i.test(msgLower)) {
+            intentToolHint = 'habit_stats';
           }
           if (strongToolIntent) {
             console.log(`   ⚡ ${choomTag} Strong tool intent detected — using tool_choice='required' on first iteration${intentToolHint ? ` (hint: ${intentToolHint})` : ''}`);
@@ -3965,6 +3976,13 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 if (choice.finish_reason) {
                   finishReason = choice.finish_reason;
                 }
+
+                // Capture token usage from final chunk (OpenAI sends usage in last chunk,
+                // Anthropic adapter attaches it to the finish_reason chunk)
+                if (chunk.usage) {
+                  totalPromptTokens += chunk.usage.prompt_tokens || 0;
+                  totalCompletionTokens += chunk.usage.completion_tokens || 0;
+                }
               }
               if (thinkTokensFiltered) {
                 console.log(`   🧠 ${choomTag} Think tokens filtered from response`);
@@ -4043,6 +4061,10 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                         }
                         if (choice.finish_reason) {
                           finishReason = choice.finish_reason;
+                        }
+                        if (chunk.usage) {
+                          totalPromptTokens += chunk.usage.prompt_tokens || 0;
+                          totalCompletionTokens += chunk.usage.completion_tokens || 0;
                         }
                       }
                     })();
@@ -4762,6 +4784,49 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             { model: llmSettings.model, charCount: fullContent.length, iterations: iteration, fullResponse: fullContent.slice(0, 2000),
               toolCallCount: allToolCalls.length, toolNames: allToolCalls.map(t => t.name) },
             elapsed);
+
+          // Record token usage (fire-and-forget — don't block the response)
+          // If the provider didn't return usage data, estimate from character counts.
+          // Rough approximation: 1 token ≈ 4 characters for English text.
+          let finalPromptTokens = totalPromptTokens;
+          let finalCompletionTokens = totalCompletionTokens;
+          if (totalPromptTokens === 0 && totalCompletionTokens === 0) {
+            // Estimate prompt tokens from all messages sent to the LLM
+            const promptChars = currentMessages.reduce((sum: number, m: { content?: string }) => sum + (m.content?.length || 0), 0);
+            finalPromptTokens = Math.round(promptChars / 4);
+            // Estimate completion tokens from generated content + tool call arguments
+            const toolArgChars = allToolCalls.reduce((sum: number, tc: { arguments?: Record<string, unknown> }) => {
+              try { return sum + JSON.stringify(tc.arguments || {}).length; } catch { return sum; }
+            }, 0);
+            finalCompletionTokens = Math.round((fullContent.length + toolArgChars) / 4);
+          }
+          const totalTok = finalPromptTokens + finalCompletionTokens;
+          const resolvedProvider = (choom.llmProviderId as string) || (usingCloudProvider ? 'cloud' : 'local');
+          if (totalTok > 0 || iteration > 0) {
+            const isEstimated = totalPromptTokens === 0 && totalCompletionTokens === 0;
+            prisma.tokenUsage.create({
+              data: {
+                choomId,
+                choomName: (choom.name as string) || 'Unknown',
+                chatId,
+                model: llmSettings.model,
+                provider: resolvedProvider,
+                endpoint: llmSettings.endpoint || null,
+                promptTokens: finalPromptTokens,
+                completionTokens: finalCompletionTokens,
+                totalTokens: totalTok,
+                iterations: iteration,
+                toolCalls: allToolCalls.length,
+                toolNames: allToolCalls.length > 0 ? JSON.stringify(allToolCalls.map(t => t.name)) : null,
+                durationMs: elapsed,
+                source: isDelegation ? 'delegation' : isHeartbeat ? 'heartbeat' : 'chat',
+              },
+            }).catch(err => console.warn('[TokenUsage] Write failed:', err instanceof Error ? err.message : err));
+            if (totalTok > 0) {
+              console.log(`   📊 ${choomTag} Tokens: ${finalPromptTokens.toLocaleString()} prompt + ${finalCompletionTokens.toLocaleString()} completion = ${totalTok.toLocaleString()} total${isEstimated ? ' (estimated)' : ''}`);
+            }
+          }
+
           send({
             type: 'done',
             content: fullContent,

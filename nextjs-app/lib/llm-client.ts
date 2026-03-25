@@ -33,6 +33,12 @@ export interface ChatCompletionRequest {
   chat_template_kwargs?: Record<string, unknown>;
 }
 
+export interface TokenUsageData {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+}
+
 export interface ChatCompletionChunk {
   id: string;
   object: string;
@@ -52,6 +58,7 @@ export interface ChatCompletionChunk {
     };
     finish_reason: string | null;
   }>;
+  usage?: TokenUsageData;
 }
 
 export class LLMClient {
@@ -80,7 +87,7 @@ export class LLMClient {
       return true;
     });
 
-    const body: ChatCompletionRequest = {
+    const body: ChatCompletionRequest & { stream_options?: { include_usage: boolean } } = {
       model: this.settings.model,
       messages: sanitizedMessages,
       temperature: this.settings.temperature,
@@ -89,6 +96,7 @@ export class LLMClient {
       frequency_penalty: this.settings.frequencyPenalty,
       presence_penalty: this.settings.presencePenalty,
       stream: true,
+      stream_options: { include_usage: true }, // Request usage data in final chunk
     };
 
     // Extended params (provider-specific, only sent when present)
@@ -163,7 +171,7 @@ export class LLMClient {
   async chat(
     messages: ChatMessage[],
     tools?: ToolDefinition[]
-  ): Promise<{ content: string; toolCalls: ToolCall[] | null; finishReason: string }> {
+  ): Promise<{ content: string; toolCalls: ToolCall[] | null; finishReason: string; usage?: TokenUsageData }> {
     const url = ensureEndpoint(this.endpoint, '/chat/completions');
 
     const body: ChatCompletionRequest = {
@@ -226,10 +234,18 @@ export class LLMClient {
       }));
     }
 
+    // Extract usage data if present
+    const usage: TokenUsageData | undefined = data.usage ? {
+      prompt_tokens: data.usage.prompt_tokens || 0,
+      completion_tokens: data.usage.completion_tokens || 0,
+      total_tokens: data.usage.total_tokens || 0,
+    } : undefined;
+
     return {
       content: choice.message.content || '',
       toolCalls,
       finishReason: choice.finish_reason,
+      usage,
     };
   }
 

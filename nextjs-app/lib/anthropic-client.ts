@@ -5,7 +5,7 @@
  */
 
 import type { LLMSettings, ToolDefinition, ToolCall } from './types';
-import type { ChatMessage, ChatCompletionChunk } from './llm-client';
+import type { ChatMessage, ChatCompletionChunk, TokenUsageData } from './llm-client';
 
 interface AnthropicTool {
   name: string;
@@ -230,6 +230,8 @@ export class AnthropicClient {
     let buffer = '';
     let currentToolIndex = -1;
     let messageId = '';
+    let inputTokens = 0;
+    let outputTokens = 0;
 
     try {
       while (true) {
@@ -254,8 +256,9 @@ export class AnthropicClient {
           const eventType = event.type as string;
 
           if (eventType === 'message_start') {
-            const msg = event.message as { id?: string; model?: string };
+            const msg = event.message as { id?: string; model?: string; usage?: { input_tokens?: number } };
             messageId = msg?.id || `msg_${Date.now()}`;
+            if (msg?.usage?.input_tokens) inputTokens = msg.usage.input_tokens;
           }
 
           // Text content
@@ -296,12 +299,22 @@ export class AnthropicClient {
           // Message complete
           if (eventType === 'message_delta') {
             const delta = event.delta as { stop_reason?: string };
+            const deltaUsage = event.usage as { output_tokens?: number } | undefined;
+            if (deltaUsage?.output_tokens) outputTokens = deltaUsage.output_tokens;
             if (delta?.stop_reason) {
               const finishReason = delta.stop_reason === 'tool_use' ? 'tool_calls'
                 : delta.stop_reason === 'end_turn' ? 'stop'
                 : delta.stop_reason === 'max_tokens' ? 'length'
                 : 'stop';
-              yield this.makeChunk(messageId, {}, finishReason);
+              // Attach usage data to final chunk
+              const usage: TokenUsageData | undefined = (inputTokens || outputTokens) ? {
+                prompt_tokens: inputTokens,
+                completion_tokens: outputTokens,
+                total_tokens: inputTokens + outputTokens,
+              } : undefined;
+              const chunk = this.makeChunk(messageId, {}, finishReason);
+              if (usage) chunk.usage = usage;
+              yield chunk;
             }
           }
         }
@@ -318,7 +331,7 @@ export class AnthropicClient {
   async chat(
     messages: ChatMessage[],
     tools?: ToolDefinition[]
-  ): Promise<{ content: string; toolCalls: ToolCall[] | null; finishReason: string }> {
+  ): Promise<{ content: string; toolCalls: ToolCall[] | null; finishReason: string; usage?: TokenUsageData }> {
     const { system, messages: anthropicMessages } = this.convertMessages(messages);
 
     const body: Record<string, unknown> = {
@@ -388,7 +401,14 @@ export class AnthropicClient {
       : data.stop_reason === 'max_tokens' ? 'length'
       : 'stop';
 
-    return { content, toolCalls, finishReason: stopReason };
+    // Extract usage from Anthropic response
+    const usage: TokenUsageData | undefined = data.usage ? {
+      prompt_tokens: data.usage.input_tokens || 0,
+      completion_tokens: data.usage.output_tokens || 0,
+      total_tokens: (data.usage.input_tokens || 0) + (data.usage.output_tokens || 0),
+    } : undefined;
+
+    return { content, toolCalls, finishReason: stopReason, usage };
   }
 
   /** Create an OpenAI-format ChatCompletionChunk */
