@@ -55,8 +55,10 @@ class MarkdownErrorBoundary extends Component<
 
 // Markdown content renderer using react-markdown
 function MarkdownContent({ content }: { content: string }) {
+  // Strip raw tool call XML that local models sometimes emit as text
+  const cleanContent = content.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').trim();
   return (
-    <MarkdownErrorBoundary fallback={content}>
+    <MarkdownErrorBoundary fallback={cleanContent}>
       <ReactMarkdown
         components={{
           // Fenced code blocks
@@ -154,7 +156,7 @@ function MarkdownContent({ content }: { content: string }) {
           },
         }}
       >
-        {content}
+        {cleanContent}
       </ReactMarkdown>
     </MarkdownErrorBoundary>
   );

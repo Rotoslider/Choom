@@ -285,6 +285,120 @@ function createThinkFilter(): (text: string) => string {
 }
 
 /**
+ * Streaming filter that strips <tool_call>...</tool_call> XML blocks from content.
+ * Some local models emit tool calls as XML text instead of structured tool_calls.
+ * This captures the XML for later parsing into real tool calls while hiding the
+ * raw XML from the user (both web UI and Signal).
+ */
+function createToolCallXmlFilter(): {
+  filter: (text: string) => string;
+  getCaptured: () => string[];
+} {
+  let inBlock = false;
+  let currentBlock = '';
+  const captured: string[] = [];
+
+  function filter(text: string): string {
+    if (!text) return '';
+    let result = '';
+    let pos = 0;
+
+    while (pos < text.length) {
+      if (inBlock) {
+        const closeIdx = text.indexOf('</tool_call>', pos);
+        if (closeIdx !== -1) {
+          currentBlock += text.slice(pos, closeIdx);
+          captured.push(currentBlock);
+          currentBlock = '';
+          inBlock = false;
+          pos = closeIdx + 12; // '</tool_call>'.length
+        } else {
+          currentBlock += text.slice(pos);
+          break; // rest is inside block — buffer it
+        }
+      } else {
+        const openIdx = text.indexOf('<tool_call>', pos);
+        if (openIdx !== -1) {
+          result += text.slice(pos, openIdx);
+          inBlock = true;
+          currentBlock = '';
+          pos = openIdx + 11; // '<tool_call>'.length
+        } else {
+          result += text.slice(pos);
+          break;
+        }
+      }
+    }
+
+    return result;
+  }
+
+  return { filter, getCaptured: () => captured };
+}
+
+/**
+ * Parse captured <tool_call> XML blocks into structured tool calls.
+ * Handles two formats:
+ *   1. XML args: tool_name<arg_key>k</arg_key><arg_value>v</arg_value>...
+ *   2. JSON body: {"name":"tool_name","arguments":{...}}
+ */
+function parseXmlToolCalls(
+  xmlBlocks: string[],
+): { id: string; name: string; arguments: Record<string, unknown> }[] {
+  const results: { id: string; name: string; arguments: Record<string, unknown> }[] = [];
+
+  for (let i = 0; i < xmlBlocks.length; i++) {
+    const xml = xmlBlocks[i].trim();
+
+    // Try JSON format first: {"name": "tool_name", "arguments": {...}}
+    const jsonMatch = xml.match(/^\s*(\{[\s\S]*\})\s*$/);
+    if (jsonMatch) {
+      try {
+        const parsed = JSON.parse(jsonMatch[1]);
+        if (parsed.name) {
+          results.push({
+            id: `xmltc_${Date.now()}_${i}`,
+            name: parsed.name,
+            arguments: parsed.arguments || parsed.params || {},
+          });
+          continue;
+        }
+      } catch { /* fall through to XML arg parsing */ }
+    }
+
+    // XML args format: tool_name<arg_key>k</arg_key><arg_value>v</arg_value>...
+    const nameMatch = xml.match(/^\s*(\w+)/);
+    if (!nameMatch) continue;
+
+    const name = nameMatch[1];
+    const args: Record<string, unknown> = {};
+    const argRegex = /<arg_key>\s*([^<]+?)\s*<\/arg_key>\s*<arg_value>([\s\S]*?)<\/arg_value>/g;
+    let match;
+    while ((match = argRegex.exec(xml)) !== null) {
+      const key = match[1].trim();
+      let value: unknown = match[2];
+      // Coerce booleans and numbers
+      if (value === 'true') value = true;
+      else if (value === 'false') value = false;
+      else if (typeof value === 'string' && value.trim() !== '' && !isNaN(Number(value))) {
+        value = Number(value);
+      }
+      args[key] = value;
+    }
+
+    if (name && Object.keys(args).length > 0) {
+      results.push({
+        id: `xmltc_${Date.now()}_${i}`,
+        name,
+        arguments: args,
+      });
+    }
+  }
+
+  return results;
+}
+
+/**
  * Rescue workspace_write_file tool calls with broken JSON arguments.
  * Models often fail to properly escape code content in JSON strings, producing
  * arguments like raw code mixed with partial JSON. This extracts the path and
@@ -3951,6 +4065,11 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
 
             // Think-block filter: strips <think>...</think> from reasoning models
             const thinkFilter = createThinkFilter();
+            // Tool-call XML filter: strips <tool_call>...</tool_call> emitted as text
+            // by local models and captures them for parsing into real tool calls
+            const toolCallXmlFilter = createToolCallXmlFilter();
+            // Hoisted so fallback loop can also contribute captured XML blocks
+            let capturedXmlToolCalls: string[] = [];
             let thinkTokensFiltered = false;
 
             const streamPromise = (async () => {
@@ -3960,10 +4079,13 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 const choice = chunk.choices[0];
 
                 if (choice.delta.content) {
-                  const visible = thinkFilter(choice.delta.content);
+                  let visible = thinkFilter(choice.delta.content);
                   if (visible) {
-                    iterationContent += visible;
-                    send({ type: 'content', content: visible });
+                    visible = toolCallXmlFilter.filter(visible);
+                    if (visible) {
+                      iterationContent += visible;
+                      send({ type: 'content', content: visible });
+                    }
                   } else if (choice.delta.content.length > 0) {
                     thinkTokensFiltered = true;
                   }
@@ -4044,16 +4166,20 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                     console.log(`   ⏱️  Fallback timeout: ${fbTimeoutMs / 1000}s wall-clock, ${fbFirstTokenMs / 1000}s first-token, ${fbBetweenTokenMs / 1000}s between-token (primary was ${timeoutMs / 1000}s)`);
 
                     const fbThinkFilter = createThinkFilter();
+                    const fbToolCallXmlFilter = createToolCallXmlFilter();
                     const fbStreamPromise = (async () => {
                       for await (const chunk of fbClient.streamChat(currentMessages, activeTools, undefined, toolChoiceOverride)) {
                         resetFbInactivity();
                         if (!chunk.choices || !chunk.choices[0]) continue;
                         const choice = chunk.choices[0];
                         if (choice.delta.content) {
-                          const visible = fbThinkFilter(choice.delta.content);
+                          let visible = fbThinkFilter(choice.delta.content);
                           if (visible) {
-                            iterationContent += visible;
-                            send({ type: 'content', content: visible });
+                            visible = fbToolCallXmlFilter.filter(visible);
+                            if (visible) {
+                              iterationContent += visible;
+                              send({ type: 'content', content: visible });
+                            }
                           }
                         }
                         if (choice.delta.tool_calls) {
@@ -4087,6 +4213,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                     }
                     fallbackSucceeded = true;
                     fallbackActivated = true;
+                    capturedXmlToolCalls = fbToolCallXmlFilter.getCaptured();
                     fallbackAttempt = fbIdx + 1;
                     // Allow nudge logic on the next iteration even if tools were already called,
                     // since the fallback model hasn't had a chance to call tools yet and may
@@ -4171,6 +4298,23 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 return true;
               });
               toolCalls = validToolCalls;
+            }
+
+            // Parse any XML <tool_call> blocks captured during streaming.
+            // These are tool calls emitted as text by local models instead of structured calls.
+            // Primary filter captures are always available; fallback captures are added
+            // to capturedXmlToolCalls when a fallback model succeeds.
+            const allCapturedXml = capturedXmlToolCalls.length > 0
+              ? capturedXmlToolCalls
+              : toolCallXmlFilter.getCaptured();
+            if (allCapturedXml.length > 0) {
+              const xmlToolCalls = parseXmlToolCalls(allCapturedXml);
+              for (const xtc of xmlToolCalls) {
+                if (xtc.name && /^[a-zA-Z0-9_-]+$/.test(xtc.name)) {
+                  console.log(`   🔧 ${choomTag} Parsed XML <tool_call>: ${xtc.name}(${JSON.stringify(xtc.arguments).slice(0, 80)})`);
+                  toolCalls.push(xtc);
+                }
+              }
             }
 
             // ── finish_reason === 'length' recovery ──

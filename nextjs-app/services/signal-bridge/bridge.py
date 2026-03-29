@@ -1000,8 +1000,9 @@ class SignalBridge:
             import re
             audio_path = None
             if message:
-                # Strip think tags first (LLM reasoning blocks)
+                # Strip think tags and raw tool call XML (LLM reasoning blocks + malformed tool calls)
                 tts_text = re.sub(r'<think>.*?</think>', '', message, flags=re.DOTALL)
+                tts_text = re.sub(r'<tool_call>.*?</tool_call>', '', tts_text, flags=re.DOTALL)
 
                 # Strip agentic "working" lines — only speak the final delivery
                 # Multi-iteration responses are joined with \n\n. Working lines contain
@@ -1079,8 +1080,9 @@ class SignalBridge:
                     else:
                         logger.warning(f"Image {i}: empty URL even after fallback fetch")
 
-            # Strip think tags from message text too
+            # Strip think tags and raw tool call XML from message text
             clean_message = re.sub(r'<think>.*?</think>', '', message, flags=re.DOTALL)
+            clean_message = re.sub(r'<tool_call>.*?</tool_call>', '', clean_message, flags=re.DOTALL)
             clean_message = clean_message.strip()
 
             # Format message with Choom attribution

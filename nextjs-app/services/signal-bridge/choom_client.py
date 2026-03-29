@@ -479,6 +479,13 @@ class ChoomClient:
                     continue
                 break
 
+        # Strip raw tool call XML that local models sometimes emit as text
+        # instead of structured tool_calls (safety net — route.ts should filter these
+        # during streaming, but heartbeat/delegation paths may bypass that)
+        if '<tool_call>' in content:
+            import re as _re
+            content = _re.sub(r'<tool_call>.*?</tool_call>', '', content, flags=_re.DOTALL).strip()
+
         logger.info(f"Chat complete - content: {len(content)} chars, tool_calls: {len(tool_calls)}, tool_results: {len(tool_results)}, images: {len(images)}")
 
         return ChatResponse(
