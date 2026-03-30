@@ -4147,7 +4147,9 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 for (let fbIdx = fallbackAttempt; fbIdx < fallbackConfigs.length; fbIdx++) {
                   const fb = fallbackConfigs[fbIdx];
                   console.log(`   🔄 ${choomTag} Trying fallback #${fbIdx + 1}: ${fb.label}`);
-                  send({ type: 'content', content: `\n*[Primary model unavailable — switching to ${fb.label}]*\n` });
+                  // Log fallback switch server-side only — don't send as content
+                  // (it was leaking to Signal messages and TTS audio)
+                  send({ type: 'status', content: `Switching to ${fb.label}` });
 
                   try {
                     const { client: fbClient, settings: fbSettings } = await createClientForFallback(fb);
