@@ -554,6 +554,14 @@ export default function Home() {
                   }
                 }
                 break;
+              case 'retract_partial':
+                // Primary model sent partial text before timing out and falling back.
+                // Remove the partial text so the fallback model starts clean.
+                if (data.length && fullContent.length >= data.length) {
+                  fullContent = fullContent.slice(0, fullContent.length - data.length);
+                  setStreamingContent(fullContent);
+                }
+                break;
               case 'tool_call':
                 // Log tool calls to activity log
                 if (data.toolCall) {

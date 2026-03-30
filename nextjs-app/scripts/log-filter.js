@@ -3,7 +3,7 @@
 // Keeps: LLM logs, tool calls, errors, warnings, TTS, image gen, etc.
 // Suppresses: GET/POST for notifications, health, chats, images, logs, memory stats
 
-const SUPPRESS = /^\s*(GET|POST|DELETE) \/api\/(notifications|health|chats|images|logs|chooms)\b|INFO:\s+\d+\.\d+\.\d+\.\d+:\d+ - "GET \/memory\/stats/;
+const SUPPRESS = /^\s*(GET|POST|DELETE) \/api\/(notifications|health|chats|images|logs|chooms|token-usage|settings\/defaults)\b|^\s*GET \/(usage)\b|INFO:\s+\d+\.\d+\.\d+\.\d+:\d+ - "GET \/memory\/stats/;
 
 let buffer = '';
 process.stdin.setEncoding('utf8');
