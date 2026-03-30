@@ -393,6 +393,149 @@ function createToolCallXmlFilter(): {
 }
 
 /**
+ * Streaming filter that strips JSON tool-call arrays emitted as plain text
+ * by local models.  Catches patterns like:
+ *
+ *   [
+ *   {"name": "remember", "parameters": {"title": "..."}}
+ *   ]
+ *
+ * Works identically to createToolCallXmlFilter(): buffers potential blocks
+ * during streaming, validates on close, and either captures (tool call) or
+ * releases (normal text).
+ */
+function createJsonToolCallFilter(): {
+  filter: (text: string) => string;
+  getCaptured: () => { id: string; name: string; arguments: Record<string, unknown> }[];
+  flush: () => string;
+} {
+  let inBlock = false;
+  let buffer = '';
+  let bracketDepth = 0;
+  let seenBrace = false;          // saw `{` after opening `[`
+  let pendingBracket = '';        // `[` (+ whitespace) at end of chunk
+  const captured: { id: string; name: string; arguments: Record<string, unknown> }[] = [];
+
+  /** Try to parse a complete `[…]` string as a tool-call array. */
+  function tryCapture(block: string): boolean {
+    try {
+      const parsed = JSON.parse(block);
+      if (!Array.isArray(parsed)) return false;
+      let any = false;
+      for (const item of parsed) {
+        if (item && typeof item.name === 'string' && /^[a-zA-Z0-9_-]+$/.test(item.name)) {
+          captured.push({
+            id: `jsontc_${Date.now()}_${captured.length}`,
+            name: item.name,
+            arguments: item.parameters || item.arguments || {},
+          });
+          any = true;
+        }
+      }
+      return any;
+    } catch {
+      return false;
+    }
+  }
+
+  function filter(text: string): string {
+    if (!text && !pendingBracket) return '';
+
+    text = pendingBracket + (text || '');
+    pendingBracket = '';
+
+    let result = '';
+    let i = 0;
+
+    while (i < text.length) {
+      if (inBlock) {
+        const ch = text[i];
+        buffer += ch;
+
+        if (ch === '[') {
+          bracketDepth++;
+        } else if (ch === ']') {
+          bracketDepth--;
+          if (bracketDepth === 0) {
+            // Block complete
+            if (tryCapture(buffer)) {
+              // Swallowed — don't emit
+            } else {
+              result += buffer;
+            }
+            buffer = '';
+            inBlock = false;
+            seenBrace = false;
+          }
+        } else if (!seenBrace && ch === '{') {
+          seenBrace = true;
+        } else if (!seenBrace && !/\s/.test(ch)) {
+          // First non-whitespace after `[` isn't `{` — not a tool call
+          result += buffer;
+          buffer = '';
+          inBlock = false;
+        }
+
+        // Safety valve: huge buffer means this isn't a tool call
+        if (inBlock && buffer.length > 10000) {
+          result += buffer;
+          buffer = '';
+          inBlock = false;
+          seenBrace = false;
+        }
+
+        i++;
+      } else {
+        if (text[i] === '[') {
+          // Only intercept `[` that starts on its own line (or at text start)
+          const before = i > 0 ? text[i - 1] : '\n';
+          if (before === '\n' || before === '\r' || i === 0) {
+            const rest = text.slice(i + 1);
+            if (rest.length === 0 || /^\s*$/.test(rest)) {
+              // `[` at/near end of chunk — buffer for next chunk
+              pendingBracket = text.slice(i);
+              break;
+            }
+            const peek = rest.match(/^\s*(.)/s);
+            if (peek && peek[1] === '{') {
+              inBlock = true;
+              bracketDepth = 1;
+              buffer = '[';
+              seenBrace = false;
+              i++;
+              continue;
+            }
+          }
+        }
+        result += text[i];
+        i++;
+      }
+    }
+
+    return result;
+  }
+
+  function flush(): string {
+    let remaining = pendingBracket;
+    pendingBracket = '';
+
+    if (inBlock && buffer) {
+      // Last-chance parse (e.g. stream ended right after `]`)
+      if (!tryCapture(buffer)) {
+        remaining = buffer + remaining;
+      }
+      buffer = '';
+      inBlock = false;
+      seenBrace = false;
+    }
+
+    return remaining;
+  }
+
+  return { filter, getCaptured: () => captured, flush };
+}
+
+/**
  * Parse captured <tool_call> XML blocks into structured tool calls.
  * Handles two formats:
  *   1. XML args: tool_name<arg_key>k</arg_key><arg_value>v</arg_value>...
@@ -4177,8 +4320,12 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             // Tool-call XML filter: strips <tool_call>...</tool_call> emitted as text
             // by local models and captures them for parsing into real tool calls
             const toolCallXmlFilter = createToolCallXmlFilter();
-            // Hoisted so fallback loop can also contribute captured XML blocks
+            // JSON tool-call filter: strips [{"name":"...","parameters":{...}}] arrays
+            // emitted as plain text (common with Qwen/Mistral models)
+            const jsonToolCallFilter = createJsonToolCallFilter();
+            // Hoisted so fallback loop can also contribute captured blocks
             let capturedXmlToolCalls: string[] = [];
+            let capturedFbJsonToolCalls: { id: string; name: string; arguments: Record<string, unknown> }[] = [];
             let thinkTokensFiltered = false;
 
             // Buffer post-tool-call content for dedup before sending.
@@ -4199,6 +4346,9 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                   let visible = thinkFilter(choice.delta.content);
                   if (visible) {
                     visible = toolCallXmlFilter.filter(visible);
+                    if (visible) {
+                      visible = jsonToolCallFilter.filter(visible);
+                    }
                     if (visible) {
                       iterationContent += visible;
                       if (!bufferForDedup) {
@@ -4234,6 +4384,13 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                   iterationContent += flushed;
                   if (!bufferForDedup) {
                     send({ type: 'content', content: flushed });
+                  }
+                }
+                const flushedJson = jsonToolCallFilter.flush();
+                if (flushedJson) {
+                  iterationContent += flushedJson;
+                  if (!bufferForDedup) {
+                    send({ type: 'content', content: flushedJson });
                   }
                 }
               }
@@ -4339,6 +4496,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
 
                     const fbThinkFilter = createThinkFilter();
                     const fbToolCallXmlFilter = createToolCallXmlFilter();
+                    const fbJsonToolCallFilter = createJsonToolCallFilter();
                     const fbStreamPromise = (async () => {
                       for await (const chunk of fbClient.streamChat(currentMessages, activeTools, undefined, toolChoiceOverride)) {
                         const fbHasContent = !!(chunk.choices?.[0]?.delta?.content || chunk.choices?.[0]?.delta?.tool_calls);
@@ -4349,6 +4507,9 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                           let visible = fbThinkFilter(choice.delta.content);
                           if (visible) {
                             visible = fbToolCallXmlFilter.filter(visible);
+                            if (visible) {
+                              visible = fbJsonToolCallFilter.filter(visible);
+                            }
                             if (visible) {
                               iterationContent += visible;
                               if (!bufferForDedup) {
@@ -4376,6 +4537,13 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                           send({ type: 'content', content: fbFlushed });
                         }
                       }
+                      const fbFlushedJson = fbJsonToolCallFilter.flush();
+                      if (fbFlushedJson) {
+                        iterationContent += fbFlushedJson;
+                        if (!bufferForDedup) {
+                          send({ type: 'content', content: fbFlushedJson });
+                        }
+                      }
                     })();
 
                     await Promise.race([fbStreamPromise, fbInactivityPromise, fbWallClockPromise]);
@@ -4398,6 +4566,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                     fallbackSucceeded = true;
                     fallbackActivated = true;
                     capturedXmlToolCalls = fbToolCallXmlFilter.getCaptured();
+                    capturedFbJsonToolCalls = fbJsonToolCallFilter.getCaptured();
                     fallbackAttempt = fbIdx + 1;
                     // Allow nudge logic on the next iteration even if tools were already called,
                     // since the fallback model hasn't had a chance to call tools yet and may
@@ -4499,6 +4668,17 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                   console.log(`   🔧 ${choomTag} Parsed XML <tool_call>: ${xtc.name}(${JSON.stringify(xtc.arguments).slice(0, 80)})`);
                   toolCalls.push(xtc);
                 }
+              }
+            }
+
+            // Parse any JSON [{"name":"...","parameters":{...}}] blocks captured during streaming.
+            const capturedJsonTCs = capturedFbJsonToolCalls.length > 0
+              ? capturedFbJsonToolCalls
+              : jsonToolCallFilter.getCaptured();
+            if (capturedJsonTCs.length > 0) {
+              for (const jtc of capturedJsonTCs) {
+                console.log(`   🔧 ${choomTag} Parsed JSON tool call: ${jtc.name}(${JSON.stringify(jtc.arguments).slice(0, 80)})`);
+                toolCalls.push(jtc);
               }
             }
 
