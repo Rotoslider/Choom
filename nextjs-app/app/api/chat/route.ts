@@ -179,6 +179,23 @@ function detectCheckpointType(checkpointName: string): 'pony' | 'flux' | 'other'
   return 'other';
 }
 
+/**
+ * Check if an endpoint URL points to a local/LAN server.
+ * Used to determine timeout behavior — local models need longer prefill
+ * timeouts but shouldn't be penalized by cloud-oriented limits.
+ * Providers with LAN endpoints (e.g., LM Studio on 192.168.x.x) are local.
+ */
+function isLocalEndpoint(endpoint: string): boolean {
+  try {
+    const host = new URL(endpoint).hostname;
+    return host === 'localhost' || host === '127.0.0.1' || host === '::1' ||
+      host.startsWith('192.168.') || host.startsWith('10.') ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(host) || host.endsWith('.local');
+  } catch {
+    return true; // assume local if URL can't be parsed
+  }
+}
+
 // Attempt JSON repair for malformed tool call arguments from local models.
 // Uses a state machine to properly track string context so braces/brackets
 // inside strings are not miscounted (common when content contains code).
@@ -4025,15 +4042,17 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             //     Only armed after first chunk received.
             // (3) Wall-clock cap — absolute limit on total response time.
             //     180s regular, 300s delegation. Prevents infinite thinking loops.
-            // Use the actual resolved provider state (usingCloudProvider) instead of
-            // re-checking the provider chain, which can be misleading — e.g., a Choom
-            // with an explicit local model and no provider was wrongly classified as
-            // cloud when a global provider was configured.
-            const isLocalPrimary = !usingCloudProvider;
-            const FIRST_TOKEN_MS = isLocalPrimary ? 120000 : 60000;
-            const BETWEEN_TOKEN_MS = isLocalPrimary ? 120000 : 60000;
+            // Detect local vs cloud by checking the actual endpoint URL, not just
+            // provider presence. A provider pointing at 192.168.x.x / localhost is
+            // still local and needs local-grade timeouts (longer prefill, etc.).
+            const isLocalPrimary = !usingCloudProvider || isLocalEndpoint(llmSettings.endpoint);
             const DEFAULT_TIMEOUT_MS = isDelegation ? 300000 : 180000;
             const timeoutMs = (choom.llmTimeoutSec ? choom.llmTimeoutSec * 1000 : DEFAULT_TIMEOUT_MS);
+            // First-token timeout: local models need generous prefill time,
+            // especially with large contexts (40K+ tokens). Use most of the
+            // wall-clock budget since the between-token timeout handles stalls.
+            const FIRST_TOKEN_MS = isLocalPrimary ? Math.max(120000, timeoutMs - 15000) : 60000;
+            const BETWEEN_TOKEN_MS = isLocalPrimary ? 120000 : 60000;
             let firstTokenReceived = false;
             let inactivityTimer: ReturnType<typeof setTimeout>;
             let rejectInactivity: (err: Error) => void;
@@ -4138,10 +4157,12 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                     finishReason = 'stop';
 
                     // Fallback timeout: same three-tier approach as primary.
+                    // Detect local by endpoint URL, not just provider presence.
                     // Local fallbacks get FULL primary wall-clock timeout, cloud gets 75% (min 60s).
-                    const isLocalFallback = !fb.providerId;
+                    const isLocalFallback = !fb.providerId || isLocalEndpoint(fbSettings.endpoint);
                     const fbTimeoutMs = isLocalFallback ? timeoutMs : Math.max(60000, Math.floor(timeoutMs * 0.75));
-                    const fbFirstTokenMs = isLocalFallback ? 120000 : 60000;
+                    // First-token: use most of the wall-clock budget for local (prefill can be slow)
+                    const fbFirstTokenMs = isLocalFallback ? Math.max(120000, fbTimeoutMs - 15000) : 60000;
                     const fbBetweenTokenMs = isLocalFallback ? 120000 : 60000;
                     let fbFirstTokenReceived = false;
                     let fbInactivityTimer: ReturnType<typeof setTimeout>;
