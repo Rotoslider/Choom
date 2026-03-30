@@ -4091,6 +4091,13 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             let capturedXmlToolCalls: string[] = [];
             let thinkTokensFiltered = false;
 
+            // Buffer post-tool-call content for dedup before sending.
+            // When tools have already been called, the next text iteration is
+            // typically a confirmation ("I've set that reminder..."). Models
+            // sometimes repeat this across iterations — streaming it live means
+            // TTS and Signal get the duplicate before post-loop dedup can catch it.
+            const bufferForDedup = allToolCalls.length > 0 && iterationTexts.length > 0;
+
             const streamPromise = (async () => {
               for await (const chunk of llmClient.streamChat(currentMessages, activeTools, undefined, toolChoiceOverride)) {
                 resetInactivity(); // chunk received — connection alive
@@ -4103,7 +4110,9 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                     visible = toolCallXmlFilter.filter(visible);
                     if (visible) {
                       iterationContent += visible;
-                      send({ type: 'content', content: visible });
+                      if (!bufferForDedup) {
+                        send({ type: 'content', content: visible });
+                      }
                     }
                   } else if (choice.delta.content.length > 0) {
                     thinkTokensFiltered = true;
@@ -4201,7 +4210,9 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                             visible = fbToolCallXmlFilter.filter(visible);
                             if (visible) {
                               iterationContent += visible;
-                              send({ type: 'content', content: visible });
+                              if (!bufferForDedup) {
+                                send({ type: 'content', content: visible });
+                              }
                             }
                           }
                         }
@@ -4377,6 +4388,18 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 // so the next iteration benefits from higher limit
               } else {
                 console.warn(`   ⚠️  ${choomTag} Output truncated but max_tokens already at ${currentMax} — proceeding with ${hasDropped ? 'dropped' : 'repaired'} tool calls`);
+              }
+            }
+
+            // Flush or suppress buffered post-tool-call content
+            if (bufferForDedup && iterationContent.trim()) {
+              const isDuplicate = iterationTexts.some(prev => prev.trim() === iterationContent.trim());
+              if (isDuplicate) {
+                console.log(`   🔄 ${choomTag} Suppressed duplicate post-tool content (${iterationContent.length} chars)`);
+                iterationContent = ''; // Don't track or send
+              } else {
+                // Content is unique — flush the buffer to client
+                send({ type: 'content', content: iterationContent });
               }
             }
 
