@@ -39,6 +39,9 @@ All 87 tools are organized into 23 modular **skills** with progressive disclosur
 - **Web Search**: Brave Search, SerpAPI (Google), or self-hosted SearXNG with automatic cascading fallback (e.g., Brave → SerpAPI → SearXNG). Configure all three and the system auto-switches on 429/5xx errors
 - **Habit Tracker**: Log daily activities via Signal or chat (e.g., "habit went to Walmart", "habit took a shower"). Structured storage in SQLite (not vector memory) with category auto-detection, location/quantity extraction, streak tracking, and a dedicated `/habits` dashboard with GitHub-style activity heatmap, daily trend charts, category pie charts, and top activities breakdown. 10 default categories (vehicle, hygiene, shopping, outdoor, maintenance, health, food, travel, social, finance) with customizable icons and colors. 5 tools: `log_habit`, `query_habits`, `habit_stats`, `manage_categories`, `delete_habit`
 - **Token Usage Tracking**: Per-request token counting across all LLM providers (local and cloud). Captures prompt tokens, completion tokens, iterations, tool calls, duration, and source (chat/delegation/heartbeat). Exact counts from providers that return usage data (Anthropic, OpenAI); character-based estimation (~4 chars/token) for providers that don't (LM Studio, NVIDIA). Dedicated `/usage` dashboard with breakdowns by Choom, model, provider, and source; daily trend area charts; cost estimates for paid providers. Filter by period, Choom, model, or provider
+
+![Token Usage Dashboard](docs/screenshots/Token-Usage.png)
+
 - **Weather**: OpenWeatherMap integration with caching
 
 ## Project Structure
