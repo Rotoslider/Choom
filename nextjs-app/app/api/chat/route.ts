@@ -3431,10 +3431,25 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
       console.log(`   🔒 Delegation mode: stripped ${before - activeTools.length} delegation/plan tools → ${activeTools.length} tools`);
     }
 
-    // Build raw history messages (before compaction)
-    const historyMessages: ChatMessage[] = [];
+    // Build raw history messages (before compaction).
+    // Filter out dead entries: empty assistant messages from previous timeouts,
+    // and collapse consecutive duplicate user retries (keep only the last).
+    const rawHistory: Array<{ role: string; content: string }> = [];
     for (const msg of chat.messages) {
       if (msg.role === 'tool') continue;
+      // Skip empty assistant messages (timeout leftovers with no content and no tool calls)
+      if (msg.role === 'assistant' && (!msg.content || msg.content.trim() === '')) continue;
+      rawHistory.push({ role: msg.role, content: msg.content });
+    }
+    // Collapse consecutive duplicate user messages (user retrying same prompt)
+    const historyMessages: ChatMessage[] = [];
+    for (let i = 0; i < rawHistory.length; i++) {
+      const msg = rawHistory[i];
+      // If this is a user message and the next message is the same user message, skip this one
+      if (msg.role === 'user' && i + 1 < rawHistory.length) {
+        const next = rawHistory[i + 1];
+        if (next.role === 'user' && next.content === msg.content) continue;
+      }
       historyMessages.push({
         role: msg.role as 'user' | 'assistant',
         content: msg.content,
@@ -3442,7 +3457,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
     }
 
     // Cross-turn compaction: summarize old messages if history exceeds token budget
-    const compactionService = new CompactionService(llmSettings, 0.5);
+    const compactionService = new CompactionService(llmSettings);
     let compactionSummary = (chat as { compactionSummary?: string | null }).compactionSummary || null;
     let systemPromptWithSummary = finalSystemPrompt;
 
@@ -4060,6 +4075,20 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             if (iteration > 1) {
               send({ type: 'agent_iteration', iteration, maxIterations });
               console.log(`   🔄 ${choomTag} Agent iteration ${iteration}/${maxIterations}`);
+
+              // Within-turn compaction: ensure context fits budget BEFORE calling LLM.
+              // Critical tools (workspace_read_file etc.) are exempt from stubbing —
+              // the model needs their results to complete multi-step tasks.
+              const CRITICAL_TOOLS = new Set(['workspace_read_file', 'workspace_read_pdf', 'workspace_list_files']);
+              const withinTurnResult = compactionService.compactWithinTurn(currentMessages, systemPromptWithSummary, activeTools, 2, CRITICAL_TOOLS);
+              if (withinTurnResult.truncatedCount > 0) {
+                const beforeTokens = Math.ceil(currentMessages.map(m => m.content || '').join('').length / 4);
+                currentMessages.length = 0;
+                currentMessages.push(...withinTurnResult.messages);
+                const afterTokens = Math.ceil(currentMessages.map(m => m.content || '').join('').length / 4);
+                const budget = compactionService.calculateBudget(systemPromptWithSummary, activeTools);
+                console.log(`   🗜️  Pre-LLM compaction: truncated ${withinTurnResult.truncatedCount} tool results, recovered ~${withinTurnResult.tokensRecovered.toLocaleString()} tokens (~${beforeTokens.toLocaleString()} → ~${afterTokens.toLocaleString()}, budget: ~${budget.availableForMessages.toLocaleString()})`);
+              }
             }
 
             // Stream LLM response
@@ -4070,30 +4099,43 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             >();
             let finishReason = 'stop';
 
-            // Three-tier timeout system:
-            // (1) First-token timeout — catches crashed/frozen LLM during prefill.
-            //     Local: 120s (large models like qwen3.5-122b need extended prefill).
-            //     Cloud: 60s (cloud APIs should start responding faster).
-            //     Starts immediately, cleared once the first chunk arrives.
-            // (2) Between-token inactivity — catches stalled streams mid-generation.
-            //     Local: 120s (local models can pause during complex tool-call generation).
-            //     Cloud: 60s (cloud APIs have consistent throughput).
-            //     Only armed after first chunk received.
-            // (3) Wall-clock cap — absolute limit on total response time.
-            //     180s regular, 300s delegation. Prevents infinite thinking loops.
-            // Detect local vs cloud by checking the actual endpoint URL, not just
-            // provider presence. A provider pointing at 192.168.x.x / localhost is
-            // still local and needs local-grade timeouts (longer prefill, etc.).
-            const isLocalPrimary = !usingCloudProvider || isLocalEndpoint(llmSettings.endpoint);
+            // Three-tier timeout system based on endpoint type:
+            //
+            // LOCAL (LM Studio, Ollama on LAN):
+            //   First-token: generous (large models need extended prefill on consumer GPUs)
+            //   Between-token: generous (can pause during complex tool-call generation)
+            //
+            // CLOUD-INFERENCE (NVIDIA NIM, Together, Fireworks, etc.):
+            //   First-token: generous (these queue requests, prefill can take 60-120s)
+            //   Between-token: tight (once streaming starts, throughput is consistent)
+            //
+            // CLOUD-FAST (OpenAI, Anthropic):
+            //   First-token: tight (fast infrastructure, should start quickly)
+            //   Between-token: tight (consistent throughput)
+            //
+            const isLocal = !usingCloudProvider || isLocalEndpoint(llmSettings.endpoint);
+            const endpointLower = (llmSettings.endpoint || '').toLowerCase();
+            const isCloudInference = !isLocal && /nvidia|\.nvcf\.|together|fireworks|groq|replicate|deepinfra/.test(endpointLower);
+            // isCloudFast = !isLocal && !isCloudInference (OpenAI, Anthropic, etc.)
             const DEFAULT_TIMEOUT_MS = isDelegation ? 300000 : 180000;
             const timeoutMs = (choom.llmTimeoutSec ? choom.llmTimeoutSec * 1000 : DEFAULT_TIMEOUT_MS);
-            // First-token timeout: local models need generous prefill time,
-            // especially with large contexts (40K+ tokens). Use most of the
-            // wall-clock budget since the between-token timeout handles stalls.
-            const FIRST_TOKEN_MS = isLocalPrimary ? Math.max(120000, timeoutMs - 15000) : 60000;
-            const BETWEEN_TOKEN_MS = isLocalPrimary ? 120000 : 60000;
+
+            let FIRST_TOKEN_MS: number;
+            let BETWEEN_TOKEN_MS: number;
+            if (isLocal) {
+              FIRST_TOKEN_MS = Math.max(120000, timeoutMs - 15000);
+              BETWEEN_TOKEN_MS = 120000;
+            } else if (isCloudInference) {
+              // Generous first-token for queuing, tight between-token
+              FIRST_TOKEN_MS = Math.max(120000, timeoutMs - 15000);
+              BETWEEN_TOKEN_MS = 45000;
+            } else {
+              // Cloud-fast: tight everything
+              FIRST_TOKEN_MS = 30000;
+              BETWEEN_TOKEN_MS = 30000;
+            }
             let firstTokenReceived = false;
-            let inactivityTimer: ReturnType<typeof setTimeout>;
+            let inactivityTimer: ReturnType<typeof setTimeout> = undefined!;
             let rejectInactivity: (err: Error) => void;
             const inactivityPromise = new Promise<never>((_, reject) => {
               rejectInactivity = reject;
@@ -4202,6 +4244,8 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
 
             try {
               await Promise.race([streamPromise, inactivityPromise, wallClockPromise]);
+              // Stream succeeded — clean up timers to prevent leaks
+              clearTimeout(inactivityTimer);
             } catch (timeoutError) {
               const errMsg = timeoutError instanceof Error ? timeoutError.message : String(timeoutError);
               console.warn(`   ⚠️  LLM response error on iteration ${iteration}: ${errMsg}`);
@@ -4209,10 +4253,31 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               // Try fallback models on timeout/error. Even if partial content was streamed,
               // a broken response is worse than switching models. Partial text was already
               // sent to the user; we clear iterationContent and retry with the fallback.
+              // Clean up primary model's timer to prevent memory leaks
+              clearTimeout(inactivityTimer);
+
               let fallbackSucceeded = false;
               if (fallbackAttempt < fallbackConfigs.length) {
                 if (iterationContent) {
                   console.log(`   ⚠️  ${choomTag} Partial content (${iterationContent.length} chars) streamed before error — clearing for fallback attempt`);
+                  send({ type: 'retract_partial', length: iterationContent.length });
+                }
+                // Strip nudge/hint messages injected for the primary model —
+                // the fallback model hasn't seen the primary's behavior and these
+                // messages ("You described what you would do...") will confuse it.
+                const beforeStrip = currentMessages.length;
+                for (let i = currentMessages.length - 1; i >= 1; i--) {
+                  const m = currentMessages[i];
+                  if (m.role === 'user' && m.content?.startsWith('[System] You described what')) {
+                    currentMessages.splice(i, 1);
+                  } else if (m.role === 'user' && m.content?.startsWith('[System] You indicated you have more')) {
+                    currentMessages.splice(i, 1);
+                  } else if (m.role === 'system' && m.content?.startsWith('[Tool guidance]')) {
+                    currentMessages.splice(i, 1);
+                  }
+                }
+                if (currentMessages.length < beforeStrip) {
+                  console.log(`   🧹 ${choomTag} Stripped ${beforeStrip - currentMessages.length} nudge messages before fallback`);
                 }
                 for (let fbIdx = fallbackAttempt; fbIdx < fallbackConfigs.length; fbIdx++) {
                   const fb = fallbackConfigs[fbIdx];
@@ -4221,6 +4286,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                   // (it was leaking to Signal messages and TTS audio)
                   send({ type: 'status', content: `Switching to ${fb.label}` });
 
+                  let fbInactivityTimer: ReturnType<typeof setTimeout> = undefined!;
                   try {
                     const { client: fbClient, settings: fbSettings } = await createClientForFallback(fb);
                     // Reset iteration state for the fallback attempt
@@ -4229,15 +4295,23 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                     finishReason = 'stop';
 
                     // Fallback timeout: same three-tier approach as primary.
-                    // Detect local by endpoint URL, not just provider presence.
-                    // Local fallbacks get FULL primary wall-clock timeout, cloud gets 75% (min 60s).
-                    const isLocalFallback = !fb.providerId || isLocalEndpoint(fbSettings.endpoint);
-                    const fbTimeoutMs = isLocalFallback ? timeoutMs : Math.max(60000, Math.floor(timeoutMs * 0.75));
-                    // First-token: use most of the wall-clock budget for local (prefill can be slow)
-                    const fbFirstTokenMs = isLocalFallback ? Math.max(120000, fbTimeoutMs - 15000) : 60000;
-                    const fbBetweenTokenMs = isLocalFallback ? 120000 : 60000;
+                    const fbIsLocal = !fb.providerId || isLocalEndpoint(fbSettings.endpoint);
+                    const fbEndpointLower = (fbSettings.endpoint || '').toLowerCase();
+                    const fbIsCloudInference = !fbIsLocal && /nvidia|\.nvcf\.|together|fireworks|groq|replicate|deepinfra/.test(fbEndpointLower);
+                    const fbTimeoutMs = fbIsLocal ? timeoutMs : Math.max(60000, Math.floor(timeoutMs * 0.75));
+                    let fbFirstTokenMs: number;
+                    let fbBetweenTokenMs: number;
+                    if (fbIsLocal) {
+                      fbFirstTokenMs = Math.max(120000, fbTimeoutMs - 15000);
+                      fbBetweenTokenMs = 120000;
+                    } else if (fbIsCloudInference) {
+                      fbFirstTokenMs = Math.max(120000, fbTimeoutMs - 15000);
+                      fbBetweenTokenMs = 45000;
+                    } else {
+                      fbFirstTokenMs = 30000;
+                      fbBetweenTokenMs = 30000;
+                    }
                     let fbFirstTokenReceived = false;
-                    let fbInactivityTimer: ReturnType<typeof setTimeout>;
                     let fbRejectInactivity: (err: Error) => void;
                     const fbInactivityPromise = new Promise<never>((_, reject) => {
                       fbRejectInactivity = reject;
@@ -4305,6 +4379,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                     })();
 
                     await Promise.race([fbStreamPromise, fbInactivityPromise, fbWallClockPromise]);
+                    clearTimeout(fbInactivityTimer); // clean up timer
 
                     // Fallback succeeded — switch llmClient for rest of this request
                     llmClient = fbClient;
@@ -4331,6 +4406,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                     console.log(`   ✅ ${choomTag} Fallback #${fbIdx + 1} succeeded: ${fb.label} (model=${fbSettings.model})`);
                     break;
                   } catch (fbError) {
+                    clearTimeout(fbInactivityTimer); // clean up timer
                     const fbErrMsg = fbError instanceof Error ? fbError.message : String(fbError);
                     console.warn(`   ⚠️  ${choomTag} Fallback #${fbIdx + 1} (${fb.label}) also failed: ${fbErrMsg}`);
                     fallbackAttempt = fbIdx + 1;
@@ -4521,10 +4597,23 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
 
             // Still no tool calls after extraction — check if we should nudge or stop
             if (toolCalls.length === 0) {
-              // If tools were already called this request, accept text as final response
-              // BUT: after a fallback switch the new model may narrate on its first try —
-              // allow the nudge logic below to fire if nudgeCount was reset by fallback.
+              // If tools were already called this request, check if model intends more work.
+              // Models often narrate their next step ("Now let me update the file...")
+              // before the loop breaks — losing the write-back, notification, etc.
               if (allToolCalls.length > 0 && !(fallbackActivated && nudgeCount === 0)) {
+                const lc = iterationContent.toLowerCase();
+                const planningNext = /(?:now (?:let me|i'?ll|i need to|i should|i'?m going to)|next,? i'?ll|next step|then i'?ll|i(?:'ll| will) (?:also|now|then)|let me (?:also|now|update|write|save|send|notify)|updating|writing the|saving the|appending|i still need to)/i.test(lc);
+                if (planningNext && nudgeCount < 3 && iteration < maxIterations - 1) {
+                  nudgeCount++;
+                  console.log(`   🔄 ${choomTag} Task continuation nudge ${nudgeCount}/3 — model indicated more steps pending`);
+                  currentMessages.push({ role: 'assistant', content: iterationContent });
+                  currentMessages.push({
+                    role: 'user',
+                    content: '[System] You indicated you have more steps to complete. Call the next tool NOW. Do not narrate — make the tool call directly.',
+                  });
+                  forceToolCall = true;
+                  continue;
+                }
                 break; // fullContent built from iterationTexts after loop
               }
 
@@ -4801,10 +4890,22 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               return result;
             };
 
-            // Phase 1: Run pre-flight checks on all tool calls
+            // Phase 1: Run pre-flight checks on all tool calls.
+            // Track pending image gen calls within this batch to enforce the cap
+            // BEFORE execution (otherwise all N calls pass when imageGenCount=0).
+            let pendingImageGenInBatch = 0;
             const preFlightResults = new Map<string, ToolResult>(); // tc.id → result
             const pendingCalls: typeof toolCalls = [];
             for (const tc of toolCalls) {
+              // Batch-aware image gen cap: count calls already queued in this batch
+              if (tc.name === 'generate_image' && imageGenCount + pendingImageGenInBatch >= 3) {
+                const total = imageGenCount + pendingImageGenInBatch;
+                console.log(`   🖼️  Skipping generate_image (${total}/3 already queued this request)`);
+                const skippedImg: ToolResult = { toolCallId: tc.id, name: tc.name, result: { success: false, message: `Image generation limit reached (${total}/3 this turn). Cannot generate more images.` } };
+                preFlightResults.set(tc.id, skippedImg);
+                allToolResults.push(skippedImg);
+                continue;
+              }
               const skipped = preFlightCheck(tc);
               if (skipped) {
                 preFlightResults.set(tc.id, skipped);
@@ -4813,6 +4914,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 send({ type: 'tool_call', toolCall: tc });
                 send({ type: 'tool_result', toolResult: skipped });
               } else {
+                if (tc.name === 'generate_image') pendingImageGenInBatch++;
                 pendingCalls.push(tc);
               }
             }
@@ -4923,20 +5025,8 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               console.log(`   🛑 ${consecutiveFailures} consecutive failures — stripped tools, 1 final iteration to summarize`);
             }
 
-            const approxTokens = Math.ceil(currentMessages.map(m => m.content).join('').length / 4);
+            const approxTokens = Math.ceil(currentMessages.map(m => m.content || '').join('').length / 4);
             console.log(`   🔧 ${choomTag} Next iteration | ${currentMessages.length} msgs | ~${approxTokens.toLocaleString()} tokens`);
-
-            // Within-turn compaction: truncate old tool results if context is getting large
-            const withinTurnResult = compactionService.compactWithinTurn(currentMessages, systemPromptWithSummary, activeTools, 2);
-            if (withinTurnResult.truncatedCount > 0) {
-              // Replace currentMessages contents in-place
-              const beforeTokens = approxTokens;
-              currentMessages.length = 0;
-              currentMessages.push(...withinTurnResult.messages);
-              const afterTokens = Math.ceil(currentMessages.map(m => m.content || '').join('').length / 4);
-              const budget = compactionService.calculateBudget(systemPromptWithSummary, activeTools);
-              console.log(`   🗜️  Within-turn compaction: truncated ${withinTurnResult.truncatedCount} tool results, recovered ~${withinTurnResult.tokensRecovered.toLocaleString()} tokens (~${beforeTokens.toLocaleString()} → ~${afterTokens.toLocaleString()}, budget: ~${budget.availableForMessages.toLocaleString()})`);
-            }
           }
 
           // Assemble fullContent from all iterations, deduplicating repeated text.

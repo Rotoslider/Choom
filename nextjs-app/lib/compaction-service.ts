@@ -80,7 +80,7 @@ export class CompactionService {
   private llmSettings: LLMSettings;
   private budgetRatio: number;
 
-  constructor(llmSettings: LLMSettings, budgetRatio: number = 0.5) {
+  constructor(llmSettings: LLMSettings, budgetRatio: number = 0.85) {
     this.llmSettings = llmSettings;
     this.budgetRatio = budgetRatio;
   }
@@ -224,7 +224,8 @@ export class CompactionService {
     currentMessages: ChatMessage[],
     systemPrompt: string,
     tools: ToolDefinition[],
-    preserveLastN: number = 2
+    preserveLastN: number = 2,
+    criticalToolNames: Set<string> = new Set()
   ): WithinTurnResult {
     const { availableForMessages } = this.calculateBudget(systemPrompt, tools);
 
@@ -262,6 +263,8 @@ export class CompactionService {
     for (let i = 1; i < preserveBoundary; i++) {
       const msg = compacted[i];
       if (msg.role !== 'tool') continue;
+      // Never stub critical tool results — the model needs these to complete the task
+      if (msg.name && criticalToolNames.has(msg.name)) continue;
 
       const contentTokens = estimateTokens(msg.content || '');
       if (contentTokens <= minTokensToTruncate) continue;
@@ -285,6 +288,8 @@ export class CompactionService {
       for (let i = 1; i < preserveBoundary; i++) {
         if (currentTotal <= availableForMessages) break;
         const msg = compacted[i];
+        // Never drop critical tool results
+        if (msg.role === 'tool' && msg.name && criticalToolNames.has(msg.name)) continue;
         if (msg.role === 'tool') {
           const toks = estimateTokens(msg.content || '');
           compacted[i] = { ...msg, content: '[result dropped — context too large]' };

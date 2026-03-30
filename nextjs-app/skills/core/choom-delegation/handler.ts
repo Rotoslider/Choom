@@ -309,6 +309,16 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
                 case 'agent_iteration':
                   console.log(`   🤝 [${targetChoom.name}] iteration ${data.iteration}/${data.maxIterations}`);
                   break;
+                case 'retract_partial':
+                  // Worker choom's primary model sent partial text before timing out
+                  // and falling back to another model. Remove the partial text.
+                  if (data.length && content.length >= data.length) {
+                    content = content.slice(0, content.length - data.length);
+                  }
+                  break;
+                case 'status':
+                  // Informational (e.g. "Switching to fallback") — ignore
+                  break;
               }
             } catch {
               // Skip unparseable SSE lines

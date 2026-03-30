@@ -414,8 +414,9 @@ export interface ChatResponse {
 }
 
 export interface StreamingChatChunk {
-  type: 'content' | 'tool_call' | 'tool_result' | 'image_generated' | 'agent_iteration' | 'file_created' | 'compaction' | 'plan_created' | 'plan_step_update' | 'plan_completed' | 'done' | 'error';
+  type: 'content' | 'retract_partial' | 'status' | 'tool_call' | 'tool_result' | 'image_generated' | 'agent_iteration' | 'file_created' | 'compaction' | 'plan_created' | 'plan_step_update' | 'plan_completed' | 'done' | 'error';
   content?: string;
+  length?: number; // retract_partial: chars to remove from end of accumulated content
   toolCall?: ToolCall;
   toolResult?: ToolResult;
   imageUrl?: string;
