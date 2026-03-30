@@ -4098,6 +4098,13 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             // TTS and Signal get the duplicate before post-loop dedup can catch it.
             const bufferForDedup = allToolCalls.length > 0 && iterationTexts.length > 0;
 
+            // Within-content repeat detection: models sometimes output the same
+            // response twice in one stream. Track content and suppress when we
+            // detect the output is repeating from the beginning.
+            let repeatCheckpoint = ''; // The "original" content to compare against
+            let repeatMatchPos = 0;    // How many chars of checkpoint have matched
+            let suppressingRepeat = false;
+
             const streamPromise = (async () => {
               for await (const chunk of llmClient.streamChat(currentMessages, activeTools, undefined, toolChoiceOverride)) {
                 resetInactivity(); // chunk received — connection alive
@@ -4110,8 +4117,45 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                     visible = toolCallXmlFilter.filter(visible);
                     if (visible) {
                       iterationContent += visible;
-                      if (!bufferForDedup) {
-                        send({ type: 'content', content: visible });
+
+                      if (suppressingRepeat) {
+                        // Already detected repeat — suppress silently
+                      } else if (bufferForDedup) {
+                        // Buffered for cross-iteration dedup — don't send yet
+                      } else {
+                        // Inline repeat detection: after 80+ chars, save checkpoint.
+                        // As new content arrives past the checkpoint, check if it
+                        // matches the checkpoint from the start (model repeating itself).
+                        if (!repeatCheckpoint && iterationContent.length >= 80) {
+                          repeatCheckpoint = iterationContent;
+                        }
+                        if (repeatCheckpoint && iterationContent.length > repeatCheckpoint.length + 10) {
+                          const overflow = iterationContent.slice(repeatCheckpoint.length).trimStart();
+                          if (overflow.length > 0) {
+                            // Check char-by-char if overflow matches checkpoint start
+                            let matching = true;
+                            for (let ci = 0; ci < overflow.length && ci < repeatCheckpoint.length; ci++) {
+                              if (overflow[ci] !== repeatCheckpoint[ci]) {
+                                matching = false;
+                                break;
+                              }
+                              repeatMatchPos = ci + 1;
+                            }
+                            if (!matching) {
+                              // Content diverged — update checkpoint, reset
+                              repeatMatchPos = 0;
+                              repeatCheckpoint = iterationContent;
+                            } else if (repeatMatchPos >= 60) {
+                              // 60+ chars match — confirmed repeat
+                              suppressingRepeat = true;
+                              iterationContent = repeatCheckpoint;
+                              console.log(`   🔄 ${choomTag} Suppressing within-content repeat at char ${repeatCheckpoint.length}`);
+                            }
+                          }
+                        }
+                        if (!suppressingRepeat) {
+                          send({ type: 'content', content: visible });
+                        }
                       }
                     }
                   } else if (choice.delta.content.length > 0) {
@@ -4199,6 +4243,10 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
 
                     const fbThinkFilter = createThinkFilter();
                     const fbToolCallXmlFilter = createToolCallXmlFilter();
+                    // Reset repeat detection for fallback (fresh stream)
+                    repeatCheckpoint = '';
+                    repeatMatchPos = 0;
+                    suppressingRepeat = false;
                     const fbStreamPromise = (async () => {
                       for await (const chunk of fbClient.streamChat(currentMessages, activeTools, undefined, toolChoiceOverride)) {
                         resetFbInactivity();
@@ -4210,8 +4258,33 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                             visible = fbToolCallXmlFilter.filter(visible);
                             if (visible) {
                               iterationContent += visible;
-                              if (!bufferForDedup) {
-                                send({ type: 'content', content: visible });
+                              if (suppressingRepeat) {
+                                // Already detected repeat
+                              } else if (bufferForDedup) {
+                                // Buffered for cross-iteration dedup
+                              } else {
+                                if (!repeatCheckpoint && iterationContent.length >= 80) {
+                                  repeatCheckpoint = iterationContent;
+                                }
+                                if (repeatCheckpoint && iterationContent.length > repeatCheckpoint.length + 10) {
+                                  const overflow = iterationContent.slice(repeatCheckpoint.length).trimStart();
+                                  if (overflow.length > 0) {
+                                    let matching = true;
+                                    for (let ci = 0; ci < overflow.length && ci < repeatCheckpoint.length; ci++) {
+                                      if (overflow[ci] !== repeatCheckpoint[ci]) { matching = false; break; }
+                                      repeatMatchPos = ci + 1;
+                                    }
+                                    if (!matching) { repeatMatchPos = 0; repeatCheckpoint = iterationContent; }
+                                    else if (repeatMatchPos >= 60) {
+                                      suppressingRepeat = true;
+                                      iterationContent = repeatCheckpoint;
+                                      console.log(`   🔄 ${choomTag} Suppressing within-content repeat at char ${repeatCheckpoint.length} (fallback)`);
+                                    }
+                                  }
+                                }
+                                if (!suppressingRepeat) {
+                                  send({ type: 'content', content: visible });
+                                }
                               }
                             }
                           }
@@ -4388,6 +4461,27 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 // so the next iteration benefits from higher limit
               } else {
                 console.warn(`   ⚠️  ${choomTag} Output truncated but max_tokens already at ${currentMax} — proceeding with ${hasDropped ? 'dropped' : 'repaired'} tool calls`);
+              }
+            }
+
+            // Within-content dedup safety net: if the inline detector missed it
+            // (e.g., repeat started right at the checkpoint boundary), catch it
+            // post-stream using midpoint splitting (same approach as choom_client.py).
+            if (iterationContent.length > 100) {
+              const trimmed = iterationContent.trim();
+              const mid = Math.floor(trimmed.length / 2);
+              for (let offset = 0; offset < Math.min(100, mid); offset++) {
+                for (const pos of [mid + offset, mid - offset]) {
+                  if (pos < 30 || pos >= trimmed.length - 30) continue;
+                  const first = trimmed.slice(0, pos).trim();
+                  const second = trimmed.slice(pos).trim();
+                  if (first === second && first.length > 30) {
+                    console.log(`   🔄 ${choomTag} Post-stream dedup: ${trimmed.length} → ${first.length} chars`);
+                    iterationContent = first;
+                    offset = mid; // break outer
+                    break;
+                  }
+                }
               }
             }
 
