@@ -1012,7 +1012,9 @@ class SignalBridge:
                     r'^(Now let me|Let me|I\'ll |I\'m going to|I will |I need to|'
                     r'First,? (?:let me|I\'ll)|Next,? (?:let me|I\'ll)|'
                     r'(?:Now |)(?:creating|checking|searching|looking|reading|writing|uploading|downloading|updating|fetching|generating)|'
-                    r'(?:I\'ve |I have )(?:created|updated|written|uploaded|added|set up))',
+                    r'(?:I\'ve |I have )(?:created|updated|written|uploaded|added|set up)|'
+                    r'\[Reached maximum|I\'m sorry, the response timed out|'
+                    r'\*\*(?:Progress so far|Files (?:written|read)|Other tools|Delegations completed))',
                     re.IGNORECASE
                 )
                 paragraphs = tts_text.split('\n\n')
