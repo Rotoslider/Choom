@@ -146,6 +146,9 @@ export function splitIntoSentences(text: string): string[] {
 // Strip content that shouldn't be spoken (URLs, code blocks, think tags)
 export function stripForTTS(text: string): string {
   return text
+    // Remove JSON tool-call arrays: [{"name":"...","parameters":{...}}]
+    // Safety net for blocks that slip past the streaming filter
+    .replace(/\[\s*\{[^}]*"name"\s*:\s*"[^"]+"\s*,\s*"(?:parameters|arguments)"\s*:\s*\{[\s\S]*?\}\s*\}\s*\]/g, '')
     // Remove [think]...[/think] blocks (case insensitive)
     .replace(/\[think\][\s\S]*?\[\/think\]/gi, '')
     // Remove <think>...</think> blocks (case insensitive)
