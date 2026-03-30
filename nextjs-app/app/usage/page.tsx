@@ -388,17 +388,17 @@ export default function UsagePage() {
                   <h3 className="text-sm font-medium mb-3">Daily Token Usage</h3>
                   <ResponsiveContainer width="100%" height={220}>
                     <AreaChart data={dailyData}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                      <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--muted-foreground)' }} stroke="var(--border)" />
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgb(var(--border))" />
+                      <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'rgb(var(--muted-foreground))' }} stroke="rgb(var(--border))" />
                       <YAxis
-                        tick={{ fontSize: 10, fill: 'var(--muted-foreground)' }}
-                        stroke="var(--border)"
+                        tick={{ fontSize: 10, fill: 'rgb(var(--muted-foreground))' }}
+                        stroke="rgb(var(--border))"
                         tickFormatter={(v) => formatTokens(v)}
                       />
                       <Tooltip
                         contentStyle={{
-                          backgroundColor: 'var(--card)',
-                          border: '1px solid var(--border)',
+                          backgroundColor: 'rgb(var(--card))',
+                          border: '1px solid rgb(var(--border))',
                           borderRadius: 8,
                           fontSize: 12,
                         }}
@@ -437,7 +437,7 @@ export default function UsagePage() {
                               <text
                                 x={x}
                                 y={y}
-                                fill="var(--foreground)"
+                                fill="rgb(var(--foreground))"
                                 textAnchor={x > (cx as number) ? 'start' : 'end'}
                                 dominantBaseline="central"
                                 fontSize={12}
@@ -446,7 +446,7 @@ export default function UsagePage() {
                               </text>
                             );
                           }}
-                          labelLine={{ stroke: 'var(--muted-foreground)', strokeWidth: 1 }}
+                          labelLine={{ stroke: 'rgb(var(--muted-foreground))', strokeWidth: 1 }}
                         >
                           {choomPieData.map((entry, i) => (
                             <Cell key={i} fill={entry.color} />
@@ -481,7 +481,7 @@ export default function UsagePage() {
                               <text
                                 x={x}
                                 y={y}
-                                fill="var(--foreground)"
+                                fill="rgb(var(--foreground))"
                                 textAnchor={x > (cx as number) ? 'start' : 'end'}
                                 dominantBaseline="central"
                                 fontSize={12}
@@ -490,7 +490,7 @@ export default function UsagePage() {
                               </text>
                             );
                           }}
-                          labelLine={{ stroke: 'var(--muted-foreground)', strokeWidth: 1 }}
+                          labelLine={{ stroke: 'rgb(var(--muted-foreground))', strokeWidth: 1 }}
                         >
                           {sourceData.map((entry, i) => (
                             <Cell key={i} fill={entry.color} />
@@ -509,18 +509,18 @@ export default function UsagePage() {
                   <h3 className="text-sm font-medium mb-3">By Model</h3>
                   <ResponsiveContainer width="100%" height={Math.max(150, modelBarData.length * 40)}>
                     <BarChart data={modelBarData} layout="vertical" margin={{ left: 150 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgb(var(--border))" />
                       <XAxis
                         type="number"
-                        tick={{ fontSize: 10, fill: 'var(--muted-foreground)' }}
-                        stroke="var(--border)"
+                        tick={{ fontSize: 10, fill: 'rgb(var(--muted-foreground))' }}
+                        stroke="rgb(var(--border))"
                         tickFormatter={(v) => formatTokens(v)}
                       />
-                      <YAxis type="category" dataKey="name" tick={{ fontSize: 11, fill: 'var(--foreground)' }} stroke="var(--border)" width={150} />
+                      <YAxis type="category" dataKey="name" tick={{ fontSize: 11, fill: 'rgb(var(--foreground))' }} stroke="rgb(var(--border))" width={150} />
                       <Tooltip
                         contentStyle={{
-                          backgroundColor: 'var(--card)',
-                          border: '1px solid var(--border)',
+                          backgroundColor: 'rgb(var(--card))',
+                          border: '1px solid rgb(var(--border))',
                           borderRadius: 8,
                           fontSize: 12,
                         }}
@@ -540,18 +540,18 @@ export default function UsagePage() {
                   <h3 className="text-sm font-medium mb-3">By Provider</h3>
                   <ResponsiveContainer width="100%" height={Math.max(100, providerBarData.length * 40)}>
                     <BarChart data={providerBarData} layout="vertical" margin={{ left: 80 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgb(var(--border))" />
                       <XAxis
                         type="number"
-                        tick={{ fontSize: 10, fill: 'var(--muted-foreground)' }}
-                        stroke="var(--border)"
+                        tick={{ fontSize: 10, fill: 'rgb(var(--muted-foreground))' }}
+                        stroke="rgb(var(--border))"
                         tickFormatter={(v) => formatTokens(v)}
                       />
-                      <YAxis type="category" dataKey="name" tick={{ fontSize: 11, fill: 'var(--foreground)' }} stroke="var(--border)" width={80} />
+                      <YAxis type="category" dataKey="name" tick={{ fontSize: 11, fill: 'rgb(var(--foreground))' }} stroke="rgb(var(--border))" width={80} />
                       <Tooltip
                         contentStyle={{
-                          backgroundColor: 'var(--card)',
-                          border: '1px solid var(--border)',
+                          backgroundColor: 'rgb(var(--card))',
+                          border: '1px solid rgb(var(--border))',
                           borderRadius: 8,
                           fontSize: 12,
                         }}
