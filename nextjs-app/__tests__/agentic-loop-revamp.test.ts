@@ -326,7 +326,7 @@ describe('6. Task Continuation Nudge (Loop Break Fix)', () => {
     // After the planning detection, forceToolCall should be set
     const nudgeBlock = routeContent.slice(
       routeContent.indexOf('Task continuation nudge'),
-      routeContent.indexOf('Task continuation nudge') + 500
+      routeContent.indexOf('Task continuation nudge') + 800
     );
     expect(nudgeBlock).toContain('forceToolCall = true');
   });

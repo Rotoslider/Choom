@@ -4023,7 +4023,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           const MAX_CALLS_PER_READONLY_TOOL = 50; // Higher limit for read-only (PARALLEL_SAFE) tools
           const MAX_FAILURES_PER_TOOL = 2; // Block tool after this many failures (any error)
           const choomTag = `[${choom.name}]`;
-          console.log(`   🛠️  ${choomTag} Tools available: ${activeTools.length} (${activeTools.map(t => t.name).join(', ')})${skillDispatch ? ' [skill dispatch]' : ''}`);
+          console.log(`   🛠️  ${choomTag} Tools available: ${activeTools.length}${skillDispatch ? ' [skill dispatch]' : ''}`);
           // Intent-specific tool guidance: when we detect a specific intent, inject a
           // system message steering the LLM to the correct tool. This prevents the LLM
           // from calling get_calendar_events when the user says "remind me" etc.
@@ -4602,15 +4602,41 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               // before the loop breaks — losing the write-back, notification, etc.
               if (allToolCalls.length > 0 && !(fallbackActivated && nudgeCount === 0)) {
                 const lc = iterationContent.toLowerCase();
+
+                // Check 1: Model narrates its next step ("now let me update...")
                 const planningNext = /(?:now (?:let me|i'?ll|i need to|i should|i'?m going to)|next,? i'?ll|next step|then i'?ll|i(?:'ll| will) (?:also|now|then)|let me (?:also|now|update|write|save|send|notify)|updating|writing the|saving the|appending|i still need to)/i.test(lc);
-                if (planningNext && nudgeCount < 3 && iteration < maxIterations - 1) {
+
+                // Check 2: Original task mentions steps that were never completed.
+                // Compare the user's instructions against tools actually called.
+                const calledToolNames = new Set(allToolCalls.map(tc => tc.name));
+                const msgLower = message.toLowerCase();
+                const unfinishedSteps: string[] = [];
+                if (/(?:update|write|append|save|modify).*(?:file|history|prompt|log)/i.test(msgLower) &&
+                    !calledToolNames.has('workspace_write_file')) {
+                  unfinishedSteps.push('update/write file (workspace_write_file)');
+                }
+                if (/(?:send|notify|notification|signal|let me know|tell me)/i.test(msgLower) &&
+                    !calledToolNames.has('send_notification')) {
+                  unfinishedSteps.push('send notification (send_notification)');
+                }
+                if (/(?:read|check|open|look at).*(?:file|history|prompt)/i.test(msgLower) &&
+                    !calledToolNames.has('workspace_read_file')) {
+                  unfinishedSteps.push('read file (workspace_read_file)');
+                }
+
+                const hasUnfinished = unfinishedSteps.length > 0;
+
+                if ((planningNext || hasUnfinished) && nudgeCount < 3 && iteration < maxIterations - 1) {
                   nudgeCount++;
-                  console.log(`   🔄 ${choomTag} Task continuation nudge ${nudgeCount}/3 — model indicated more steps pending`);
+                  const reason = hasUnfinished
+                    ? `unfinished steps: ${unfinishedSteps.join(', ')}`
+                    : 'model indicated more steps pending';
+                  console.log(`   🔄 ${choomTag} Task continuation nudge ${nudgeCount}/3 — ${reason}`);
                   currentMessages.push({ role: 'assistant', content: iterationContent });
-                  currentMessages.push({
-                    role: 'user',
-                    content: '[System] You indicated you have more steps to complete. Call the next tool NOW. Do not narrate — make the tool call directly.',
-                  });
+                  const nudgeMsg = hasUnfinished
+                    ? `[System] You have NOT completed all steps from the original instructions. Remaining: ${unfinishedSteps.join('; ')}. Call the next tool NOW.`
+                    : '[System] You indicated you have more steps to complete. Call the next tool NOW. Do not narrate — make the tool call directly.';
+                  currentMessages.push({ role: 'user', content: nudgeMsg });
                   forceToolCall = true;
                   continue;
                 }
