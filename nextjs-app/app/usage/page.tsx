@@ -178,7 +178,7 @@ export default function UsagePage() {
     ? Object.entries(stats.byModel)
         .sort(([, a], [, b]) => b.total - a.total)
         .map(([name, v], i) => ({
-          name: name.length > 25 ? name.slice(0, 25) + '...' : name,
+          name: name.length > 30 ? name.slice(0, 30) + '...' : name,
           fullName: name,
           prompt: v.prompt,
           completion: v.completion,
@@ -389,10 +389,10 @@ export default function UsagePage() {
                   <ResponsiveContainer width="100%" height={220}>
                     <AreaChart data={dailyData}>
                       <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                      <XAxis dataKey="date" tick={{ fontSize: 10 }} stroke="var(--muted-foreground)" />
+                      <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--muted-foreground)' }} stroke="var(--border)" />
                       <YAxis
-                        tick={{ fontSize: 10 }}
-                        stroke="var(--muted-foreground)"
+                        tick={{ fontSize: 10, fill: 'var(--muted-foreground)' }}
+                        stroke="var(--border)"
                         tickFormatter={(v) => formatTokens(v)}
                       />
                       <Tooltip
@@ -418,18 +418,35 @@ export default function UsagePage() {
                 {choomPieData.length > 0 && (
                   <div className="bg-card border border-border rounded-lg p-4">
                     <h3 className="text-sm font-medium mb-3">By Choom</h3>
-                    <ResponsiveContainer width="100%" height={220}>
+                    <ResponsiveContainer width="100%" height={260}>
                       <PieChart>
                         <Pie
                           data={choomPieData}
                           cx="50%"
                           cy="50%"
-                          innerRadius={50}
-                          outerRadius={90}
+                          innerRadius={45}
+                          outerRadius={80}
                           dataKey="value"
                           nameKey="name"
-                          label={({ name, value }) => `${name} (${formatTokens(value)})`}
-                          labelLine={false}
+                          label={({ name, value, cx, cy, midAngle, outerRadius: oR }) => {
+                            const RADIAN = Math.PI / 180;
+                            const radius = (oR as number) + 25;
+                            const x = (cx as number) + radius * Math.cos(-midAngle * RADIAN);
+                            const y = (cy as number) + radius * Math.sin(-midAngle * RADIAN);
+                            return (
+                              <text
+                                x={x}
+                                y={y}
+                                fill="var(--foreground)"
+                                textAnchor={x > (cx as number) ? 'start' : 'end'}
+                                dominantBaseline="central"
+                                fontSize={12}
+                              >
+                                {`${name} (${formatTokens(value as number)})`}
+                              </text>
+                            );
+                          }}
+                          labelLine={{ stroke: 'var(--muted-foreground)', strokeWidth: 1 }}
                         >
                           {choomPieData.map((entry, i) => (
                             <Cell key={i} fill={entry.color} />
@@ -445,18 +462,35 @@ export default function UsagePage() {
                 {sourceData.length > 0 && (
                   <div className="bg-card border border-border rounded-lg p-4">
                     <h3 className="text-sm font-medium mb-3">By Source</h3>
-                    <ResponsiveContainer width="100%" height={220}>
+                    <ResponsiveContainer width="100%" height={260}>
                       <PieChart>
                         <Pie
                           data={sourceData}
                           cx="50%"
                           cy="50%"
-                          innerRadius={50}
-                          outerRadius={90}
+                          innerRadius={45}
+                          outerRadius={80}
                           dataKey="value"
                           nameKey="name"
-                          label={({ name, value }) => `${name} (${formatTokens(value)})`}
-                          labelLine={false}
+                          label={({ name, value, cx, cy, midAngle, outerRadius: oR }) => {
+                            const RADIAN = Math.PI / 180;
+                            const radius = (oR as number) + 25;
+                            const x = (cx as number) + radius * Math.cos(-midAngle * RADIAN);
+                            const y = (cy as number) + radius * Math.sin(-midAngle * RADIAN);
+                            return (
+                              <text
+                                x={x}
+                                y={y}
+                                fill="var(--foreground)"
+                                textAnchor={x > (cx as number) ? 'start' : 'end'}
+                                dominantBaseline="central"
+                                fontSize={12}
+                              >
+                                {`${name} (${formatTokens(value as number)})`}
+                              </text>
+                            );
+                          }}
+                          labelLine={{ stroke: 'var(--muted-foreground)', strokeWidth: 1 }}
                         >
                           {sourceData.map((entry, i) => (
                             <Cell key={i} fill={entry.color} />
@@ -474,15 +508,15 @@ export default function UsagePage() {
                 <div className="bg-card border border-border rounded-lg p-4">
                   <h3 className="text-sm font-medium mb-3">By Model</h3>
                   <ResponsiveContainer width="100%" height={Math.max(150, modelBarData.length * 40)}>
-                    <BarChart data={modelBarData} layout="vertical" margin={{ left: 120 }}>
+                    <BarChart data={modelBarData} layout="vertical" margin={{ left: 150 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
                       <XAxis
                         type="number"
-                        tick={{ fontSize: 10 }}
-                        stroke="var(--muted-foreground)"
+                        tick={{ fontSize: 10, fill: 'var(--muted-foreground)' }}
+                        stroke="var(--border)"
                         tickFormatter={(v) => formatTokens(v)}
                       />
-                      <YAxis type="category" dataKey="name" tick={{ fontSize: 11 }} stroke="var(--muted-foreground)" width={120} />
+                      <YAxis type="category" dataKey="name" tick={{ fontSize: 11, fill: 'var(--foreground)' }} stroke="var(--border)" width={150} />
                       <Tooltip
                         contentStyle={{
                           backgroundColor: 'var(--card)',
@@ -509,11 +543,11 @@ export default function UsagePage() {
                       <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
                       <XAxis
                         type="number"
-                        tick={{ fontSize: 10 }}
-                        stroke="var(--muted-foreground)"
+                        tick={{ fontSize: 10, fill: 'var(--muted-foreground)' }}
+                        stroke="var(--border)"
                         tickFormatter={(v) => formatTokens(v)}
                       />
-                      <YAxis type="category" dataKey="name" tick={{ fontSize: 11 }} stroke="var(--muted-foreground)" width={80} />
+                      <YAxis type="category" dataKey="name" tick={{ fontSize: 11, fill: 'var(--foreground)' }} stroke="var(--border)" width={80} />
                       <Tooltip
                         contentStyle={{
                           backgroundColor: 'var(--card)',
