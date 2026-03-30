@@ -4,7 +4,7 @@ export const tools: ToolDefinition[] = [
   {
     name: 'send_notification',
     description:
-      'Send a notification message to the user via Signal. Use when a long-running task is complete, something interesting was found, or the user\'s attention is needed.',
+      'Send a notification to the user via Signal — pass image_ids from save_generated_image to attach images. Use when a task is complete or the user\'s attention is needed.',
     parameters: {
       type: 'object',
       properties: {

@@ -310,13 +310,22 @@ function createThinkFilter(): (text: string) => string {
 function createToolCallXmlFilter(): {
   filter: (text: string) => string;
   getCaptured: () => string[];
+  flush: () => string;
 } {
   let inBlock = false;
   let currentBlock = '';
+  let pendingBuffer = ''; // holds partial tag prefixes across chunks
   const captured: string[] = [];
 
+  const OPEN_TAG = '<tool_call>';
+
   function filter(text: string): string {
-    if (!text) return '';
+    if (!text && !pendingBuffer) return '';
+
+    // Prepend any buffered partial tag from previous chunk
+    text = pendingBuffer + (text || '');
+    pendingBuffer = '';
+
     let result = '';
     let pos = 0;
 
@@ -334,14 +343,30 @@ function createToolCallXmlFilter(): {
           break; // rest is inside block — buffer it
         }
       } else {
-        const openIdx = text.indexOf('<tool_call>', pos);
+        const openIdx = text.indexOf(OPEN_TAG, pos);
         if (openIdx !== -1) {
           result += text.slice(pos, openIdx);
           inBlock = true;
           currentBlock = '';
           pos = openIdx + 11; // '<tool_call>'.length
         } else {
-          result += text.slice(pos);
+          // No complete <tool_call> found. Check if the text ends with a
+          // partial prefix of <tool_call> split across streaming chunks
+          // (e.g. chunk ends with "<tool" and next chunk starts with "_call>").
+          const remaining = text.slice(pos);
+          const lastLt = remaining.lastIndexOf('<');
+          if (lastLt !== -1 && lastLt >= remaining.length - OPEN_TAG.length) {
+            const tail = remaining.slice(lastLt);
+            if (OPEN_TAG.startsWith(tail)) {
+              // Tail is a valid prefix of <tool_call> — buffer it
+              result += remaining.slice(0, lastLt);
+              pendingBuffer = tail;
+            } else {
+              result += remaining;
+            }
+          } else {
+            result += remaining;
+          }
           break;
         }
       }
@@ -350,7 +375,21 @@ function createToolCallXmlFilter(): {
     return result;
   }
 
-  return { filter, getCaptured: () => captured };
+  function flush(): string {
+    // Release any buffered partial tag that never completed
+    const buf = pendingBuffer;
+    pendingBuffer = '';
+    // If stream ended while inside a block, capture whatever we have
+    // so parseXmlToolCalls can attempt to parse the truncated tool call
+    if (inBlock && currentBlock) {
+      captured.push(currentBlock);
+      currentBlock = '';
+      inBlock = false;
+    }
+    return buf;
+  }
+
+  return { filter, getCaptured: () => captured, flush };
 }
 
 /**
@@ -4062,14 +4101,23 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               inactivityTimer = setTimeout(() => reject(new Error(`LLM response timeout (no first token for ${FIRST_TOKEN_MS / 1000}s)`)), FIRST_TOKEN_MS);
             });
             inactivityPromise.catch(() => {}); // suppress unhandled rejection after race
-            const resetInactivity = () => {
+            const resetInactivity = (hasContent: boolean = false) => {
               clearTimeout(inactivityTimer);
-              if (!firstTokenReceived) {
+              // Only switch from first-token to between-token mode when actual
+              // content (text or tool_calls) arrives — not on empty SSE setup
+              // chunks. Otherwise the generous prefill timeout gets replaced
+              // too early, causing timeouts on large contexts (~28K+ tokens)
+              // where prefill legitimately takes 60-120s.
+              if (!firstTokenReceived && hasContent) {
                 firstTokenReceived = true;
-                console.log(`   ⚡ ${choomTag} First token received — switching to ${BETWEEN_TOKEN_MS / 1000}s between-token timeout`);
+                console.log(`   ⚡ ${choomTag} First content token — switching to ${BETWEEN_TOKEN_MS / 1000}s between-token timeout`);
               }
-              // After first token, use shorter between-token timeout
-              inactivityTimer = setTimeout(() => rejectInactivity(new Error(`LLM response timeout (no data for ${BETWEEN_TOKEN_MS / 1000}s)`)), BETWEEN_TOKEN_MS);
+              const currentTimeout = firstTokenReceived ? BETWEEN_TOKEN_MS : FIRST_TOKEN_MS;
+              inactivityTimer = setTimeout(() => rejectInactivity(new Error(
+                firstTokenReceived
+                  ? `LLM response timeout (no data for ${BETWEEN_TOKEN_MS / 1000}s)`
+                  : `LLM response timeout (no first token for ${FIRST_TOKEN_MS / 1000}s)`
+              )), currentTimeout);
             };
             const wallClockPromise = new Promise<never>((_, reject) => {
               setTimeout(() => reject(new Error('LLM response timeout')), timeoutMs);
@@ -4100,7 +4148,8 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
 
             const streamPromise = (async () => {
               for await (const chunk of llmClient.streamChat(currentMessages, activeTools, undefined, toolChoiceOverride)) {
-                resetInactivity(); // chunk received — connection alive
+                const hasContent = !!(chunk.choices?.[0]?.delta?.content || chunk.choices?.[0]?.delta?.tool_calls);
+                resetInactivity(hasContent); // reset timer; only switch mode on actual content
                 if (!chunk.choices || !chunk.choices[0]) continue;
                 const choice = chunk.choices[0];
 
@@ -4132,6 +4181,18 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 if (chunk.usage) {
                   totalPromptTokens += chunk.usage.prompt_tokens || 0;
                   totalCompletionTokens += chunk.usage.completion_tokens || 0;
+                }
+              }
+              // Flush any buffered partial tag that was never completed.
+              // Guard: if a fallback took over, the primary IIFE may still
+              // finish late — don't corrupt iterationContent.
+              if (!fallbackActivated) {
+                const flushed = toolCallXmlFilter.flush();
+                if (flushed) {
+                  iterationContent += flushed;
+                  if (!bufferForDedup) {
+                    send({ type: 'content', content: flushed });
+                  }
                 }
               }
               if (thinkTokensFiltered) {
@@ -4183,13 +4244,18 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                       fbInactivityTimer = setTimeout(() => reject(new Error(`LLM response timeout (no first token for ${fbFirstTokenMs / 1000}s)`)), fbFirstTokenMs);
                     });
                     fbInactivityPromise.catch(() => {});
-                    const resetFbInactivity = () => {
+                    const resetFbInactivity = (hasContent: boolean = false) => {
                       clearTimeout(fbInactivityTimer);
-                      if (!fbFirstTokenReceived) {
+                      if (!fbFirstTokenReceived && hasContent) {
                         fbFirstTokenReceived = true;
-                        console.log(`   ⚡ ${choomTag} Fallback first token received — switching to ${fbBetweenTokenMs / 1000}s between-token timeout`);
+                        console.log(`   ⚡ ${choomTag} Fallback first content token — switching to ${fbBetweenTokenMs / 1000}s between-token timeout`);
                       }
-                      fbInactivityTimer = setTimeout(() => fbRejectInactivity(new Error(`LLM response timeout (no data for ${fbBetweenTokenMs / 1000}s)`)), fbBetweenTokenMs);
+                      const currentTimeout = fbFirstTokenReceived ? fbBetweenTokenMs : fbFirstTokenMs;
+                      fbInactivityTimer = setTimeout(() => fbRejectInactivity(new Error(
+                        fbFirstTokenReceived
+                          ? `LLM response timeout (no data for ${fbBetweenTokenMs / 1000}s)`
+                          : `LLM response timeout (no first token for ${fbFirstTokenMs / 1000}s)`
+                      )), currentTimeout);
                     };
                     const fbWallClockPromise = new Promise<never>((_, reject) => {
                       setTimeout(() => reject(new Error('LLM response timeout')), fbTimeoutMs);
@@ -4201,7 +4267,8 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                     const fbToolCallXmlFilter = createToolCallXmlFilter();
                     const fbStreamPromise = (async () => {
                       for await (const chunk of fbClient.streamChat(currentMessages, activeTools, undefined, toolChoiceOverride)) {
-                        resetFbInactivity();
+                        const fbHasContent = !!(chunk.choices?.[0]?.delta?.content || chunk.choices?.[0]?.delta?.tool_calls);
+                        resetFbInactivity(fbHasContent);
                         if (!chunk.choices || !chunk.choices[0]) continue;
                         const choice = chunk.choices[0];
                         if (choice.delta.content) {
@@ -4225,6 +4292,14 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                         if (chunk.usage) {
                           totalPromptTokens += chunk.usage.prompt_tokens || 0;
                           totalCompletionTokens += chunk.usage.completion_tokens || 0;
+                        }
+                      }
+                      // Flush any buffered partial tag
+                      const fbFlushed = fbToolCallXmlFilter.flush();
+                      if (fbFlushed) {
+                        iterationContent += fbFlushed;
+                        if (!bufferForDedup) {
+                          send({ type: 'content', content: fbFlushed });
                         }
                       }
                     })();

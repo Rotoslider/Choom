@@ -145,6 +145,7 @@ export const BUILTIN_LLM_PROFILES: LLMModelProfile[] = [
     maxTokens: 4096,
     contextLength: 131072,
     topK: 20,
+    enableThinking: false,
   },
   {
     modelId: 'qwen3.5-122b-a10b',
