@@ -374,6 +374,286 @@ export class CompactionService {
   }
 
   /**
+   * Aggressive within-turn compaction: after iteration >= threshold, replace all
+   * intermediate assistant+tool message pairs with a compact progress summary.
+   * Reduces message count from O(iterations) to a fixed ~5 messages.
+   *
+   * Result: [system, user, progress_summary, last_assistant, ...last_tool_results]
+   *
+   * Does NOT call the LLM — uses mechanical extraction for speed.
+   * Should be called BEFORE compactWithinTurn() which serves as a second safety net.
+   */
+  compactAggressiveWithinTurn(
+    currentMessages: ChatMessage[],
+    iteration: number,
+    threshold: number = 3,
+    contextBudget: number = 0,
+  ): { messages: ChatMessage[]; progressSummary: string; tokensRecovered: number } {
+    // Only activate after threshold iterations AND when context is large enough to need it.
+    // Without the budget check, this fires every iteration and erases web search results,
+    // delegation responses, and file reads before the model can use them — causing
+    // a death spiral where the model searches memories to recover lost context.
+    if (iteration < threshold || currentMessages.length < 6) {
+      return { messages: currentMessages, progressSummary: '', tokensRecovered: 0 };
+    }
+
+    // Budget-aware gating: only compact when messages use >70% of available context.
+    // If contextBudget is 0 (not provided), use a generous default based on message count.
+    const currentTokens = currentMessages.reduce((sum, m) => sum + messageTokens(m), 0);
+    const effectiveBudget = contextBudget > 0 ? contextBudget : 24000; // safe default
+    if (currentTokens < effectiveBudget * 0.70) {
+      return { messages: currentMessages, progressSummary: '', tokensRecovered: 0 };
+    }
+
+    // Identify key messages
+    const systemMsg = currentMessages[0]; // Always system prompt
+    const firstUserMsg = currentMessages.find((m, i) => i > 0 && m.role === 'user');
+
+    // Find the last assistant message that has tool_calls (the most recent iteration)
+    let lastAssistantIdx = -1;
+    for (let i = currentMessages.length - 1; i >= 1; i--) {
+      if (currentMessages[i].role === 'assistant' && currentMessages[i].tool_calls?.length) {
+        lastAssistantIdx = i;
+        break;
+      }
+    }
+
+    // If no tool-calling assistant message found, return unchanged
+    if (lastAssistantIdx === -1) {
+      return { messages: currentMessages, progressSummary: '', tokensRecovered: 0 };
+    }
+
+    // Collect the last assistant message + all following tool results
+    const lastAssistantMsg = currentMessages[lastAssistantIdx];
+    const lastToolResults: ChatMessage[] = [];
+    for (let i = lastAssistantIdx + 1; i < currentMessages.length; i++) {
+      if (currentMessages[i].role === 'tool') {
+        lastToolResults.push(currentMessages[i]);
+      } else {
+        break; // Stop at next non-tool message
+      }
+    }
+
+    // Tools whose results are critical and should be preserved as full messages
+    // rather than compressed into the progress summary.
+    // - workspace_read_file/pdf: contains file content the model needs to reference
+    // - delegate_to_choom: response is already truncated by the handler (~1500 chars),
+    //   but still worth preserving since it contains the summary + file pointers
+    const PRESERVE_FULL_TOOLS = new Set(['delegate_to_choom', 'workspace_read_file', 'workspace_read_pdf']);
+
+    // Build progress summary from intermediate assistant+tool pairs (excluding the last).
+    // Delegation and file-read results are kept as separate messages instead of summarized.
+    const progressLines: string[] = [];
+    const preservedMessages: ChatMessage[] = []; // Full tool result messages to keep
+    let stepNum = 0;
+
+    for (let i = 1; i < lastAssistantIdx; i++) {
+      const msg = currentMessages[i];
+
+      if (msg.role === 'assistant' && msg.tool_calls?.length) {
+        for (const tc of msg.tool_calls) {
+          stepNum++;
+          const toolName = tc.function.name;
+          const argsSnippet = this.extractKeyArgs(tc.function.arguments || '{}');
+
+          // Find the matching tool result
+          let resultSnippet = '';
+          let toolResultMsg: ChatMessage | null = null;
+          for (let j = i + 1; j < currentMessages.length; j++) {
+            const toolMsg = currentMessages[j];
+            if (toolMsg.role === 'tool' && toolMsg.tool_call_id === tc.id) {
+              toolResultMsg = toolMsg;
+              resultSnippet = this.extractResultSnippet(toolMsg.content || '', toolName);
+              break;
+            }
+            if (toolMsg.role !== 'tool') break;
+          }
+
+          // Preserve critical tool results as full messages
+          if (PRESERVE_FULL_TOOLS.has(toolName) && toolResultMsg) {
+            // Truncate very large results but keep much more than a summary line
+            const content = toolResultMsg.content || '';
+            const maxChars = toolName === 'delegate_to_choom' ? 12000 : 6000;
+            const truncatedContent = content.length > maxChars
+              ? content.slice(0, maxChars) + '\n...[truncated for context]'
+              : content;
+            preservedMessages.push({ ...toolResultMsg, content: truncatedContent });
+            // Still add a brief note to the progress summary
+            const briefNote = toolName === 'delegate_to_choom'
+              ? `(full response preserved below)`
+              : `(file content preserved below)`;
+            progressLines.push(`${stepNum}. ${toolName}(${argsSnippet}) → ${briefNote}`);
+          } else {
+            progressLines.push(`${stepNum}. ${toolName}(${argsSnippet}) → ${resultSnippet}`);
+          }
+        }
+      }
+    }
+
+    if (progressLines.length === 0 && preservedMessages.length === 0) {
+      return { messages: currentMessages, progressSummary: '', tokensRecovered: 0 };
+    }
+
+    // Build a "files created/updated" section so the model always knows where its work is,
+    // even after compaction. Scan ALL messages (including the last iteration) for write operations.
+    const filesWritten: string[] = [];
+    for (const msg of currentMessages) {
+      if (msg.role === 'assistant' && msg.tool_calls) {
+        for (const tc of msg.tool_calls) {
+          if (tc.function.name === 'workspace_write_file') {
+            try {
+              const args = JSON.parse(tc.function.arguments || '{}');
+              const filePath = args.path || args.file_path || '';
+              if (filePath) filesWritten.push(filePath);
+            } catch { /* ignore parse errors */ }
+          }
+        }
+      }
+    }
+    const filesSection = filesWritten.length > 0
+      ? `\n\n## Files created/updated this session\n${filesWritten.map(f => `- ${f}`).join('\n')}\nYou can read these files with workspace_read_file if you need the full content.`
+      : '';
+
+    const progressSummary = `## Progress so far (${progressLines.length} tool calls completed)\n${progressLines.join('\n')}${filesSection}`;
+
+    // Build compacted messages: system, user, progress summary, preserved results, last iteration
+    const compacted: ChatMessage[] = [systemMsg];
+    if (firstUserMsg) compacted.push(firstUserMsg);
+    compacted.push({ role: 'assistant', content: progressSummary });
+    // Insert preserved delegation/file-read results as assistant context so the model
+    // can reference them. We inject them as an assistant message (not raw tool messages)
+    // to avoid API validation issues (tool messages require matching assistant tool_calls).
+    if (preservedMessages.length > 0) {
+      const preservedContent = preservedMessages.map(m => {
+        const label = m.name || 'tool';
+        return `### Result from ${label}\n${m.content || ''}`;
+      }).join('\n\n');
+      compacted.push({ role: 'assistant', content: `## Preserved results from previous steps\n\n${preservedContent}` });
+    }
+    compacted.push(lastAssistantMsg);
+    compacted.push(...lastToolResults);
+
+    // Calculate token savings
+    const beforeTokens = currentMessages.reduce((sum, m) => sum + messageTokens(m), 0);
+    const afterTokens = compacted.reduce((sum, m) => sum + messageTokens(m), 0);
+    const tokensRecovered = Math.max(0, beforeTokens - afterTokens);
+
+    return { messages: compacted, progressSummary, tokensRecovered };
+  }
+
+  /**
+   * Extract key argument values from a tool call's arguments JSON.
+   * Returns a compact snippet like: location:'NYC', query:'weather'
+   */
+  private extractKeyArgs(argsJson: string): string {
+    try {
+      const args = JSON.parse(argsJson);
+      if (typeof args !== 'object' || args === null) return '';
+      const parts: string[] = [];
+      for (const [key, value] of Object.entries(args)) {
+        if (typeof value === 'string') {
+          parts.push(`${key}:'${value.length > 40 ? value.slice(0, 37) + '...' : value}'`);
+        } else if (typeof value === 'number' || typeof value === 'boolean') {
+          parts.push(`${key}:${value}`);
+        }
+        if (parts.length >= 3) break; // Max 3 args in snippet
+      }
+      return parts.join(', ');
+    } catch {
+      return '';
+    }
+  }
+
+  /**
+   * Extract a compact result snippet from a tool result message.
+   * Tool-type-aware: preserves actionable data (URLs, file paths, key findings)
+   * while dropping verbose descriptions and metadata.
+   */
+  private extractResultSnippet(content: string, toolName: string): string {
+    try {
+      const parsed = JSON.parse(content);
+      if (typeof parsed !== 'object' || parsed === null) {
+        return typeof parsed === 'string' ? parsed.slice(0, 80) : String(parsed);
+      }
+
+      // Check for error
+      if (parsed.error) return `error: ${String(parsed.error).slice(0, 60)}`;
+
+      // ---- Web search: preserve URLs and titles (the actionable data) ----
+      if (toolName === 'web_search' && parsed.results && Array.isArray(parsed.results)) {
+        const urls = parsed.results.map((r: Record<string, unknown>) => {
+          const title = r.title ? String(r.title).slice(0, 60) : '';
+          const url = r.url ? String(r.url) : '';
+          return title && url ? `  - ${title}: ${url}` : url || title;
+        }).filter(Boolean);
+        return `${urls.length} results:\n${urls.join('\n')}`;
+      }
+
+      // ---- Search YouTube: preserve video titles and URLs ----
+      if (toolName === 'search_youtube' && parsed.results && Array.isArray(parsed.results)) {
+        const videos = parsed.results.map((r: Record<string, unknown>) => {
+          const title = r.title ? String(r.title).slice(0, 60) : '';
+          const url = r.url || (r.videoId ? `https://youtube.com/watch?v=${r.videoId}` : '');
+          return title && url ? `  - ${title}: ${url}` : title;
+        }).filter(Boolean);
+        return `${videos.length} videos:\n${videos.join('\n')}`;
+      }
+
+      // ---- Delegation: preserve summary + file pointers ----
+      if (toolName === 'delegate_to_choom' && parsed.response) {
+        const response = String(parsed.response);
+        const status = parsed.incomplete ? ' (incomplete)' : '';
+        const choom = parsed.choom_name ? `${parsed.choom_name}: ` : '';
+        const folder = parsed.project_folder ? ` [files in: ${parsed.project_folder}]` : '';
+        const snippet = response.length > 2000 ? response.slice(0, 2000) + '...[truncated]' : response;
+        return `${choom}${snippet}${status}${folder}`;
+      }
+
+      // ---- File write: preserve the file path ----
+      if (toolName === 'workspace_write_file') {
+        const path = parsed.path || parsed.filePath || '';
+        return `wrote: ${path}${parsed.size ? ` (${parsed.size})` : ''}`;
+      }
+
+      // ---- Memory search: preserve memory titles and key content ----
+      if ((toolName === 'search_memories' || toolName === 'search_by_type' || toolName === 'search_by_tags')
+          && parsed.results && Array.isArray(parsed.results)) {
+        const memories = parsed.results.slice(0, 5).map((r: Record<string, unknown>) => {
+          const title = r.title || r.key || '';
+          const preview = r.content ? String(r.content).slice(0, 80) : '';
+          return title ? `  - ${title}${preview ? ': ' + preview : ''}` : preview;
+        }).filter(Boolean);
+        return memories.length > 0 ? `${parsed.results.length} memories:\n${memories.join('\n')}` : 'no results';
+      }
+
+      // ---- Image generation: preserve imageId and prompt ----
+      if (toolName === 'generate_image') {
+        const parts: string[] = [];
+        if (parsed.success) parts.push('success');
+        if (parsed.imageId) parts.push(`imageId: ${parsed.imageId}`);
+        if (parsed.message) parts.push(String(parsed.message).slice(0, 80));
+        return parts.join(', ') || 'completed';
+      }
+
+      // ---- Default: extract key fields ----
+      const status = parsed.success === true ? 'success' : parsed.success === false ? 'failed' : '';
+      const keyFields: string[] = [];
+      if (status) keyFields.push(status);
+      for (const key of ['message', 'path', 'imageId', 'id', 'title', 'name', 'formatted', 'temperature', 'summary']) {
+        if (parsed[key] !== undefined) {
+          const val = String(parsed[key]);
+          keyFields.push(`${key}: ${val.length > 80 ? val.slice(0, 77) + '...' : val}`);
+          if (keyFields.length >= 4) break;
+        }
+      }
+      return keyFields.length > 0 ? keyFields.join(', ') : `completed (${Object.keys(parsed).length} fields)`;
+    } catch {
+      // Not JSON — return truncated text
+      return content.slice(0, 200) + (content.length > 200 ? '...' : '');
+    }
+  }
+
+  /**
    * Mechanical fallback when LLM summarization fails.
    * Extracts key information from message prefixes.
    */

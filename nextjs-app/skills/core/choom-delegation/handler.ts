@@ -182,13 +182,29 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
       const projectContext = activeProject
         ? `\n- IMPORTANT: Work inside the existing project folder "${activeProject}". Do NOT create a new project — use workspace_write_file with project_folder="${activeProject}" for all file operations.`
         : '';
+      // Determine the project folder the worker should use for checkpoints
+      const workerProjectFolder = activeProject || null;
 
       // Build delegation message — different phrasing for continuation vs fresh
+      // Checkpoint instruction: tell the worker to save progress incrementally.
+      // If the worker times out, the orchestrator can read the progress file.
+      const checkpointFile = workerProjectFolder ? `DELEGATION_PROGRESS.md` : null;
+      const checkpointInstruction = checkpointFile && workerProjectFolder
+        ? `\n- CHECKPOINT YOUR WORK: After every 2-3 tool calls, save your findings so far to "${checkpointFile}" using workspace_write_file (project_folder="${workerProjectFolder}"). Include what you've found, what's left to do, and any key data. This protects your work if you time out.`
+        : '';
+
+      // Instruct worker to write findings to files and keep the response text brief.
+      // The orchestrator can read the files for details — this keeps delegation responses
+      // small (~200 tokens) instead of dumping 8000+ chars into the orchestrator's context.
+      const fileHandoffInstruction = workerProjectFolder
+        ? `\n- WRITE YOUR FINDINGS TO FILES: Save all detailed results, data, and analysis to files in "${workerProjectFolder}" using workspace_write_file. Your response text should be a BRIEF SUMMARY (under 300 words) listing what files you created and key takeaways. The orchestrator will read the files for full details.`
+        : '';
+
       let delegationMessage: string;
       if (isContinuation) {
-        delegationMessage = `[CONTINUATION — from ${(ctx.choom as Record<string, unknown>).name || 'Orchestrator'}]\n\nYour previous work was cut short. Continue where you left off.\n\n## Updated Instructions\n${fullTask}\n\nRULES:\n- You have the full conversation history above — do NOT re-read files you already read.\n- Pick up from where you stopped and complete the remaining work.\n- Use as many tool calls as needed.${projectContext}\n- Provide a complete summary of ALL work done (previous + this continuation).`;
+        delegationMessage = `[CONTINUATION — from ${(ctx.choom as Record<string, unknown>).name || 'Orchestrator'}]\n\nYour previous work was cut short. Continue where you left off.\n\n## Updated Instructions\n${fullTask}\n\nRULES:\n- You have the full conversation history above — do NOT re-read files you already read.\n- Pick up from where you stopped and complete the remaining work.\n- Use as many tool calls as needed.${projectContext}${checkpointInstruction}${fileHandoffInstruction}\n- End with a brief summary of ALL work done (previous + this continuation) and which files contain the full details.`;
       } else {
-        delegationMessage = `[DELEGATED TASK from ${(ctx.choom as Record<string, unknown>).name || 'Orchestrator'}]\n\n${fullTask}\n\nRULES FOR THIS TASK:\n- Complete this task DIRECTLY using your own tools. Do NOT delegate to other Chooms.\n- Use the most specific tool available (e.g., get_weather for weather, not web_search).\n- Use as many tool calls as needed to fully complete the task. Read all necessary files before making changes.${projectContext}\n- IMPORTANT: Your full response text will be returned to the orchestrator. Provide a complete summary of what you did, what you changed, and any issues found.`;
+        delegationMessage = `[DELEGATED TASK from ${(ctx.choom as Record<string, unknown>).name || 'Orchestrator'}]\n\n${fullTask}\n\nRULES FOR THIS TASK:\n- Complete this task DIRECTLY using your own tools. Do NOT delegate to other Chooms.\n- Use the most specific tool available (e.g., get_weather for weather, not web_search).\n- Use as many tool calls as needed to fully complete the task. Read all necessary files before making changes.${projectContext}${checkpointInstruction}${fileHandoffInstruction}\n- End with a brief summary of what you did, which files you created/updated, and key findings. Keep this summary under 300 words — the orchestrator will read the files for full details.`;
       }
 
       console.log(`   🤝 ${isContinuation ? 'Continuing' : 'Delegating to'} "${targetChoom.name}" (${delegationId}): ${task.slice(0, 80)}...`);
@@ -334,7 +350,49 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
           // If we got partial content, return it as a partial result instead of failing
           if (content.trim().length > 20 || toolCallsUsed.length > 0) {
             console.warn(`   ⚠️  [${targetChoom.name}] Delegation timed out after ${elapsed}s but has partial results (${content.length} chars, ${toolCallsUsed.length} tool calls) — returning partial`);
-            const partialResponse = content.trim() || `[${targetChoom.name} timed out after ${elapsed}s with ${toolCallsUsed.length} tool calls but no text response]`;
+            let partialResponse = content.trim();
+            if (!partialResponse || partialResponse.length < 20) {
+              // No text content — use accumulated tool results as fallback
+              if (toolResultTexts.length > 0) {
+                partialResponse = `[${targetChoom.name} timed out after ${elapsed}s. Tool results from ${toolCallsUsed.length} calls below]\n\n${toolResultTexts.join('\n\n')}`;
+                console.log(`   🤝 [${targetChoom.name}] Timeout fallback: using ${toolResultTexts.length} tool result texts (${partialResponse.length} chars)`);
+              } else {
+                partialResponse = `[${targetChoom.name} timed out after ${elapsed}s with ${toolCallsUsed.length} tool calls but no text response]`;
+              }
+            }
+
+            // Auto-checkpoint: write captured work to a progress file so the
+            // orchestrator can read it even if the response is truncated.
+            let checkpointPath: string | null = null;
+            if (workerProjectFolder && (toolResultTexts.length > 0 || content.trim().length > 50)) {
+              try {
+                const { WorkspaceService } = await import('@/lib/workspace-service');
+                const ws = new WorkspaceService();
+                const progressContent = [
+                  `# Delegation Progress — ${targetChoom.name}`,
+                  `**Task:** ${task.slice(0, 200)}`,
+                  `**Status:** Timed out after ${elapsed}s (${toolCallsUsed.length} tool calls, ${doneIterations || '?'} iterations)`,
+                  `**Time:** ${new Date().toISOString()}`,
+                  '',
+                  '## Tool Calls Made',
+                  ...toolCallsUsed.map((tc, i) => `${i + 1}. ${tc.name}${tc.result ? `: ${String(tc.result).slice(0, 200)}` : ''}`),
+                  '',
+                  '## Findings So Far',
+                  content.trim() || '(No summary text generated yet)',
+                  '',
+                  ...(toolResultTexts.length > 0 ? [
+                    '## Raw Tool Results',
+                    ...toolResultTexts.map((t, i) => `### Result ${i + 1}\n${t}`),
+                  ] : []),
+                ].join('\n');
+                checkpointPath = `${workerProjectFolder}/DELEGATION_PROGRESS.md`;
+                await ws.writeFile(checkpointPath, progressContent);
+                console.log(`   📝 [${targetChoom.name}] Auto-checkpoint saved: ${checkpointPath} (${progressContent.length} chars)`);
+              } catch (writeErr) {
+                console.warn(`   ⚠️  [${targetChoom.name}] Failed to write auto-checkpoint:`, writeErr instanceof Error ? writeErr.message : writeErr);
+              }
+            }
+
             const result: DelegationResult = {
               id: delegationId,
               choomName: targetChoom.name,
@@ -360,7 +418,9 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
               tools_used: toolCallsUsed.map(tc => tc.name),
               duration_seconds: elapsed,
               incomplete: true,
-              message: `${targetChoom.name} timed out after ${elapsed}s but partial work was captured. IMPORTANT: If you re-delegate to ${targetChoom.name}, use continue_delegation_id="${delegationId}" to resume where they left off instead of starting over.`,
+              project_folder: workerProjectFolder,
+              progress_file: checkpointPath,
+              message: `${targetChoom.name} timed out after ${elapsed}s but partial work was captured.${checkpointPath ? ` Progress saved to "${checkpointPath}" — read it with workspace_read_file for full details.` : ''} To continue, re-delegate to ${targetChoom.name} with continue_delegation_id="${delegationId}".`,
             });
           }
           return this.error(toolCall, `Delegation to "${targetChoom.name}" timed out after ${elapsed}s (${timeoutSeconds}s limit). ${toolCallsUsed.length > 0 ? `${toolCallsUsed.length} tools were called before timeout.` : 'No tools were called.'}`);
@@ -433,20 +493,38 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
         toolCallCount: toolCallsUsed.length,
       });
 
+      // If the worker wrote files, the response should be a brief summary.
+      // Detect if the response is still very large (worker ignored the instruction)
+      // and truncate it — the orchestrator should read the files for full details.
+      let responseForOrchestrator = effectiveResponse;
+      const fileWriteTools = toolCallsUsed.filter(tc => tc.name === 'workspace_write_file');
+      if (workerProjectFolder && effectiveResponse.length > 2000) {
+        // Worker wrote a long response instead of keeping it brief.
+        // Truncate and point to files.
+        const fileList = fileWriteTools.length > 0
+          ? `\n\nFiles written: ${fileWriteTools.map(tc => tc.result ? String(tc.result).slice(0, 100) : 'file').join(', ')}`
+          : '';
+        responseForOrchestrator = effectiveResponse.slice(0, 1500)
+          + `\n\n...[response truncated — ${effectiveResponse.length} chars total]${fileList}`
+          + `\n\nFor full details, read the files in project folder "${workerProjectFolder}" using workspace_read_file.`;
+        console.log(`   🤝 [${targetChoom.name}] Truncated response for orchestrator: ${effectiveResponse.length} → ${responseForOrchestrator.length} chars (files written: ${fileWriteTools.length})`);
+      }
+
       const resultPayload: Record<string, unknown> = {
         success: !incomplete,
         delegation_id: delegationId,
         choom_name: targetChoom.name,
-        response: effectiveResponse,
+        response: responseForOrchestrator,
         tools_used: toolCallsUsed.map(tc => tc.name),
         duration_seconds: Math.round(durationMs / 1000),
         chat_id: delegationChatId,
         iterations_used: doneIterations,
         max_iterations: doneMaxIterations,
         incomplete,
+        project_folder: workerProjectFolder,
         message: incomplete
-          ? `${targetChoom.name} ran out of iterations (${doneIterations}/${doneMaxIterations}) and did not finish. You can continue this delegation by calling delegate_to_choom again with continue_delegation_id="${delegationId}" and a task describing what remains.`
-          : `${targetChoom.name} completed the task in ${Math.round(durationMs / 1000)}s.`,
+          ? `${targetChoom.name} ran out of iterations (${doneIterations}/${doneMaxIterations}) and did not finish.${workerProjectFolder ? ` Check "${workerProjectFolder}" for partial work files.` : ''} You can continue by calling delegate_to_choom again with continue_delegation_id="${delegationId}".`
+          : `${targetChoom.name} completed the task in ${Math.round(durationMs / 1000)}s.${workerProjectFolder ? ` Read files in "${workerProjectFolder}" for full details.` : ''}`,
       };
 
       return this.success(toolCall, resultPayload);

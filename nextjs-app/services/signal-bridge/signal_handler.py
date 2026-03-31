@@ -447,15 +447,9 @@ class MessageParser:
 
         return parsed
 
-    # Common transcription variants for each Choom name
-    # Maps variant -> canonical name
-    CHOOM_NAME_VARIANTS = {
-        "genesis": "Genesis",
-        "lissa": "Lissa",
-        "aloy": "Aloy",
-        "anya": "Anya",
-        "optic": "Optic",
-        # Common voice transcription variants
+    # Voice transcription variants that don't match the canonical name
+    # Maps variant -> canonical name (for STT misheard names)
+    VOICE_VARIANTS = {
         "lisa": "Lissa",
         "lysa": "Lissa",
         "lesa": "Lissa",
@@ -471,13 +465,28 @@ class MessageParser:
         "optek": "Optic",
         "optik": "Optic",
         "optics": "Optic",
+        "eave": "Eve",
+        "eva": "Eve",
     }
+
+    # Set by SignalBridge after ChoomClient loads
+    _live_chooms: Dict[str, str] = {}  # lowercase name -> canonical name
+
+    @classmethod
+    def update_choom_names(cls, choom_names: list[str]):
+        """Update the live Choom name list from ChoomClient.
+        Called whenever chooms are fetched so new Chooms are auto-detected."""
+        cls._live_chooms = {name.lower(): name for name in choom_names}
 
     @staticmethod
     def _match_choom_name(name: str) -> Optional[str]:
-        """Match a potential name against known Chooms and transcription variants"""
+        """Match a potential name against live Chooms first, then voice transcription variants"""
         normalized = name.lower().strip().rstrip(",:.!?")
-        return MessageParser.CHOOM_NAME_VARIANTS.get(normalized)
+        # Check live Choom names from the API (auto-detects new Chooms)
+        if normalized in MessageParser._live_chooms:
+            return MessageParser._live_chooms[normalized]
+        # Fall back to voice transcription variants
+        return MessageParser.VOICE_VARIANTS.get(normalized)
 
     # Words to skip when scanning for Choom names (common greetings/fillers)
     SKIP_WORDS = {

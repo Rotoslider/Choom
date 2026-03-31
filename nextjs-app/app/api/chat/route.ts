@@ -4048,6 +4048,32 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           // ================================================================
           // PLANNER — for multi-step requests, create and execute a plan
           // ================================================================
+
+          // Resolve optional planner model — a fast local model for plan creation (JSON generation).
+          // Falls back to primary LLM if not configured or on error.
+          let plannerClient: { streamChat: LLMClient['streamChat'] } | null = null;
+          const plannerModel = llmSettings.plannerModel;
+          if (plannerModel) {
+            try {
+              const plannerFb: FallbackConfig = {
+                model: plannerModel,
+                providerId: llmSettings.plannerProviderId || null,
+                label: 'planner',
+              };
+              const { client: pClient } = await createClientForFallback(plannerFb);
+              // Override endpoint if explicitly set (e.g. different LM Studio instance)
+              if (llmSettings.plannerEndpoint) {
+                const plannerSettings: LLMSettings = { ...llmSettings, model: plannerModel, endpoint: llmSettings.plannerEndpoint };
+                plannerClient = new LLMClient(plannerSettings);
+              } else {
+                plannerClient = pClient;
+              }
+              console.log(`   📋 Planner model: ${plannerModel}${llmSettings.plannerProviderId ? ` (provider: ${llmSettings.plannerProviderId})` : ' (local)'}`);
+            } catch (err) {
+              console.warn(`   ⚠️  Failed to create planner client, using primary model:`, err instanceof Error ? err.message : err);
+            }
+          }
+
           let imageGenCount = 0; // Track images generated across plan + loop (cap at 3)
           let planExecuted = false;
           let planFullySucceeded = false;
@@ -4056,7 +4082,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             try {
               console.log(`   📋 Multi-step request detected — creating plan...`);
               const registry = getSkillRegistry();
-              const plan = await createPlan(currentMessages, registry, llmClient, activeTools);
+              const plan = await createPlan(currentMessages, registry, plannerClient || llmClient, activeTools);
 
               if (plan) {
                 console.log(`   📋 Plan created: "${plan.goal}" (${plan.steps.length} steps)`);
@@ -4153,7 +4179,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           // force the LLM to call a tool on the first iteration instead of narrating.
           // This is the biggest reliability win for local models that tend to describe actions.
           const msgLower = message.toLowerCase();
-          const strongToolIntent = /\b(what(?:'s| is) the weather|weather (?:like|today|tomorrow|forecast)|search (?:for|the web)|look up|find (?:me|out)|generate (?:an? |some )?(?:image|picture|photo|selfie|portrait)|take a (?:selfie|photo|picture)|create (?:a |an )?(?:image|picture)|make (?:me |an? )?(?:image|picture|selfie)|(?:please |can you |you should )remember (?:that|this|my|i |the |for )|(?<!i )(?<!i'll )remember (?:that |this |my |i |the |for )|(?:don'?t |never )forget (?:that|this|my|i )|(?:save|store|note|keep) (?:this|that|my|the |it )(?:in |to |as )?(?:memory|mind)?|use (?:the )?remember(?: tool)?|remind me|set (?:a )?reminder|send (?:a )?(?:notification|message|alert)|check (?:the |my )?(?:calendar|schedule|tasks|email|inbox)|write (?:a |an )?(?:file|document|report)|read (?:the |my |this )?(?:file|document|pdf|report)|(?:look|take a look|glance) at (?:the |this |that )?(?:file|document|pdf|report)|open (?:the |this |that )?(?:pdf|report|document)|review (?:the |this |that )?(?:file|document|pdf|report)|list (?:my |the )?(?:files|projects|tasks)|download|scrape|analyze (?:this|the|that) (?:image|photo|picture)|turn (?:on|off) (?:the )?|(?:open|close) (?:the )?|(?:lights?|switch|fan|heater|thermostat) (?:on|off)|delegate|get (?:the )?(?:weather|forecast)|search (?:youtube|email|gmail|contacts)|draft (?:an? )?email|compose (?:an? )?email|^habit\b|habit (?:stats|summary|report|breakdown)|how (?:often|many times) (?:do|did|have) i |when (?:did|was the last time) i )\b/i.test(msgLower);
+          const strongToolIntent = /\b(what(?:'s| is) the weather|weather (?:like|today|tomorrow|forecast)|search (?:for|the web)|look up|find (?:me|out)|generate (?:an? |some )?(?:image|picture|photo|selfie|portrait)|take a (?:selfie|photo|picture)|create (?:a |an )?(?:image|picture)|make (?:me |an? )?(?:image|picture|selfie)|(?:please |can you |you should )remember (?:that|this|my|i |the |for )|(?<!i )(?<!i'll )remember (?:that |this |my |i |the |for )|(?:don'?t |never )forget (?:that|this|my|i )|(?:save|store|note|keep) (?:this|that|my|the |it )(?:in |to |as )?(?:memory|mind)?|use (?:the )?remember(?: tool)?|remind me|set (?:a )?reminder|send (?:a )?(?:notification|message|alert)|check (?:the |my )?(?:calendar|schedule|tasks|email|inbox)|when (?:is|was|did) (?:my |the )?(?:next|last) |when (?:is|was) the last time i |when did i (?:last )?(?:go|get|have|see|do|visit|fill|take)|write (?:a |an )?(?:file|document|report)|read (?:the |my |this )?(?:file|document|pdf|report)|(?:look|take a look|glance) at (?:the |this |that )?(?:file|document|pdf|report)|open (?:the |this |that )?(?:pdf|report|document)|review (?:the |this |that )?(?:file|document|pdf|report)|list (?:my |the )?(?:files|projects|tasks)|download|scrape|analyze (?:this|the|that) (?:image|photo|picture)|turn (?:on|off) (?:the )?|(?:open|close) (?:the )?|(?:lights?|switch|fan|heater|thermostat) (?:on|off)|delegate|get (?:the )?(?:weather|forecast)|search (?:youtube|email|gmail|contacts)|draft (?:an? )?email|compose (?:an? )?email|^habit\b|habit (?:stats|summary|report|breakdown)|how (?:often|many times) (?:do|did|have) i )\b/i.test(msgLower);
           let forceToolCall = strongToolIntent; // Force tool_choice:'required' on first iteration if intent is strong
           const executedToolCache = new Map<string, unknown>(); // Dedup: normalizedKey → result
           const failedCallCache = new Map<string, string>(); // Cache: dedupKey → error message
@@ -4173,11 +4199,11 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           let intentToolHint = '';
           if (/\b(?:remind me|set (?:a )?reminder)\b/i.test(msgLower)) {
             intentToolHint = 'create_reminder';
-          } else if (/\b(?:check (?:the |my )?(?:calendar|schedule)|what(?:\'s| is) on my calendar)\b/i.test(msgLower)) {
+          } else if (/\b(?:check (?:the |my )?(?:calendar|schedule)|what(?:'s| is) on my calendar|when (?:is|was|did) (?:my |the )?(?:next|last) |when (?:is|was) the last time i |when did i (?:last )?(?:go|get|have|see|do|visit|fill|take))\b/i.test(msgLower)) {
             intentToolHint = 'get_calendar_events';
           } else if (/^habit\b/i.test(msgLower)) {
             intentToolHint = 'log_habit';
-          } else if (/\b(?:habit (?:stats|summary|report|breakdown)|how (?:often|many times) (?:do|did|have) i |when (?:did|was the last time) i )\b/i.test(msgLower)) {
+          } else if (/\b(?:habit (?:stats|summary|report|breakdown)|how (?:often|many times) (?:do|did|have) i )\b/i.test(msgLower)) {
             intentToolHint = 'habit_stats';
           }
           if (strongToolIntent) {
@@ -4219,9 +4245,29 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               send({ type: 'agent_iteration', iteration, maxIterations });
               console.log(`   🔄 ${choomTag} Agent iteration ${iteration}/${maxIterations}`);
 
+              // Aggressive within-turn compaction: after iteration 3, replace intermediate
+              // messages with a compact progress summary. Reduces context from O(iterations)
+              // to a fixed ~5 messages. Benefits both regular chats and delegated workers
+              // (workers especially — they do many tool iterations and timeout if context grows too large).
+              const AGGRESSIVE_COMPACTION_THRESHOLD = 3;
+              {
+                // Pass the actual context budget so compaction only fires when needed
+                const budget = compactionService.calculateBudget(systemPromptWithSummary, activeTools);
+                const aggressiveResult = compactionService.compactAggressiveWithinTurn(
+                  currentMessages, iteration, AGGRESSIVE_COMPACTION_THRESHOLD, budget.availableForMessages
+                );
+                if (aggressiveResult.tokensRecovered > 0) {
+                  const beforeCount = currentMessages.length;
+                  currentMessages.length = 0;
+                  currentMessages.push(...aggressiveResult.messages);
+                  console.log(`   ⚡ ${choomTag} Aggressive compaction: ${beforeCount} → ${currentMessages.length} msgs, recovered ~${aggressiveResult.tokensRecovered.toLocaleString()} tokens`);
+                }
+              }
+
               // Within-turn compaction: ensure context fits budget BEFORE calling LLM.
               // Critical tools (workspace_read_file etc.) are exempt from stubbing —
               // the model needs their results to complete multi-step tasks.
+              // This runs AFTER aggressive compaction as a second safety net.
               const CRITICAL_TOOLS = new Set(['workspace_read_file', 'workspace_read_pdf', 'workspace_list_files']);
               const withinTurnResult = compactionService.compactWithinTurn(currentMessages, systemPromptWithSummary, activeTools, 2, CRITICAL_TOOLS);
               if (withinTurnResult.truncatedCount > 0) {
