@@ -20,6 +20,7 @@ import { CompactionService } from '@/lib/compaction-service';
 import { getTimeContext, formatTimeContextForPrompt } from '@/lib/time-context';
 import { waitForGpu } from '@/lib/gpu-lock';
 import { isMultiStepRequest, createPlan, executePlan, summarizePlan } from '@/lib/planner-loop';
+import { TraceBuilder, writeTrace } from '@/lib/execution-trace';
 import { WatcherLoop } from '@/lib/watcher-loop';
 import type { LLMSettings, ToolCall, ToolResult, ToolDefinition, ImageGenSettings, WeatherSettings, SearchSettings, ImageSize, ImageAspect } from '@/lib/types';
 import { computeImageDimensions } from '@/lib/types';
@@ -4033,6 +4034,18 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
 
         try {
           const requestStartTime = Date.now();
+          const resolvedProvider = (choom.llmProviderId as string) || (usingCloudProvider ? 'cloud' : 'local');
+          const traceBuilder = new TraceBuilder({
+            chatId,
+            choomId,
+            choomName: choom.name as string,
+            model: llmSettings.model,
+            provider: resolvedProvider,
+            endpoint: llmSettings.endpoint || '',
+            isDelegation: !!isDelegation,
+            isHeartbeat: !!isHeartbeat,
+            maxIterations,
+          });
           const initialMsgContent = currentMessages.map(m => m.content).join('');
           const approxInitialTokens = Math.ceil(initialMsgContent.length / 4);
           console.log(`\n💬 Chat Request [${choom.name}] | ${currentMessages.length} msgs | ~${approxInitialTokens.toLocaleString()} tokens`);
@@ -4079,6 +4092,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           let planFullySucceeded = false;
           let planHadDelegations = false;
           if (skillDispatch && !isDelegation && isMultiStepRequest(message)) {
+            traceBuilder.setPlanMode();
             try {
               console.log(`   📋 Multi-step request detected — creating plan...`);
               const registry = getSkillRegistry();
@@ -4207,6 +4221,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             intentToolHint = 'habit_stats';
           }
           if (strongToolIntent) {
+            traceBuilder.setForceToolCall();
             console.log(`   ⚡ ${choomTag} Strong tool intent detected — using tool_choice='required' on first iteration${intentToolHint ? ` (hint: ${intentToolHint})` : ''}`);
           }
           if (intentToolHint) {
@@ -4257,6 +4272,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                   currentMessages, iteration, AGGRESSIVE_COMPACTION_THRESHOLD, budget.availableForMessages
                 );
                 if (aggressiveResult.tokensRecovered > 0) {
+                  traceBuilder.recordCompaction();
                   const beforeCount = currentMessages.length;
                   currentMessages.length = 0;
                   currentMessages.push(...aggressiveResult.messages);
@@ -4485,6 +4501,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 for (let fbIdx = fallbackAttempt; fbIdx < fallbackConfigs.length; fbIdx++) {
                   const fb = fallbackConfigs[fbIdx];
                   console.log(`   🔄 ${choomTag} Trying fallback #${fbIdx + 1}: ${fb.label}`);
+                  traceBuilder.recordFallback(fb.label);
                   // Log fallback switch server-side only — don't send as content
                   // (it was leaking to Signal messages and TTS audio)
                   send({ type: 'status', content: `Switching to ${fb.label}` });
@@ -4789,6 +4806,23 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               }
             }
 
+            // Strip tool schema bleed: models sometimes echo tool definitions as text,
+            // dumping dozens of {"name":"...","parameters":{...}} objects. These aren't
+            // tool calls (they have "parameters" with type schemas, not "arguments" with
+            // actual values). Strip them so the user doesn't see schema spam.
+            if (iterationContent.includes('"parameters"') && iterationContent.includes('"name"')) {
+              const schemaPattern = /\{\s*"name"\s*:\s*"[a-zA-Z_]+"\s*,\s*"parameters"\s*:\s*\{[^}]*\}\s*\}/g;
+              const matches = iterationContent.match(schemaPattern);
+              if (matches && matches.length >= 3) {
+                // 3+ schema blocks = clearly echoing tool definitions, not real content
+                const stripped = iterationContent.replace(
+                  /,?\s*\{\s*"name"\s*:\s*"[a-zA-Z_]+"\s*,\s*"parameters"\s*:\s*\{[^}]*\}\s*\}/g, ''
+                ).trim();
+                console.log(`   🧹 ${choomTag} Stripped ${matches.length} tool schema blocks from response (${iterationContent.length} → ${stripped.length} chars)`);
+                iterationContent = stripped;
+              }
+            }
+
             // Flush or suppress buffered post-tool-call content
             if (bufferForDedup && iterationContent.trim()) {
               const isDuplicate = iterationTexts.some(prev => prev.trim() === iterationContent.trim());
@@ -4854,6 +4888,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
 
                 if ((planningNext || hasUnfinished) && nudgeCount < 3 && iteration < maxIterations - 1) {
                   nudgeCount++;
+                  traceBuilder.recordNudge(hasUnfinished ? 'unfinished_steps' : 'task_continuation');
                   const reason = hasUnfinished
                     ? `unfinished steps: ${unfinishedSteps.join(', ')}`
                     : 'model indicated more steps pending';
@@ -4882,6 +4917,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               const suggestsToolUse = describesToolAction || suggestsAction;
               if (nudgeCount < 2 && suggestsToolUse && activeTools.length > 0) {
                 nudgeCount++;
+                traceBuilder.recordNudge('tool_use');
                 // Build a dynamic tool hint based on what the LLM seems to be describing
                 const toolHints: string[] = [];
                 if (/(?:image|selfie|portrait|picture|photo|illustration|artwork)/i.test(lowerContent)) {
@@ -5002,12 +5038,13 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             };
 
             // Execute a single tool call and handle post-execution bookkeeping
-            const executeAndProcess = async (tc: { id: string; name: string; arguments: Record<string, unknown> }): Promise<ToolResult> => {
+            const executeAndProcess = async (tc: { id: string; name: string; arguments: Record<string, unknown> }, isParallel = false): Promise<ToolResult> => {
               send({ type: 'tool_call', toolCall: tc });
               serverLog(choomId, chatId, 'info', 'system', `Tool Call: ${tc.name}`,
                 `Arguments: ${JSON.stringify(tc.arguments).slice(0, 200)}`,
                 { toolName: tc.name, arguments: tc.arguments });
 
+              traceBuilder.toolCallStart(tc.id);
               const normalizedArgs = JSON.stringify(tc.arguments).toLowerCase();
               const dedupKey = `${tc.name}:${normalizedArgs}`;
 
@@ -5021,6 +5058,9 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 console.error(`   ❌ Tool execution error for ${tc.name}:`, toolErrMsg);
                 result = { toolCallId: tc.id, name: tc.name, result: null, error: `Tool execution failed: ${toolErrMsg}` };
               }
+
+              // Classify error (hoisted for trace logging)
+              let errorClass: 'config' | 'param' | 'gpu_busy' | 'no_data' | 'path' | 'other' | undefined;
 
               // Cache results
               if (!result.error) {
@@ -5039,6 +5079,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 const isNoData = /no (?:history |data |results? )(?:data |found )?for /i.test(result.error);
                 // File/path not found is recoverable — LLM guessed wrong filename, can list dir and retry
                 const isPathError = /ENOENT|no such file or directory|file not found|path not found|does not exist|not found in project/i.test(result.error);
+                errorClass = isConfigError ? 'config' : isParamError ? 'param' : isGpuBusy ? 'gpu_busy' : isNoData ? 'no_data' : isPathError ? 'path' : 'other';
                 failedCallCache.set(dedupKey, result.error);
                 if (isNoData) {
                   // No data found is informational — the tool works, the entity just has no data.
@@ -5076,6 +5117,18 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                   console.log(`   🛑 ${MAX_CONSECUTIVE_FAILURES} consecutive tool failures — aborting loop`);
                 }
               }
+
+              // Record in execution trace
+              traceBuilder.recordToolCall({
+                id: tc.id,
+                name: tc.name,
+                args: tc.arguments,
+                success: !result.error,
+                error: result.error || undefined,
+                errorClass,
+                iteration,
+                parallel: isParallel,
+              });
 
               // Check for soft failure (success:false in result body)
               if (!result.error && result.result && typeof result.result === 'object' && (result.result as Record<string, unknown>).success === false) {
@@ -5163,6 +5216,12 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 preFlightResults.set(tc.id, skipped);
                 allToolResults.push(skipped);
                 if (skipped.error) consecutiveFailures++;
+                traceBuilder.recordToolCall({
+                  id: tc.id, name: tc.name, args: tc.arguments,
+                  success: !skipped.error, error: skipped.error || undefined,
+                  iteration, parallel: false,
+                  cached: !skipped.error, blocked: !!skipped.error,
+                });
                 send({ type: 'tool_call', toolCall: tc });
                 send({ type: 'tool_result', toolResult: skipped });
               } else {
@@ -5179,7 +5238,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             const parallelResults = new Map<string, ToolResult>();
             if (parallelCalls.length > 1) {
               console.log(`   ⚡ Executing ${parallelCalls.length} read-only tools in parallel: ${parallelCalls.map(tc => tc.name).join(', ')}`);
-              const results = await Promise.all(parallelCalls.map(tc => executeAndProcess(tc)));
+              const results = await Promise.all(parallelCalls.map(tc => executeAndProcess(tc, true)));
               for (let i = 0; i < parallelCalls.length; i++) {
                 parallelResults.set(parallelCalls[i].id, results[i]);
                 allToolResults.push(results[i]);
@@ -5429,7 +5488,6 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             finalCompletionTokens = Math.round((fullContent.length + toolArgChars) / 4);
           }
           const totalTok = finalPromptTokens + finalCompletionTokens;
-          const resolvedProvider = (choom.llmProviderId as string) || (usingCloudProvider ? 'cloud' : 'local');
           if (totalTok > 0 || iteration > 0) {
             const isEstimated = totalPromptTokens === 0 && totalCompletionTokens === 0;
             prisma.tokenUsage.create({
@@ -5454,6 +5512,20 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               console.log(`   📊 ${choomTag} Tokens: ${finalPromptTokens.toLocaleString()} prompt + ${finalCompletionTokens.toLocaleString()} completion = ${totalTok.toLocaleString()} total${isEstimated ? ' (estimated)' : ''}`);
             }
           }
+
+          // Write execution trace
+          const isEstimatedTokens = totalPromptTokens === 0 && totalCompletionTokens === 0;
+          traceBuilder.finalize({
+            iterations: iteration,
+            status: iteration >= maxIterations ? 'max_iterations' : streamClosed ? 'stream_closed' : 'complete',
+            durationMs: elapsed,
+            promptTokens: finalPromptTokens,
+            completionTokens: finalCompletionTokens,
+            tokensEstimated: isEstimatedTokens,
+            responseLength: fullContent.length,
+            brokenTools: [...brokenTools],
+          });
+          writeTrace(traceBuilder.getTrace());
 
           send({
             type: 'done',
