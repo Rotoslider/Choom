@@ -16,6 +16,7 @@ from signal_handler import get_signal_handler
 from choom_client import get_choom_client, get_tts_client
 from google_client import get_google_client
 from task_config import load_config as load_task_config, save_config as save_task_config, is_task_enabled, is_quiet_period, get_custom_heartbeats
+from nightly_doctor import run_diagnostics
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +106,18 @@ class ScheduledTaskManager:
             self.add_cron_task(
                 "db_backup",
                 self._backup_databases,
+                hour=hour,
+                minute=minute
+            )
+
+        # Nightly doctor — diagnostic analysis of execution traces
+        nd = tasks.get("nightly_doctor", {})
+        if nd.get("enabled", True):
+            nd_time = nd.get("time", "22:00")
+            hour, minute = map(int, nd_time.split(':'))
+            self.add_cron_task(
+                "nightly_doctor",
+                self._nightly_doctor,
                 hour=hour,
                 minute=minute
             )
@@ -1133,6 +1146,7 @@ Be practical. Only work on things that can actually be accomplished with the too
             "system_health": self._system_health_check,
             "db_backup": self._backup_databases,
             "yt_download": self._yt_download,
+            "nightly_doctor": self._nightly_doctor,
         }
         func = task_map.get(task_id)
         if func:
@@ -1961,6 +1975,36 @@ Be practical. Only work on things that can actually be accomplished with the too
 
         except Exception as e:
             logger.error(f"Health check failed: {e}")
+
+    def _nightly_doctor(self):
+        """Run nightly diagnostics on execution traces and send report via Signal."""
+        if not is_task_enabled("nightly_doctor"):
+            logger.debug("Nightly doctor is disabled")
+            return
+
+        logger.info("Running nightly doctor diagnostics")
+
+        try:
+            report = run_diagnostics(lookback_days=1)
+            logger.info(f"Nightly doctor report:\n{report}")
+
+            # Always send the report (it's scheduled, user expects it)
+            self.send_message_to_owner(
+                report,
+                include_audio=False,
+                choom_name="System"
+            )
+
+        except Exception as e:
+            logger.error(f"Nightly doctor failed: {e}")
+            try:
+                self.send_message_to_owner(
+                    f"Nightly Doctor crashed: {e}",
+                    include_audio=False,
+                    choom_name="System"
+                )
+            except Exception:
+                logger.error("Failed to send nightly doctor error notification")
 
 
 # Singleton instance

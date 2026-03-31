@@ -41,6 +41,9 @@ choom-profiles/lissa/
 .DS_Store
 Thumbs.db
 
+# Execution traces (runtime diagnostic data)
+**/data/traces/
+
 # Logs
 *.log
 
