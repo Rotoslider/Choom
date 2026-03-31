@@ -48,6 +48,12 @@ export interface ExecutionPlan {
 export type PlanStreamCallback = (data: Record<string, unknown>) => void;
 
 // SSE event types for plan progress
+export interface PlanWaveStartEvent {
+  type: 'plan_wave_start';
+  wave: number;
+  stepIds: string[];
+}
+
 export interface PlanCreatedEvent {
   type: 'plan_created';
   goal: string;
@@ -345,7 +351,105 @@ function resolveTemplateVars(
 // ============================================================================
 
 /**
- * Execute a plan step-by-step with watcher evaluation after each step.
+ * Execute a single plan step: build tool call, run it, handle retries.
+ * Returns the final ToolResult after execution + any retries.
+ */
+async function executeStep(
+  step: PlanStep,
+  plan: ExecutionPlan,
+  completedSteps: Map<string, ToolResult>,
+  executeToolFn: (toolCall: ToolCall, iteration: number) => Promise<ToolResult>,
+  watcher: WatcherLoop,
+  send: PlanStreamCallback,
+  toolCallCounter: { value: number },
+  delayMs: number = 0,
+): Promise<{ step: PlanStep; result: ToolResult; decision: ReturnType<WatcherLoop['evaluate']> }> {
+  // Rate-limit stagger: delay before execution if requested (e.g. web_search in parallel wave)
+  if (delayMs > 0) {
+    await new Promise(resolve => setTimeout(resolve, delayMs));
+  }
+
+  // Resolve template variables (for both args and delegate task text)
+  const resolvedArgs = resolveTemplateVars(step.args, completedSteps);
+  const resolvedTask = step.task ? resolveTemplateVars({ _task: step.task }, completedSteps)._task as string : undefined;
+
+  // Mark step as running
+  step.status = 'running';
+  send({ type: 'plan_step_update', stepId: step.id, status: 'running' });
+
+  // Build tool call — delegate steps route through delegate_to_choom
+  const tcId = ++toolCallCounter.value;
+  let toolCall: ToolCall;
+  if (step.type === 'delegate' && step.choomName) {
+    toolCall = {
+      id: `plan_tc_${tcId}`,
+      name: 'delegate_to_choom',
+      arguments: {
+        choom_name: step.choomName,
+        task: resolvedTask || step.description,
+        context: `Part of plan: "${plan.goal}". Step ${step.id}: ${step.description}`,
+      },
+    };
+    console.log(`[Planner] Step ${step.id}: delegating to "${step.choomName}"`);
+  } else {
+    toolCall = {
+      id: `plan_tc_${tcId}`,
+      name: step.toolName,
+      arguments: resolvedArgs,
+    };
+  }
+
+  // Execute
+  let result: ToolResult;
+  try {
+    result = await executeToolFn(toolCall, tcId);
+    step.result = result;
+  } catch (err) {
+    result = {
+      toolCallId: toolCall.id,
+      name: toolCall.name,
+      result: null,
+      error: `Execution error: ${err instanceof Error ? err.message : 'Unknown'}`,
+    };
+    step.result = result;
+  }
+
+  // Evaluate with watcher
+  const decision = watcher.evaluate(step, result, plan);
+
+  // Handle retry inline (step stays in same wave cycle)
+  if (decision.action === 'retry' && step.retries < plan.maxRetries) {
+    step.retries++;
+    console.log(`[Planner] Retrying step ${step.id} (attempt ${step.retries}/${plan.maxRetries}): ${decision.reason}`);
+    send({ type: 'plan_step_update', stepId: step.id, status: 'running', description: `Retrying: ${decision.reason}` });
+
+    const retryToolCall: ToolCall = {
+      id: `plan_tc_${++toolCallCounter.value}`,
+      name: step.type === 'delegate' ? 'delegate_to_choom' : step.toolName,
+      arguments: decision.modifiedArgs || resolvedArgs,
+    };
+
+    try {
+      const retryResult = await executeToolFn(retryToolCall, toolCallCounter.value);
+      step.result = retryResult;
+      const retryDecision = watcher.evaluate(step, retryResult, plan);
+      return { step, result: retryResult, decision: retryDecision };
+    } catch {
+      const failResult: ToolResult = {
+        toolCallId: retryToolCall.id, name: retryToolCall.name,
+        result: null, error: 'Retry failed',
+      };
+      step.result = failResult;
+      return { step, result: failResult, decision: { action: 'skip', reason: 'Retry execution failed' } };
+    }
+  }
+
+  return { step, result, decision };
+}
+
+/**
+ * Execute a plan using wave-based parallel scheduling.
+ * Steps with satisfied dependencies run concurrently within each wave.
  * Streams progress to the client via the send callback.
  */
 export async function executePlan(
@@ -355,9 +459,11 @@ export async function executePlan(
   send: PlanStreamCallback
 ): Promise<{ succeeded: number; failed: number; results: Map<string, ToolResult> }> {
   const completedSteps = new Map<string, ToolResult>();
+  const completedIds = new Set<string>();
   let succeeded = 0;
   let failed = 0;
-  let toolCallCounter = 0;
+  const toolCallCounter = { value: 0 }; // Shared mutable counter across parallel steps
+  let aborted = false;
 
   // Stream plan creation event
   send({
@@ -372,198 +478,155 @@ export async function executePlan(
     })),
   });
 
-  for (const step of plan.steps) {
-    // Check dependencies
-    const unmetDeps = step.dependsOn.filter(depId => {
-      const depStep = plan.steps.find(s => s.id === depId);
-      return depStep && depStep.status !== 'completed';
+  let waveNum = 0;
+
+  while (!aborted) {
+    // Find all steps whose dependencies are fully satisfied
+    const readySteps = plan.steps.filter(s =>
+      s.status === 'pending' && s.dependsOn.every(depId => completedIds.has(depId))
+    );
+
+    if (readySteps.length === 0) break; // All done or deadlocked
+
+    waveNum++;
+    const isParallel = readySteps.length > 1;
+    console.log(`[Planner] Wave ${waveNum}: ${readySteps.length} step(s) [${readySteps.map(s => s.id).join(', ')}]${isParallel ? ' (parallel)' : ''}`);
+
+    send({
+      type: 'plan_wave_start',
+      wave: waveNum,
+      stepIds: readySteps.map(s => s.id),
     });
 
-    if (unmetDeps.length > 0) {
-      console.log(`[Planner] Skipping step ${step.id}: unmet dependencies [${unmetDeps.join(', ')}]`);
-      step.status = 'skipped';
-      send({ type: 'plan_step_update', stepId: step.id, status: 'skipped', description: `Skipped: depends on ${unmetDeps.join(', ')}` });
-      failed++;
-      continue;
-    }
+    // Reset watcher consecutive failures at the start of each wave
+    // to prevent N parallel failures in one wave from prematurely aborting
+    watcher.reset();
 
-    // Resolve template variables (for both args and delegate task text)
-    const resolvedArgs = resolveTemplateVars(step.args, completedSteps);
-    const resolvedTask = step.task ? resolveTemplateVars({ _task: step.task }, completedSteps)._task as string : undefined;
-
-    // Rate limit protection: add a short delay between consecutive web searches
-    const toolName = step.type === 'delegate' ? 'delegate_to_choom' : step.toolName;
-    if (toolName === 'web_search' && toolCallCounter > 0) {
-      const prevStep = plan.steps[plan.steps.indexOf(step) - 1];
-      if (prevStep && (prevStep.toolName === 'web_search' || prevStep.type === 'delegate')) {
-        await new Promise(resolve => setTimeout(resolve, 2000));
+    // Calculate per-step delays for rate limiting (stagger web_search calls by 2s)
+    const stepDelays = new Map<string, number>();
+    let webSearchDelay = 0;
+    for (const step of readySteps) {
+      const toolName = step.type === 'delegate' ? 'delegate_to_choom' : step.toolName;
+      if (toolName === 'web_search') {
+        stepDelays.set(step.id, webSearchDelay);
+        webSearchDelay += 2000;
+      } else {
+        stepDelays.set(step.id, 0);
       }
     }
 
-    // Mark step as running
-    step.status = 'running';
-    send({ type: 'plan_step_update', stepId: step.id, status: 'running' });
+    // Execute all ready steps concurrently
+    const waveResults = await Promise.allSettled(
+      readySteps.map(step =>
+        executeStep(
+          step, plan, completedSteps, executeToolFn, watcher, send,
+          toolCallCounter, stepDelays.get(step.id) || 0,
+        )
+      )
+    );
 
-    // Build tool call — delegate steps route through delegate_to_choom
-    toolCallCounter++;
-    let toolCall: ToolCall;
-    if (step.type === 'delegate' && step.choomName) {
-      toolCall = {
-        id: `plan_tc_${toolCallCounter}`,
-        name: 'delegate_to_choom',
-        arguments: {
-          choom_name: step.choomName,
-          task: resolvedTask || step.description,
-          context: `Part of plan: "${plan.goal}". Step ${step.id}: ${step.description}`,
-        },
-      };
-      console.log(`[Planner] Step ${step.id}: delegating to "${step.choomName}"`);
-    } else {
-      toolCall = {
-        id: `plan_tc_${toolCallCounter}`,
-        name: step.toolName,
-        arguments: resolvedArgs,
-      };
-    }
-
-    // Execute
-    let result: ToolResult;
-    try {
-      result = await executeToolFn(toolCall, toolCallCounter);
-      step.result = result;
-    } catch (err) {
-      result = {
-        toolCallId: toolCall.id,
-        name: toolCall.name,
-        result: null,
-        error: `Execution error: ${err instanceof Error ? err.message : 'Unknown'}`,
-      };
-      step.result = result;
-    }
-
-    // Evaluate with watcher
-    const decision = watcher.evaluate(step, result, plan);
-
-    switch (decision.action) {
-      case 'continue': {
-        step.status = 'completed';
-        completedSteps.set(step.id, result);
-        succeeded++;
-        const resultPreview = result.result
-          ? JSON.stringify(result.result).slice(0, 150)
-          : result.error || 'No result';
-        send({ type: 'plan_step_update', stepId: step.id, status: 'completed', result: resultPreview });
-        break;
+    // Process wave results
+    for (const settled of waveResults) {
+      if (settled.status === 'rejected') {
+        // Unexpected — executeStep catches errors internally, but handle gracefully
+        console.warn(`[Planner] Wave ${waveNum}: step rejected unexpectedly:`, settled.reason);
+        failed++;
+        continue;
       }
 
-      case 'retry': {
-        if (step.retries < plan.maxRetries) {
-          step.retries++;
-          console.log(`[Planner] Retrying step ${step.id} (attempt ${step.retries}/${plan.maxRetries}): ${decision.reason}`);
-          send({ type: 'plan_step_update', stepId: step.id, status: 'running', description: `Retrying: ${decision.reason}` });
+      const { step, result, decision } = settled.value;
 
-          // Execute again with potentially modified args
-          const retryToolCall: ToolCall = {
-            id: `plan_tc_${++toolCallCounter}`,
-            name: step.toolName,
-            arguments: decision.modifiedArgs || resolvedArgs,
-          };
+      switch (decision.action) {
+        case 'continue': {
+          step.status = 'completed';
+          completedSteps.set(step.id, result);
+          completedIds.add(step.id);
+          succeeded++;
+          const resultPreview = result.result
+            ? JSON.stringify(result.result).slice(0, 150)
+            : result.error || 'No result';
+          send({ type: 'plan_step_update', stepId: step.id, status: 'completed', result: resultPreview });
+          break;
+        }
 
-          try {
-            const retryResult = await executeToolFn(retryToolCall, toolCallCounter);
-            step.result = retryResult;
-
-            if (!retryResult.error) {
-              step.status = 'completed';
-              completedSteps.set(step.id, retryResult);
-              succeeded++;
-              send({ type: 'plan_step_update', stepId: step.id, status: 'completed', result: JSON.stringify(retryResult.result).slice(0, 150) });
-            } else {
-              step.status = 'failed';
-              failed++;
-              send({ type: 'plan_step_update', stepId: step.id, status: 'failed', result: retryResult.error });
-            }
-          } catch {
-            step.status = 'failed';
-            failed++;
-            send({ type: 'plan_step_update', stepId: step.id, status: 'failed', result: 'Retry failed' });
-          }
-        } else {
+        case 'retry': {
+          // If we get here, retries were exhausted inside executeStep
           step.status = 'failed';
           failed++;
           send({ type: 'plan_step_update', stepId: step.id, status: 'failed', result: `Max retries (${plan.maxRetries}) exceeded` });
+          break;
         }
-        break;
-      }
 
-      case 'skip': {
-        step.status = 'skipped';
-        failed++;
-        send({ type: 'plan_step_update', stepId: step.id, status: 'skipped', description: decision.reason });
-        break;
-      }
+        case 'skip': {
+          step.status = 'skipped';
+          failed++;
+          send({ type: 'plan_step_update', stepId: step.id, status: 'skipped', description: decision.reason });
+          break;
+        }
 
-      case 'rollback': {
-        console.log(`[Planner] Rolling back steps: ${decision.stepIds.join(', ')}: ${decision.reason}`);
-        // Execute rollback for specified steps
-        for (const rollbackId of decision.stepIds) {
-          const rbStep = plan.steps.find(s => s.id === rollbackId);
-          if (rbStep?.rollbackAction) {
-            const rbToolCall: ToolCall = {
-              id: `plan_rb_${++toolCallCounter}`,
-              name: rbStep.rollbackAction.toolName,
-              arguments: rbStep.rollbackAction.args,
-            };
-            try {
-              await executeToolFn(rbToolCall, toolCallCounter);
-              rbStep.status = 'rolled_back';
-              send({ type: 'plan_step_update', stepId: rbStep.id, status: 'rolled_back', description: 'Rolled back' });
-            } catch {
-              console.warn(`[Planner] Rollback failed for step ${rollbackId}`);
+        case 'rollback': {
+          console.log(`[Planner] Rolling back steps: ${decision.stepIds.join(', ')}: ${decision.reason}`);
+          for (const rollbackId of decision.stepIds) {
+            const rbStep = plan.steps.find(s => s.id === rollbackId);
+            if (rbStep?.rollbackAction) {
+              const rbToolCall: ToolCall = {
+                id: `plan_rb_${++toolCallCounter.value}`,
+                name: rbStep.rollbackAction.toolName,
+                arguments: rbStep.rollbackAction.args,
+              };
+              try {
+                await executeToolFn(rbToolCall, toolCallCounter.value);
+                rbStep.status = 'rolled_back';
+                send({ type: 'plan_step_update', stepId: rbStep.id, status: 'rolled_back', description: 'Rolled back' });
+              } catch {
+                console.warn(`[Planner] Rollback failed for step ${rollbackId}`);
+              }
             }
           }
+          step.status = 'failed';
+          failed++;
+          send({ type: 'plan_step_update', stepId: step.id, status: 'failed', result: `Rolled back: ${decision.reason}` });
+          break;
         }
-        step.status = 'failed';
-        failed++;
-        send({ type: 'plan_step_update', stepId: step.id, status: 'failed', result: `Rolled back: ${decision.reason}` });
-        break;
-      }
 
-      case 'abort': {
-        step.status = 'failed';
-        failed++;
-        send({ type: 'plan_step_update', stepId: step.id, status: 'failed', result: `Aborted: ${decision.reason}` });
-        // Mark all remaining steps as skipped
-        for (const remaining of plan.steps) {
-          if (remaining.status === 'pending') {
-            remaining.status = 'skipped';
-            failed++;
-            send({ type: 'plan_step_update', stepId: remaining.id, status: 'skipped', description: 'Aborted by watcher' });
-          }
+        case 'abort': {
+          step.status = 'failed';
+          failed++;
+          send({ type: 'plan_step_update', stepId: step.id, status: 'failed', result: `Aborted: ${decision.reason}` });
+          aborted = true;
+          break;
         }
-        // Early exit
-        send({
-          type: 'plan_completed',
-          summary: `Plan aborted: ${decision.reason}. ${succeeded} succeeded, ${failed} failed/skipped out of ${plan.steps.length} steps.`,
-          succeeded,
-          failed,
-          total: plan.steps.length,
-        });
-        return { succeeded, failed, results: completedSteps };
       }
     }
+
+    // If abort was triggered, mark all remaining pending steps as skipped
+    if (aborted) {
+      for (const remaining of plan.steps) {
+        if (remaining.status === 'pending') {
+          remaining.status = 'skipped';
+          failed++;
+          send({ type: 'plan_step_update', stepId: remaining.id, status: 'skipped', description: 'Aborted by watcher' });
+        }
+      }
+      const summary = `Plan aborted. ${succeeded} succeeded, ${failed} failed/skipped out of ${plan.steps.length} steps.`;
+      send({ type: 'plan_completed', summary, succeeded, failed, total: plan.steps.length });
+      return { succeeded, failed, results: completedSteps };
+    }
+  }
+
+  // Check for deadlocked steps (pending with unmet deps that will never resolve)
+  const deadlocked = plan.steps.filter(s => s.status === 'pending');
+  for (const step of deadlocked) {
+    step.status = 'skipped';
+    failed++;
+    const unmetDeps = step.dependsOn.filter(d => !completedIds.has(d));
+    console.log(`[Planner] Skipping step ${step.id}: unresolvable dependencies [${unmetDeps.join(', ')}]`);
+    send({ type: 'plan_step_update', stepId: step.id, status: 'skipped', description: `Skipped: depends on failed/skipped steps [${unmetDeps.join(', ')}]` });
   }
 
   // Stream completion
   const summary = `Plan completed: ${succeeded}/${plan.steps.length} steps succeeded${failed > 0 ? `, ${failed} failed/skipped` : ''}.`;
-  send({
-    type: 'plan_completed',
-    summary,
-    succeeded,
-    failed,
-    total: plan.steps.length,
-  });
-
+  send({ type: 'plan_completed', summary, succeeded, failed, total: plan.steps.length });
   return { succeeded, failed, results: completedSteps };
 }
 

@@ -16,7 +16,7 @@ import time
 import signal as sig
 import logging
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -407,8 +407,8 @@ class SignalBridge:
                     return "Upcoming events:\n" + "\n".join(event_lines)
                 return "No upcoming events in the next 3 days."
 
-            # Calendar this week
-            if 'calendar this week' in message_lower or 'week' in message_lower and 'calendar' in message_lower:
+            # Calendar this week — exact shortcut only
+            if message_lower in ['calendar this week', 'this week', "this week's calendar", "this week's schedule", 'events this week', 'schedule this week']:
                 events = self.google.get_upcoming_events(max_results=10, days_ahead=7)
                 if events:
                     event_lines = []
@@ -423,298 +423,23 @@ class SignalBridge:
                     return "This week's events:\n" + "\n".join(event_lines)
                 return "No events scheduled this week."
 
-            # Generic "next meeting" / "upcoming meetings" → show upcoming events (not search for word "meeting")
-            generic_meeting_patterns = [
-                r'(?:when\s+is\s+)?(?:my\s+)?next\s+meeting',
-                r'upcoming\s+meeting',
-                r'(?:do\s+i\s+have\s+)?(?:any\s+)?meetings?\s+(?:coming\s+up|this\s+month|scheduled)',
-                r'(?:what|when)\s+(?:are|is)\s+my\s+(?:next\s+)?meetings?',
+            # ================================================================
+            # SIMPLE CALENDAR SHORTCUTS — exact-match only.
+            # Everything else (searching events, "when is my dentist",
+            # "when was my last oil change", etc.) goes to the Choom which
+            # uses get_calendar_events with proper natural language understanding.
+            # Trying to regex-match every possible calendar question is a losing game.
+            # ================================================================
+
+            # Today's events — exact phrases only
+            today_exact = [
+                'today', "today's calendar", 'whats today', "what's today",
+                'events today', 'calendar today', 'check the calendar',
+                'check my calendar', 'meetings today', 'any meetings today',
+                "what's happening today", 'whats happening today',
+                'schedule today', "today's schedule", "what's on today",
             ]
-            if any(re.search(p, message_lower) for p in generic_meeting_patterns):
-                events = self.google.get_upcoming_events(max_results=10, days_ahead=60)
-                if events:
-                    event_lines = []
-                    for e in events:
-                        start = e['start']
-                        if 'T' in start:
-                            dt = datetime.fromisoformat(start.replace('Z', '+00:00'))
-                            start_str = dt.strftime("%a %m/%d %I:%M %p")
-                        else:
-                            start_str = start
-                        event_lines.append(f"- {e['summary']} ({start_str})")
-                    return f"Upcoming events (next 60 days):\n" + "\n".join(event_lines)
-                return "No upcoming events in the next 60 days."
-
-            # Birthday-specific patterns → search all events for "birthday" keyword
-            birthday_patterns = [
-                r"(?:who(?:'?s|se)\s+)?birthday\s+(?:is\s+)?(?:up\s+)?next",
-                r"next\s+birthday",
-                r"upcoming\s+birthday",
-                r"(?:look\s+up|find|search\s+for|check)\s+(?:the\s+)?birthdays?",
-                r"(?:any|when\s+(?:are|is))\s+(?:the\s+)?(?:next\s+)?birthdays?",
-                r"birthdays?\s+(?:coming\s+up|this\s+month|this\s+year)",
-            ]
-            if any(re.search(p, message_lower) for p in birthday_patterns):
-                events = self.google.get_upcoming_events(max_results=100, days_ahead=365)
-                birthday_events = []
-                for e in events:
-                    name_lower = e['summary'].lower()
-                    if 'birthday' in name_lower or 'bday' in name_lower:
-                        birthday_events.append(e)
-                if birthday_events:
-                    event_lines = []
-                    for e in birthday_events:
-                        start = e['start']
-                        if 'T' in start:
-                            dt = datetime.fromisoformat(start.replace('Z', '+00:00'))
-                            start_str = dt.strftime("%A, %B %d")
-                        else:
-                            dt = datetime.strptime(start, '%Y-%m-%d')
-                            start_str = dt.strftime("%A, %B %d")
-                        event_lines.append(f"- {e['summary']}: {start_str}")
-                    return f"Found {len(birthday_events)} upcoming birthday(s):\n" + "\n".join(event_lines)
-                return "No birthdays found in the calendar for the next year."
-
-            # Search for specific event: "when is X" or "check calendar for X" or "when is X's birthday"
-            search_patterns = [
-                r"when\s+is\s+(.+?)(?:'s)?\s*(?:birthday|bday|party|appointment|event)?(?:\?)?$",
-                r"(?:check|search)\s+(?:the\s+)?calendar\s+(?:for|and\s+(?:tell|find)\s+(?:me\s+)?(?:when)?)\s+(.+?)(?:\?)?$",
-                r"(?:find|look\s+for)\s+(.+?)\s+(?:on|in)\s+(?:the\s+)?calendar",
-            ]
-
-            for pattern in search_patterns:
-                search_match = re.search(pattern, message_lower)
-                if search_match:
-                    search_term = search_match.group(1).strip()
-                    # Remove common words that aren't helpful for searching
-                    search_term = re.sub(r"\b(the|a|an|is|on|for|my|calendar)\b", "", search_term).strip()
-
-                    # Skip general knowledge date questions — let the Choom answer these
-                    # from its own knowledge instead of searching the calendar.
-                    # Multi-word phrases (e.g. "first day of spring") are always general knowledge.
-                    # Bare holiday names (e.g. "easter") are only general knowledge when they're
-                    # the entire search term — "christmas party" is a real calendar search.
-                    term_stripped = re.sub(r'\b\d{4}\b', '', search_term).strip()  # remove year
-                    is_phrase_gk = bool(re.search(
-                        r'(?:first|last) day of (?:spring|summer|autumn|fall|winter)'
-                        r'|(?:start|end|beginning) of (?:spring|summer|autumn|fall|winter)'
-                        r'|(?:spring|vernal|autumnal|fall) equinox'
-                        r'|(?:summer|winter) solstice',
-                        search_term, re.IGNORECASE
-                    ))
-                    is_bare_holiday = bool(re.match(
-                        r'^(?:easter|christmas|hanukkah|kwanzaa|ramadan|diwali'
-                        r'|thanksgiving|new year|independence day|memorial day'
-                        r'|labor day|martin luther king|presidents day|veterans day)$',
-                        term_stripped, re.IGNORECASE
-                    ))
-                    if is_phrase_gk or is_bare_holiday:
-                        logger.info(f"Skipping calendar search for general knowledge query: '{search_term}'")
-                        return None  # Let the Choom handle it
-
-                    logger.info(f"Calendar search for: '{search_term}'")
-
-                    # Extend search range for birthdays/anniversaries to full year
-                    if any(word in message_lower for word in ['birthday', 'bday', 'anniversary', 'annual']):
-                        days_ahead = 365
-                    else:
-                        days_ahead = 60
-
-                    # Search upcoming events
-                    events = self.google.get_upcoming_events(max_results=100, days_ahead=days_ahead)
-                    matching = []
-
-                    # Split search into words for flexible matching
-                    search_words = [w.lower().strip("'s") for w in search_term.split() if len(w) > 2]
-
-                    # First pass: try full search term as substring
-                    if search_term:
-                        for e in events:
-                            if search_term.lower() in e['summary'].lower():
-                                matching.append(e)
-
-                    # Second pass: if no full-term matches, try individual words
-                    # Require ALL words to match (not just any one)
-                    if not matching and search_words:
-                        for e in events:
-                            event_name = e['summary'].lower()
-                            all_words_match = True
-                            for word in search_words:
-                                # Direct substring match
-                                if word in event_name:
-                                    continue
-                                # Prefix match: first 4+ chars must match an event word
-                                event_words = event_name.replace("'s", "").split()
-                                word_matched = False
-                                for ew in event_words:
-                                    if len(word) >= 4 and len(ew) >= 4 and word[:4] == ew[:4]:
-                                        word_matched = True
-                                        break
-                                if not word_matched:
-                                    all_words_match = False
-                                    break
-                            if all_words_match:
-                                matching.append(e)
-
-                    # Remove duplicates while preserving order
-                    seen = set()
-                    unique_matching = []
-                    for e in matching:
-                        if e['id'] not in seen:
-                            seen.add(e['id'])
-                            unique_matching.append(e)
-                    matching = unique_matching
-
-                    if matching:
-                        event_lines = []
-                        for e in matching:
-                            start = e['start']
-                            if 'T' in start:
-                                dt = datetime.fromisoformat(start.replace('Z', '+00:00'))
-                                start_str = dt.strftime("%A, %B %d at %I:%M %p")
-                            else:
-                                # All-day event
-                                dt = datetime.strptime(start, '%Y-%m-%d')
-                                start_str = dt.strftime("%A, %B %d")
-                            event_lines.append(f"- {e['summary']}: {start_str}")
-                        return f"Found {len(matching)} event(s) matching '{search_term}':\n" + "\n".join(event_lines)
-                    return f"No events found matching '{search_term}' in the next 60 days."
-
-            # "This weekend" / "next weekend" queries
-            weekend_match = re.search(r'(?:this|next)\s+weekend', message_lower)
-            if weekend_match and not any(w in message_lower for w in ['weather', 'forecast', 'temperature', 'rain', 'snow', 'wind']):
-                today = datetime.now()
-                # Find Saturday
-                days_until_sat = (5 - today.weekday()) % 7
-                if days_until_sat == 0 and today.weekday() != 5:
-                    days_until_sat = 7
-                if 'next' in message_lower and today.weekday() < 5:
-                    days_until_sat += 7
-                saturday = today + timedelta(days=days_until_sat)
-                sunday = saturday + timedelta(days=1)
-
-                events = self.google.get_upcoming_events(max_results=20, days_ahead=days_until_sat + 2)
-                weekend_events = []
-                for e in events:
-                    start = e['start']
-                    if 'T' in start:
-                        event_dt = datetime.fromisoformat(start.replace('Z', '+00:00'))
-                        if event_dt.date() in (saturday.date(), sunday.date()):
-                            weekend_events.append(e)
-                    else:
-                        event_date = datetime.strptime(start, '%Y-%m-%d').date()
-                        if event_date in (saturday.date(), sunday.date()):
-                            weekend_events.append(e)
-
-                if weekend_events:
-                    event_lines = []
-                    for e in weekend_events:
-                        start = e['start']
-                        if 'T' in start:
-                            dt = datetime.fromisoformat(start.replace('Z', '+00:00'))
-                            start_str = dt.strftime("%A %I:%M %p")
-                        else:
-                            dt = datetime.strptime(start, '%Y-%m-%d')
-                            start_str = dt.strftime("%A (all day)")
-                        event_lines.append(f"- {e['summary']} ({start_str})")
-                    return f"Weekend events ({saturday.strftime('%b %d')}-{sunday.strftime('%b %d')}):\n" + "\n".join(event_lines)
-                return f"Nothing on the calendar for the weekend ({saturday.strftime('%b %d')}-{sunday.strftime('%b %d')})."
-
-            # "Do I have anything on [day]" / "What's happening [day]" queries
-            day_names = {'monday': 0, 'tuesday': 1, 'wednesday': 2, 'thursday': 3, 'friday': 4, 'saturday': 5, 'sunday': 6}
-            specific_day_match = re.search(r'(?:do i have anything|what.?s (?:on|happening)|schedule for|anything on)\s+(?:next\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)', message_lower)
-            if specific_day_match and not any(w in message_lower for w in ['weather', 'forecast', 'temperature', 'rain', 'snow', 'wind']):
-                target_day = day_names[specific_day_match.group(1)]
-                today = datetime.now()
-                days_ahead = (target_day - today.weekday()) % 7
-                if days_ahead == 0:
-                    days_ahead = 7  # Next week
-                if 'next' in message_lower:
-                    days_ahead += 7
-                target_date = today + timedelta(days=days_ahead)
-
-                events = self.google.get_upcoming_events(max_results=20, days_ahead=days_ahead + 1)
-                day_events = []
-                for e in events:
-                    start = e['start']
-                    if 'T' in start:
-                        event_dt = datetime.fromisoformat(start.replace('Z', '+00:00'))
-                        if event_dt.date() == target_date.date():
-                            day_events.append(e)
-                    else:
-                        if start == target_date.strftime('%Y-%m-%d'):
-                            day_events.append(e)
-
-                if day_events:
-                    event_lines = []
-                    for e in day_events:
-                        start = e['start']
-                        if 'T' in start:
-                            dt = datetime.fromisoformat(start.replace('Z', '+00:00'))
-                            start_str = dt.strftime("%I:%M %p")
-                        else:
-                            start_str = "All day"
-                        event_lines.append(f"- {e['summary']} ({start_str})")
-                    return f"Events for {target_date.strftime('%A, %B %d')}:\n" + "\n".join(event_lines)
-                return f"Nothing on the calendar for {target_date.strftime('%A, %B %d')}."
-
-            # Tomorrow's events - but NOT weather/forecast questions
-            is_tomorrow_calendar = 'tomorrow' in message_lower and not any(
-                w in message_lower for w in ['weather', 'forecast', 'temperature', 'rain', 'snow', 'wind', 'cold', 'hot', 'warm', 'humid']
-            )
-            if is_tomorrow_calendar:
-                tomorrow = datetime.now() + timedelta(days=1)
-                events = self.google.get_upcoming_events(max_results=10, days_ahead=2)
-                # Filter to only tomorrow's events
-                tomorrow_events = []
-                for e in events:
-                    start = e['start']
-                    if 'T' in start:
-                        event_dt = datetime.fromisoformat(start.replace('Z', '+00:00'))
-                        if event_dt.date() == tomorrow.date():
-                            tomorrow_events.append(e)
-                    else:
-                        # All-day event - check date string
-                        if start == tomorrow.strftime('%Y-%m-%d'):
-                            tomorrow_events.append(e)
-
-                if tomorrow_events:
-                    event_lines = []
-                    for e in tomorrow_events:
-                        start = e['start']
-                        if 'T' in start:
-                            dt = datetime.fromisoformat(start.replace('Z', '+00:00'))
-                            start_str = dt.strftime("%I:%M %p")
-                        else:
-                            start_str = "All day"
-                        event_lines.append(f"- {e['summary']} ({start_str})")
-                    return "Tomorrow's events:\n" + "\n".join(event_lines)
-                return "Nothing on the calendar for tomorrow."
-
-            # Today's events - exact matches
-            today_exact = ['today', "today's calendar", 'whats today', "what's today", 'events today', 'calendar today', "check the calendar", "check my calendar", 'meetings today', 'any meetings today', 'any meetings', 'meetings', "what's happening today", 'whats happening today', 'schedule today', 'schedule for today', "today's schedule"]
-            # Today's events - pattern matches
-            today_patterns = [
-                'whats on.*calendar', "what's on.*calendar", 'check.*calendar',
-                r'(?:any|check|do i have).*meeting',
-                r'meeting.*today',
-                r'what.*meeting.*today',
-                r'check about.*meeting',
-                r'(?:any|what).*(?:event|appointment).*today',
-                r'do i have anything.*today',
-                r"what's (?:on|happening|going on).*today",
-                r'(?:any|what).*on (?:the |my )?schedule',
-                r'anything (?:on|going on).*today',
-            ]
-
-            is_today_query = message_lower in today_exact or any(re.search(p, message_lower) for p in today_patterns)
-            # Exclude "this week", "tomorrow", and weather queries
-            if 'week' in message_lower or 'tomorrow' in message_lower:
-                is_today_query = False
-            if any(w in message_lower for w in ['weather', 'forecast', 'temperature', 'rain', 'snow', 'wind']):
-                is_today_query = False
-
-            if is_today_query:
+            if message_lower in today_exact:
                 events = self.google.get_todays_events()
                 if events:
                     event_lines = []
@@ -728,6 +453,32 @@ class SignalBridge:
                         event_lines.append(f"- {e['summary']} ({start_str})")
                     return "Today's events:\n" + "\n".join(event_lines)
                 return "Nothing on the calendar today."
+
+            # Tomorrow — exact phrases only
+            tomorrow_exact = [
+                'tomorrow', "tomorrow's calendar", "tomorrow's schedule",
+                "what's tomorrow", 'whats tomorrow', 'events tomorrow',
+                'calendar tomorrow', 'schedule tomorrow',
+            ]
+            if message_lower in tomorrow_exact:
+                tomorrow = datetime.now() + timedelta(days=1)
+                events = self.google.get_upcoming_events(max_results=10, days_ahead=2)
+                tomorrow_events = [e for e in events if (
+                    (e['start'][:10] == tomorrow.strftime('%Y-%m-%d')) if 'T' not in e['start']
+                    else (datetime.fromisoformat(e['start'].replace('Z', '+00:00')).date() == tomorrow.date())
+                )]
+                if tomorrow_events:
+                    event_lines = []
+                    for e in tomorrow_events:
+                        start = e['start']
+                        if 'T' in start:
+                            dt = datetime.fromisoformat(start.replace('Z', '+00:00'))
+                            start_str = dt.strftime("%I:%M %p")
+                        else:
+                            start_str = "All day"
+                        event_lines.append(f"- {e['summary']} ({start_str})")
+                    return "Tomorrow's events:\n" + "\n".join(event_lines)
+                return "Nothing on the calendar for tomorrow."
 
             # Remind me command: "remind me in 30 minutes to check the oven"
             # Also handles: "remind me to check the oven in 30 minutes"
@@ -879,10 +630,11 @@ class SignalBridge:
             # Show list: "show groceries" or "groceries list" or "what's on groceries" or "what's in my groceries list"
             show_match = re.match(r"(?:show|whats (?:on|in)|what's (?:on|in)|what (?:is|was) (?:on|in))\s+(?:my\s+)?(?:the\s+)?(\w+)(?:\s+list)?", message_lower)
             if not show_match:
-                show_match = re.match(r"(\w+)\s+list", message_lower)
+                # Only match "<word> list" when the entire message is just that (e.g. "groceries list")
+                show_match = re.match(r"(\w+)\s+list\s*$", message_lower)
             if not show_match:
                 # "what do i have on my groceries list"
-                show_match = re.search(r"(?:on|in)\s+(?:my\s+)?(?:the\s+)?(\w+)\s+list", message_lower)
+                show_match = re.search(r"(?:on|in)\s+(?:my\s+)?(?:the\s+)?(\w+)\s+list\s*$", message_lower)
 
             if show_match:
                 list_name = show_match.group(1).strip()
@@ -908,7 +660,7 @@ class SignalBridge:
 
         return None  # Not a task command
 
-    # Common list name aliases
+    # Common list name aliases (checked before fuzzy matching)
     LIST_ALIASES = {
         'grocery': 'groceries',
         'groceries': 'groceries',
@@ -918,8 +670,37 @@ class SignalBridge:
     }
 
     def _resolve_list_name(self, name: str) -> str:
-        """Resolve list name aliases (grocery → groceries, etc.)"""
-        return self.LIST_ALIASES.get(name.lower(), name)
+        """Resolve list name to actual Google Tasks list name.
+        Checks: hardcoded aliases → exact match → substring/partial match."""
+        lower = name.lower()
+
+        # Check hardcoded aliases first
+        if lower in self.LIST_ALIASES:
+            return self.LIST_ALIASES[lower]
+
+        # Try matching against actual Google Task list names
+        if self.google:
+            try:
+                lists = self.google.get_task_lists()
+                list_titles = [tl['title'] for tl in lists]
+
+                # Exact match (case-insensitive)
+                for title in list_titles:
+                    if title.lower() == lower:
+                        return title
+
+                # Partial/substring match (input is part of list name, or vice versa)
+                matches = []
+                for title in list_titles:
+                    tl = title.lower()
+                    if lower in tl or tl in lower:
+                        matches.append(title)
+                if len(matches) == 1:
+                    return matches[0]
+            except Exception:
+                pass
+
+        return name
 
     def _extract_task_from_message(self, message: str) -> Optional[tuple]:
         """

@@ -258,6 +258,45 @@ class GoogleClient:
             logger.error(f"Failed to get calendar events: {e}")
             return []
 
+    def search_events(self, query: str, days_back: int = 365, days_ahead: int = 365, max_results: int = 50) -> List[Dict[str, Any]]:
+        """
+        Search calendar events by keyword, looking both past and future.
+        Uses Google Calendar API's 'q' parameter for server-side text search.
+
+        Args:
+            query: Search term to match against event summary/description
+            days_back: How many days in the past to search
+            days_ahead: How many days in the future to search
+            max_results: Maximum number of events to return
+        """
+        try:
+            now = datetime.now(timezone.utc)
+            time_min = (now - timedelta(days=days_back)).strftime('%Y-%m-%dT%H:%M:%SZ')
+            time_max = (now + timedelta(days=days_ahead)).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+            results = self.calendar_service.events().list(
+                calendarId='primary',
+                timeMin=time_min,
+                timeMax=time_max,
+                q=query,
+                maxResults=max_results,
+                singleEvents=True,
+                orderBy='startTime'
+            ).execute()
+
+            events = results.get('items', [])
+            return [{
+                'id': e['id'],
+                'summary': e.get('summary', 'No title'),
+                'description': e.get('description', ''),
+                'start': e['start'].get('dateTime', e['start'].get('date')),
+                'end': e['end'].get('dateTime', e['end'].get('date')),
+                'location': e.get('location', ''),
+            } for e in events]
+        except HttpError as e:
+            logger.error(f"Failed to search calendar events: {e}")
+            return []
+
     def get_todays_events(self) -> List[Dict[str, Any]]:
         """Get today's calendar events (in local timezone)"""
         try:

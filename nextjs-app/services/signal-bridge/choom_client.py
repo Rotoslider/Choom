@@ -125,6 +125,14 @@ class ChoomClient:
             logger.info(f"Loaded Choom: {choom.name} ({choom.id}) llmModel={choom.llm_model} llmEndpoint={choom.llm_endpoint}")
 
         self._chooms_fetched_at = time.time()
+
+        # Update MessageParser with live Choom names so routing auto-detects new Chooms
+        try:
+            from signal_handler import MessageParser
+            MessageParser.update_choom_names([c.name for c in self.chooms.values()])
+        except Exception:
+            pass  # Non-critical — parser falls back to voice variants
+
         return list(self.chooms.values())
 
     def _ensure_chooms_fresh(self):

@@ -154,6 +154,10 @@ export interface LLMSettings {
   topK?: number;
   repetitionPenalty?: number;
   enableThinking?: boolean;
+  // Planner model — optional fast model for plan creation (JSON generation)
+  plannerModel?: string;
+  plannerEndpoint?: string;
+  plannerProviderId?: string;
 }
 
 export interface TTSSettings {
