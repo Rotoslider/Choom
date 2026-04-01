@@ -3221,7 +3221,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { choomId, chatId, message, settings, isDelegation, suppressNotifications, noTools, maxIterationsOverride, isHeartbeat } = body;
+    const { choomId, chatId, message, settings, isDelegation, suppressNotifications, noTools, maxIterationsOverride, isHeartbeat, taskModelOverride } = body;
 
     if (!choomId || !chatId || !message) {
       return new Response(
@@ -3374,6 +3374,44 @@ export async function POST(request: NextRequest) {
         usingCloudProvider = true;
       }
     }
+    // Layer 4: Per-task model override (highest priority)
+    // Heartbeats, automations, and other scheduled tasks can specify a model+provider
+    // that overrides everything — including the Choom's own DB settings.
+    // This allows cheap/fast models for simple tasks (selfies, reminders) while keeping
+    // the Choom's primary model for complex work (coding, research).
+    if (taskModelOverride?.model) {
+      const overrideProviderId = taskModelOverride.provider_id;
+      if (overrideProviderId && overrideProviderId !== '_local' && providers.length > 0) {
+        const overrideProvider = providers.find((p: LLMProviderConfig) => p.id === overrideProviderId);
+        if (overrideProvider && overrideProvider.apiKey) {
+          const overrideSettings: LLMSettings = {
+            ...llmSettings,
+            model: taskModelOverride.model,
+            endpoint: overrideProvider.endpoint,
+          };
+          if (overrideProvider.type === 'anthropic') {
+            const { AnthropicClient } = await import('@/lib/anthropic-client');
+            llmClient = new AnthropicClient(overrideSettings, overrideProvider.apiKey, overrideProvider.endpoint);
+          } else {
+            llmClient = new LLMClient(overrideSettings, overrideProvider.apiKey);
+          }
+          llmSettings.model = taskModelOverride.model;
+          llmSettings.endpoint = overrideProvider.endpoint;
+          usingCloudProvider = true;
+          console.log(`   🎯 Layer 4 (task override): ${overrideProvider.name} model=${taskModelOverride.model}`);
+        }
+      } else {
+        // Local model override
+        llmSettings.model = taskModelOverride.model;
+        if (taskModelOverride.endpoint) {
+          llmSettings.endpoint = taskModelOverride.endpoint;
+        }
+        llmClient = new LLMClient(llmSettings);
+        usingCloudProvider = false;
+        console.log(`   🎯 Layer 4 (task override): local model=${taskModelOverride.model}, endpoint=${llmSettings.endpoint}`);
+      }
+    }
+
     const memoryClient = new MemoryClient(memoryEndpoint);
 
     // Use companionId for memory operations (falls back to choomId if not set)

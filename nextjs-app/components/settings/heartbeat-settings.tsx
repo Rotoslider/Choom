@@ -14,6 +14,16 @@ interface BridgeConfig {
     quiet_end: string;
     custom_tasks?: CustomHeartbeat[];
   };
+  providers?: LLMProvider[];
+  llm?: { model?: string; endpoint?: string };
+}
+
+interface LLMProvider {
+  id: string;
+  name: string;
+  models: string[];
+  endpoint: string;
+  type: string;
 }
 
 interface CustomHeartbeat {
@@ -24,6 +34,8 @@ interface CustomHeartbeat {
   prompt_script?: string;
   respect_quiet: boolean;
   enabled: boolean;
+  model?: string;
+  provider_id?: string;
 }
 
 interface ChoomOption {
@@ -36,6 +48,7 @@ export function HeartbeatSettings() {
   const [bridgeStatus, setBridgeStatus] = useState<'connected' | 'disconnected' | 'checking'>('checking');
   const [saving, setSaving] = useState(false);
   const [chooms, setChooms] = useState<ChoomOption[]>([]);
+  const [localModels, setLocalModels] = useState<string[]>([]);
 
   useEffect(() => {
     fetch('/api/bridge-config')
@@ -54,6 +67,20 @@ export function HeartbeatSettings() {
         setChooms(list.map((c: { id: string; name: string }) => ({ id: c.id, name: c.name })));
       })
       .catch(console.error);
+
+    // Fetch local LM Studio models
+    fetch('/api/bridge-config')
+      .then((r) => r.json())
+      .then((data) => {
+        const endpoint = data?.llm?.endpoint || 'http://192.168.1.145:1234/v1';
+        return fetch(`${endpoint}/models`);
+      })
+      .then((r) => r.json())
+      .then((data) => {
+        const models = (data?.data || []).map((m: { id: string }) => m.id).filter(Boolean);
+        setLocalModels(models);
+      })
+      .catch(() => setLocalModels([]));
   }, []);
 
   const saveConfig = useCallback(async (updated: BridgeConfig) => {
@@ -401,6 +428,45 @@ export function HeartbeatSettings() {
                     onCheckedChange={(checked) => saveCustomHeartbeat(task.id, { respect_quiet: checked })}
                   />
                   <span className="text-sm text-muted-foreground">Respect quiet period</span>
+                </div>
+                <div className="space-y-1">
+                  <p className="text-xs text-muted-foreground font-medium">Model override (optional) — use a different model for this task</p>
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={task.provider_id || '_local'}
+                      onChange={(e) => {
+                        const pid = e.target.value;
+                        const updates: Partial<CustomHeartbeat> = { provider_id: pid === '_local' ? undefined : pid };
+                        // Clear model when switching provider
+                        if (pid === '_local') {
+                          updates.model = localModels[0] || undefined;
+                        } else {
+                          const prov = (config?.providers || []).find(p => p.id === pid);
+                          updates.model = prov?.models?.[0] || undefined;
+                        }
+                        saveCustomHeartbeat(task.id, updates);
+                      }}
+                      className="bg-muted border border-border rounded px-2 py-1 text-xs flex-shrink-0"
+                    >
+                      <option value="_local">Local (LM Studio)</option>
+                      {(config?.providers || []).map((p) => (
+                        <option key={p.id} value={p.id}>{p.name}</option>
+                      ))}
+                    </select>
+                    <select
+                      value={task.model || ''}
+                      onChange={(e) => saveCustomHeartbeat(task.id, { model: e.target.value || undefined })}
+                      className="bg-muted border border-border rounded px-2 py-1 text-xs flex-1 min-w-0"
+                    >
+                      <option value="">Choom default</option>
+                      {(task.provider_id && task.provider_id !== '_local'
+                        ? (config?.providers || []).find(p => p.id === task.provider_id)?.models || []
+                        : localModels
+                      ).map((m) => (
+                        <option key={m} value={m}>{m.split('/').pop()}</option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
               </div>
             ))}
