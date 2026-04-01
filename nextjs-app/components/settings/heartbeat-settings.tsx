@@ -455,7 +455,7 @@ export function HeartbeatSettings() {
                     </select>
                     <select
                       value={task.model || ''}
-                      onChange={(e) => saveCustomHeartbeat(task.id, { model: e.target.value || undefined })}
+                      onChange={(e) => saveCustomHeartbeat(task.id, { model: e.target.value || null, provider_id: e.target.value ? task.provider_id : null } as Partial<CustomHeartbeat>)}
                       className="bg-muted border border-border rounded px-2 py-1 text-xs flex-1 min-w-0"
                     >
                       <option value="">Choom default</option>

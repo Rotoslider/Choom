@@ -369,11 +369,16 @@ export function CronSettings() {
                           <select
                             value={taskConfig.model || ''}
                             onChange={(e) => {
+                              const val = e.target.value;
                               const updated = {
                                 ...config!,
                                 tasks: {
                                   ...config!.tasks,
-                                  [taskId]: { ...taskConfig, model: e.target.value || undefined },
+                                  [taskId]: {
+                                    ...taskConfig,
+                                    model: val || null,
+                                    provider_id: val ? taskConfig.provider_id : null,
+                                  },
                                 },
                               };
                               setConfig(updated);
