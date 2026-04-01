@@ -243,6 +243,9 @@ function syncSettingsToBridgeConfig(settings: AppSettings) {
           llm: {
             model: settings.llm.model,
             endpoint: settings.llm.endpoint,
+            simpleTasksModel: settings.llm.simpleTasksModel || null,
+            simpleTasksProviderId: settings.llm.simpleTasksProviderId || null,
+            simpleTasksEnabled: settings.llm.simpleTasksEnabled || false,
           },
           weather: settings.weather,
           search: settings.search,

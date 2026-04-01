@@ -506,6 +506,75 @@ export function LLMSettings() {
       </div>
 
       {/* ================================================================ */}
+      {/* Simple Tasks Model Section */}
+      {/* ================================================================ */}
+      <div className="border-t pt-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-medium">Simple Tasks Model</h3>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Use a fast/cheap model for routine tool calls — reminders, habits, calendar, weather, tasks, memory.
+              Complex requests (research, coding, image gen) still use the primary model.
+            </p>
+          </div>
+          <Switch
+            checked={llm.simpleTasksEnabled || false}
+            onCheckedChange={(checked) => updateLLMSettings({ simpleTasksEnabled: checked })}
+          />
+        </div>
+
+        {llm.simpleTasksEnabled && (
+          <div className="space-y-2 ml-1">
+            <div className="flex items-center gap-2">
+              <label className="text-xs text-muted-foreground w-16">Provider</label>
+              <select
+                value={llm.simpleTasksProviderId || '_local'}
+                onChange={(e) => {
+                  const pid = e.target.value;
+                  const updates: Record<string, unknown> = {
+                    simpleTasksProviderId: pid === '_local' ? undefined : pid,
+                  };
+                  // Auto-select first model for the provider
+                  if (pid === '_local') {
+                    updates.simpleTasksModel = models[0]?.id || '';
+                  } else {
+                    const prov = providers.find(p => p.id === pid);
+                    updates.simpleTasksModel = prov?.models?.[0] || '';
+                  }
+                  updateLLMSettings(updates);
+                }}
+                className="bg-muted border border-border rounded px-2 py-1 text-sm flex-1"
+              >
+                <option value="_local">Local (LM Studio)</option>
+                {providers.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="text-xs text-muted-foreground w-16">Model</label>
+              <select
+                value={llm.simpleTasksModel || ''}
+                onChange={(e) => updateLLMSettings({ simpleTasksModel: e.target.value })}
+                className="bg-muted border border-border rounded px-2 py-1 text-sm flex-1"
+              >
+                <option value="">(not set)</option>
+                {(llm.simpleTasksProviderId && llm.simpleTasksProviderId !== '_local'
+                  ? providers.find(p => p.id === llm.simpleTasksProviderId)?.models || []
+                  : models.map(m => m.id)
+                ).map((m) => (
+                  <option key={m} value={m}>{m.split('/').pop()}</option>
+                ))}
+              </select>
+            </div>
+            <p className="text-[10px] text-muted-foreground ml-[4.5rem]">
+              Routes: reminders, habits, calendar, weather, tasks, memory, notifications
+            </p>
+          </div>
+        )}
+      </div>
+
+      {/* ================================================================ */}
       {/* Model Profiles Section */}
       {/* ================================================================ */}
       <div className="border-t pt-4">
