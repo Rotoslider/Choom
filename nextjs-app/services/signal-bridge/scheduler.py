@@ -1235,9 +1235,21 @@ Be practical. Only work on things that can actually be accomplished with the too
             logger.info(f"Custom heartbeat {task_id} deferred: user active with {choom_name}")
             return
 
+        # Per-task model override: if the heartbeat has a model configured,
+        # pass it through so route.ts applies it as Layer 4 (highest priority)
+        task_model_override = None
+        if task_config:
+            task_model = task_config.get("model")
+            if task_model:
+                task_model_override = {
+                    "model": task_model,
+                    "provider_id": task_config.get("provider_id"),
+                }
+                logger.info(f"  Task model override: {task_model} (provider: {task_config.get('provider_id', 'local')})")
+
         logger.info(f"Running custom heartbeat: {task_id} -> {choom_name}")
         try:
-            response = self.choom.send_message(choom_name, prompt, is_heartbeat=True)
+            response = self.choom.send_message(choom_name, prompt, is_heartbeat=True, task_model_override=task_model_override)
 
             if response.content:
                 self.send_message_to_owner(

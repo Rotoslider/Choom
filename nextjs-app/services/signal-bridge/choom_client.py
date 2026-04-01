@@ -273,7 +273,7 @@ class ChoomClient:
             logger.warning(f"Failed to fetch recent conversations: {e}")
             return ""
 
-    def send_message(self, choom_name: str, message: str, settings: Optional[Dict] = None, fresh_chat: bool = False, no_tools: bool = False, max_iterations: Optional[int] = None, is_heartbeat: bool = False) -> ChatResponse:
+    def send_message(self, choom_name: str, message: str, settings: Optional[Dict] = None, fresh_chat: bool = False, no_tools: bool = False, max_iterations: Optional[int] = None, is_heartbeat: bool = False, task_model_override: Optional[Dict] = None) -> ChatResponse:
         """
         Send a message to a Choom and get the response
 
@@ -417,6 +417,8 @@ class ChoomClient:
             payload["maxIterationsOverride"] = max_iterations
         if is_heartbeat:
             payload["isHeartbeat"] = True
+        if task_model_override:
+            payload["taskModelOverride"] = task_model_override
 
         # Use streaming endpoint
         # timeout=(connect, read) — connect fast, read generous for LLM fallback retries
@@ -461,6 +463,11 @@ class ChoomClient:
                                 'prompt': img_prompt,
                             })
                         elif event_type == 'done':
+                            # Use done event's content as authoritative if we missed content events
+                            done_content = data.get('content', '')
+                            if done_content and len(done_content) > len(content):
+                                logger.info(f"Using done event content ({len(done_content)} chars) over accumulated ({len(content)} chars)")
+                                content = done_content
                             break
                         elif event_type == 'error':
                             logger.error(f"Chat error: {data.get('error')}")
