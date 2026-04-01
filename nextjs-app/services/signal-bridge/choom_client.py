@@ -326,6 +326,10 @@ class ChoomClient:
                 "model": llm_cfg.get("model", ""),
                 "temperature": 0.7,
                 "maxTokens": 4096,
+                # Simple tasks model routing (synced from GUI settings)
+                "simpleTasksModel": llm_cfg.get("simpleTasksModel"),
+                "simpleTasksProviderId": llm_cfg.get("simpleTasksProviderId"),
+                "simpleTasksEnabled": llm_cfg.get("simpleTasksEnabled", False),
             },
             "memory": {
                 "endpoint": config.MEMORY_ENDPOINT,
