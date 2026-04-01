@@ -4,7 +4,7 @@ A self-hosted AI companion framework with persistent memory, image generation, t
 
 Each AI persona ("Choom") can have its own LLM model, voice, image style, and memory space. Chooms are agentic — they autonomously chain tools across multi-step tasks, searching the web, writing files, generating images, running code, and managing your calendar without manual prompting between steps. **Chooms can also delegate tasks to each other** — an orchestrator Choom can assign research to one agent, coding to another, and image analysis to a third, then synthesize the results. Talk to them through the web UI or via Signal messages.
 
-All 87 tools are organized into 23 modular **skills** with progressive disclosure — the LLM only sees detailed documentation for skills relevant to the current request, saving ~3,400 tokens per message. Skills can be enabled/disabled, custom skills can be created via a visual builder, and external skills can be installed from GitHub with safety verification.
+All 88 tools are organized into 23 modular **skills** with progressive disclosure — the LLM only sees detailed documentation for skills relevant to the current request, saving ~3,400 tokens per message. Skills can be enabled/disabled, custom skills can be created via a visual builder, and external skills can be installed from GitHub with safety verification.
 
 ![Chat Interface](docs/screenshots/chat-interface.png)
 
@@ -18,7 +18,7 @@ All 87 tools are organized into 23 modular **skills** with progressive disclosur
 - **Speech-to-Text**: Whisper-based transcription with push-to-talk, toggle, and VAD modes
 - **Signal Bridge**: Two-way messaging through Signal, including voice transcription, image delivery, and image forwarding for vision analysis
 - **Smart Home (Home Assistant)**: Full integration with Home Assistant for reading sensors, controlling lights/switches/climate, viewing history trends, and ambient home awareness. Three-layer environmental awareness: system prompt injection (every LLM call knows the current home state), heartbeat monitoring (periodic checks with intelligent reasoning), and conditional automations (trigger actions based on sensor thresholds). Includes an Entity Browser in Settings and works from both the web UI and Signal. See the [Smart Home Guide](#smart-home-home-assistant-1) for setup and usage
-- **Scheduled Tasks**: Cron-driven morning briefings, weather checks, aurora forecasts, health heartbeats, and YouTube music downloads
+- **Scheduled Tasks**: Cron-driven morning briefings, weather checks, aurora forecasts, health heartbeats, and YouTube music downloads. Custom heartbeats support **per-task model routing** — assign a fast/cheap model to simple tasks (selfies, reminders) while keeping the Choom's primary model for complex work
 - **Google Integration**: Full Google Workspace access — Calendar (CRUD), Tasks, Sheets, Docs, Drive, Gmail (read/send/draft/search/archive/reply), Contacts (search/lookup), and YouTube (search/video details/channel info/playlists) — 35 tools via OAuth2
 - **Skills Architecture**: 87 tools organized into 23 modular skills with 3-level progressive disclosure — Level 1 (one-line summaries, always sent), Level 2 (full docs, injected on match), Level 3 (reference files, on demand). Custom skills via visual builder, external skills from GitHub with safety scanning. See the [Skills Guide](SKILLS-GUIDE.md) for details
 - **Agentic Tool Loop**: Chooms autonomously execute up to 10 tool calls per turn — chaining memory lookups, web searches, image generation, file operations, calendar updates, and more in a single response. Includes automatic nudging (retries with `tool_choice=required` if the LLM describes a tool instead of calling it), tool call deduplication, and smart completion detection
@@ -29,10 +29,10 @@ All 87 tools are organized into 23 modular **skills** with progressive disclosur
 - **Image Attachment**: Attach images in the web GUI (paperclip, drag-and-drop, clipboard paste) or send via Signal for Optic analysis
 - **Project Management**: Live dashboard for workspace projects with per-project iteration limits, auto-refresh, automatic Choom assignment tracking, and project rename tool
 - **Code Sandbox**: Execute Python and Node.js code in workspace projects with venv/npm support, package installation, timeout enforcement, and output truncation
-- **Web Scraping & Downloads**: Scrape webpages for image URLs (`scrape_page_images`), download images with WebP-to-PNG auto-conversion (`download_web_image`), and download files (`download_web_file` for PDFs, docs, etc.) from the web into workspace projects
+- **Web Scraping & Downloads**: Full JavaScript-rendered page scraping via headless Chromium (`scrape_page_content`) with text extraction and image discovery — works on SPAs, product pages, and dynamic sites. Also static HTML image scraping (`scrape_page_images`), image downloads with WebP-to-PNG auto-conversion (`download_web_image`), and file downloads (`download_web_file` for PDFs, docs, etc.)
 - **PDF Generation & Reading**: Markdown-to-PDF with embedded images (`![caption](path)` syntax + explicit images array) via pdfkit; text extraction from PDFs via `pdftotext` with optional page range
 - **Context Compaction**: Two-layer context window management — cross-turn summarization of old messages into a rolling LLM-generated summary, plus within-turn truncation of stale tool results during agentic loops
-- **External LLM Providers**: Connect to Anthropic, OpenAI, NVIDIA Build, or custom OpenAI-compatible APIs per-Choom or per-project with provider presets, API key management (with visibility toggle), and a full Anthropic Messages API adapter. Each Choom supports two fallback models (any mix of local and cloud) for automatic failover on timeout/error. Provider API keys are resolved from settings at chat time and read from `bridge-config.json` as fallback for Signal bridge parity
+- **External LLM Providers**: Connect to Anthropic, OpenAI, NVIDIA Build, or custom OpenAI-compatible APIs per-Choom or per-project with provider presets, API key management (with visibility toggle), and a full Anthropic Messages API adapter. Each Choom supports two fallback models (any mix of local and cloud) for automatic failover on timeout/error. **Per-task model routing** allows individual heartbeats and scheduled tasks to use a different model/provider than the Choom's default — use a fast local model for selfies while keeping a cloud model for research. Provider API keys are resolved from settings at chat time and read from `bridge-config.json` as fallback for Signal bridge parity
 - **Heartbeat Deferral**: Scheduled heartbeats automatically defer when the user is actively chatting, preventing concurrent responses to the same conversation
 - **Markdown Rendering**: Chat messages rendered with `react-markdown` and `react-syntax-highlighter` (oneDark theme) for proper code blocks, tables, lists, links, and headings
 - **LLM Fallback Redundancy**: Each Choom can have two fallback LLM models (local or cloud) that automatically activate on timeout or connection failure. Fallback timeouts are halved for fast failure cascade. Works across all execution paths — direct chat, Signal, delegation, cron jobs
@@ -102,7 +102,7 @@ nextjs-app/
       google-youtube/               4 tools (search, video details, channel info, playlist items)
       workspace-files/              7 tools (read, write, list, create folder, create project, delete, rename)
       pdf-processing/               2 tools (generate PDF, read PDF)
-      web-scraping/                 3 tools (scrape images, download image, download file)
+      web-scraping/                 4 tools (scrape content w/ JS rendering, scrape images, download image, download file)
       image-analysis/               1 tool (vision analysis)
       code-execution/               4 tools (execute, venv, install, run command)
       notifications/                1 tool (Signal notifications)
@@ -148,6 +148,8 @@ nextjs-app/
     planner-loop.ts                 Multi-step plan creation + execution with watcher
     watcher-loop.ts                 Step evaluation, retry, rollback heuristics
     google-client.ts                Google API client (Calendar, Sheets, Docs, Drive, Gmail, Contacts, YouTube)
+    playwright-service.ts           JS-rendered web scraping via headless Chromium (text + image extraction)
+    execution-trace.ts              Structured trace logging for agentic loop diagnostics
   prisma/
     schema.prisma                   SQLite (Choom, Chat, Message, GeneratedImage, ActivityLog, HabitEntry, HabitCategory, TokenUsage)
     create-views.sql                SQLite views with human-readable timestamps (npm run db:views)
@@ -156,7 +158,8 @@ nextjs-app/
     bridge.py                       Main daemon (signal-cli JSON-RPC socket)
     choom_client.py                 Choom API client with settings merging + user activity tracking
     signal_handler.py               Message routing + fuzzy name matching
-    scheduler.py                    Cron tasks + heartbeat deferral + automation execution
+    scheduler.py                    Cron tasks + heartbeat deferral + automation execution + nightly doctor
+    nightly_doctor.py               Automated diagnostic analyzer (reads execution traces, detects anomalies)
     task_config.py                  Persistent task config
     yt_downloader.py                YouTube music downloader (yt-dlp + ID3 tagging)
     google_client.py                Google Workspace integration (Calendar, Tasks, Sheets, Docs, Drive, Gmail, Contacts, YouTube)
@@ -168,7 +171,7 @@ nextjs-app/
 
 ![Settings Panel](docs/screenshots/settings-llm.png)
 
-Settings resolve in six layers. Each layer overrides the one before it. After the final model is resolved, a **model profile** is applied if the resolved model differs from the global default.
+Settings resolve in seven layers. Each layer overrides the one before it. After the final model is resolved, a **model profile** is applied if the resolved model differs from the global default.
 
 ```
 Layer 1: Code Defaults (hardcoded)
@@ -186,7 +189,10 @@ Layer 3: Per-Choom Overrides (database)
 Layer 3b: Per-Choom Provider (if Choom has llmProviderId)
     |
     v
-Layer 4: Per-Project Provider (project metadata)  <-- wins (LLM only)
+Layer 4: Per-Project Provider (project metadata)
+    |
+    v
+Layer 5: Per-Task Model Override (heartbeats, scheduled tasks)  <-- wins (LLM only)
     |
     v
 Model Profile Application (if resolved model != global model)
@@ -389,7 +395,8 @@ Hybrid SQLite + ChromaDB storage via a Python HTTP server on port 8100.
 - `send_notification` - Send proactive Signal messages
 
 ### Download & Scraping Tools
-- `scrape_page_images` - Fetch a webpage and extract all image URLs from the HTML. Parses `<img src>`, `srcset`, `data-src` (lazy loading), `og:image`/`twitter:image` meta tags, CSS `background-image`, and JSON-LD structured data. Use this to find real image URLs before downloading — never guess CDN URLs.
+- `scrape_page_content` - Scrape a webpage with full JavaScript rendering via headless Chromium (Playwright). Returns extracted text content (cleaned, 15K char cap) AND images sorted by size with alt text and dimensions. Handles SPAs, lazy-loaded content, product pages, and dynamic sites that static HTML scraping misses. Auto-scrolls to trigger lazy image loading. Prefers semantic containers (`article`, `main`) over full body text.
+- `scrape_page_images` - Fetch a webpage and extract all image URLs from the static HTML. Parses `<img src>`, `srcset`, `data-src` (lazy loading), `og:image`/`twitter:image` meta tags, CSS `background-image`, and JSON-LD structured data. Faster than `scrape_page_content` for simple pages. Use this to find real image URLs before downloading — never guess CDN URLs.
 - `download_web_image` - Download images from URLs with browser-like headers (avoids 403 blocks), automatic WebP-to-PNG conversion via sharp, optional resize, and content-type validation (10MB limit)
 - `download_web_file` - Download any file type from URLs (PDFs, docs, spreadsheets, archives — 50MB limit, 60s timeout)
 
@@ -985,7 +992,7 @@ All scheduled tasks have a **Run Now** button in Settings that triggers immediat
 
 ### Custom Heartbeats
 
-Create custom heartbeats in **Settings > Heartbeats** to send periodic prompts to any Choom. Each heartbeat has a Choom, interval, prompt, and optional quiet-hours respect.
+Create custom heartbeats in **Settings > Heartbeats** to send periodic prompts to any Choom. Each heartbeat has a Choom, interval, prompt, optional quiet-hours respect, and optional **model override** — use a fast/cheap model for simple tasks (selfies, reminders) instead of the Choom's primary model. Select any local model or configured provider model from the dropdown.
 
 #### Static Prompts
 
@@ -1335,7 +1342,7 @@ sudo systemctl start signal-bridge.service
 - Some LLMs may describe tool usage in text rather than making function calls — a nudge mechanism with `tool_choice=required` retries automatically (disabled after tools have executed to prevent response repetition), but model-dependent
 - Image generation capped at 3 per request to prevent runaway loops (heartbeat selfie spam, etc.)
 - Image resizing applied before vision analysis (max dimension per vision model profile: 768-2048px); very small details may be lost
-- Page scraping (`scrape_page_images`) works with static HTML; JavaScript-rendered content (SPAs, lazy-loaded galleries) may not return all images
+- Static page scraping (`scrape_page_images`) works with HTML only; for JavaScript-rendered content (SPAs, lazy-loaded galleries), use `scrape_page_content` which renders via headless Chromium. The Playwright browser uses ~100-200MB RAM per scrape and closes automatically after each call
 - Code sandbox has no network restrictions — Chooms can make HTTP requests and download packages
 - External LLM providers (Anthropic, OpenAI, NVIDIA Build) require separate API keys/subscriptions
 - NVIDIA Build API: large models (Qwen 3.5 397B, GLM-5, Kimi K2.5) may be overloaded or have high latency; some model IDs are periodically retired/renamed. Confirmed working: Nemotron Ultra 253B, Mistral Large 3 675B, DeepSeek V3.2, Llama 3.3 70B, Llama 405B
