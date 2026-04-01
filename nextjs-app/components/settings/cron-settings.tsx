@@ -10,6 +10,14 @@ interface TaskConfig {
   enabled: boolean;
   time?: string;
   interval_minutes?: number;
+  model?: string;
+  provider_id?: string;
+}
+
+interface LLMProvider {
+  id: string;
+  name: string;
+  models: string[];
 }
 
 interface BridgeConfig {
@@ -18,6 +26,8 @@ interface BridgeConfig {
     quiet_start: string;
     quiet_end: string;
   };
+  providers?: LLMProvider[];
+  llm?: { endpoint?: string };
 }
 
 const TASK_META: Record<string, { name: string; description: string; details: string; choom: string; icon: React.ReactNode }> = {
@@ -90,12 +100,26 @@ export function CronSettings() {
   const [config, setConfig] = useState<BridgeConfig | null>(null);
   const [saving, setSaving] = useState(false);
   const [expandedTask, setExpandedTask] = useState<string | null>(null);
+  const [localModels, setLocalModels] = useState<string[]>([]);
 
   useEffect(() => {
     fetch('/api/bridge-config')
       .then((r) => r.json())
       .then(setConfig)
       .catch(console.error);
+
+    // Fetch local LM Studio models
+    fetch('/api/bridge-config')
+      .then((r) => r.json())
+      .then((data) => {
+        const endpoint = data?.llm?.endpoint || 'http://192.168.1.145:1234/v1';
+        return fetch(`${endpoint}/models`);
+      })
+      .then((r) => r.json())
+      .then((data) => {
+        setLocalModels((data?.data || []).map((m: { id: string }) => m.id).filter(Boolean));
+      })
+      .catch(() => setLocalModels([]));
   }, []);
 
   const saveConfig = useCallback(
@@ -311,6 +335,63 @@ export function CronSettings() {
                       <span className="font-medium">Assigned Choom:</span>
                       <span>{meta.choom}</span>
                     </div>
+                    {/* Model override for LLM-backed tasks */}
+                    {(taskId === 'morning_briefing' || taskId === 'goal_review') && (
+                      <div className="mt-3 pt-3 border-t border-border/30 space-y-1">
+                        <p className="text-xs text-muted-foreground font-medium">Model override (optional)</p>
+                        <div className="flex items-center gap-2">
+                          <select
+                            value={taskConfig.provider_id || '_local'}
+                            onChange={(e) => {
+                              const pid = e.target.value;
+                              const prov = (config?.providers || []).find(p => p.id === pid);
+                              const updated = {
+                                ...config!,
+                                tasks: {
+                                  ...config!.tasks,
+                                  [taskId]: {
+                                    ...taskConfig,
+                                    provider_id: pid === '_local' ? undefined : pid,
+                                    model: pid === '_local' ? (localModels[0] || undefined) : (prov?.models?.[0] || undefined),
+                                  },
+                                },
+                              };
+                              setConfig(updated);
+                              saveConfig(updated);
+                            }}
+                            className="bg-muted border border-border rounded px-2 py-1 text-xs"
+                          >
+                            <option value="_local">Local (LM Studio)</option>
+                            {(config?.providers || []).map((p) => (
+                              <option key={p.id} value={p.id}>{p.name}</option>
+                            ))}
+                          </select>
+                          <select
+                            value={taskConfig.model || ''}
+                            onChange={(e) => {
+                              const updated = {
+                                ...config!,
+                                tasks: {
+                                  ...config!.tasks,
+                                  [taskId]: { ...taskConfig, model: e.target.value || undefined },
+                                },
+                              };
+                              setConfig(updated);
+                              saveConfig(updated);
+                            }}
+                            className="bg-muted border border-border rounded px-2 py-1 text-xs flex-1 min-w-0"
+                          >
+                            <option value="">Choom default</option>
+                            {(taskConfig.provider_id && taskConfig.provider_id !== '_local'
+                              ? (config?.providers || []).find(p => p.id === taskConfig.provider_id)?.models || []
+                              : localModels
+                            ).map((m) => (
+                              <option key={m} value={m}>{m.split('/').pop()}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}

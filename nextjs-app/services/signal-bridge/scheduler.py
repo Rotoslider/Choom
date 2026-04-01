@@ -647,7 +647,19 @@ Reminders: {reminders_text}{goals_text}{recent_context}
 
 Include a warm greeting, the weather summary (mention if wind under 15mph is good for drone flying), calendar events, and any reminders. If there are active goals listed, suggest 3-5 small actionable things {owner_name} could focus on today that move those goals forward — keep suggestions realistic and specific (research tasks, outreach, writing, coding, etc.). If there are recent conversations, briefly mention any unfinished tasks or anything relevant from yesterday. Keep it conversational for speaking aloud, no markdown. Do NOT repeat these instructions or mention that you were given data."""
 
-            response = self.choom.send_message(self.default_choom, prompt, fresh_chat=True, no_tools=True)
+            # Per-task model override: use configured model for morning briefing if set
+            mb_model_override = None
+            task_config = load_task_config()
+            mb_cfg = task_config.get("tasks", {}).get("morning_briefing", {})
+            mb_model = mb_cfg.get("model")
+            if mb_model:
+                mb_model_override = {
+                    "model": mb_model,
+                    "provider_id": mb_cfg.get("provider_id"),
+                }
+                logger.info(f"  Morning briefing model override: {mb_model}")
+
+            response = self.choom.send_message(self.default_choom, prompt, fresh_chat=True, no_tools=True, task_model_override=mb_model_override)
 
             if response.content:
                 message = response.content
@@ -811,9 +823,19 @@ Include a warm greeting, the weather summary (mention if wind under 15mph is goo
 
 Be practical. Only work on things that can actually be accomplished with the tools available. Don't repeat work that was already done. Don't force work if nothing needs attention. Quality over quantity."""
 
+            # Per-task model override for goal review
+            gr_model_override = None
+            gr_model = goal_cfg.get("model")
+            if gr_model:
+                gr_model_override = {
+                    "model": gr_model,
+                    "provider_id": goal_cfg.get("provider_id"),
+                }
+                logger.info(f"  Goal review model override: {gr_model}")
+
             # Send to orchestrator with tools enabled and higher iteration limit
             # Goal review involves delegation chains that need many iterations
-            response = self.choom.send_message(orchestrator, prompt, fresh_chat=True, max_iterations=100)
+            response = self.choom.send_message(orchestrator, prompt, fresh_chat=True, max_iterations=100, task_model_override=gr_model_override)
 
             if response.content:
                 # Send a summary to the owner via Signal
