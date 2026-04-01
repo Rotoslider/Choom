@@ -158,6 +158,11 @@ export interface LLMSettings {
   plannerModel?: string;
   plannerEndpoint?: string;
   plannerProviderId?: string;
+  // Simple tasks model — optional lightweight model for routine tool calls
+  // (reminders, habits, calendar, weather, tasks, memory)
+  simpleTasksModel?: string;
+  simpleTasksProviderId?: string;
+  simpleTasksEnabled?: boolean;
 }
 
 export interface TTSSettings {

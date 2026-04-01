@@ -4268,6 +4268,46 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             });
           }
 
+          // Simple tasks model routing: if the user's intent maps to a routine tool
+          // and a lightweight model is configured, switch to it. This avoids burning
+          // expensive/slow models on simple operations like reminders, habits, weather.
+          const SIMPLE_TASK_TOOLS = new Set([
+            'create_reminder', 'get_reminders',
+            'log_habit', 'habit_stats', 'query_habits',
+            'get_calendar_events', 'create_calendar_event', 'update_calendar_event', 'delete_calendar_event',
+            'get_weather', 'get_weather_forecast',
+            'get_task_list', 'list_task_lists', 'add_to_task_list', 'remove_from_task_list',
+            'remember', 'search_memories', 'get_recent_memories',
+            'send_notification',
+          ]);
+          const simpleTasksEnabled = (clientLLMSettings as Record<string, unknown>)?.simpleTasksEnabled;
+          const simpleTasksModel = (clientLLMSettings as Record<string, unknown>)?.simpleTasksModel as string | undefined;
+          if (simpleTasksEnabled && simpleTasksModel && intentToolHint && SIMPLE_TASK_TOOLS.has(intentToolHint) && !body.taskModelOverride) {
+            const simpleProviderId = (clientLLMSettings as Record<string, unknown>)?.simpleTasksProviderId as string | undefined;
+            if (simpleProviderId && simpleProviderId !== '_local' && providers.length > 0) {
+              const simpleProvider = providers.find((p: LLMProviderConfig) => p.id === simpleProviderId);
+              if (simpleProvider && simpleProvider.apiKey) {
+                const simpleSettings: LLMSettings = { ...llmSettings, model: simpleTasksModel, endpoint: simpleProvider.endpoint };
+                if (simpleProvider.type === 'anthropic') {
+                  const { AnthropicClient } = await import('@/lib/anthropic-client');
+                  llmClient = new AnthropicClient(simpleSettings, simpleProvider.apiKey, simpleProvider.endpoint);
+                } else {
+                  llmClient = new LLMClient(simpleSettings, simpleProvider.apiKey);
+                }
+                llmSettings.model = simpleTasksModel;
+                llmSettings.endpoint = simpleProvider.endpoint;
+                usingCloudProvider = true;
+                console.log(`   🔀 ${choomTag} Simple task routing: ${simpleProvider.name}/${simpleTasksModel} (intent: ${intentToolHint})`);
+              }
+            } else {
+              llmSettings.model = simpleTasksModel;
+              llmSettings.endpoint = defaultLLMSettings.endpoint;
+              llmClient = new LLMClient(llmSettings);
+              usingCloudProvider = false;
+              console.log(`   🔀 ${choomTag} Simple task routing: local/${simpleTasksModel} (intent: ${intentToolHint})`);
+            }
+          }
+
           // If plan fully succeeded, allow some follow-up iterations for summary, cleanup,
           // and handling incomplete delegations. Don't cap too aggressively — delegation
           // results are often partial and the orchestrator needs room to continue work.
