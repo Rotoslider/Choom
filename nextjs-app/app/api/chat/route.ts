@@ -4245,6 +4245,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           const preLoopContent = fullContent;
           const iterationTexts: string[] = []; // Track each iteration's text for dedup
           let fallbackActivated = false; // Set when a fallback model takes over mid-request
+          let retriedCurrentFallback = false; // Guard: only retry a timed-out fallback once
 
           while (iteration < maxIterations) {
             iteration++;
@@ -4476,6 +4477,14 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               clearTimeout(inactivityTimer);
 
               let fallbackSucceeded = false;
+              // If the currently-active fallback timed out (not the primary),
+              // allow retrying it once — the timeout may be transient (context
+              // grew, API queued). Without this, we burn through the chain
+              // linearly and exhaust all fallbacks after a single retry per model.
+              if (fallbackActivated && fallbackAttempt > 0 && !retriedCurrentFallback) {
+                fallbackAttempt = fallbackAttempt - 1; // retry last-successful fallback
+                retriedCurrentFallback = true;
+              }
               if (fallbackAttempt < fallbackConfigs.length) {
                 if (iterationContent) {
                   console.log(`   ⚠️  ${choomTag} Partial content (${iterationContent.length} chars) streamed before error — clearing for fallback attempt`);
