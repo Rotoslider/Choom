@@ -410,10 +410,12 @@ export const useAppStore = create<AppState>()(
         set((state) => ({
           settings: { ...state.settings, ...newSettings },
         })),
-      updateLLMSettings: (llm) =>
+      updateLLMSettings: (llm) => {
         set((state) => ({
           settings: { ...state.settings, llm: { ...state.settings.llm, ...llm } },
-        })),
+        }));
+        syncSettingsToBridgeConfig(get().settings);
+      },
       updateTTSSettings: (tts) =>
         set((state) => ({
           settings: { ...state.settings, tts: { ...state.settings.tts, ...tts } },
