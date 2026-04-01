@@ -3401,11 +3401,10 @@ export async function POST(request: NextRequest) {
           console.log(`   🎯 Layer 4 (task override): ${overrideProvider.name} model=${taskModelOverride.model}`);
         }
       } else {
-        // Local model override
+        // Local model override — reset endpoint to local LM Studio
+        // (previous layers may have set it to a cloud provider endpoint)
         llmSettings.model = taskModelOverride.model;
-        if (taskModelOverride.endpoint) {
-          llmSettings.endpoint = taskModelOverride.endpoint;
-        }
+        llmSettings.endpoint = taskModelOverride.endpoint || defaultLLMSettings.endpoint;
         llmClient = new LLMClient(llmSettings);
         usingCloudProvider = false;
         console.log(`   🎯 Layer 4 (task override): local model=${taskModelOverride.model}, endpoint=${llmSettings.endpoint}`);
