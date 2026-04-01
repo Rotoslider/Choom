@@ -48,6 +48,33 @@ export const tools: ToolDefinition[] = [
     },
   },
   {
+    name: 'scrape_page_content',
+    description:
+      'Scrape a webpage with full JavaScript rendering using a headless browser. Returns the page\'s text content AND images. Use this instead of scrape_page_images when the page uses JavaScript to load content (SPAs, product pages, dynamic sites). For static HTML pages, scrape_page_images is faster.',
+    parameters: {
+      type: 'object',
+      properties: {
+        url: {
+          type: 'string',
+          description: 'The URL of the webpage to scrape',
+        },
+        wait_for: {
+          type: 'string',
+          description: 'Optional CSS selector to wait for before extracting content (e.g. ".product-list", "#results")',
+        },
+        include_images: {
+          type: 'boolean',
+          description: 'Whether to extract images from the page (default: true)',
+        },
+        max_images: {
+          type: 'number',
+          description: 'Maximum number of images to return, sorted by size (default: 15)',
+        },
+      },
+      required: ['url'],
+    },
+  },
+  {
     name: 'download_web_file',
     description:
       'Download any file from a URL and save it to the project workspace. Use for PDFs, documents, archives, data files, or any non-image file. For images, prefer download_web_image instead (it supports resizing). The file extension in save_path must match the content being downloaded.',

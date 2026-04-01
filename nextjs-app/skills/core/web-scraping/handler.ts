@@ -2,6 +2,7 @@ import { BaseSkillHandler, SkillHandlerContext } from '@/lib/skill-handler';
 import type { ToolCall, ToolResult } from '@/lib/types';
 import { WorkspaceService } from '@/lib/workspace-service';
 import { WORKSPACE_ROOT } from '@/lib/config';
+import { scrapePage } from '@/lib/playwright-service';
 const WORKSPACE_MAX_FILE_SIZE_KB = 1024;
 const WORKSPACE_ALLOWED_EXTENSIONS = ['.md', '.txt', '.json', '.py', '.ts', '.tsx', '.js', '.jsx', '.html', '.css', '.csv', '.sh', '.bash', '.yaml', '.yml', '.xml', '.sql', '.toml', '.ini', '.cfg', '.r', '.R', '.ipynb', '.log'];
 const WORKSPACE_IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp'];
@@ -11,6 +12,7 @@ const BROWSER_USER_AGENT = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (
 
 const TOOL_NAMES = new Set([
   'scrape_page_images',
+  'scrape_page_content',
   'download_web_image',
   'download_web_file',
 ]);
@@ -24,6 +26,8 @@ export default class WebScrapingHandler extends BaseSkillHandler {
     switch (toolCall.name) {
       case 'scrape_page_images':
         return this.scrapePageImages(toolCall);
+      case 'scrape_page_content':
+        return this.scrapePageContent(toolCall);
       case 'download_web_image':
         return this.downloadWebImage(toolCall, ctx);
       case 'download_web_file':
@@ -166,6 +170,64 @@ export default class WebScrapingHandler extends BaseSkillHandler {
       });
     } catch (err) {
       return this.error(toolCall, `Page scrape failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    }
+  }
+
+  // ===========================================================================
+  // scrape_page_content (Playwright — JS-rendered)
+  // ===========================================================================
+
+  private async scrapePageContent(toolCall: ToolCall): Promise<ToolResult> {
+    try {
+      const url = toolCall.arguments.url as string;
+      const waitFor = toolCall.arguments.wait_for as string | undefined;
+      const includeImages = toolCall.arguments.include_images !== false;
+      const maxImages = (toolCall.arguments.max_images as number) || 15;
+
+      // Validate URL
+      const parsedUrl = new URL(url);
+      if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+        throw new Error('Only http/https URLs are allowed');
+      }
+
+      console.log(`   🌐 Playwright scraping: ${url}${waitFor ? ` (wait for: ${waitFor})` : ''}`);
+
+      const result = await scrapePage(url, {
+        waitFor,
+        extractImages: includeImages,
+        maxImages,
+      });
+
+      // Truncate text to avoid blowing up context
+      const MAX_TEXT_CHARS = 15_000;
+      const truncated = result.text.length > MAX_TEXT_CHARS;
+      const text = truncated
+        ? result.text.slice(0, MAX_TEXT_CHARS) + `\n\n[Truncated — ${result.wordCount} words total, showing first ${MAX_TEXT_CHARS} chars]`
+        : result.text;
+
+      console.log(`   ✅ Scraped: "${result.title}" — ${result.wordCount} words, ${result.images.length} images`);
+
+      return this.success(toolCall, {
+        success: true,
+        title: result.title,
+        url: result.url,
+        metaDescription: result.metaDescription,
+        wordCount: result.wordCount,
+        truncated,
+        text,
+        images: result.images.map((img, i) => ({
+          index: i,
+          url: img.url,
+          alt: img.alt,
+          width: img.naturalWidth || img.width,
+          height: img.naturalHeight || img.height,
+        })),
+        imageCount: result.images.length,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      console.error(`   ❌ Playwright scrape failed: ${msg}`);
+      return this.error(toolCall, `Page scrape failed: ${msg}`);
     }
   }
 
