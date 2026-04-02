@@ -4457,6 +4457,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             wallClockPromise.catch(() => {}); // suppress unhandled rejection after race
 
             const toolChoiceOverride = forceToolCall ? 'required' as const : undefined;
+            const toolChoiceWasRequired = forceToolCall;
             if (forceToolCall) {
               console.log(`   ⚡ Using tool_choice='required' to force tool invocation`);
               forceToolCall = false; // Reset after use
@@ -4998,11 +4999,28 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 break; // fullContent built from iterationTexts after loop
               }
 
+              // tool_choice='required' was sent but model returned text without tool calls.
+              // This is a hard failure — always nudge regardless of what the text says.
+              // Catches false confirmations like "Logged!" or "Done!" from weak models.
+              if (toolChoiceWasRequired && nudgeCount < 2 && activeTools.length > 0) {
+                nudgeCount++;
+                traceBuilder.recordNudge('forced_tool_choice_ignored');
+                const hint = intentToolHint ? ` Use the "${intentToolHint}" tool.` : '';
+                console.log(`   🔄 ${choomTag} Nudge ${nudgeCount}/2 — model ignored tool_choice=required, retrying${hint}`);
+                currentMessages.push({ role: 'assistant', content: iterationContent });
+                currentMessages.push({
+                  role: 'user',
+                  content: `[System] You responded with text but did NOT make a tool call. You MUST call a tool — do not describe the action or claim it is done.${hint} Make the function call NOW.`,
+                });
+                forceToolCall = true;
+                continue;
+              }
+
               // No tools called yet — check if model is narrating instead of acting
               const lowerContent = iterationContent.toLowerCase();
 
               const describesToolAction =
-                /(?:(?:generat|creat|mak|produc|design|render|draw|craft|captur|snap)\w*\s+(?:\d+\s+)?(?:\w+\s+)?(?:unique\s+|some\s+|a\s+|an\s+|the\s+|your\s+|my\s+)?(?:\w+\s+)?(?:image|selfie|portrait|picture|photo|illustration|artwork))|(?:(?:search|check|fetch|get|grab|download|send|analyz|look\w* up)\w*\s+(?:the |your |a |for )?(?:weather|forecast|web|image|file|email|contact|video|result|drone|review))|(?:(?:here(?:'s| is| are)|i (?:created|generated|made|took|prepared|composed|rendered))\s+(?:the |your |some |a |\d+ )?(?:\w+ )?(?:image|selfie|portrait|picture|photo|illustration|result|file|forecast))|(?:i (?:created|generated|made)\s+\d+\s+\w+)|(?:(?:remember|sav|stor|not|record|keep)\w*\s+(?:that|this|it|your|the )\s*(?:in |to |as )?(?:my |your )?(?:memory|notes|knowledge)?)|(?:(?:i'?ve |i have |i )?(?:stored|saved|noted|recorded|memorized|remembered)\s+(?:that|this|it|your|the ))|(?:(?:fix|updat|edit|modif|correct|rewrit|patch|chang|writ)\w*\s+(?:the |this |that )?(?:file|code|script|bug|issue|error|implementation|model|function|class))|(?:(?:set|creat|schedul)\w*\s+(?:a\s+|the\s+|your\s+)?(?:reminder|remind))|(?:(?:i'?ll |i will |let me )?remind\s+(?:you|the user))/i.test(lowerContent);
+                /(?:(?:generat|creat|mak|produc|design|render|draw|craft|captur|snap)\w*\s+(?:\d+\s+)?(?:\w+\s+)?(?:unique\s+|some\s+|a\s+|an\s+|the\s+|your\s+|my\s+)?(?:\w+\s+)?(?:image|selfie|portrait|picture|photo|illustration|artwork))|(?:(?:search|check|fetch|get|grab|download|send|analyz|look\w* up)\w*\s+(?:the |your |a |for )?(?:weather|forecast|web|image|file|email|contact|video|result|drone|review))|(?:(?:here(?:'s| is| are)|i (?:created|generated|made|took|prepared|composed|rendered))\s+(?:the |your |some |a |\d+ )?(?:\w+ )?(?:image|selfie|portrait|picture|photo|illustration|result|file|forecast))|(?:i (?:created|generated|made)\s+\d+\s+\w+)|(?:(?:remember|sav|stor|not|record|keep)\w*\s+(?:that|this|it|your|the )\s*(?:in |to |as )?(?:my |your )?(?:memory|notes|knowledge)?)|(?:(?:i'?ve |i have |i )?(?:stored|saved|noted|recorded|memorized|remembered)\s+(?:that|this|it|your|the ))|(?:(?:fix|updat|edit|modif|correct|rewrit|patch|chang|writ)\w*\s+(?:the |this |that )?(?:file|code|script|bug|issue|error|implementation|model|function|class))|(?:(?:set|creat|schedul)\w*\s+(?:a\s+|the\s+|your\s+)?(?:reminder|remind))|(?:(?:i'?ll |i will |let me )?remind\s+(?:you|the user))|(?:^logged[!.\s]|(?:i'?ve |i )?logged\s+(?:your|that|this|the|it|a ))/i.test(lowerContent);
 
               // Short preambles (< 500 chars) are likely pure narration.
               // Longer responses may also be narration (planning essays) — detect
@@ -5049,6 +5067,9 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 }
                 if (/(?:turn |switch |lights?|fan|thermostat|heater)/i.test(lowerContent)) {
                   toolHints.push('for smart home use ha_call_service');
+                }
+                if (/(?:logged|habit|track|soda|water|drank|ate|workout|exercise)/i.test(lowerContent)) {
+                  toolHints.push('for habits use log_habit');
                 }
                 // Fallback if no specific hint matched
                 if (toolHints.length === 0) {
