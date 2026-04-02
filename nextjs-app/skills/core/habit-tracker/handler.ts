@@ -83,10 +83,13 @@ export default class HabitTrackerHandler extends BaseSkillHandler {
         return this.error(toolCall, 'Both category and activity are required');
       }
 
-      // The LLM doesn't know the current time — it guesses (often wrong).
+      // Time context is in the system prompt, but smaller models still produce
+      // bad ISO timestamps (date-only → UTC midnight → wrong day in MST,
+      // or hallucinated times like 8:42 PM when it's 9:48 AM). Server time
+      // is authoritative for present-tense events.
       // Rules:
-      //  - No timestamp or date-only (YYYY-MM-DD) → use now (fixes UTC midnight → wrong day)
-      //  - Timestamp with today's date → use now (LLM hallucinated a time for "just now" events)
+      //  - No timestamp or date-only (YYYY-MM-DD) → use now
+      //  - Timestamp with today's date → use now (server clock is authoritative)
       //  - Timestamp with a past date → trust it (user said "yesterday I did X")
       let timestamp: Date;
       const now = new Date();
