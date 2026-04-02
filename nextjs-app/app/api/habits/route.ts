@@ -280,6 +280,53 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ success: true, data: created });
     }
 
+    // Merge activities: rename all entries with source activity names to target name
+    if (action === 'merge_activities') {
+      const { sourceActivities, targetActivity, category } = body;
+      if (!sourceActivities?.length || !targetActivity) return NextResponse.json({ success: false, error: 'sourceActivities[] and targetActivity required' }, { status: 400 });
+
+      let totalUpdated = 0;
+      for (const src of sourceActivities as string[]) {
+        if (src === targetActivity) continue;
+        const where: Record<string, unknown> = { activity: src };
+        if (category) where.category = category;
+        const result = await prisma.habitEntry.updateMany({ where, data: { activity: targetActivity } });
+        totalUpdated += result.count;
+      }
+      return NextResponse.json({ success: true, updated: totalUpdated });
+    }
+
+    // Rename an activity across all entries
+    if (action === 'rename_activity') {
+      const { oldActivity, newActivity, category } = body;
+      if (!oldActivity || !newActivity) return NextResponse.json({ success: false, error: 'oldActivity and newActivity required' }, { status: 400 });
+
+      const where: Record<string, unknown> = { activity: oldActivity };
+      if (category) where.category = category;
+      const result = await prisma.habitEntry.updateMany({ where, data: { activity: newActivity } });
+      return NextResponse.json({ success: true, updated: result.count });
+    }
+
+    // List distinct activities (optionally filtered by category) with counts
+    if (action === 'list_activities') {
+      const { category } = body;
+      const where: Record<string, unknown> = {};
+      if (category) where.category = category;
+
+      const results = await prisma.habitEntry.groupBy({
+        by: ['activity', 'category'],
+        where,
+        _count: { id: true },
+        orderBy: { _count: { id: 'desc' } },
+      });
+      const activities = results.map(r => ({
+        activity: r.activity,
+        category: r.category,
+        count: r._count.id,
+      }));
+      return NextResponse.json({ success: true, data: activities });
+    }
+
     // Reassign a single entry to a different category
     if (action === 'reassign_entry') {
       const { entryId, newCategory } = body;
