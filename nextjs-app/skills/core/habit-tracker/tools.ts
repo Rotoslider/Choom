@@ -11,12 +11,12 @@ export const tools: ToolDefinition[] = [
         category: {
           type: 'string',
           description:
-            'Activity category: vehicle, hygiene, shopping, outdoor, maintenance, health, food, travel, social, finance',
+            'Activity category: vehicle, hygiene, shopping, outdoor, maintenance, health, food, travel, social, finance, alcohol, hydration',
         },
         activity: {
           type: 'string',
           description:
-            'Short activity description, e.g. "filled gas", "shower", "went to Walmart", "camping"',
+            'Short canonical label (1-3 words). NO verbs, NO quantities, NO articles. Examples: "water", "soda", "coffee", "beer", "gas", "shower", "walmart", "camping". Put quantities in the quantity field instead. REUSE the same label each time (e.g., always "water" not sometimes "water bottle" or "drank water").',
         },
         location: {
           type: 'string',

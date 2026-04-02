@@ -26,6 +26,22 @@ const DEFAULT_CATEGORIES: { name: string; icon: string; color: string; descripti
 
 let categoriesSeeded = false;
 
+/**
+ * Normalize an activity string to a short canonical label.
+ * Strips verbs, quantities, articles so "drank 1 water bottle" → "water bottle",
+ * "had a soda" → "soda", "took a shower" → "shower".
+ */
+function normalizeActivity(raw: string): string {
+  let s = raw.toLowerCase().trim();
+  // Strip leading action verbs
+  s = s.replace(/^(?:drank|had|ate|took|did|went\s+(?:to|for)|got|made|used|consumed|finished|bought|picked\s+up|grabbed|ordered)\s+/i, '');
+  // Strip leading quantities (e.g., "1 ", "2x ", "3 ")
+  s = s.replace(/^\d+(?:\.\d+)?\s*[x×]?\s*/, '');
+  // Strip leading articles
+  s = s.replace(/^(?:a|an|the|some|my)\s+/i, '');
+  return s.trim();
+}
+
 async function ensureDefaultCategories(): Promise<void> {
   if (categoriesSeeded) return;
   const count = await prisma.habitCategory.count();
@@ -72,16 +88,29 @@ export default class HabitTrackerHandler extends BaseSkillHandler {
     try {
       const args = toolCall.arguments;
       const category = (args.category as string || '').toLowerCase().trim();
-      const activity = args.activity as string;
+      const rawActivity = args.activity as string;
       const location = args.location as string | undefined;
       const notes = args.notes as string | undefined;
       const quantity = args.quantity as number | undefined;
       const unit = args.unit as string | undefined;
       const timestampStr = args.timestamp as string | undefined;
 
-      if (!category || !activity) {
+      if (!category || !rawActivity) {
         return this.error(toolCall, 'Both category and activity are required');
       }
+
+      // Normalize activity to a short canonical label, then match against
+      // existing activities in this category to prevent duplicates like
+      // "drank water" / "drank 1 water bottle" / "water bottle" → "water"
+      const normalized = normalizeActivity(rawActivity);
+      const existingActivities = await prisma.habitEntry.findMany({
+        where: { category },
+        distinct: ['activity'],
+        select: { activity: true },
+      });
+      // Find an existing activity whose normalized form matches
+      const match = existingActivities.find(e => normalizeActivity(e.activity) === normalized);
+      const activity = match ? match.activity : normalized;
 
       // Time context is in the system prompt, but smaller models still produce
       // bad ISO timestamps (date-only → UTC midnight → wrong day in MST,

@@ -222,6 +222,12 @@ export default function HabitsPage() {
   const [mergeSelections, setMergeSelections] = useState<Set<string>>(new Set());
   const [mergeTarget, setMergeTarget] = useState<string>('');
   const [categoryActionLoading, setCategoryActionLoading] = useState(false);
+  const [activities, setActivities] = useState<{ activity: string; category: string; count: number }[]>([]);
+  const [activityMergeSelections, setActivityMergeSelections] = useState<Set<string>>(new Set());
+  const [activityMergeTarget, setActivityMergeTarget] = useState('');
+  const [activityFilterCategory, setActivityFilterCategory] = useState('');
+  const [renamingActivity, setRenamingActivity] = useState<string | null>(null);
+  const [activityRenameValue, setActivityRenameValue] = useState('');
   const [newCategoryName, setNewCategoryName] = useState('');
   const [newCategoryIcon, setNewCategoryIcon] = useState('');
   const [newCategoryColor, setNewCategoryColor] = useState('#888888');
@@ -269,6 +275,16 @@ export default function HabitsPage() {
       if (heatmapRes.ok) {
         const d = await heatmapRes.json();
         setHeatmapData(d.data || {});
+      }
+      // Fetch activities for the manager
+      const actRes = await fetch('/api/habits', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'list_activities' }),
+      });
+      if (actRes.ok) {
+        const d = await actRes.json();
+        setActivities(d.data || []);
       }
     } catch {
       setError('Failed to load habit data');
@@ -382,6 +398,68 @@ export default function HabitsPage() {
       return next;
     });
   };
+
+  const handleMergeActivities = async () => {
+    if (activityMergeSelections.size < 2 || !activityMergeTarget) return;
+    const sourceActivities = Array.from(activityMergeSelections).filter(a => a !== activityMergeTarget);
+    if (sourceActivities.length === 0) return;
+    setCategoryActionLoading(true);
+    try {
+      const res = await fetch('/api/habits', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'merge_activities',
+          sourceActivities,
+          targetActivity: activityMergeTarget,
+          category: activityFilterCategory || undefined,
+        }),
+      });
+      if (res.ok) {
+        setActivityMergeSelections(new Set());
+        setActivityMergeTarget('');
+        fetchAll();
+      }
+    } catch { alert('Merge failed'); }
+    finally { setCategoryActionLoading(false); }
+  };
+
+  const handleRenameActivity = async (oldActivity: string) => {
+    const newActivity = activityRenameValue.trim().toLowerCase();
+    if (!newActivity || newActivity === oldActivity) { setRenamingActivity(null); return; }
+    setCategoryActionLoading(true);
+    try {
+      const res = await fetch('/api/habits', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'rename_activity', oldActivity, newActivity }),
+      });
+      if (res.ok) {
+        setRenamingActivity(null);
+        fetchAll();
+      }
+    } catch { alert('Rename failed'); }
+    finally { setCategoryActionLoading(false); }
+  };
+
+  const toggleActivityMergeSelection = (activity: string) => {
+    setActivityMergeSelections(prev => {
+      const next = new Set(prev);
+      if (next.has(activity)) {
+        next.delete(activity);
+        if (activityMergeTarget === activity) setActivityMergeTarget('');
+      } else {
+        next.add(activity);
+        if (!activityMergeTarget) setActivityMergeTarget(activity);
+      }
+      return next;
+    });
+  };
+
+  // Filtered activities for the manager
+  const filteredActivities = activityFilterCategory
+    ? activities.filter(a => a.category === activityFilterCategory)
+    : activities;
 
   // Chart data transforms
   const colors = categoryColorMap();
@@ -841,6 +919,134 @@ export default function HabitsPage() {
                     </div>
                     <p className="text-[11px] text-muted-foreground">
                       Select 2+ categories and click Merge to combine duplicates. Pencil icon to rename.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Activity Manager */}
+              {showCategoryManager && filteredActivities.length > 0 && (
+                <div className="bg-card border border-border rounded-lg">
+                  <div className="px-4 py-3 border-b border-border flex items-center justify-between flex-wrap gap-2">
+                    <h3 className="text-sm font-medium">Activities</h3>
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={activityFilterCategory}
+                        onChange={(e) => { setActivityFilterCategory(e.target.value); setActivityMergeSelections(new Set()); setActivityMergeTarget(''); }}
+                        className="h-7 text-xs rounded-md bg-muted border border-border px-2"
+                      >
+                        <option value="">All Categories</option>
+                        {categories.map(c => (
+                          <option key={c.id} value={c.name}>{c.icon || ''} {c.name}</option>
+                        ))}
+                      </select>
+                      {activityMergeSelections.size >= 2 && (
+                        <>
+                          <span className="text-xs text-muted-foreground">
+                            Merge {activityMergeSelections.size} into:
+                          </span>
+                          <select
+                            value={activityMergeTarget}
+                            onChange={(e) => setActivityMergeTarget(e.target.value)}
+                            className="h-7 text-xs rounded-md bg-muted border border-border px-2"
+                          >
+                            {Array.from(activityMergeSelections).map(name => (
+                              <option key={name} value={name}>{name}</option>
+                            ))}
+                          </select>
+                          <Button
+                            variant="default"
+                            size="sm"
+                            className="h-7 text-xs"
+                            disabled={categoryActionLoading}
+                            onClick={handleMergeActivities}
+                          >
+                            <Merge className="h-3 w-3 mr-1" />
+                            Merge
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 text-xs"
+                            onClick={() => { setActivityMergeSelections(new Set()); setActivityMergeTarget(''); }}
+                          >
+                            Cancel
+                          </Button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  <div className="divide-y divide-border max-h-[400px] overflow-y-auto">
+                    {filteredActivities.map((act) => {
+                      const isSelected = activityMergeSelections.has(act.activity);
+                      const isRenaming = renamingActivity === act.activity;
+                      const catColor = colors[act.category] || '#888';
+                      return (
+                        <div
+                          key={`${act.category}:${act.activity}`}
+                          className={cn(
+                            'flex items-center gap-3 px-4 py-2 transition-colors',
+                            isSelected && 'bg-primary/5'
+                          )}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => toggleActivityMergeSelection(act.activity)}
+                            className="h-3.5 w-3.5 rounded border-border accent-primary flex-shrink-0"
+                          />
+                          <div
+                            className="w-2 h-2 rounded-full flex-shrink-0"
+                            style={{ backgroundColor: catColor }}
+                          />
+                          {isRenaming ? (
+                            <div className="flex items-center gap-1.5 flex-1">
+                              <input
+                                type="text"
+                                value={activityRenameValue}
+                                onChange={(e) => setActivityRenameValue(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') handleRenameActivity(act.activity);
+                                  if (e.key === 'Escape') setRenamingActivity(null);
+                                }}
+                                className="h-7 text-sm rounded-md bg-muted border border-border px-2 flex-1"
+                                autoFocus
+                              />
+                              <Button variant="ghost" size="sm" className="h-7 w-7 p-0" disabled={categoryActionLoading} onClick={() => handleRenameActivity(act.activity)}>
+                                <Check className="h-3.5 w-3.5 text-green-500" />
+                              </Button>
+                              <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => setRenamingActivity(null)}>
+                                <X className="h-3.5 w-3.5" />
+                              </Button>
+                            </div>
+                          ) : (
+                            <span className="text-sm flex-1 min-w-0 truncate">{act.activity}</span>
+                          )}
+                          {!activityFilterCategory && (
+                            <span className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded flex-shrink-0">
+                              {act.category}
+                            </span>
+                          )}
+                          <span className="text-xs text-muted-foreground tabular-nums flex-shrink-0">
+                            {act.count}×
+                          </span>
+                          {!isRenaming && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground"
+                              onClick={() => { setRenamingActivity(act.activity); setActivityRenameValue(act.activity); }}
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </Button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="px-4 py-2 border-t border-border">
+                    <p className="text-[11px] text-muted-foreground">
+                      Select 2+ activities and click Merge to combine duplicates. Filter by category to focus cleanup.
                     </p>
                   </div>
                 </div>
