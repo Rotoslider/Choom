@@ -83,9 +83,28 @@ export default class HabitTrackerHandler extends BaseSkillHandler {
         return this.error(toolCall, 'Both category and activity are required');
       }
 
-      const timestamp = timestampStr ? new Date(timestampStr) : new Date();
-      if (isNaN(timestamp.getTime())) {
-        return this.error(toolCall, `Invalid timestamp: "${timestampStr}"`);
+      // The LLM doesn't know the current time — it guesses (often wrong).
+      // Rules:
+      //  - No timestamp or date-only (YYYY-MM-DD) → use now (fixes UTC midnight → wrong day)
+      //  - Timestamp with today's date → use now (LLM hallucinated a time for "just now" events)
+      //  - Timestamp with a past date → trust it (user said "yesterday I did X")
+      let timestamp: Date;
+      const now = new Date();
+      const todayStr = now.toLocaleDateString('en-CA', { timeZone: 'America/Denver' }); // YYYY-MM-DD in local tz
+
+      if (!timestampStr) {
+        timestamp = now;
+      } else if (/^\d{4}-\d{2}-\d{2}$/.test(timestampStr)) {
+        // Date-only string — use current time (prevents UTC midnight → wrong day)
+        timestamp = now;
+      } else {
+        const parsed = new Date(timestampStr);
+        if (isNaN(parsed.getTime())) {
+          return this.error(toolCall, `Invalid timestamp: "${timestampStr}"`);
+        }
+        // If the LLM's timestamp is today's date, use now instead of its hallucinated time
+        const parsedDateStr = parsed.toLocaleDateString('en-CA', { timeZone: 'America/Denver' });
+        timestamp = parsedDateStr === todayStr ? now : parsed;
       }
 
       const entry = await prisma.habitEntry.create({

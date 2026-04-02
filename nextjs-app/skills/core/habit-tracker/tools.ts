@@ -37,7 +37,7 @@ export const tools: ToolDefinition[] = [
         timestamp: {
           type: 'string',
           description:
-            'ISO 8601 timestamp of when the activity happened. Defaults to now. Use past dates for "yesterday I..." etc.',
+            'ONLY for past events ("yesterday I...", "last Tuesday..."). Omit for things happening now — server uses current time automatically. ISO 8601 format with date only (e.g. "2026-04-01") for past dates.',
         },
       },
       required: ['category', 'activity'],
