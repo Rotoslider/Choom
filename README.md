@@ -39,6 +39,8 @@ All 86 tools are organized into 23 modular **skills** with progressive disclosur
 - **Execution Traces & Nightly Doctor**: Every agentic loop execution writes a structured JSON trace capturing tool calls (with duration, error class, parallel flag), nudges, fallbacks, compaction events, and token usage. A nightly diagnostic job (22:00) analyzes traces, computes daily aggregates (tool failure rates, avg iterations, per-Choom stats), detects anomalies (high error rate, excessive nudging, frequent fallbacks, misconfigured tools), and sends a report via Signal
 - **Web Search**: Brave Search, SerpAPI (Google), or self-hosted SearXNG with automatic cascading fallback (e.g., Brave → SerpAPI → SearXNG). Configure all three and the system auto-switches on 429/5xx errors
 - **Habit Tracker**: Log daily activities via Signal or chat (e.g., "habit went to Walmart", "habit took a shower"). Structured storage in SQLite (not vector memory) with category auto-detection, location/quantity extraction, streak tracking, and a dedicated `/habits` dashboard with GitHub-style activity heatmap, daily trend charts, category pie charts, and top activities breakdown. 11 default categories (vehicle, hygiene, shopping, outdoor, maintenance, health, food, travel, social, finance, alcohol) with customizable icons and colors. **Category management**: rename, merge duplicates (select 2+ → pick target), delete, and create new categories from the UI. Auto-syncs category list from entry data so orphaned categories (e.g., LLM typos like "beverages" vs "beverage") surface for cleanup. 5 tools: `log_habit`, `query_habits`, `habit_stats`, `manage_categories`, `delete_habit`
+![Habit Tracker](docs/screenshots/habit-tracker.png)
+
 - **Token Usage Tracking**: Per-request token counting across all LLM providers (local and cloud). Captures prompt tokens, completion tokens, iterations, tool calls, duration, and source (chat/delegation/heartbeat). Exact counts from providers that return usage data (Anthropic, OpenAI); character-based estimation (~4 chars/token) for providers that don't (LM Studio, NVIDIA). Provider attribution tracks the actual provider that served each request through all routing layers (per-task override, simple task routing, LLM fallback) for accurate By Provider breakdowns. Dedicated `/usage` dashboard with breakdowns by Choom, model, provider, and source; daily trend area charts; cost estimates for paid providers. Filter by period, Choom, model, or provider
 
 ![Token Usage Dashboard](docs/screenshots/Token-Usage.png)
@@ -277,6 +279,8 @@ Settings Hierarchy for "MyChoom":
 ```
 
 ## Image Generation
+
+![Image Gallery](docs/screenshots/image-gallery.png)
 
 ![Image Settings](docs/screenshots/settings-image.png)
 
