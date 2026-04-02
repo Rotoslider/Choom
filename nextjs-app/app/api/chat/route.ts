@@ -3324,6 +3324,7 @@ export async function POST(request: NextRequest) {
     const globalProviderId = (clientLLMSettings as Record<string, unknown>)?.llmProviderId as string | undefined;
     const choomHasExplicitLocalModel = !!(choom.llmModel && !choom.llmProviderId);
     let usingCloudProvider = false;
+    let activeProviderId = 'local';
     if (globalProviderId && providers.length > 0 && !choomHasExplicitLocalModel) {
       const globalProvider = providers.find(
         (p: LLMProviderConfig) => p.id === globalProviderId
@@ -3343,6 +3344,7 @@ export async function POST(request: NextRequest) {
         }
         llmSettings.endpoint = globalProvider.endpoint;
         usingCloudProvider = true;
+        activeProviderId = globalProvider.id;
       }
     } else if (choomHasExplicitLocalModel && globalProviderId) {
       console.log(`   ⏭️  Layer 2b skipped: Choom has explicit local model "${choom.llmModel}" (no provider) — keeping local endpoint`);
@@ -3372,6 +3374,7 @@ export async function POST(request: NextRequest) {
         llmSettings.model = choomModel;
         llmSettings.endpoint = choomProvider.endpoint;
         usingCloudProvider = true;
+        activeProviderId = choomProvider.id;
       }
     }
     // Layer 4: Per-task model override (highest priority)
@@ -3398,6 +3401,7 @@ export async function POST(request: NextRequest) {
           llmSettings.model = taskModelOverride.model;
           llmSettings.endpoint = overrideProvider.endpoint;
           usingCloudProvider = true;
+          activeProviderId = overrideProvider.id;
           console.log(`   🎯 Layer 4 (task override): ${overrideProvider.name} model=${taskModelOverride.model}`);
         }
       } else {
@@ -3407,6 +3411,7 @@ export async function POST(request: NextRequest) {
         llmSettings.endpoint = taskModelOverride.endpoint || defaultLLMSettings.endpoint;
         llmClient = new LLMClient(llmSettings);
         usingCloudProvider = false;
+        activeProviderId = 'local';
         console.log(`   🎯 Layer 4 (task override): local model=${taskModelOverride.model}, endpoint=${llmSettings.endpoint}`);
       }
     }
@@ -3879,11 +3884,11 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
         // can misleadingly pick up a global provider for a Choom that's using local.
         if (usingCloudProvider) {
           // Find the provider that was actually applied (Choom > Project > Global)
-          const activeProviderId = choom.llmProviderId
+          const clientProviderId = choom.llmProviderId
             || detectedProject?.metadata?.llmProviderId
             || globalProviderId;
-          const activeProvider = activeProviderId && providers.length > 0
-            ? providers.find((p: LLMProviderConfig) => p.id === activeProviderId)
+          const activeProvider = clientProviderId && providers.length > 0
+            ? providers.find((p: LLMProviderConfig) => p.id === clientProviderId)
             : null;
 
           if (activeProvider?.type === 'anthropic' && activeProvider.apiKey) {
@@ -4071,7 +4076,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
 
         try {
           const requestStartTime = Date.now();
-          const resolvedProvider = (choom.llmProviderId as string) || (usingCloudProvider ? 'cloud' : 'local');
+          let resolvedProvider = activeProviderId;
           const traceBuilder = new TraceBuilder({
             chatId,
             choomId,
@@ -4297,6 +4302,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 llmSettings.model = simpleTasksModel;
                 llmSettings.endpoint = simpleProvider.endpoint;
                 usingCloudProvider = true;
+                resolvedProvider = simpleProvider.id;
                 console.log(`   🔀 ${choomTag} Simple task routing: ${simpleProvider.name}/${simpleTasksModel} (intent: ${intentToolHint})`);
               }
             } else {
@@ -4304,6 +4310,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               llmSettings.endpoint = defaultLLMSettings.endpoint;
               llmClient = new LLMClient(llmSettings);
               usingCloudProvider = false;
+              resolvedProvider = 'local';
               console.log(`   🔀 ${choomTag} Simple task routing: local/${simpleTasksModel} (intent: ${intentToolHint})`);
             }
           }
@@ -4714,6 +4721,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                     }
                     fallbackSucceeded = true;
                     fallbackActivated = true;
+                    resolvedProvider = fb.providerId || 'local';
                     capturedXmlToolCalls = fbToolCallXmlFilter.getCaptured();
                     capturedFbJsonToolCalls = fbJsonToolCallFilter.getCaptured();
                     fallbackAttempt = fbIdx + 1;

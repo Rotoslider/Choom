@@ -12,6 +12,11 @@ import {
   TrendingUp,
   Calendar,
   BarChart3,
+  Settings2,
+  Pencil,
+  Merge,
+  Check,
+  X,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -54,6 +59,7 @@ interface HabitCategory {
   icon: string | null;
   color: string | null;
   description: string | null;
+  entryCount?: number;
 }
 
 interface HabitStats {
@@ -210,6 +216,15 @@ export default function HabitsPage() {
   const [period, setPeriod] = useState<Period>('month');
   const [filterCategory, setFilterCategory] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
+  const [showCategoryManager, setShowCategoryManager] = useState(false);
+  const [renamingCategory, setRenamingCategory] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+  const [mergeSelections, setMergeSelections] = useState<Set<string>>(new Set());
+  const [mergeTarget, setMergeTarget] = useState<string>('');
+  const [categoryActionLoading, setCategoryActionLoading] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState('');
+  const [newCategoryIcon, setNewCategoryIcon] = useState('');
+  const [newCategoryColor, setNewCategoryColor] = useState('#888888');
 
   const categoryColorMap = useCallback((): Record<string, string> => {
     const map: Record<string, string> = {};
@@ -276,6 +291,98 @@ export default function HabitsPage() {
     } catch { /* ignore */ }
   };
 
+  const handleRenameCategory = async (oldName: string) => {
+    const newName = renameValue.trim().toLowerCase();
+    if (!newName || newName === oldName) { setRenamingCategory(null); return; }
+    setCategoryActionLoading(true);
+    try {
+      const res = await fetch('/api/habits', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'rename_category', oldName, newName }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data.error || 'Rename failed');
+      } else {
+        setRenamingCategory(null);
+        fetchAll();
+      }
+    } catch { alert('Rename failed'); }
+    finally { setCategoryActionLoading(false); }
+  };
+
+  const handleMergeCategories = async () => {
+    if (mergeSelections.size < 2 || !mergeTarget) return;
+    const sourceNames = Array.from(mergeSelections).filter(n => n !== mergeTarget);
+    if (sourceNames.length === 0) return;
+    setCategoryActionLoading(true);
+    try {
+      const res = await fetch('/api/habits', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'merge_category', sourceNames, targetName: mergeTarget }),
+      });
+      if (res.ok) {
+        setMergeSelections(new Set());
+        setMergeTarget('');
+        fetchAll();
+      }
+    } catch { alert('Merge failed'); }
+    finally { setCategoryActionLoading(false); }
+  };
+
+  const handleDeleteCategory = async (id: string) => {
+    setCategoryActionLoading(true);
+    try {
+      const res = await fetch(`/api/habits?id=${id}&type=category`, { method: 'DELETE' });
+      if (res.ok) fetchAll();
+    } catch { /* ignore */ }
+    finally { setCategoryActionLoading(false); }
+  };
+
+  const handleCreateCategory = async () => {
+    const name = newCategoryName.trim().toLowerCase();
+    if (!name) return;
+    setCategoryActionLoading(true);
+    try {
+      const res = await fetch('/api/habits', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'create_category',
+          name,
+          icon: newCategoryIcon || null,
+          color: newCategoryColor || null,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data.error || 'Create failed');
+      } else {
+        setNewCategoryName('');
+        setNewCategoryIcon('');
+        setNewCategoryColor('#888888');
+        fetchAll();
+      }
+    } catch { alert('Create failed'); }
+    finally { setCategoryActionLoading(false); }
+  };
+
+  const toggleMergeSelection = (name: string) => {
+    setMergeSelections(prev => {
+      const next = new Set(prev);
+      if (next.has(name)) {
+        next.delete(name);
+        if (mergeTarget === name) setMergeTarget('');
+      } else {
+        next.add(name);
+        if (!mergeTarget) setMergeTarget(name);
+      }
+      return next;
+    });
+  };
+
   // Chart data transforms
   const colors = categoryColorMap();
   const icons = categoryIconMap();
@@ -334,9 +441,20 @@ export default function HabitsPage() {
               </p>
             </div>
           </div>
-          <Button variant="outline" size="sm" onClick={fetchAll}>
-            <RefreshCw className="h-4 w-4" />
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowCategoryManager(!showCategoryManager)}
+              className={cn(showCategoryManager && 'bg-primary/15 text-primary')}
+            >
+              <Settings2 className="h-4 w-4 mr-1" />
+              Categories
+            </Button>
+            <Button variant="outline" size="sm" onClick={fetchAll}>
+              <RefreshCw className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
 
         {/* Filters */}
@@ -430,16 +548,19 @@ export default function HabitsPage() {
                   {dailyData.length > 0 ? (
                     <ResponsiveContainer width="100%" height={200}>
                       <LineChart data={dailyData}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                        <XAxis dataKey="date" tick={{ fontSize: 10 }} stroke="var(--muted-foreground)" />
-                        <YAxis allowDecimals={false} tick={{ fontSize: 10 }} stroke="var(--muted-foreground)" />
+                        <CartesianGrid strokeDasharray="3 3" stroke="rgb(var(--border))" />
+                        <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'rgb(var(--muted-foreground))' }} stroke="rgb(var(--border))" />
+                        <YAxis allowDecimals={false} tick={{ fontSize: 10, fill: 'rgb(var(--muted-foreground))' }} stroke="rgb(var(--border))" />
                         <Tooltip
                           contentStyle={{
-                            backgroundColor: 'var(--card)',
-                            border: '1px solid var(--border)',
+                            backgroundColor: 'rgb(var(--card))',
+                            border: '1px solid rgb(var(--border))',
                             borderRadius: 8,
                             fontSize: 12,
+                            color: 'rgb(var(--foreground))',
                           }}
+                          labelStyle={{ color: 'rgb(var(--muted-foreground))' }}
+                          itemStyle={{ color: 'rgb(var(--foreground))' }}
                         />
                         <Line
                           type="monotone"
@@ -460,24 +581,52 @@ export default function HabitsPage() {
                 <div className="bg-card border border-border rounded-lg p-4">
                   <h3 className="text-sm font-medium mb-3">By Category</h3>
                   {pieData.length > 0 ? (
-                    <ResponsiveContainer width="100%" height={200}>
+                    <ResponsiveContainer width="100%" height={260}>
                       <PieChart>
                         <Pie
                           data={pieData}
                           cx="50%"
                           cy="50%"
-                          innerRadius={40}
-                          outerRadius={80}
+                          innerRadius={35}
+                          outerRadius={70}
                           dataKey="value"
                           nameKey="name"
-                          label={({ name, value }) => `${name} (${value})`}
-                          labelLine={false}
+                          label={(props: any) => {
+                            const { name, value, cx, cy, midAngle, outerRadius: oR } = props;
+                            const RADIAN = Math.PI / 180;
+                            const radius = (oR as number) + 20;
+                            const ma = (midAngle as number) || 0;
+                            const x = (cx as number) + radius * Math.cos(-ma * RADIAN);
+                            const y = (cy as number) + radius * Math.sin(-ma * RADIAN);
+                            return (
+                              <text
+                                x={x}
+                                y={y}
+                                fill="rgb(var(--foreground))"
+                                textAnchor={x > (cx as number) ? 'start' : 'end'}
+                                dominantBaseline="central"
+                                fontSize={11}
+                              >
+                                {`${name} (${value})`}
+                              </text>
+                            );
+                          }}
+                          labelLine={{ stroke: 'rgb(var(--muted-foreground))', strokeWidth: 1 }}
                         >
                           {pieData.map((entry, i) => (
                             <Cell key={i} fill={entry.color} />
                           ))}
                         </Pie>
-                        <Tooltip />
+                        <Tooltip
+                          contentStyle={{
+                            backgroundColor: 'rgb(var(--card))',
+                            border: '1px solid rgb(var(--border))',
+                            borderRadius: 8,
+                            fontSize: 12,
+                            color: 'rgb(var(--foreground))',
+                          }}
+                          itemStyle={{ color: 'rgb(var(--foreground))' }}
+                        />
                       </PieChart>
                     </ResponsiveContainer>
                   ) : (
@@ -492,16 +641,19 @@ export default function HabitsPage() {
                   <h3 className="text-sm font-medium mb-3">Top Activities</h3>
                   <ResponsiveContainer width="100%" height={Math.max(150, topBarData.length * 32)}>
                     <BarChart data={topBarData} layout="vertical" margin={{ left: 80 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                      <XAxis type="number" allowDecimals={false} tick={{ fontSize: 10 }} stroke="var(--muted-foreground)" />
-                      <YAxis type="category" dataKey="name" tick={{ fontSize: 11 }} stroke="var(--muted-foreground)" width={80} />
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgb(var(--border))" />
+                      <XAxis type="number" allowDecimals={false} tick={{ fontSize: 10, fill: 'rgb(var(--muted-foreground))' }} stroke="rgb(var(--border))" />
+                      <YAxis type="category" dataKey="name" tick={{ fontSize: 11, fill: 'rgb(var(--foreground))' }} stroke="rgb(var(--border))" width={80} />
                       <Tooltip
                         contentStyle={{
-                          backgroundColor: 'var(--card)',
-                          border: '1px solid var(--border)',
+                          backgroundColor: 'rgb(var(--card))',
+                          border: '1px solid rgb(var(--border))',
                           borderRadius: 8,
                           fontSize: 12,
+                          color: 'rgb(var(--foreground))',
                         }}
+                        labelStyle={{ color: 'rgb(var(--muted-foreground))' }}
+                        itemStyle={{ color: 'rgb(var(--foreground))' }}
                       />
                       <Bar dataKey="count" radius={[0, 4, 4, 0]}>
                         {topBarData.map((entry, i) => (
@@ -510,6 +662,187 @@ export default function HabitsPage() {
                       </Bar>
                     </BarChart>
                   </ResponsiveContainer>
+                </div>
+              )}
+
+              {/* Category Manager */}
+              {showCategoryManager && (
+                <div className="bg-card border border-border rounded-lg">
+                  <div className="px-4 py-3 border-b border-border flex items-center justify-between">
+                    <h3 className="text-sm font-medium">Manage Categories</h3>
+                    {mergeSelections.size >= 2 && (
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-muted-foreground">
+                          Merge {mergeSelections.size} into:
+                        </span>
+                        <select
+                          value={mergeTarget}
+                          onChange={(e) => setMergeTarget(e.target.value)}
+                          className="h-7 text-xs rounded-md bg-muted border border-border px-2"
+                        >
+                          {Array.from(mergeSelections).map(name => (
+                            <option key={name} value={name}>{name}</option>
+                          ))}
+                        </select>
+                        <Button
+                          variant="default"
+                          size="sm"
+                          className="h-7 text-xs"
+                          disabled={categoryActionLoading}
+                          onClick={handleMergeCategories}
+                        >
+                          <Merge className="h-3 w-3 mr-1" />
+                          Merge
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 text-xs"
+                          onClick={() => { setMergeSelections(new Set()); setMergeTarget(''); }}
+                        >
+                          Cancel
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                  <div className="divide-y divide-border">
+                    {categories.map((cat) => {
+                      const entryCount = cat.entryCount || 0;
+                      const isRenaming = renamingCategory === cat.name;
+                      const isSelected = mergeSelections.has(cat.name);
+                      return (
+                        <div
+                          key={cat.id}
+                          className={cn(
+                            'flex items-center gap-3 px-4 py-2.5 transition-colors',
+                            isSelected && 'bg-primary/5'
+                          )}
+                        >
+                          {/* Merge checkbox */}
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => toggleMergeSelection(cat.name)}
+                            className="h-3.5 w-3.5 rounded border-border accent-primary flex-shrink-0"
+                          />
+                          {/* Color dot */}
+                          <div
+                            className="w-3 h-3 rounded-full flex-shrink-0"
+                            style={{ backgroundColor: cat.color || '#888' }}
+                          />
+                          {/* Icon */}
+                          <span className="text-base w-6 text-center flex-shrink-0">{cat.icon || '•'}</span>
+                          {/* Name / rename input */}
+                          {isRenaming ? (
+                            <div className="flex items-center gap-1.5 flex-1">
+                              <input
+                                type="text"
+                                value={renameValue}
+                                onChange={(e) => setRenameValue(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') handleRenameCategory(cat.name);
+                                  if (e.key === 'Escape') setRenamingCategory(null);
+                                }}
+                                className="h-7 text-sm rounded-md bg-muted border border-border px-2 flex-1"
+                                autoFocus
+                              />
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 w-7 p-0"
+                                disabled={categoryActionLoading}
+                                onClick={() => handleRenameCategory(cat.name)}
+                              >
+                                <Check className="h-3.5 w-3.5 text-green-500" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 w-7 p-0"
+                                onClick={() => setRenamingCategory(null)}
+                              >
+                                <X className="h-3.5 w-3.5" />
+                              </Button>
+                            </div>
+                          ) : (
+                            <div className="flex-1 min-w-0">
+                              <span className="text-sm font-medium">{cat.name}</span>
+                              {cat.description && (
+                                <span className="text-xs text-muted-foreground ml-2">{cat.description}</span>
+                              )}
+                            </div>
+                          )}
+                          {/* Entry count */}
+                          <span className="text-xs text-muted-foreground tabular-nums flex-shrink-0">
+                            {entryCount} {entryCount === 1 ? 'entry' : 'entries'}
+                          </span>
+                          {/* Actions */}
+                          {!isRenaming && (
+                            <div className="flex items-center gap-0.5">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground"
+                                onClick={() => { setRenamingCategory(cat.name); setRenameValue(cat.name); }}
+                              >
+                                <Pencil className="h-3.5 w-3.5" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+                                onClick={() => {
+                                  if (confirm(`Delete category "${cat.name}"? Entries will keep their category label but it won't appear in filters.`)) {
+                                    handleDeleteCategory(cat.id);
+                                  }
+                                }}
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </Button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {/* Add Category */}
+                  <div className="px-4 py-3 border-t border-border space-y-2">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        value={newCategoryColor}
+                        onChange={(e) => setNewCategoryColor(e.target.value)}
+                        className="h-7 w-7 rounded border border-border cursor-pointer bg-transparent p-0.5"
+                      />
+                      <input
+                        type="text"
+                        value={newCategoryIcon}
+                        onChange={(e) => setNewCategoryIcon(e.target.value)}
+                        placeholder="🏷️"
+                        className="h-7 w-10 text-center text-sm rounded-md bg-muted border border-border"
+                      />
+                      <input
+                        type="text"
+                        value={newCategoryName}
+                        onChange={(e) => setNewCategoryName(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') handleCreateCategory(); }}
+                        placeholder="New category name..."
+                        className="h-7 text-sm rounded-md bg-muted border border-border px-2 flex-1"
+                      />
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7 text-xs"
+                        disabled={categoryActionLoading || !newCategoryName.trim()}
+                        onClick={handleCreateCategory}
+                      >
+                        Add
+                      </Button>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground">
+                      Select 2+ categories and click Merge to combine duplicates. Pencil icon to rename.
+                    </p>
+                  </div>
                 </div>
               )}
 

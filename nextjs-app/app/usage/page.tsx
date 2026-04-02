@@ -402,7 +402,7 @@ export default function UsagePage() {
                           borderRadius: 8,
                           fontSize: 12,
                         }}
-                        formatter={(value: number, name: string) => [formatTokens(value), name]}
+                        formatter={(value, name) => [formatTokens(Number(value) || 0), String(name)]}
                       />
                       <Area type="monotone" dataKey="prompt" stackId="1" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.3} name="Prompt" />
                       <Area type="monotone" dataKey="completion" stackId="1" stroke="#22c55e" fill="#22c55e" fillOpacity={0.3} name="Completion" />
@@ -428,11 +428,13 @@ export default function UsagePage() {
                           outerRadius={80}
                           dataKey="value"
                           nameKey="name"
-                          label={({ name, value, cx, cy, midAngle, outerRadius: oR }) => {
+                          label={(props: any) => {
+                            const { name, value, cx, cy, midAngle, outerRadius: oR } = props;
                             const RADIAN = Math.PI / 180;
                             const radius = (oR as number) + 25;
-                            const x = (cx as number) + radius * Math.cos(-midAngle * RADIAN);
-                            const y = (cy as number) + radius * Math.sin(-midAngle * RADIAN);
+                            const ma = (midAngle as number) || 0;
+                            const x = (cx as number) + radius * Math.cos(-ma * RADIAN);
+                            const y = (cy as number) + radius * Math.sin(-ma * RADIAN);
                             return (
                               <text
                                 x={x}
@@ -452,7 +454,7 @@ export default function UsagePage() {
                             <Cell key={i} fill={entry.color} />
                           ))}
                         </Pie>
-                        <Tooltip formatter={(value: number) => formatTokens(value)} />
+                        <Tooltip formatter={(value) => formatTokens(Number(value) || 0)} />
                       </PieChart>
                     </ResponsiveContainer>
                   </div>
@@ -472,11 +474,13 @@ export default function UsagePage() {
                           outerRadius={80}
                           dataKey="value"
                           nameKey="name"
-                          label={({ name, value, cx, cy, midAngle, outerRadius: oR }) => {
+                          label={(props: any) => {
+                            const { name, value, cx, cy, midAngle, outerRadius: oR } = props;
                             const RADIAN = Math.PI / 180;
                             const radius = (oR as number) + 25;
-                            const x = (cx as number) + radius * Math.cos(-midAngle * RADIAN);
-                            const y = (cy as number) + radius * Math.sin(-midAngle * RADIAN);
+                            const ma = (midAngle as number) || 0;
+                            const x = (cx as number) + radius * Math.cos(-ma * RADIAN);
+                            const y = (cy as number) + radius * Math.sin(-ma * RADIAN);
                             return (
                               <text
                                 x={x}
@@ -496,7 +500,7 @@ export default function UsagePage() {
                             <Cell key={i} fill={entry.color} />
                           ))}
                         </Pie>
-                        <Tooltip formatter={(value: number) => formatTokens(value)} />
+                        <Tooltip formatter={(value) => formatTokens(Number(value) || 0)} />
                       </PieChart>
                     </ResponsiveContainer>
                   </div>
@@ -524,7 +528,7 @@ export default function UsagePage() {
                           borderRadius: 8,
                           fontSize: 12,
                         }}
-                        formatter={(value: number, name: string) => [formatTokens(value), name]}
+                        formatter={(value, name) => [formatTokens(Number(value) || 0), String(name)]}
                       />
                       <Bar dataKey="prompt" stackId="1" fill="#3b82f6" name="Prompt" />
                       <Bar dataKey="completion" stackId="1" fill="#22c55e" name="Completion" radius={[0, 4, 4, 0]} />
@@ -556,7 +560,7 @@ export default function UsagePage() {
                           fontSize: 12,
                         }}
                         labelFormatter={(label) => `Provider: ${label}`}
-                        formatter={(value: number, name: string) => [formatTokens(value), name]}
+                        formatter={(value, name) => [formatTokens(Number(value) || 0), String(name)]}
                       />
                       <Bar dataKey="prompt" stackId="1" fill="#3b82f6" name="Prompt" />
                       <Bar dataKey="completion" stackId="1" fill="#22c55e" name="Completion" radius={[0, 4, 4, 0]} />

@@ -13,18 +13,16 @@ const DEFAULT_CATEGORIES = [
   { name: 'travel', icon: '✈️', color: '#0ea5e9', description: 'Road trips, flights, hotel stays' },
   { name: 'social', icon: '👥', color: '#ec4899', description: 'Friends, parties, events' },
   { name: 'finance', icon: '💰', color: '#14b8a6', description: 'Bills, ATM, bank visits' },
+  { name: 'alcohol', icon: '🍺', color: '#a855f7', description: 'Beer, wine, spirits, cocktails' },
 ];
 
 async function ensureCategories() {
-  const count = await prisma.habitCategory.count();
-  if (count === 0) {
-    for (const cat of DEFAULT_CATEGORIES) {
-      await prisma.habitCategory.upsert({
-        where: { name: cat.name },
-        create: cat,
-        update: {},
-      });
-    }
+  for (const cat of DEFAULT_CATEGORIES) {
+    await prisma.habitCategory.upsert({
+      where: { name: cat.name },
+      create: cat,
+      update: {}, // Don't overwrite user edits
+    });
   }
 }
 
@@ -38,8 +36,39 @@ export async function GET(req: NextRequest) {
     const action = searchParams.get('action') || 'entries';
 
     if (action === 'categories') {
+      // Sync: auto-create HabitCategory rows for any category strings in entries
+      // that don't have a matching row yet
+      const distinctEntryCategories = await prisma.habitEntry.findMany({
+        distinct: ['category'],
+        select: { category: true },
+      });
+      const existingNames = new Set(
+        (await prisma.habitCategory.findMany({ select: { name: true } })).map(c => c.name)
+      );
+      for (const { category: catName } of distinctEntryCategories) {
+        if (!existingNames.has(catName)) {
+          await prisma.habitCategory.create({
+            data: { name: catName },
+          });
+        }
+      }
+
+      // Return categories with entry counts
       const categories = await prisma.habitCategory.findMany({ orderBy: { name: 'asc' } });
-      return NextResponse.json({ success: true, data: categories });
+      const countResults = await prisma.habitEntry.groupBy({
+        by: ['category'],
+        _count: { id: true },
+      });
+      const countMap: Record<string, number> = {};
+      for (const r of countResults) {
+        countMap[r.category] = r._count.id;
+      }
+      const categoriesWithCounts = categories.map(c => ({
+        ...c,
+        entryCount: countMap[c.name] || 0,
+      }));
+
+      return NextResponse.json({ success: true, data: categoriesWithCounts });
     }
 
     // Parse common filters
@@ -186,14 +215,105 @@ export async function GET(req: NextRequest) {
 }
 
 // =============================================================================
-// DELETE /api/habits?id=xxx
+// PATCH /api/habits — category operations: rename, merge, update, reassign
+// =============================================================================
+export async function PATCH(req: NextRequest) {
+  try {
+    const body = await req.json();
+    const { action } = body;
+
+    // Rename a category (updates category record + all entries)
+    if (action === 'rename_category') {
+      const { oldName, newName } = body;
+      if (!oldName || !newName) return NextResponse.json({ success: false, error: 'oldName and newName required' }, { status: 400 });
+      if (oldName === newName) return NextResponse.json({ success: true, updated: 0 });
+
+      // Check if target name already exists (would be a merge, not rename)
+      const existing = await prisma.habitCategory.findUnique({ where: { name: newName } });
+      if (existing) return NextResponse.json({ success: false, error: `Category "${newName}" already exists. Use merge instead.` }, { status: 409 });
+
+      await prisma.habitCategory.update({ where: { name: oldName }, data: { name: newName } });
+      const result = await prisma.habitEntry.updateMany({ where: { category: oldName }, data: { category: newName } });
+      return NextResponse.json({ success: true, updated: result.count });
+    }
+
+    // Merge: move all entries from source category into target, delete source
+    if (action === 'merge_category') {
+      const { sourceNames, targetName } = body;
+      if (!sourceNames?.length || !targetName) return NextResponse.json({ success: false, error: 'sourceNames[] and targetName required' }, { status: 400 });
+
+      let totalUpdated = 0;
+      for (const src of sourceNames as string[]) {
+        if (src === targetName) continue;
+        const result = await prisma.habitEntry.updateMany({ where: { category: src }, data: { category: targetName } });
+        totalUpdated += result.count;
+        await prisma.habitCategory.delete({ where: { name: src } }).catch(() => {});
+      }
+      return NextResponse.json({ success: true, updated: totalUpdated });
+    }
+
+    // Update category metadata (icon, color, description)
+    if (action === 'update_category') {
+      const { name, icon, color, description } = body;
+      if (!name) return NextResponse.json({ success: false, error: 'name required' }, { status: 400 });
+
+      const data: Record<string, string | null> = {};
+      if (icon !== undefined) data.icon = icon || null;
+      if (color !== undefined) data.color = color || null;
+      if (description !== undefined) data.description = description || null;
+
+      await prisma.habitCategory.update({ where: { name }, data });
+      return NextResponse.json({ success: true });
+    }
+
+    // Create a new category
+    if (action === 'create_category') {
+      const { name, icon, color, description } = body;
+      if (!name) return NextResponse.json({ success: false, error: 'name required' }, { status: 400 });
+      const trimmed = name.trim().toLowerCase();
+      const existing = await prisma.habitCategory.findUnique({ where: { name: trimmed } });
+      if (existing) return NextResponse.json({ success: false, error: `Category "${trimmed}" already exists` }, { status: 409 });
+
+      const created = await prisma.habitCategory.create({
+        data: { name: trimmed, icon: icon || null, color: color || null, description: description || null },
+      });
+      return NextResponse.json({ success: true, data: created });
+    }
+
+    // Reassign a single entry to a different category
+    if (action === 'reassign_entry') {
+      const { entryId, newCategory } = body;
+      if (!entryId || !newCategory) return NextResponse.json({ success: false, error: 'entryId and newCategory required' }, { status: 400 });
+
+      await prisma.habitEntry.update({ where: { id: entryId }, data: { category: newCategory } });
+      return NextResponse.json({ success: true });
+    }
+
+    return NextResponse.json({ success: false, error: `Unknown action: ${action}` }, { status: 400 });
+  } catch (err) {
+    console.error('[HabitsAPI] PATCH error:', err);
+    return NextResponse.json(
+      { success: false, error: err instanceof Error ? err.message : 'Unknown error' },
+      { status: 500 }
+    );
+  }
+}
+
+// =============================================================================
+// DELETE /api/habits?id=xxx&type=entry|category
 // =============================================================================
 export async function DELETE(req: NextRequest) {
   try {
     const id = req.nextUrl.searchParams.get('id');
+    const type = req.nextUrl.searchParams.get('type') || 'entry';
     if (!id) return NextResponse.json({ success: false, error: 'id required' }, { status: 400 });
 
-    await prisma.habitEntry.delete({ where: { id } });
+    if (type === 'category') {
+      // Delete category (entries remain with their category string)
+      await prisma.habitCategory.delete({ where: { id } });
+    } else {
+      await prisma.habitEntry.delete({ where: { id } });
+    }
     return NextResponse.json({ success: true });
   } catch (err) {
     return NextResponse.json(
