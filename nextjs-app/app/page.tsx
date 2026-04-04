@@ -12,6 +12,7 @@ import { useAppStore } from '@/lib/store';
 import { StreamingTTS } from '@/lib/tts-client';
 import { log, useLogStore } from '@/lib/log-store';
 import type { Message, Choom, Chat, StreamingChatChunk, ServiceHealth } from '@/lib/types';
+import type { LiveAvatarHandle } from '@/components/avatar/live-avatar-view';
 import { cn } from '@/lib/utils';
 
 export default function Home() {
@@ -81,6 +82,14 @@ export default function Home() {
   // TTS instance for streaming audio
   const ttsRef = useRef<StreamingTTS | null>(null);
 
+  const [isSpeaking, setIsSpeaking] = useState(false);
+
+  // Live avatar ref for playing MuseTalk-generated frames
+  const liveAvatarRef = useRef<LiveAvatarHandle | null>(null);
+  // Refs for live mode state (avoids stale closures in TTS callback)
+  const liveChoomIdRef = useRef<string | null>(null);
+  const currentChoomRef = useRef(currentChoom);
+
   // Abort controller for stopping generation
   const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -92,7 +101,46 @@ export default function Home() {
         ...settings.tts,
         defaultVoice: currentChoom?.voiceId || settings.tts.defaultVoice,
       };
-      ttsRef.current = new StreamingTTS(ttsSettings);
+      ttsRef.current = new StreamingTTS(
+        ttsSettings,
+        (speaking) => setIsSpeaking(speaking),
+        undefined,  // onVisemeTimeline — unused with MuseTalk
+        (audioBase64, audioElement) => {
+          const choom = currentChoomRef.current;
+          const liveId = liveChoomIdRef.current;
+
+          // Not in Live mode — return false so TTS queues audio normally
+          if (!liveId || !choom?.avatarUrl) {
+            return false;
+          }
+
+          // Live mode — send to MuseTalk for synced face animation
+          // Audio is queued via liveAvatarRef for sequential playback
+          fetch('/api/avatar/animate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              choomId: choom.id,
+              imageBase64: choom.avatarUrl,
+              audioBase64,
+            }),
+          })
+            .then((res) => res.ok ? res.json() : null)
+            .then((data) => {
+              if (data?.frames?.length > 0) {
+                liveAvatarRef.current?.playFrames(data.frames, data.fps || 25, audioElement);
+              } else {
+                // No frames but service responded — queue audio-only clip
+                liveAvatarRef.current?.playFrames([], 25, audioElement);
+              }
+            })
+            .catch(() => {
+              // Service down — queue audio-only clip (sequential, no overlap)
+              liveAvatarRef.current?.playFrames([], 25, audioElement);
+            });
+          return true; // handled — don't queue in TTS
+        },
+      );
       ttsRef.current.setMuted(ui.isMuted);
     }
     return () => {
@@ -104,6 +152,10 @@ export default function Home() {
   useEffect(() => {
     ttsRef.current?.setMuted(ui.isMuted);
   }, [ui.isMuted]);
+
+  // Keep live mode refs in sync (avoids stale closures in TTS callback)
+  useEffect(() => { liveChoomIdRef.current = ui.activeLiveChoomId; }, [ui.activeLiveChoomId]);
+  useEffect(() => { currentChoomRef.current = currentChoom; }, [currentChoom]);
 
   // Fetch initial data
   useEffect(() => {
@@ -256,7 +308,7 @@ export default function Home() {
         });
         if (res.ok) {
           const data = await res.json();
-          const serviceKeys: (keyof ServiceHealth)[] = ['llm', 'memory', 'tts', 'stt', 'imageGen', 'weather', 'search', 'searxng'];
+          const serviceKeys: (keyof ServiceHealth)[] = ['llm', 'memory', 'tts', 'stt', 'imageGen', 'weather', 'search', 'searxng', 'avatar'];
           serviceKeys.forEach((service) => {
             const info = data.services[service] as { status: string } | undefined;
             const status = info?.status === 'connected' ? 'connected' : 'disconnected';
@@ -835,6 +887,8 @@ export default function Home() {
           streamingImage={streamingImage}
           agentProgress={agentProgress}
           planProgress={planProgress}
+          isSpeaking={isSpeaking}
+          liveAvatarRef={liveAvatarRef}
         />
       </main>
 

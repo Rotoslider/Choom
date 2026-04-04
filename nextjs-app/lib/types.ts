@@ -21,6 +21,9 @@ export interface Choom {
   llmFallbackProvider1: string | null;
   llmFallbackModel2: string | null;
   llmFallbackProvider2: string | null;
+  avatar3dModelPath: string | null;
+  avatar3dStatus: string | null;
+  avatar3dError: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -394,6 +397,7 @@ export interface ServiceHealth {
   weather: ServiceStatus;
   search: ServiceStatus;
   searxng: ServiceStatus;
+  avatar: ServiceStatus;
 }
 
 export interface HealthCheckResult {
@@ -633,6 +637,7 @@ export interface UIState {
   isMuted: boolean;
   isGeneratingImage: boolean;
   activeSettingsTab: SettingsTab;
+  activeLiveChoomId: string | null;
 }
 
 export type SettingsTab = 'llm' | 'audio' | 'image' | 'memory' | 'search' | 'weather' | 'appearance' | 'scheduled' | 'heartbeat' | 'vision' | 'projects';
@@ -677,7 +682,7 @@ export class ChoomError extends Error {
 // ============================================================================
 
 export type LogLevel = 'info' | 'success' | 'warning' | 'error';
-export type LogCategory = 'llm' | 'tts' | 'stt' | 'image' | 'memory' | 'agent' | 'system';
+export type LogCategory = 'llm' | 'tts' | 'stt' | 'image' | 'memory' | 'agent' | 'system' | 'avatar';
 
 export interface LogEntry {
   id: string;
@@ -703,3 +708,22 @@ export type AsyncState<T> =
   | { status: 'loading' }
   | { status: 'success'; data: T }
   | { status: 'error'; error: Error };
+
+// ============================================================================
+// Avatar Types
+// ============================================================================
+
+export interface VisemeFrame {
+  time: number;                        // seconds into audio
+  weights: Record<string, number>;     // viseme_name → 0.0-1.0
+}
+
+export type VisemeTimeline = VisemeFrame[];
+
+export interface AvatarExpression {
+  name: string;
+  weights: Record<string, number>;     // morph_target → weight
+  triggerKeyword?: string;             // auto-trigger on this word in response
+}
+
+export type Avatar3dStatus = 'generating' | 'ready' | 'failed' | null;

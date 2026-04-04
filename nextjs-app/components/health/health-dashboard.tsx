@@ -12,6 +12,7 @@ import {
   Cloud,
   Search,
   Globe,
+  User,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -91,6 +92,13 @@ const services: ServiceInfo[] = [
     icon: Globe,
     description: 'Self-hosted metasearch engine (fallback)',
     defaultPort: '8888',
+  },
+  {
+    name: 'Avatar Service',
+    key: 'avatar',
+    icon: User,
+    description: '3D face reconstruction and avatar generation',
+    defaultPort: '8020',
   },
 ];
 

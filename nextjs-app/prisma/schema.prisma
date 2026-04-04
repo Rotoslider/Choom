@@ -24,6 +24,9 @@ model Choom {
   llmFallbackProvider1 String?  // First fallback provider ID
   llmFallbackModel2    String?  // Second fallback model (on timeout/error)
   llmFallbackProvider2 String?  // Second fallback provider ID
+  avatar3dModelPath String?   // Relative path to GLB file
+  avatar3dStatus    String?   // 'generating' | 'ready' | 'failed'
+  avatar3dError     String?   // Error message if generation failed
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
   chats         Chat[]

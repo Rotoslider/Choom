@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
-import { RefreshCw, Info, Save, X, Plus, Trash2 } from 'lucide-react';
+import { RefreshCw, Info, Save, X, Plus, Trash2, Wand2, Check, AlertCircle, Loader2 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -863,6 +863,30 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave }: ChoomEditP
                     )}
                   </div>
                 </div>
+
+                {/* Live Avatar Idle Video */}
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <label className="text-sm font-medium">Live Avatar — Idle Video</label>
+                    <Tooltip>
+                      <TooltipTrigger asChild><Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" /></TooltipTrigger>
+                      <TooltipContent side="left" className="max-w-xs">
+                        <p className="font-medium mb-1">Idle motion video for Live mode</p>
+                        <p className="text-xs">A short video (5-10s) of subtle head movements, blinks, and breathing. Used by MuseTalk as reference for natural animation.</p>
+                        <p className="text-xs mt-1 font-medium">Creating with WAN 2.1 i2v:</p>
+                        <ul className="text-xs mt-0.5 space-y-0.5 list-disc pl-3">
+                          <li>Use the same photo as avatar input</li>
+                          <li>81-160 frames, 16fps (5-10 seconds)</li>
+                          <li>Prompt: &quot;subtle head turns, gentle nodding, natural blinking, breathing, looking at camera, portrait&quot;</li>
+                          <li>Negative: &quot;talking, speaking, open mouth, static&quot;</li>
+                        </ul>
+                        <p className="text-xs mt-1">Save to: ~/choom-projects/avatar-models/</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </div>
+                  <IdleVideoSection choomId={choom?.id || null} />
+                </div>
+
                 <div className="space-y-2">
                   <div className="flex items-center gap-2">
                     <label className="text-sm font-medium">Memory ID</label>
@@ -1182,5 +1206,264 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave }: ChoomEditP
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+// ============================================================================
+// 3D Avatar Generation Section
+// ============================================================================
+
+function AvatarGenerationSection({
+  choomId,
+  avatarUrl,
+  avatar3dStatus,
+}: {
+  choomId: string | null;
+  avatarUrl: string;
+  avatar3dStatus: string | null;
+}) {
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [progress, setProgress] = useState({ step: '', percent: 0 });
+  const [error, setError] = useState<string | null>(null);
+  const { updateChoom } = useAppStore();
+
+  const handleGenerate = async (regenerate = false) => {
+    if (!choomId || !avatarUrl) return;
+
+    setIsGenerating(true);
+    setError(null);
+    setProgress({ step: 'Starting...', percent: 0 });
+
+    try {
+      const response = await fetch('/api/avatar/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ choomId, regenerate }),
+      });
+
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.error || 'Failed to start generation');
+      }
+
+      // Read SSE stream
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('No response stream');
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const data = JSON.parse(line.slice(6));
+            if (data.type === 'progress') {
+              setProgress({ step: data.step, percent: data.percent });
+            } else if (data.type === 'done') {
+              setProgress({ step: 'Complete!', percent: 100 });
+              updateChoom(choomId, {
+                avatar3dStatus: 'ready',
+                avatar3dModelPath: data.modelPath,
+                avatar3dError: null,
+              });
+            } else if (data.type === 'error') {
+              throw new Error(data.message);
+            }
+          } catch (parseErr) {
+            if (parseErr instanceof Error && parseErr.message !== 'Unexpected end of JSON input') {
+              throw parseErr;
+            }
+          }
+        }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      setError(msg);
+      updateChoom(choomId, {
+        avatar3dStatus: 'failed',
+        avatar3dError: msg,
+      });
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  if (!avatarUrl) {
+    return (
+      <p className="text-xs text-muted-foreground">
+        Upload an avatar image first to generate a 3D model
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      {/* Status indicator */}
+      <div className="flex items-center gap-2 text-xs">
+        {avatar3dStatus === 'ready' ? (
+          <>
+            <Check className="h-3.5 w-3.5 text-green-500" />
+            <span className="text-green-500 font-medium">3D Avatar Ready</span>
+          </>
+        ) : avatar3dStatus === 'failed' ? (
+          <>
+            <AlertCircle className="h-3.5 w-3.5 text-red-400" />
+            <span className="text-red-400 font-medium">Generation Failed</span>
+          </>
+        ) : avatar3dStatus === 'generating' || isGenerating ? (
+          <>
+            <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+            <span className="text-primary font-medium">Generating...</span>
+          </>
+        ) : (
+          <span className="text-muted-foreground">No 3D avatar</span>
+        )}
+      </div>
+
+      {/* Progress bar during generation */}
+      {isGenerating && (
+        <div className="space-y-1">
+          <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+            <div
+              className="h-full bg-primary rounded-full transition-all duration-500"
+              style={{ width: `${progress.percent}%` }}
+            />
+          </div>
+          <p className="text-xs text-muted-foreground">{progress.step}</p>
+        </div>
+      )}
+
+      {/* Error message */}
+      {error && (
+        <p className="text-xs text-red-400">{error}</p>
+      )}
+
+      {/* Action buttons */}
+      <div className="flex gap-2">
+        {avatar3dStatus === 'ready' ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => handleGenerate(true)}
+            disabled={isGenerating || !choomId}
+            className="text-xs"
+          >
+            <RefreshCw className="h-3 w-3 mr-1.5" />
+            Regenerate
+          </Button>
+        ) : (
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => handleGenerate(false)}
+            disabled={isGenerating || !choomId}
+            className="text-xs"
+          >
+            <Wand2 className="h-3 w-3 mr-1.5" />
+            Generate 3D Avatar
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// Idle Video Section — manage motion video for Live avatar
+// ============================================================================
+
+function IdleVideoSection({ choomId }: { choomId: string | null }) {
+  const [videos, setVideos] = useState<string[]>([]);
+  const [activeVideo, setActiveVideo] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  // Scan for idle videos on mount
+  useEffect(() => {
+    if (!choomId) return;
+    setLoading(true);
+    fetch(`/api/avatar/idle-videos?choomId=${choomId}`)
+      .then((res) => res.ok ? res.json() : { videos: [], active: null })
+      .then((data) => {
+        setVideos(data.videos || []);
+        setActiveVideo(data.active || null);
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [choomId]);
+
+  const handleSetActive = async (filename: string | null) => {
+    if (!choomId) return;
+    await fetch('/api/avatar/idle-videos', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ choomId, activeVideo: filename }),
+    });
+    setActiveVideo(filename);
+    // Clear cached reference so it reloads with new video
+    fetch(`http://127.0.0.1:8020/animate/clear-cache?choom_id=${choomId}`, { method: 'POST' }).catch(() => {});
+  };
+
+  if (loading) {
+    return <p className="text-xs text-muted-foreground">Scanning for idle videos...</p>;
+  }
+
+  return (
+    <div className="space-y-2">
+      {videos.length === 0 ? (
+        <p className="text-xs text-muted-foreground">
+          No idle videos found. Generate one with WAN 2.1 i2v and save to:<br />
+          <code className="text-[10px]">~/choom-projects/avatar-models/</code>
+          <br />
+          Name it: <code className="text-[10px]">{choomId}_idle.mp4</code> or <code className="text-[10px]">eve_idle1.mp4</code>
+        </p>
+      ) : (
+        <div className="space-y-1">
+          {videos.map((v) => (
+            <div
+              key={v}
+              className={cn(
+                'flex items-center justify-between px-2 py-1 rounded text-xs',
+                activeVideo === v ? 'bg-primary/20 text-primary' : 'bg-muted/50'
+              )}
+            >
+              <span className="truncate flex-1">{v}</span>
+              {activeVideo === v ? (
+                <span className="text-[10px] text-primary font-medium ml-2">Active</span>
+              ) : (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-5 text-[10px] px-1.5"
+                  onClick={() => handleSetActive(v)}
+                >
+                  Use
+                </Button>
+              )}
+            </div>
+          ))}
+          {activeVideo && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="text-[10px] text-muted-foreground h-5"
+              onClick={() => handleSetActive(null)}
+            >
+              Use static image only (no idle video)
+            </Button>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
