@@ -1,0 +1,16 @@
+[Unit]
+Description=Choom Avatar Service (3D Face Reconstruction)
+After=network.target
+
+[Service]
+Type=simple
+User=nuc1
+WorkingDirectory=/home/nuc1/projects/Choom/nextjs-app/services/avatar-service
+ExecStart=/home/nuc1/projects/Choom/nextjs-app/services/avatar-service/start.sh
+Restart=on-failure
+RestartSec=10
+Environment=AVATAR_SERVICE_PORT=8020
+Environment=WORKSPACE_ROOT=/home/nuc1/choom-projects
+
+[Install]
+WantedBy=multi-user.target

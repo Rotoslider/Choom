@@ -122,6 +122,7 @@ const defaultServiceHealth: ServiceHealth = {
   weather: 'checking',
   search: 'checking',
   searxng: 'checking',
+  avatar: 'checking',
 };
 
 // ============================================================================
@@ -189,6 +190,7 @@ interface AppState {
   toggleMute: () => void;
   setMuted: (muted: boolean) => void;
   setGeneratingImage: (generating: boolean) => void;
+  setActiveLiveChoomId: (id: string | null) => void;
 
   // Actions - Services
   updateServiceHealth: (service: keyof ServiceHealth, status: ServiceStatus) => void;
@@ -311,6 +313,7 @@ export const useAppStore = create<AppState>()(
         isMuted: false,
         isGeneratingImage: false,
         activeSettingsTab: 'llm',
+        activeLiveChoomId: null,
       },
 
       services: defaultServiceHealth,
@@ -387,6 +390,8 @@ export const useAppStore = create<AppState>()(
       setMuted: (muted) => set((state) => ({ ui: { ...state.ui, isMuted: muted } })),
       setGeneratingImage: (generating) =>
         set((state) => ({ ui: { ...state.ui, isGeneratingImage: generating } })),
+      setActiveLiveChoomId: (id) =>
+        set((state) => ({ ui: { ...state.ui, activeLiveChoomId: id } })),
 
       // Service actions
       updateServiceHealth: (service, status) =>
@@ -402,6 +407,7 @@ export const useAppStore = create<AppState>()(
             weather: 'checking',
             search: 'checking',
             searxng: 'checking',
+            avatar: 'checking',
           },
         }),
 

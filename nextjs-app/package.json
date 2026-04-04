@@ -38,8 +38,11 @@
     "@radix-ui/react-tabs": "^1.1.0",
     "@radix-ui/react-toast": "^1.2.0",
     "@radix-ui/react-tooltip": "^1.1.0",
+    "@react-three/drei": "^10.7.7",
+    "@react-three/fiber": "^9.5.0",
     "@types/pdfkit": "^0.17.4",
     "@types/sharp": "^0.31.1",
+    "@types/three": "^0.183.1",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.0",
     "esbuild": "^0.27.3",
@@ -54,6 +57,7 @@
     "recharts": "^3.8.0",
     "sharp": "^0.34.5",
     "tailwind-merge": "^2.5.0",
+    "three": "^0.183.2",
     "zustand": "^4.5.0"
   },
   "devDependencies": {

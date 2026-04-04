@@ -16,6 +16,7 @@ import {
   Brain,
   Bot,
   Settings,
+  User,
   AlertCircle,
   CheckCircle,
   Info,
@@ -38,6 +39,7 @@ const categoryIcons: Record<LogCategory, React.ReactNode> = {
   memory: <Brain className="h-4 w-4" />,
   agent: <Bot className="h-4 w-4" />,
   system: <Settings className="h-4 w-4" />,
+  avatar: <User className="h-4 w-4" />,
 };
 
 const categoryColors: Record<LogCategory, string> = {
@@ -48,6 +50,7 @@ const categoryColors: Record<LogCategory, string> = {
   memory: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
   agent: 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30',
   system: 'bg-gray-500/20 text-gray-400 border-gray-500/30',
+  avatar: 'bg-indigo-500/20 text-indigo-400 border-indigo-500/30',
 };
 
 const levelIcons: Record<LogLevel, React.ReactNode> = {

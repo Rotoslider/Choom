@@ -1,11 +1,13 @@
 'use client';
 
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useState, useRef } from 'react';
 import { MessageList } from './message-list';
 import { InputArea, ImageAttachment } from './input-area';
 import { AvatarDisplay } from '../common/avatar-display';
+import { LiveAvatarView, LiveAvatarHandle } from '../avatar/live-avatar-view';
 import { useAppStore } from '@/lib/store';
 import type { Message } from '@/lib/types';
+import { MessageSquare, Video } from 'lucide-react';
 
 interface ChatInterfaceProps {
   messages: Message[];
@@ -41,6 +43,8 @@ interface ChatInterfaceProps {
     failed?: number;
     total?: number;
   } | null;
+  isSpeaking?: boolean;
+  liveAvatarRef?: React.RefObject<LiveAvatarHandle | null>;
 }
 
 export function ChatInterface({
@@ -53,9 +57,13 @@ export function ChatInterface({
   streamingImage,
   agentProgress,
   planProgress,
+  isSpeaking = false,
+  liveAvatarRef,
 }: ChatInterfaceProps) {
   const [isLoading, setIsLoading] = useState(false);
-  const { currentChoom, services } = useAppStore();
+  const { currentChoom, services, ui, isStreaming, setActiveLiveChoomId } = useAppStore();
+
+  const [activeTab, setActiveTab] = useState<'chat' | 'live'>('chat');
 
   const handleSend = useCallback(
     async (message: string, attachment?: ImageAttachment) => {
@@ -79,10 +87,28 @@ export function ChatInterface({
   );
 
   const isLLMConnected = services.llm === 'connected';
+  const hasAvatar = !!currentChoom?.avatarUrl;
+  const isLiveBlocked =
+    ui.activeLiveChoomId !== null && ui.activeLiveChoomId !== currentChoom?.id;
+
+  const handleTabChange = (tab: 'chat' | 'live') => {
+    if (tab === 'live' && !hasAvatar) return;
+    if (tab === 'live' && isLiveBlocked) return;
+
+    setActiveTab(tab);
+
+    if (tab === 'live') {
+      setActiveLiveChoomId(currentChoom?.id || null);
+    } else {
+      if (ui.activeLiveChoomId === currentChoom?.id) {
+        setActiveLiveChoomId(null);
+      }
+    }
+  };
 
   return (
     <div className="flex flex-col h-full">
-      {/* Header with avatar display */}
+      {/* Header */}
       <div className="flex-shrink-0 border-b border-border bg-card/50 backdrop-blur-sm">
         <div className="max-w-4xl mx-auto px-4 py-3">
           <div className="flex items-center gap-4">
@@ -102,7 +128,46 @@ export function ChatInterface({
                 </p>
               )}
             </div>
-            {/* Connection status indicator */}
+
+            {/* Tab switcher */}
+            {currentChoom && (
+              <div className="flex items-center gap-1 bg-muted/50 rounded-lg p-0.5">
+                <button
+                  onClick={() => handleTabChange('chat')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                    activeTab === 'chat'
+                      ? 'bg-card text-foreground shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  <MessageSquare className="w-3.5 h-3.5" />
+                  Chat
+                </button>
+                <button
+                  onClick={() => handleTabChange('live')}
+                  disabled={!hasAvatar || isLiveBlocked}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                    activeTab === 'live'
+                      ? 'bg-card text-foreground shadow-sm'
+                      : !hasAvatar || isLiveBlocked
+                        ? 'text-muted-foreground/40 cursor-not-allowed'
+                        : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                  title={
+                    !hasAvatar
+                      ? 'Upload a photo to use Live mode'
+                      : isLiveBlocked
+                        ? 'Another Choom has the Live tab open'
+                        : 'Live avatar mode'
+                  }
+                >
+                  <Video className="w-3.5 h-3.5" />
+                  Live
+                </button>
+              </div>
+            )}
+
+            {/* Connection status */}
             <div className="flex items-center gap-2">
               <div
                 className={`w-2 h-2 rounded-full ${
@@ -117,8 +182,25 @@ export function ChatInterface({
         </div>
       </div>
 
-      {/* Message list */}
-      <MessageList messages={messages} isLoading={isLoading} streamingImage={streamingImage} agentProgress={agentProgress} planProgress={planProgress} />
+      {/* Tab content */}
+      {activeTab === 'live' && hasAvatar && currentChoom ? (
+        <LiveAvatarView
+          ref={liveAvatarRef}
+          choomId={currentChoom.id}
+          avatarUrl={currentChoom.avatarUrl}
+          messages={messages}
+          isSpeaking={isSpeaking}
+          isStreaming={isStreaming}
+        />
+      ) : (
+        <MessageList
+          messages={messages}
+          isLoading={isLoading}
+          streamingImage={streamingImage}
+          agentProgress={agentProgress}
+          planProgress={planProgress}
+        />
+      )}
 
       {/* Input area */}
       <InputArea
