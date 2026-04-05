@@ -119,8 +119,8 @@ export default function Home() {
           }
 
           if (mode === 'desktop') {
-            // Desktop: TTS plays normally, animate fires in background
-            // Frames go to desktop via WebSocket, slight lag is expected
+            // Desktop: intercept audio, send to service which forwards
+            // BOTH frames AND audio to desktop app via WebSocket for perfect sync
             fetch('/api/avatar/animate', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -128,9 +128,10 @@ export default function Home() {
                 choomId: choom.id,
                 imageBase64: choom.avatarUrl,
                 audioBase64,
+                includeAudio: true, // tell service to forward audio to desktop
               }),
             }).catch(() => {});
-            return false; // TTS plays audio normally
+            return true; // intercept — desktop app will play audio
           }
 
           if (mode === 'live' && !liveId) {

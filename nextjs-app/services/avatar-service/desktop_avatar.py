@@ -31,7 +31,7 @@ DB_PATH = os.path.expanduser("~/projects/Choom/nextjs-app/prisma/dev.db")
 
 class AvatarWebSocketClient(QThread):
     """Connects to avatar service WebSocket for live frame streaming."""
-    frames_received = pyqtSignal(list, int)  # (frame_b64_list, fps)
+    frames_received = pyqtSignal(list, int, str)  # (frame_b64_list, fps, audio_b64)
     status_changed = pyqtSignal(str)
 
     def __init__(self, ws_url: str = "ws://127.0.0.1:8020/ws/desktop"):
@@ -58,7 +58,11 @@ class AvatarWebSocketClient(QThread):
                         if data:
                             msg = json.loads(data)
                             if msg.get("type") == "frames":
-                                self.frames_received.emit(msg["frames"], msg.get("fps", 25))
+                                self.frames_received.emit(
+                                    msg["frames"],
+                                    msg.get("fps", 25),
+                                    msg.get("audio", ""),
+                                )
                     except Exception:
                         ws.send(json.dumps({"action": "ping"}))
 
@@ -258,8 +262,8 @@ class AvatarWindow(QWidget):
 
         menu.exec(self.mapToGlobal(pos))
 
-    def play_frames(self, frame_b64_list: list, fps: int = 25):
-        """Play a sequence of base64 JPEG frames."""
+    def play_frames(self, frame_b64_list: list, fps: int = 25, audio_b64: str = None):
+        """Play a sequence of base64 JPEG frames, optionally with synced audio."""
         self._frame_queue = frame_b64_list
         self._frame_index = 0
         self._frame_fps = fps
@@ -268,7 +272,31 @@ class AvatarWindow(QWidget):
             self._frame_timer = QTimer(self)
             self._frame_timer.timeout.connect(self._play_next_frame)
 
+        # Play audio if provided
+        if audio_b64:
+            self._play_audio(audio_b64)
+
         self._frame_timer.start(int(1000 / fps))
+
+    def _play_audio(self, audio_b64: str):
+        """Play WAV audio from base64."""
+        import tempfile
+        try:
+            raw = base64.b64decode(audio_b64)
+            # Save to temp file and play with QProcess or subprocess
+            tmp = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
+            tmp.write(raw)
+            tmp.close()
+
+            import subprocess
+            # Use aplay (ALSA) for low-latency audio on Linux
+            subprocess.Popen(
+                ['aplay', '-q', tmp.name],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception as e:
+            print(f"[DesktopAvatar] Audio error: {e}")
 
     def _play_next_frame(self):
         if not hasattr(self, '_frame_queue') or self._frame_index >= len(self._frame_queue):
@@ -354,7 +382,7 @@ def main():
     # Connect to avatar service WebSocket for live animation
     ws_url = f"{args.service_url}/ws/desktop"
     ws_client = AvatarWebSocketClient(ws_url)
-    ws_client.frames_received.connect(window.play_frames)
+    ws_client.frames_received.connect(lambda frames, fps, audio: window.play_frames(frames, fps, audio or None))
     ws_client.status_changed.connect(lambda s: print(f"[DesktopAvatar] WebSocket: {s}"))
     ws_client.start()
 
