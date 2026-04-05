@@ -86,12 +86,28 @@ export default function Home() {
 
   // Live avatar ref for playing MuseTalk-generated frames
   const liveAvatarRef = useRef<LiveAvatarHandle | null>(null);
+  // Desktop mode audio queue — sequential playback without Live tab
+  const desktopAudioQueueRef = useRef<HTMLAudioElement[]>([]);
+  const desktopPlayingRef = useRef(false);
   // Refs for live mode state (avoids stale closures in TTS callback)
   const liveChoomIdRef = useRef<string | null>(null);
   const currentChoomRef = useRef(currentChoom);
 
   // Abort controller for stopping generation
   const abortControllerRef = useRef<AbortController | null>(null);
+
+  // Desktop audio sequential playback
+  const playNextDesktopAudio = () => {
+    if (desktopAudioQueueRef.current.length === 0) {
+      desktopPlayingRef.current = false;
+      return;
+    }
+    desktopPlayingRef.current = true;
+    const audio = desktopAudioQueueRef.current.shift()!;
+    audio.onended = () => playNextDesktopAudio();
+    audio.onerror = () => playNextDesktopAudio();
+    audio.play().catch(() => playNextDesktopAudio());
+  };
 
   // Initialize TTS when settings or current Choom change
   useEffect(() => {
@@ -119,8 +135,8 @@ export default function Home() {
           }
 
           if (mode === 'desktop') {
-            // Desktop: fire-and-forget — frames go via WebSocket to desktop app
-            // Return false so TTS queue plays audio normally (no double audio)
+            // Desktop: send to animate service, hold audio until frames ready,
+            // then play audio sequentially (queued, no overlap)
             fetch('/api/avatar/animate', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -129,8 +145,21 @@ export default function Home() {
                 imageBase64: choom.avatarUrl,
                 audioBase64,
               }),
-            }).catch(() => {});
-            return false; // let TTS handle audio normally
+            })
+              .then(() => {
+                // Queue audio for sequential playback
+                desktopAudioQueueRef.current.push(audioElement);
+                if (!desktopPlayingRef.current) {
+                  playNextDesktopAudio();
+                }
+              })
+              .catch(() => {
+                desktopAudioQueueRef.current.push(audioElement);
+                if (!desktopPlayingRef.current) {
+                  playNextDesktopAudio();
+                }
+              });
+            return true; // handled — don't queue in TTS
           }
 
           if (mode === 'live' && !liveId) {
