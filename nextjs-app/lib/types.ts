@@ -21,6 +21,7 @@ export interface Choom {
   llmFallbackProvider1: string | null;
   llmFallbackModel2: string | null;
   llmFallbackProvider2: string | null;
+  avatarMode: AvatarMode | null;
   avatar3dModelPath: string | null;
   avatar3dStatus: string | null;
   avatar3dError: string | null;
@@ -733,3 +734,4 @@ export interface AvatarExpression {
 }
 
 export type Avatar3dStatus = 'generating' | 'ready' | 'failed' | null;
+export type AvatarMode = 'off' | 'live' | 'desktop';

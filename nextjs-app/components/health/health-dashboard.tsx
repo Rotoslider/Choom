@@ -97,7 +97,7 @@ const services: ServiceInfo[] = [
     name: 'Avatar Service',
     key: 'avatar',
     icon: User,
-    description: '3D face reconstruction and avatar generation',
+    description: 'LivePortrait real-time face animation',
     defaultPort: '8020',
   },
 ];
@@ -108,10 +108,16 @@ interface HealthDashboardProps {
 }
 
 export function HealthDashboard({ open, onOpenChange }: HealthDashboardProps) {
-  const { services: serviceStatus, settings, updateServiceHealth, setAllServicesChecking } =
+  const { services: serviceStatus, settings, updateServiceHealth, setAllServicesChecking, chooms } =
     useAppStore();
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [details, setDetails] = useState<Record<string, unknown>>({});
+
+  // Only show avatar service if any Choom has avatar mode enabled
+  const anyAvatarEnabled = chooms.some(c => c.avatarMode && c.avatarMode !== 'off');
+  const visibleServices = anyAvatarEnabled
+    ? services
+    : services.filter(s => s.key !== 'avatar');
 
   const refreshHealth = async () => {
     setIsRefreshing(true);
@@ -217,7 +223,7 @@ export function HealthDashboard({ open, onOpenChange }: HealthDashboardProps) {
           {/* Service list */}
           <ScrollArea className="h-[400px]">
             <div className="space-y-2">
-              {services.map((service) => {
+              {visibleServices.map((service) => {
                 const status = serviceStatus[service.key];
                 const detail = details[service.key] as
                   | { latency?: number; error?: string; details?: { provider?: string } }

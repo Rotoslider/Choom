@@ -63,6 +63,8 @@ export function ChatInterface({
   const [isLoading, setIsLoading] = useState(false);
   const { currentChoom, services, ui, isStreaming, setActiveLiveChoomId, settings } = useAppStore();
   const avatarEnabled = settings.avatar?.enabled ?? true;
+  const choomAvatarMode = (currentChoom?.avatarMode as 'off' | 'live' | 'desktop' | null) || 'off';
+  const showLiveTab = avatarEnabled && choomAvatarMode === 'live';
 
   const [activeTab, setActiveTab] = useState<'chat' | 'live'>('chat');
 
@@ -99,18 +101,18 @@ export function ChatInterface({
   // Only block if ANOTHER choom has the live tab (not this one, not null)
   const isLiveBlocked =
     ui.activeLiveChoomId !== null && ui.activeLiveChoomId !== currentChoom?.id;
-  // Allow opening Live tab even if service is temporarily down (shows static photo)
-  const canGoLive = avatarEnabled && hasAvatar && !isLiveBlocked;
+  // Can only go live if mode is 'live' and has photo
+  const canGoLive = showLiveTab && hasAvatar && !isLiveBlocked;
 
-  // Auto-switch to Chat only if avatar is explicitly disabled (not on temp health blips)
+  // Auto-switch to Chat if live mode is turned off
   React.useEffect(() => {
-    if (activeTab === 'live' && !avatarEnabled) {
+    if (activeTab === 'live' && !showLiveTab) {
       setActiveTab('chat');
       if (ui.activeLiveChoomId === currentChoom?.id) {
         setActiveLiveChoomId(null);
       }
     }
-  }, [avatarEnabled, activeTab, currentChoom?.id, ui.activeLiveChoomId, setActiveLiveChoomId]);
+  }, [showLiveTab, activeTab, currentChoom?.id, ui.activeLiveChoomId, setActiveLiveChoomId]);
 
   const handleTabChange = (tab: 'chat' | 'live') => {
     if (tab === 'live' && !canGoLive) return;
@@ -149,8 +151,8 @@ export function ChatInterface({
               )}
             </div>
 
-            {/* Tab switcher — only show Live tab if avatar is enabled */}
-            {currentChoom && avatarEnabled && (
+            {/* Tab switcher — only show when Choom is in 'live' avatar mode */}
+            {currentChoom && showLiveTab && (
               <div className="flex items-center gap-1 bg-muted/50 rounded-lg p-0.5">
                 <button
                   onClick={() => handleTabChange('chat')}
