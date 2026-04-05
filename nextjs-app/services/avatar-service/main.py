@@ -17,8 +17,10 @@ from pathlib import Path
 from threading import Thread
 
 import torch
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+import asyncio
+import json as json_mod
 from pydantic import BaseModel
 from PIL import Image
 
@@ -47,6 +49,10 @@ musetalk: MuseTalkEngine | None = None
 liveportrait: LivePortraitEngine | None = None
 animation_refs: dict[str, dict] = {}  # choom_id → prepared reference data
 jobs: dict[str, dict] = {}
+
+# Desktop avatar frame broadcast
+desktop_clients: list[WebSocket] = []
+frame_queue: asyncio.Queue | None = None
 
 
 # ============================================================================
@@ -249,6 +255,10 @@ async def animate(req: AnimateRequest):
             _, buf = cv2.imencode(".jpg", ref_data["idle_frame_bgr"], [cv2.IMWRITE_JPEG_QUALITY, 95])
             idle_frame_b64 = base64.b64encode(buf.tobytes()).decode()
 
+        # Broadcast to desktop avatar clients
+        if desktop_clients and frame_data:
+            asyncio.create_task(broadcast_frames_to_desktop(frame_data, engine_fps))
+
         return {
             "frames": frame_data,
             "fps": engine_fps,
@@ -271,6 +281,59 @@ async def clear_animate_cache(choom_id: str = None):
     elif not choom_id:
         animation_refs.clear()
     return {"cleared": True}
+
+
+# ============================================================================
+# Desktop Avatar WebSocket — streams frames to desktop client
+# ============================================================================
+
+@app.websocket("/ws/desktop")
+async def desktop_websocket(websocket: WebSocket):
+    """WebSocket for streaming animation frames to the desktop avatar app."""
+    await websocket.accept()
+    desktop_clients.append(websocket)
+    print(f"[AvatarService] Desktop client connected ({len(desktop_clients)} total)")
+
+    try:
+        while True:
+            # Keep connection alive, receive any control messages
+            data = await websocket.receive_text()
+            # Client can send {"action": "ping"} to keep alive
+            if data:
+                msg = json_mod.loads(data)
+                if msg.get("action") == "ping":
+                    await websocket.send_text(json_mod.dumps({"action": "pong"}))
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        if websocket in desktop_clients:
+            desktop_clients.remove(websocket)
+        print(f"[AvatarService] Desktop client disconnected ({len(desktop_clients)} total)")
+
+
+async def broadcast_frames_to_desktop(frame_data: list[str], fps: int):
+    """Send animation frames to all connected desktop clients."""
+    if not desktop_clients:
+        return
+
+    message = json_mod.dumps({
+        "type": "frames",
+        "frames": frame_data,
+        "fps": fps,
+    })
+
+    disconnected = []
+    for client in desktop_clients:
+        try:
+            await client.send_text(message)
+        except Exception:
+            disconnected.append(client)
+
+    for client in disconnected:
+        if client in desktop_clients:
+            desktop_clients.remove(client)
 
 
 # ============================================================================

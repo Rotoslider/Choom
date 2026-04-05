@@ -24,7 +24,51 @@ from PyQt6.QtCore import Qt, QTimer, QPoint
 from PyQt6.QtGui import QPixmap, QAction, QCursor, QBitmap, QImage, QRegion
 
 
+from PyQt6.QtCore import QThread, pyqtSignal
+
 DB_PATH = os.path.expanduser("~/projects/Choom/nextjs-app/prisma/dev.db")
+
+
+class AvatarWebSocketClient(QThread):
+    """Connects to avatar service WebSocket for live frame streaming."""
+    frames_received = pyqtSignal(list, int)  # (frame_b64_list, fps)
+    status_changed = pyqtSignal(str)
+
+    def __init__(self, ws_url: str = "ws://127.0.0.1:8020/ws/desktop"):
+        super().__init__()
+        self.ws_url = ws_url
+        self._running = True
+
+    def run(self):
+        import websocket
+        import time
+
+        while self._running:
+            try:
+                self.status_changed.emit("connecting")
+                ws = websocket.WebSocket()
+                ws.connect(self.ws_url, timeout=5)
+                self.status_changed.emit("connected")
+                print(f"[DesktopAvatar] WebSocket connected")
+
+                while self._running:
+                    ws.settimeout(30)
+                    try:
+                        data = ws.recv()
+                        if data:
+                            msg = json.loads(data)
+                            if msg.get("type") == "frames":
+                                self.frames_received.emit(msg["frames"], msg.get("fps", 25))
+                    except Exception:
+                        ws.send(json.dumps({"action": "ping"}))
+
+            except Exception as e:
+                self.status_changed.emit("disconnected")
+                print(f"[DesktopAvatar] WebSocket retry in 3s: {e}")
+                time.sleep(3)
+
+    def stop(self):
+        self._running = False
 
 # Background colors to detect and make transparent
 BG_COLORS = [
@@ -214,6 +258,41 @@ class AvatarWindow(QWidget):
 
         menu.exec(self.mapToGlobal(pos))
 
+    def play_frames(self, frame_b64_list: list, fps: int = 25):
+        """Play a sequence of base64 JPEG frames."""
+        self._frame_queue = frame_b64_list
+        self._frame_index = 0
+        self._frame_fps = fps
+
+        if not hasattr(self, '_frame_timer'):
+            self._frame_timer = QTimer(self)
+            self._frame_timer.timeout.connect(self._play_next_frame)
+
+        self._frame_timer.start(int(1000 / fps))
+
+    def _play_next_frame(self):
+        if not hasattr(self, '_frame_queue') or self._frame_index >= len(self._frame_queue):
+            if hasattr(self, '_frame_timer'):
+                self._frame_timer.stop()
+            return
+
+        frame_b64 = self._frame_queue[self._frame_index]
+        self._frame_index += 1
+
+        try:
+            raw = base64.b64decode(frame_b64)
+            pixmap = QPixmap()
+            pixmap.loadFromData(raw)
+            if not pixmap.isNull():
+                scaled = pixmap.scaled(
+                    self.size(),
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                self.label.setPixmap(scaled)
+        except Exception as e:
+            print(f"[DesktopAvatar] Frame play error: {e}")
+
     def _reset_pos(self):
         screen = QApplication.primaryScreen()
         if screen:
@@ -238,6 +317,8 @@ def main():
     parser = argparse.ArgumentParser(description="Choom Desktop Avatar")
     parser.add_argument("--choom", type=str, help="Choom name to display")
     parser.add_argument("--image", type=str, help="Image file path (test mode)")
+    parser.add_argument("--choom-url", default="http://localhost:3000", help="Choom app URL")
+    parser.add_argument("--service-url", default="ws://127.0.0.1:8020", help="Avatar service WebSocket URL")
     parser.add_argument("--opacity", type=float, default=0.85)
     parser.add_argument("--size", type=int, default=300)
     args = parser.parse_args()
@@ -270,13 +351,24 @@ def main():
             print(f"[DesktopAvatar] Error: {e}")
             sys.exit(1)
 
+    # Connect to avatar service WebSocket for live animation
+    ws_url = f"{args.service_url}/ws/desktop"
+    ws_client = AvatarWebSocketClient(ws_url)
+    ws_client.frames_received.connect(window.play_frames)
+    ws_client.status_changed.connect(lambda s: print(f"[DesktopAvatar] WebSocket: {s}"))
+    ws_client.start()
+
     window.show()
     print(f"[DesktopAvatar] Window open ({args.size}px, {args.opacity*100:.0f}% opacity)")
     print(f"  Drag: left-click")
     print(f"  Resize: scroll wheel")
     print(f"  Menu: right-click")
+    print(f"  WebSocket: {ws_url}")
 
-    sys.exit(app.exec())
+    ret = app.exec()
+    ws_client.stop()
+    ws_client.wait(2000)
+    sys.exit(ret)
 
 
 if __name__ == "__main__":
