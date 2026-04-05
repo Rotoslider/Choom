@@ -94,11 +94,12 @@ class LivePortraitEngine:
             # Resize face from 256→512 before warping, use M_c2o as-is
             M = crop_info['M_c2o']
             h, w = img_bgr.shape[:2]
-            white = np.ones((512, 512), dtype=np.uint8) * 255
-            mask = cv2.warpPerspective(white, M, (w, h), flags=cv2.INTER_LANCZOS4, borderValue=0)
-            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
-            mask = cv2.erode(mask, kernel, iterations=3)
-            mask = cv2.GaussianBlur(mask, (31, 31), 10)
+            # Create soft elliptical mask instead of hard square
+            mask_src = np.zeros((512, 512), dtype=np.uint8)
+            cv2.ellipse(mask_src, (256, 256), (230, 240), 0, 0, 360, 255, -1)
+            mask_src = cv2.GaussianBlur(mask_src, (51, 51), 15)
+            mask = cv2.warpPerspective(mask_src, M, (w, h), flags=cv2.INTER_LANCZOS4, borderValue=0)
+            mask = cv2.GaussianBlur(mask, (21, 21), 7)
             mask_3 = np.stack([mask.astype(np.float32) / 255.0] * 3, axis=2)
 
             # Composite idle frame into full image (resize 256→512 first)
@@ -134,8 +135,8 @@ class LivePortraitEngine:
         feature_3d = ref_data["feature_3d"]
         x_s = ref_data["x_s"]
 
-        # Extract audio amplitude per frame
-        amplitudes = self._extract_audio_amplitudes(audio_path, self.fps)
+        # Extract audio features per frame (amplitude + spectral brightness)
+        amplitudes, brightness = self._extract_audio_features(audio_path, self.fps)
         num_frames = len(amplitudes)
         if num_frames == 0:
             return []
@@ -163,22 +164,38 @@ class LivePortraitEngine:
             driving['yaw'] = kp_info['yaw'] + math.sin(2 * math.pi * t_sec / 10.0) * 3.0
             driving['roll'] = kp_info['roll'] + math.sin(2 * math.pi * t_sec / 8.0) * 0.8
 
-            # Mouth opening from audio
-            amp = amplitudes[i]
+            # Mouth shapes from audio features
             start = max(0, i - 1)
             end = min(num_frames, i + 2)
             smooth_amp = amplitudes[start:end].mean()
+            smooth_bright = brightness[start:end].mean()
 
-            # sqrt curve: amplifies moderate audio so mouth moves during normal speech
+            # sqrt curve: amplifies moderate audio
             a = math.sqrt(smooth_amp) if smooth_amp > 0.02 else 0.0
+            b = smooth_bright  # 0=dark vowel (oo/ah), 1=bright vowel (ee/ih)
 
             driving['exp'] = kp_info['exp'].clone()
             if a > 0:
+                # Mouth opening (amplitude-driven)
                 driving['exp'][0, 14, 1] += a * 0.024
-                driving['exp'][0, 3, 1]  -= a * 0.012
-                driving['exp'][0, 7, 1]  -= a * 0.012
                 driving['exp'][0, 19, 1] += a * 0.019
                 driving['exp'][0, 20, 1] -= a * 0.014
+
+                # Mouth SHAPE (spectral-driven):
+                # Bright sounds (ee, ih, s): lips spread wide, less open
+                # Dark sounds (oo, ah, oh): lips round, more open
+                spread = b * a          # how wide/spread (bright vowels)
+                round_amt = (1 - b) * a  # how round (dark vowels)
+
+                # kp3,7: lip corners — spread outward for bright, inward for dark
+                driving['exp'][0, 3, 1] -= a * 0.012
+                driving['exp'][0, 7, 1] -= a * 0.012
+                driving['exp'][0, 3, 0] += spread * 0.008   # spread corners out (x-axis)
+                driving['exp'][0, 7, 0] -= spread * 0.008
+                # kp19: jaw — more open for dark vowels
+                driving['exp'][0, 19, 1] += round_amt * 0.010
+                # Lip rounding via kp 17 (z-axis push forward for "oo")
+                driving['exp'][0, 17, 2] -= round_amt * 0.008
 
             # Transform + stitch (with modified expression)
             x_d = self.wrapper.transform_keypoint(driving)
@@ -225,7 +242,8 @@ class LivePortraitEngine:
 
         return frames
 
-    def _extract_audio_amplitudes(self, wav_path: str, fps: int) -> np.ndarray:
+    def _extract_audio_features(self, wav_path: str, fps: int) -> tuple[np.ndarray, np.ndarray]:
+        """Extract per-frame amplitude and spectral brightness from audio."""
         audio, sr = sf.read(wav_path, dtype='float32')
         if audio.ndim > 1:
             audio = audio.mean(axis=1)
@@ -236,11 +254,32 @@ class LivePortraitEngine:
 
         spf = sr // fps
         n = len(audio) // spf
-        amps = np.array([np.sqrt(np.mean(audio[i*spf:(i+1)*spf]**2)) for i in range(n)], dtype=np.float32)
+
+        amps = np.zeros(n, dtype=np.float32)
+        brights = np.zeros(n, dtype=np.float32)
+
+        for i in range(n):
+            chunk = audio[i * spf:(i + 1) * spf]
+            # RMS amplitude
+            amps[i] = np.sqrt(np.mean(chunk ** 2))
+            # Spectral brightness: ratio of high-frequency energy to total
+            # Bright sounds (ee, s, t) have more high-freq energy
+            fft = np.abs(np.fft.rfft(chunk))
+            total_energy = fft.sum() + 1e-8
+            # Split at ~2kHz (index = 2000 * len(fft) / (sr/2))
+            split_idx = int(2000 * len(fft) / (sr / 2))
+            high_energy = fft[split_idx:].sum()
+            brights[i] = high_energy / total_energy
+
+        # Normalize
         mx = amps.max()
         if mx > 0:
             amps /= mx
-        return amps
+        mx_b = brights.max()
+        if mx_b > 0:
+            brights /= mx_b
+
+        return amps, brights
 
     @property
     def is_loaded(self) -> bool:

@@ -66,6 +66,16 @@ export function ChatInterface({
 
   const [activeTab, setActiveTab] = useState<'chat' | 'live'>('chat');
 
+  // Auto-switch to Chat if Live becomes unavailable
+  React.useEffect(() => {
+    if (activeTab === 'live' && !canGoLive) {
+      setActiveTab('chat');
+      if (ui.activeLiveChoomId === currentChoom?.id) {
+        setActiveLiveChoomId(null);
+      }
+    }
+  }, [canGoLive, activeTab, currentChoom?.id, ui.activeLiveChoomId, setActiveLiveChoomId]);
+
   const handleSend = useCallback(
     async (message: string, attachment?: ImageAttachment) => {
       setIsLoading(true);
@@ -89,12 +99,14 @@ export function ChatInterface({
 
   const isLLMConnected = services.llm === 'connected';
   const hasAvatar = !!currentChoom?.avatarUrl;
+  const avatarServiceUp = services.avatar === 'connected';
+  // Only block if ANOTHER choom has the live tab (not this one, not null)
   const isLiveBlocked =
     ui.activeLiveChoomId !== null && ui.activeLiveChoomId !== currentChoom?.id;
+  const canGoLive = avatarEnabled && hasAvatar && avatarServiceUp && !isLiveBlocked;
 
   const handleTabChange = (tab: 'chat' | 'live') => {
-    if (tab === 'live' && !hasAvatar) return;
-    if (tab === 'live' && isLiveBlocked) return;
+    if (tab === 'live' && !canGoLive) return;
 
     setActiveTab(tab);
 
@@ -146,20 +158,22 @@ export function ChatInterface({
                 </button>
                 <button
                   onClick={() => handleTabChange('live')}
-                  disabled={!hasAvatar || isLiveBlocked}
+                  disabled={!canGoLive}
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
                     activeTab === 'live'
                       ? 'bg-card text-foreground shadow-sm'
-                      : !hasAvatar || isLiveBlocked
+                      : !canGoLive
                         ? 'text-muted-foreground/40 cursor-not-allowed'
                         : 'text-muted-foreground hover:text-foreground'
                   }`}
                   title={
                     !hasAvatar
                       ? 'Upload a photo to use Live mode'
-                      : isLiveBlocked
-                        ? 'Another Choom has the Live tab open'
-                        : 'Live avatar mode'
+                      : !avatarServiceUp
+                        ? 'Avatar service not connected'
+                        : isLiveBlocked
+                          ? 'Another Choom has the Live tab open'
+                          : 'Live avatar mode'
                   }
                 >
                   <Video className="w-3.5 h-3.5" />
