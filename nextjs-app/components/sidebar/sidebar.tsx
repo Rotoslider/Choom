@@ -62,13 +62,16 @@ export function Sidebar({
     currentChoomId,
     currentChatId,
     services,
+    chooms,
   } = useAppStore();
 
-  // Count connected services
-  const connectedCount = Object.values(services).filter(
-    (s) => s === 'connected'
-  ).length;
-  const totalServices = Object.keys(services).length;
+  // Count connected services — exclude avatar if no Chooms use it
+  const anyAvatarEnabled = chooms.some(c => c.avatarMode && c.avatarMode !== 'off');
+  const serviceEntries = Object.entries(services).filter(
+    ([key]) => key !== 'avatar' || anyAvatarEnabled
+  );
+  const connectedCount = serviceEntries.filter(([, s]) => s === 'connected').length;
+  const totalServices = serviceEntries.length;
 
   return (
     <>
