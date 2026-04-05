@@ -82,11 +82,30 @@ class LivePortraitEngine:
             feature_3d = self.wrapper.extract_feature_3d(source_tensor)
             x_s = self.wrapper.transform_keypoint(kp_info)
 
-            # Render a static idle frame (used as display when not speaking)
+            # Render a static idle frame composited into full image
             ret = self.wrapper.warp_decode(feature_3d, x_s, x_s)
-            idle_frame = ret['out'].squeeze().permute(1, 2, 0).cpu().numpy()
-            idle_frame = (idle_frame * 255).clip(0, 255).astype(np.uint8)
-            idle_bgr = cv2.cvtColor(idle_frame, cv2.COLOR_RGB2BGR)
+            idle_face = ret['out'].squeeze().permute(1, 2, 0).cpu().numpy()
+            idle_face = (idle_face * 255).clip(0, 255).astype(np.uint8)
+            idle_face_bgr = cv2.cvtColor(idle_face, cv2.COLOR_RGB2BGR)
+
+            # Pre-compute compositing mask for blending face back to full image
+            img_bgr = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
+            # M_c2o maps from 512x512 crop space → original image
+            # Resize face from 256→512 before warping, use M_c2o as-is
+            M = crop_info['M_c2o']
+            h, w = img_bgr.shape[:2]
+            white = np.ones((512, 512), dtype=np.uint8) * 255
+            mask = cv2.warpPerspective(white, M, (w, h), flags=cv2.INTER_LANCZOS4, borderValue=0)
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+            mask = cv2.erode(mask, kernel, iterations=3)
+            mask = cv2.GaussianBlur(mask, (31, 31), 10)
+            mask_3 = np.stack([mask.astype(np.float32) / 255.0] * 3, axis=2)
+
+            # Composite idle frame into full image (resize 256→512 first)
+            idle_512 = cv2.resize(idle_face_bgr, (512, 512), interpolation=cv2.INTER_LANCZOS4)
+            idle_full = cv2.warpPerspective(idle_512, M, (w, h),
+                                            flags=cv2.INTER_LANCZOS4, borderValue=(0, 0, 0))
+            idle_bgr = (idle_full * mask_3 + img_bgr * (1 - mask_3)).astype(np.uint8)
 
             print(f"[LivePortrait] Reference prepared: pitch={kp_info['pitch'].item():.1f}° "
                   f"yaw={kp_info['yaw'].item():.1f}°")
@@ -95,7 +114,10 @@ class LivePortraitEngine:
                 "kp_info": kp_info,
                 "feature_3d": feature_3d,
                 "x_s": x_s,
-                "idle_frame_bgr": idle_bgr,  # 256x256 BGR for static display
+                "idle_frame_bgr": idle_bgr,
+                "source_bgr": img_bgr,
+                "composite_M": M,
+                "composite_mask": mask_3,
             }
         finally:
             os.chdir(saved_cwd)
@@ -152,11 +174,11 @@ class LivePortraitEngine:
 
             driving['exp'] = kp_info['exp'].clone()
             if a > 0:
-                driving['exp'][0, 14, 1] += a * 0.030
-                driving['exp'][0, 3, 1]  -= a * 0.015
-                driving['exp'][0, 7, 1]  -= a * 0.015
-                driving['exp'][0, 19, 1] += a * 0.024
-                driving['exp'][0, 20, 1] -= a * 0.018
+                driving['exp'][0, 14, 1] += a * 0.024
+                driving['exp'][0, 3, 1]  -= a * 0.012
+                driving['exp'][0, 7, 1]  -= a * 0.012
+                driving['exp'][0, 19, 1] += a * 0.019
+                driving['exp'][0, 20, 1] -= a * 0.014
 
             # Transform + stitch (with modified expression)
             x_d = self.wrapper.transform_keypoint(driving)
@@ -178,12 +200,20 @@ class LivePortraitEngine:
                 eye_delta = self.wrapper.retarget_eye(x_s, eye_ratio)
                 x_d = x_d + eye_delta
 
-            # Render
+            # Render face, resize 256→512, composite into full image
             ret = self.wrapper.warp_decode(feature_3d, x_s, x_d)
-            frame = ret['out'].squeeze().permute(1, 2, 0).cpu().numpy()
-            frame = (frame * 255).clip(0, 255).astype(np.uint8)
-            # RGB → BGR for JPEG encoding
-            frames.append(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+            face_rgb = ret['out'].squeeze().permute(1, 2, 0).cpu().numpy()
+            face_rgb = (face_rgb * 255).clip(0, 255).astype(np.uint8)
+            face_bgr = cv2.cvtColor(face_rgb, cv2.COLOR_RGB2BGR)
+            face_512 = cv2.resize(face_bgr, (512, 512), interpolation=cv2.INTER_LANCZOS4)
+
+            M = ref_data["composite_M"]
+            mask_3 = ref_data["composite_mask"]
+            h, w = ref_data["source_bgr"].shape[:2]
+            face_full = cv2.warpPerspective(face_512, M, (w, h),
+                                            flags=cv2.INTER_LANCZOS4, borderValue=(0, 0, 0))
+            output = (face_full * mask_3 + ref_data["source_bgr"] * (1 - mask_3)).astype(np.uint8)
+            frames.append(output)
 
         # Update time offset for smooth continuation
         self._time_offset += num_frames / self.fps
