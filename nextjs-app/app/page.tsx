@@ -109,8 +109,8 @@ export default function Home() {
           const choom = currentChoomRef.current;
           const liveId = liveChoomIdRef.current;
 
-          // Not in Live mode — return false so TTS queues audio normally
-          if (!liveId || !choom?.avatarUrl) {
+          // Not in Live mode or avatar disabled — return false so TTS queues audio normally
+          if (!liveId || !choom?.avatarUrl || !settings.avatar?.enabled) {
             return false;
           }
 
@@ -308,7 +308,8 @@ export default function Home() {
         });
         if (res.ok) {
           const data = await res.json();
-          const serviceKeys: (keyof ServiceHealth)[] = ['llm', 'memory', 'tts', 'stt', 'imageGen', 'weather', 'search', 'searxng', 'avatar'];
+          const serviceKeys: (keyof ServiceHealth)[] = ['llm', 'memory', 'tts', 'stt', 'imageGen', 'weather', 'search', 'searxng'];
+          if (settings.avatar?.enabled) serviceKeys.push('avatar');
           serviceKeys.forEach((service) => {
             const info = data.services[service] as { status: string } | undefined;
             const status = info?.status === 'connected' ? 'connected' : 'disconnected';

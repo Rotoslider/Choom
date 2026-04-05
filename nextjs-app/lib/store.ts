@@ -3,6 +3,7 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import type {
   AppSettings,
   HomeAssistantSettings,
+  AvatarSettings,
   LLMProviderConfig,
   LLMModelProfile,
   VisionModelProfile,
@@ -111,6 +112,10 @@ const defaultSettings: AppSettings = {
     promptEntities: '',
     cacheSeconds: 30,
   },
+  avatar: {
+    enabled: true,
+    endpoint: 'http://127.0.0.1:8020',
+  },
 };
 
 const defaultServiceHealth: ServiceHealth = {
@@ -208,6 +213,7 @@ interface AppState {
   updateAppearanceSettings: (settings: Partial<AppSettings['appearance']>) => void;
   updateVisionSettings: (settings: Partial<AppSettings['vision']>) => void;
   updateHomeAssistantSettings: (ha: Partial<HomeAssistantSettings>) => void;
+  updateAvatarSettings: (avatar: Partial<AvatarSettings>) => void;
   updateProvidersSettings: (providers: LLMProviderConfig[]) => void;
   updateModelProfiles: (profiles: LLMModelProfile[]) => void;
   updateVisionProfiles: (profiles: VisionModelProfile[]) => void;
@@ -470,6 +476,11 @@ export const useAppStore = create<AppState>()(
           settings: { ...state.settings, homeAssistant: { ...state.settings.homeAssistant, ...ha } },
         }));
         syncSettingsToBridgeConfig(get().settings);
+      },
+      updateAvatarSettings: (avatar) => {
+        set((state) => ({
+          settings: { ...state.settings, avatar: { ...state.settings.avatar, ...avatar } },
+        }));
       },
       updateProvidersSettings: (providers) => {
         set((state) => ({

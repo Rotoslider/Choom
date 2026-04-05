@@ -138,9 +138,15 @@ export interface AppSettings {
   appearance: AppearanceSettings;
   vision: VisionSettings;
   homeAssistant: HomeAssistantSettings;
+  avatar: AvatarSettings;
   providers?: LLMProviderConfig[];
   modelProfiles?: LLMModelProfile[];
   visionProfiles?: VisionModelProfile[];
+}
+
+export interface AvatarSettings {
+  enabled: boolean;
+  endpoint: string;
 }
 
 export interface LLMSettings {
@@ -640,7 +646,7 @@ export interface UIState {
   activeLiveChoomId: string | null;
 }
 
-export type SettingsTab = 'llm' | 'audio' | 'image' | 'memory' | 'search' | 'weather' | 'appearance' | 'scheduled' | 'heartbeat' | 'vision' | 'projects';
+export type SettingsTab = 'llm' | 'audio' | 'image' | 'memory' | 'search' | 'weather' | 'appearance' | 'scheduled' | 'heartbeat' | 'vision' | 'projects' | 'avatar';
 
 // ============================================================================
 // Form Types
