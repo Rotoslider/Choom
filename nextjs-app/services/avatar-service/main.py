@@ -170,6 +170,7 @@ class AnimateRequest(BaseModel):
     choom_id: str
     image_base64: str       # reference photo (data URI or raw base64)
     audio_base64: str       # WAV audio (raw base64)
+    includeAudio: bool = False  # forward audio to desktop for synced playback
 
 
 @app.post("/animate")
@@ -255,9 +256,10 @@ async def animate(req: AnimateRequest):
             _, buf = cv2.imencode(".jpg", ref_data["idle_frame_bgr"], [cv2.IMWRITE_JPEG_QUALITY, 95])
             idle_frame_b64 = base64.b64encode(buf.tobytes()).decode()
 
-        # Broadcast frames to desktop avatar clients
+        # Broadcast frames (+ audio if requested) to desktop avatar clients
         if desktop_clients and frame_data:
-            asyncio.create_task(broadcast_frames_to_desktop(frame_data, engine_fps))
+            audio_for_desktop = req.audio_base64 if req.includeAudio else None
+            asyncio.create_task(broadcast_frames_to_desktop(frame_data, engine_fps, audio_for_desktop))
 
         return {
             "frames": frame_data,
@@ -328,16 +330,19 @@ async def desktop_websocket(websocket: WebSocket):
         print(f"[AvatarService] Desktop client disconnected ({len(desktop_clients)} total)")
 
 
-async def broadcast_frames_to_desktop(frame_data: list[str], fps: int):
-    """Send animation frames to all connected desktop clients."""
+async def broadcast_frames_to_desktop(frame_data: list[str], fps: int, audio_b64: str = None):
+    """Send animation frames (and optionally audio) to desktop clients."""
     if not desktop_clients:
         return
 
-    message = json_mod.dumps({
+    msg = {
         "type": "frames",
         "frames": frame_data,
         "fps": fps,
-    })
+    }
+    if audio_b64:
+        msg["audio"] = audio_b64
+    message = json_mod.dumps(msg)
 
     disconnected = []
     for client in desktop_clients:
