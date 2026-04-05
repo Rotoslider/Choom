@@ -61,7 +61,8 @@ export function ChatInterface({
   liveAvatarRef,
 }: ChatInterfaceProps) {
   const [isLoading, setIsLoading] = useState(false);
-  const { currentChoom, services, ui, isStreaming, setActiveLiveChoomId } = useAppStore();
+  const { currentChoom, services, ui, isStreaming, setActiveLiveChoomId, settings } = useAppStore();
+  const avatarEnabled = settings.avatar?.enabled ?? true;
 
   const [activeTab, setActiveTab] = useState<'chat' | 'live'>('chat');
 
@@ -129,8 +130,8 @@ export function ChatInterface({
               )}
             </div>
 
-            {/* Tab switcher */}
-            {currentChoom && (
+            {/* Tab switcher — only show Live tab if avatar is enabled */}
+            {currentChoom && avatarEnabled && (
               <div className="flex items-center gap-1 bg-muted/50 rounded-lg p-0.5">
                 <button
                   onClick={() => handleTabChange('chat')}
