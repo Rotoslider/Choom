@@ -113,15 +113,31 @@ export default function Home() {
           // Avatar mode check:
           // 'off' → never animate, normal TTS
           // 'live' → only when Live tab is open (liveId set)
-          // 'desktop' → always animate (desktop window handles display)
+          // 'desktop' → send to animate service (fire-and-forget), TTS plays audio normally
           if (mode === 'off' || !choom?.avatarUrl) {
             return false;
           }
-          if (mode === 'live' && !liveId) {
-            return false; // Live tab not open — play audio normally
+
+          if (mode === 'desktop') {
+            // Desktop: fire-and-forget — frames go via WebSocket to desktop app
+            // Return false so TTS queue plays audio normally (no double audio)
+            fetch('/api/avatar/animate', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                choomId: choom.id,
+                imageBase64: choom.avatarUrl,
+                audioBase64,
+              }),
+            }).catch(() => {});
+            return false; // let TTS handle audio normally
           }
 
-          // Send audio to avatar service for animation
+          if (mode === 'live' && !liveId) {
+            return false; // Live tab not open — normal TTS
+          }
+
+          // Live tab mode — hold audio until frames arrive, play synced
           fetch('/api/avatar/animate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -133,19 +149,13 @@ export default function Home() {
           })
             .then((res) => res.ok ? res.json() : null)
             .then((data) => {
-              if (mode === 'live' && data?.frames?.length > 0) {
-                // Live tab mode — play frames in the Live tab
+              if (data?.frames?.length > 0) {
                 liveAvatarRef.current?.playFrames(data.frames, data.fps || 25, audioElement, data.idle_frame);
-              } else if (mode === 'desktop') {
-                // Desktop mode — frames go via WebSocket, just play audio here
-                audioElement.play().catch(() => {});
               } else {
-                // Fallback — play audio without animation
                 liveAvatarRef.current?.playFrames([], 25, audioElement);
               }
             })
             .catch(() => {
-              // Service error — play audio normally
               audioElement.play().catch(() => {});
             });
           return true; // handled — don't queue in TTS
