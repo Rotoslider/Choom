@@ -5,7 +5,7 @@ import type { Message } from '@/lib/types';
 import { User } from 'lucide-react';
 
 export interface LiveAvatarHandle {
-  playFrames: (frames: string[], fps: number, audio?: HTMLAudioElement) => void;
+  playFrames: (frames: string[], fps: number, audio?: HTMLAudioElement, idleFrame?: string) => void;
 }
 
 interface LiveAvatarViewProps {
@@ -28,6 +28,7 @@ export const LiveAvatarView = forwardRef<LiveAvatarHandle, LiveAvatarViewProps>(
     ref
   ) {
     const [currentFrame, setCurrentFrame] = useState<string | null>(null);
+    const [idleFrame, setIdleFrame] = useState<string | null>(null);
     const [isAnimating, setIsAnimating] = useState(false);
     const animationRef = useRef<number | null>(null);
     const currentAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -104,7 +105,8 @@ export const LiveAvatarView = forwardRef<LiveAvatarHandle, LiveAvatarViewProps>(
 
     // Expose playFrames to parent — queues clips for sequential playback
     useImperativeHandle(ref, () => ({
-      playFrames(frames: string[], fps: number, audio?: HTMLAudioElement) {
+      playFrames(frames: string[], fps: number, audio?: HTMLAudioElement, newIdleFrame?: string) {
+        if (newIdleFrame) setIdleFrame(newIdleFrame);
         if (frames.length === 0 && !audio) return;
 
         clipQueueRef.current.push({ frames, fps, audio });
@@ -172,9 +174,13 @@ export const LiveAvatarView = forwardRef<LiveAvatarHandle, LiveAvatarViewProps>(
       );
     }
 
+    // Use idle frame (256x256 from LivePortrait) if available, else full photo
+    const staticSrc = idleFrame
+      ? `data:image/jpeg;base64,${idleFrame}`
+      : avatarUrl;
     const displaySrc = currentFrame
       ? `data:image/jpeg;base64,${currentFrame}`
-      : avatarUrl;
+      : staticSrc;
 
     return (
       <div className="flex-1 flex flex-col min-h-0">

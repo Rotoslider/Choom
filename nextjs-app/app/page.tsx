@@ -128,7 +128,7 @@ export default function Home() {
             .then((res) => res.ok ? res.json() : null)
             .then((data) => {
               if (data?.frames?.length > 0) {
-                liveAvatarRef.current?.playFrames(data.frames, data.fps || 25, audioElement);
+                liveAvatarRef.current?.playFrames(data.frames, data.fps || 25, audioElement, data.idle_frame);
               } else {
                 // No frames but service responded — queue audio-only clip
                 liveAvatarRef.current?.playFrames([], 25, audioElement);
