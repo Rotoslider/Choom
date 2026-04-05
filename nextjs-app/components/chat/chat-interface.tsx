@@ -66,16 +66,6 @@ export function ChatInterface({
 
   const [activeTab, setActiveTab] = useState<'chat' | 'live'>('chat');
 
-  // Auto-switch to Chat if Live becomes unavailable
-  React.useEffect(() => {
-    if (activeTab === 'live' && !canGoLive) {
-      setActiveTab('chat');
-      if (ui.activeLiveChoomId === currentChoom?.id) {
-        setActiveLiveChoomId(null);
-      }
-    }
-  }, [canGoLive, activeTab, currentChoom?.id, ui.activeLiveChoomId, setActiveLiveChoomId]);
-
   const handleSend = useCallback(
     async (message: string, attachment?: ImageAttachment) => {
       setIsLoading(true);
@@ -104,6 +94,16 @@ export function ChatInterface({
   const isLiveBlocked =
     ui.activeLiveChoomId !== null && ui.activeLiveChoomId !== currentChoom?.id;
   const canGoLive = avatarEnabled && hasAvatar && avatarServiceUp && !isLiveBlocked;
+
+  // Auto-switch to Chat if Live becomes unavailable
+  React.useEffect(() => {
+    if (activeTab === 'live' && !canGoLive) {
+      setActiveTab('chat');
+      if (ui.activeLiveChoomId === currentChoom?.id) {
+        setActiveLiveChoomId(null);
+      }
+    }
+  }, [canGoLive, activeTab, currentChoom?.id, ui.activeLiveChoomId, setActiveLiveChoomId]);
 
   const handleTabChange = (tab: 'chat' | 'live') => {
     if (tab === 'live' && !canGoLive) return;
