@@ -135,8 +135,8 @@ export default function Home() {
           }
 
           if (mode === 'desktop') {
-            // Desktop: send to animate service, hold audio until frames ready,
-            // then play audio sequentially (queued, no overlap)
+            // Desktop: fire-and-forget animate (frames go via WebSocket)
+            // Audio plays immediately via sequential queue (no waiting for response)
             fetch('/api/avatar/animate', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -145,20 +145,13 @@ export default function Home() {
                 imageBase64: choom.avatarUrl,
                 audioBase64,
               }),
-            })
-              .then(() => {
-                // Queue audio for sequential playback
-                desktopAudioQueueRef.current.push(audioElement);
-                if (!desktopPlayingRef.current) {
-                  playNextDesktopAudio();
-                }
-              })
-              .catch(() => {
-                desktopAudioQueueRef.current.push(audioElement);
-                if (!desktopPlayingRef.current) {
-                  playNextDesktopAudio();
-                }
-              });
+            }).catch(() => {});
+
+            // Queue audio for sequential playback (no overlap)
+            desktopAudioQueueRef.current.push(audioElement);
+            if (!desktopPlayingRef.current) {
+              playNextDesktopAudio();
+            }
             return true; // handled — don't queue in TTS
           }
 
