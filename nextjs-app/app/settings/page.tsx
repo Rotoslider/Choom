@@ -39,6 +39,7 @@ import { ProvidersSettings } from '@/components/settings/providers-settings';
 import { YTDownloaderSettings } from '@/components/settings/yt-downloader-settings';
 import { AutomationsSettings } from '@/components/settings/automations-settings';
 import { HomeAssistantSettings } from '@/components/settings/homeassistant-settings';
+import { AvatarSettingsPanel } from '@/components/settings/avatar-settings';
 import { cn } from '@/lib/utils';
 
 type Section =
@@ -57,6 +58,7 @@ type Section =
   | 'yt-downloader'
   | 'automations'
   | 'home-assistant'
+  | 'avatar'
   | 'appearance';
 
 const sections: { id: Section; label: string; icon: React.ReactNode }[] = [
@@ -75,6 +77,7 @@ const sections: { id: Section; label: string; icon: React.ReactNode }[] = [
   { id: 'yt-downloader', label: 'YouTube DL', icon: <Music className="h-4 w-4" /> },
   { id: 'automations', label: 'Automations', icon: <Workflow className="h-4 w-4" /> },
   { id: 'home-assistant', label: 'Smart Home', icon: <Home className="h-4 w-4" /> },
+  { id: 'avatar', label: 'Avatar', icon: <Eye className="h-4 w-4" /> },
   { id: 'appearance', label: 'Theme', icon: <Palette className="h-4 w-4" /> },
 ];
 
@@ -142,6 +145,7 @@ export default function SettingsPage() {
             {activeSection === 'yt-downloader' && <YTDownloaderSettings />}
             {activeSection === 'automations' && <AutomationsSettings />}
             {activeSection === 'home-assistant' && <HomeAssistantSettings />}
+            {activeSection === 'avatar' && <AvatarSettingsPanel />}
             {activeSection === 'appearance' && <AppearanceSettings />}
           </div>
         </ScrollArea>
