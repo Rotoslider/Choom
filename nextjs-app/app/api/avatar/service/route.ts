@@ -7,6 +7,7 @@ const MUSETALK_VENV = '/home/nuc1/projects/MuseTalk/venv/bin/activate';
 const AVATAR_SERVICE_URL = process.env.AVATAR_SERVICE_URL || 'http://127.0.0.1:8020';
 
 let serviceProcess: ChildProcess | null = null;
+let desktopProcess: ChildProcess | null = null;
 
 async function isServiceRunning(): Promise<boolean> {
   try {
@@ -30,11 +31,11 @@ export async function GET() {
 }
 
 /**
- * POST /api/avatar/service — start or stop the service
- * Body: { action: "start" | "stop" }
+ * POST /api/avatar/service — start or stop the service + desktop avatar
+ * Body: { action: "start" | "stop" | "start-desktop" | "stop-desktop", choomName?: string }
  */
 export async function POST(request: NextRequest) {
-  const { action } = await request.json();
+  const { action, choomName } = await request.json();
 
   if (action === 'start') {
     // Check if already running
@@ -94,7 +95,57 @@ export async function POST(request: NextRequest) {
       execSync('fuser -k 8020/tcp 2>/dev/null', { timeout: 3000 });
     } catch {}
 
+    // Also stop desktop avatar if running
+    if (desktopProcess) {
+      desktopProcess.kill();
+      desktopProcess = null;
+    }
+
     return NextResponse.json({ success: true, message: 'Stopped' });
+
+  } else if (action === 'start-desktop') {
+    // Launch desktop avatar window for a specific Choom
+    if (desktopProcess) {
+      desktopProcess.kill();
+      desktopProcess = null;
+    }
+
+    const name = choomName || '';
+    const cmd = `source ${MUSETALK_VENV} && cd ${SERVICE_DIR} && python3 desktop_avatar.py --choom "${name}" --size 300 --opacity 0.9`;
+    desktopProcess = spawn('bash', ['-c', cmd], {
+      detached: false,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    desktopProcess.stdout?.on('data', (data: Buffer) => {
+      const line = data.toString().trim();
+      if (line) console.log(`[desktop-avatar] ${line}`);
+    });
+
+    desktopProcess.stderr?.on('data', (data: Buffer) => {
+      const line = data.toString().trim();
+      if (line) console.error(`[desktop-avatar] ${line}`);
+    });
+
+    desktopProcess.on('exit', (code) => {
+      console.log(`[desktop-avatar] Exited with code ${code}`);
+      desktopProcess = null;
+    });
+
+    return NextResponse.json({ success: true, message: `Desktop avatar launched for ${name}`, pid: desktopProcess?.pid });
+
+  } else if (action === 'stop-desktop') {
+    if (desktopProcess) {
+      desktopProcess.kill();
+      desktopProcess = null;
+    }
+    // Also kill any orphaned desktop_avatar processes
+    try {
+      const { execSync } = require('child_process');
+      execSync('pkill -f desktop_avatar.py 2>/dev/null', { timeout: 3000 });
+    } catch {}
+
+    return NextResponse.json({ success: true, message: 'Desktop avatar stopped' });
   }
 
   return NextResponse.json({ error: 'Invalid action' }, { status: 400 });

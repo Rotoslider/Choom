@@ -50,12 +50,35 @@ export function AvatarSettingsPanel() {
             body: JSON.stringify({ action: 'start' }),
           }).catch(() => {});
         } else if (!anyNeedService && avatarServiceUp) {
-          // Stop service
+          // Stop service + desktop
           fetch('/api/avatar/service', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ action: 'stop' }),
           }).catch(() => {});
+        }
+
+        // Desktop avatar window management
+        const choomName = chooms.find(c => c.id === choomId)?.name;
+        if (mode === 'desktop' && choomName) {
+          // Launch desktop avatar for this Choom (after service starts)
+          setTimeout(() => {
+            fetch('/api/avatar/service', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action: 'start-desktop', choomName }),
+            }).catch(() => {});
+          }, anyNeedService && !avatarServiceUp ? 8000 : 500); // wait for service if starting
+        } else {
+          // Stop desktop avatar if switching away from desktop mode
+          const anyDesktop = updatedChooms.some(c => c.avatarMode === 'desktop');
+          if (!anyDesktop) {
+            fetch('/api/avatar/service', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action: 'stop-desktop' }),
+            }).catch(() => {});
+          }
         }
       }
     } catch (e) {
