@@ -8,6 +8,7 @@ Endpoints:
 """
 
 import base64
+import os
 import time
 import traceback
 import uuid
@@ -25,6 +26,7 @@ import config
 from face_reconstruction import create_reconstructor, FaceReconstructor
 from glb_exporter import export_avatar_glb
 from musetalk_inference import MuseTalkEngine
+from liveportrait_engine import LivePortraitEngine
 
 
 app = FastAPI(title="Choom Avatar Service", version="1.0.0")
@@ -36,10 +38,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Animation engine: "liveportrait" (real-time) or "musetalk" (higher quality lip sync)
+ANIMATION_ENGINE = os.environ.get("ANIMATION_ENGINE", "liveportrait")
+
 # Global state
 reconstructor: FaceReconstructor | None = None
 musetalk: MuseTalkEngine | None = None
-musetalk_refs: dict[str, dict] = {}  # choom_id → prepared reference data
+liveportrait: LivePortraitEngine | None = None
+animation_refs: dict[str, dict] = {}  # choom_id → prepared reference data
 jobs: dict[str, dict] = {}
 
 
@@ -61,8 +67,13 @@ async def startup():
     # Pre-load the reconstructor
     reconstructor = create_reconstructor(config.DEVICE)
 
-    # Initialize MuseTalk engine (models loaded lazily on first use)
-    musetalk = MuseTalkEngine(config.DEVICE)
+    # Initialize animation engine (models loaded lazily on first use)
+    if ANIMATION_ENGINE == "liveportrait":
+        liveportrait = LivePortraitEngine(config.DEVICE)
+        print(f"[AvatarService] Animation engine: LivePortrait (real-time)")
+    else:
+        musetalk = MuseTalkEngine(config.DEVICE)
+        print(f"[AvatarService] Animation engine: MuseTalk")
     print("[AvatarService] Ready")
 
 
@@ -160,48 +171,51 @@ async def animate(req: AnimateRequest):
     """
     Generate talking head video frames from audio + reference image.
     Returns base64-encoded JPEG frames as a JSON array.
+    Uses LivePortrait (real-time) or MuseTalk depending on ANIMATION_ENGINE.
     """
-    global musetalk
-
-    if musetalk is None:
-        musetalk = MuseTalkEngine(config.DEVICE)
+    global musetalk, liveportrait
 
     try:
         # Prepare reference if not cached
-        if req.choom_id not in musetalk_refs:
+        if req.choom_id not in animation_refs:
             image = _decode_image(req.image_base64)
 
-            # Check for idle video config
-            video_path = None
-            config_path = config.AVATAR_MODEL_DIR / "idle-video-config.json"
-            if config_path.exists():
-                import json as json_mod
-                try:
-                    idle_config = json_mod.loads(config_path.read_text())
-                    video_name = idle_config.get(req.choom_id)
-                    if video_name:
-                        vp = config.AVATAR_MODEL_DIR / video_name
-                        if vp.exists():
-                            video_path = str(vp)
-                except Exception:
-                    pass
+            if ANIMATION_ENGINE == "liveportrait":
+                if liveportrait is None:
+                    liveportrait = LivePortraitEngine(config.DEVICE)
+                ref_data = liveportrait.prepare_reference(image)
+            else:
+                if musetalk is None:
+                    musetalk = MuseTalkEngine(config.DEVICE)
+                # Check for idle video
+                video_path = None
+                config_path = config.AVATAR_MODEL_DIR / "idle-video-config.json"
+                if config_path.exists():
+                    import json as json_mod
+                    try:
+                        idle_config = json_mod.loads(config_path.read_text())
+                        video_name = idle_config.get(req.choom_id)
+                        if video_name:
+                            vp = config.AVATAR_MODEL_DIR / video_name
+                            if vp.exists():
+                                video_path = str(vp)
+                    except Exception:
+                        pass
+                if not video_path:
+                    import glob
+                    for pattern in [f"{req.choom_id}_idle*.mp4", "eve_idle*.mp4"]:
+                        matches = sorted(glob.glob(str(config.AVATAR_MODEL_DIR / pattern)))
+                        if matches:
+                            video_path = matches[0]
+                            break
+                if video_path:
+                    print(f"[AvatarService] Using idle video: {video_path}")
+                ref_data = musetalk.prepare_reference(image, video_path=video_path)
 
-            # Fallback: scan for any matching idle video
-            if not video_path:
-                import glob
-                for pattern in [f"{req.choom_id}_idle*.mp4", "eve_idle*.mp4"]:
-                    matches = sorted(glob.glob(str(config.AVATAR_MODEL_DIR / pattern)))
-                    if matches:
-                        video_path = matches[0]
-                        break
+            animation_refs[req.choom_id] = ref_data
+            print(f"[AvatarService] Prepared reference for {req.choom_id} ({ANIMATION_ENGINE})")
 
-            if video_path:
-                print(f"[AvatarService] Using idle video: {video_path}")
-            ref_data = musetalk.prepare_reference(image, video_path=video_path)
-            musetalk_refs[req.choom_id] = ref_data
-            print(f"[AvatarService] Prepared MuseTalk reference for {req.choom_id}")
-
-        ref_data = musetalk_refs[req.choom_id]
+        ref_data = animation_refs[req.choom_id]
 
         # Decode audio and save to temp file
         import tempfile
@@ -211,24 +225,36 @@ async def animate(req: AnimateRequest):
             audio_path = f.name
 
         # Generate frames
-        frames = musetalk.animate(audio_path, ref_data)
+        if ANIMATION_ENGINE == "liveportrait":
+            frames = liveportrait.animate(audio_path, ref_data)
+        else:
+            frames = musetalk.animate(audio_path, ref_data)
 
         # Clean up temp file
         import os
         os.unlink(audio_path)
 
-        # Encode frames as base64 JPEGs
-        # Frames are BGR (from MuseTalk pipeline), cv2.imencode expects BGR
+        # Encode frames as base64 JPEGs (frames are BGR)
         import cv2
         frame_data = []
         for frame in frames:
             _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
             frame_data.append(base64.b64encode(buf.tobytes()).decode())
 
+        engine_fps = liveportrait.fps if ANIMATION_ENGINE == "liveportrait" else musetalk.fps
+
+        # Include idle frame for LivePortrait (prevents zoom jump in frontend)
+        idle_frame_b64 = None
+        if ANIMATION_ENGINE == "liveportrait" and "idle_frame_bgr" in ref_data:
+            _, buf = cv2.imencode(".jpg", ref_data["idle_frame_bgr"], [cv2.IMWRITE_JPEG_QUALITY, 95])
+            idle_frame_b64 = base64.b64encode(buf.tobytes()).decode()
+
         return {
             "frames": frame_data,
-            "fps": musetalk.fps,
+            "fps": engine_fps,
             "count": len(frame_data),
+            "engine": ANIMATION_ENGINE,
+            "idle_frame": idle_frame_b64,
         }
 
     except Exception as e:
@@ -240,10 +266,10 @@ async def animate(req: AnimateRequest):
 @app.post("/animate/clear-cache")
 async def clear_animate_cache(choom_id: str = None):
     """Clear cached reference data."""
-    if choom_id and choom_id in musetalk_refs:
-        del musetalk_refs[choom_id]
+    if choom_id and choom_id in animation_refs:
+        del animation_refs[choom_id]
     elif not choom_id:
-        musetalk_refs.clear()
+        animation_refs.clear()
     return {"cleared": True}
 
 
