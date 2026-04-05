@@ -66,14 +66,6 @@ export const LiveAvatarView = forwardRef<LiveAvatarHandle, LiveAvatarViewProps>(
         clip.audio.play().catch(() => {});
       }
 
-      // Push frames to desktop avatar (synced with audio start)
-      if (clip.frames.length > 0) {
-        fetch('http://127.0.0.1:8020/desktop/push-frames', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ frames: clip.frames, fps: clip.fps }),
-        }).catch(() => {}); // fire-and-forget
-      }
 
       // Audio-only clip (no frames) — wait for audio to finish then play next
       if (clip.frames.length === 0) {

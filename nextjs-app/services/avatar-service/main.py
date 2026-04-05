@@ -255,6 +255,9 @@ async def animate(req: AnimateRequest):
             _, buf = cv2.imencode(".jpg", ref_data["idle_frame_bgr"], [cv2.IMWRITE_JPEG_QUALITY, 95])
             idle_frame_b64 = base64.b64encode(buf.tobytes()).decode()
 
+        # Broadcast frames to desktop avatar clients
+        if desktop_clients and frame_data:
+            asyncio.create_task(broadcast_frames_to_desktop(frame_data, engine_fps))
 
         return {
             "frames": frame_data,
