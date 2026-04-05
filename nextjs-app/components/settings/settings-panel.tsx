@@ -49,7 +49,7 @@ export function SettingsPanel({ open, onOpenChange }: SettingsPanelProps) {
           onValueChange={(v) => setActiveSettingsTab(v as typeof ui.activeSettingsTab)}
           className="flex-1 flex flex-col h-full"
         >
-          <TabsList className="grid grid-cols-5 w-full gap-1">
+          <TabsList className="flex flex-wrap h-auto w-full gap-1 p-1">
             <TabsTrigger value="llm">LLM</TabsTrigger>
             <TabsTrigger value="audio">Audio</TabsTrigger>
             <TabsTrigger value="image">Image</TabsTrigger>
