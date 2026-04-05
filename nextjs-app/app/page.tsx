@@ -108,14 +108,20 @@ export default function Home() {
         (audioBase64, audioElement) => {
           const choom = currentChoomRef.current;
           const liveId = liveChoomIdRef.current;
+          const mode = (choom?.avatarMode as string) || 'off';
 
-          // Not in Live mode or avatar disabled — return false so TTS queues audio normally
-          if (!liveId || !choom?.avatarUrl || !settings.avatar?.enabled) {
+          // Avatar mode check:
+          // 'off' → never animate, normal TTS
+          // 'live' → only when Live tab is open (liveId set)
+          // 'desktop' → always animate (desktop window handles display)
+          if (mode === 'off' || !choom?.avatarUrl) {
             return false;
           }
+          if (mode === 'live' && !liveId) {
+            return false; // Live tab not open — play audio normally
+          }
 
-          // Live mode — send to MuseTalk for synced face animation
-          // Audio is queued via liveAvatarRef for sequential playback
+          // Send audio to avatar service for animation
           fetch('/api/avatar/animate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -127,16 +133,20 @@ export default function Home() {
           })
             .then((res) => res.ok ? res.json() : null)
             .then((data) => {
-              if (data?.frames?.length > 0) {
+              if (mode === 'live' && data?.frames?.length > 0) {
+                // Live tab mode — play frames in the Live tab
                 liveAvatarRef.current?.playFrames(data.frames, data.fps || 25, audioElement, data.idle_frame);
+              } else if (mode === 'desktop') {
+                // Desktop mode — frames go via WebSocket, just play audio here
+                audioElement.play().catch(() => {});
               } else {
-                // No frames but service responded — queue audio-only clip
+                // Fallback — play audio without animation
                 liveAvatarRef.current?.playFrames([], 25, audioElement);
               }
             })
             .catch(() => {
-              // Service down — queue audio-only clip (sequential, no overlap)
-              liveAvatarRef.current?.playFrames([], 25, audioElement);
+              // Service error — play audio normally
+              audioElement.play().catch(() => {});
             });
           return true; // handled — don't queue in TTS
         },
@@ -309,7 +319,14 @@ export default function Home() {
         if (res.ok) {
           const data = await res.json();
           const serviceKeys: (keyof ServiceHealth)[] = ['llm', 'memory', 'tts', 'stt', 'imageGen', 'weather', 'search', 'searxng'];
-          if (settings.avatar?.enabled) serviceKeys.push('avatar');
+          // Only check avatar service if any Choom has avatar mode != 'off'
+          const anyAvatarEnabled = chooms.some(c => c.avatarMode && c.avatarMode !== 'off');
+          if (anyAvatarEnabled) {
+            serviceKeys.push('avatar');
+          } else {
+            // Mark as disconnected without checking (standby)
+            updateServiceHealth('avatar', 'disconnected');
+          }
           serviceKeys.forEach((service) => {
             const info = data.services[service] as { status: string } | undefined;
             const status = info?.status === 'connected' ? 'connected' : 'disconnected';

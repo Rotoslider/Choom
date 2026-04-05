@@ -50,3 +50,5 @@ Thumbs.db
 # Lock files (not needed for project - no CI)
 package-lock.json
 nextjs-app/tests/
+services/avatar-service/models/
+services/avatar-service/test_glb.py
