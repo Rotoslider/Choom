@@ -255,9 +255,6 @@ async def animate(req: AnimateRequest):
             _, buf = cv2.imencode(".jpg", ref_data["idle_frame_bgr"], [cv2.IMWRITE_JPEG_QUALITY, 95])
             idle_frame_b64 = base64.b64encode(buf.tobytes()).decode()
 
-        # Broadcast to desktop avatar clients
-        if desktop_clients and frame_data:
-            asyncio.create_task(broadcast_frames_to_desktop(frame_data, engine_fps))
 
         return {
             "frames": frame_data,
@@ -281,6 +278,21 @@ async def clear_animate_cache(choom_id: str = None):
     elif not choom_id:
         animation_refs.clear()
     return {"cleared": True}
+
+
+# ============================================================================
+# Desktop Frame Push — browser sends frames when clip queue plays them
+# ============================================================================
+
+@app.post("/desktop/push-frames")
+async def push_frames_to_desktop(request_data: dict):
+    """Browser calls this when the clip queue starts playing a clip.
+    This ensures desktop animation is synced with audio playback."""
+    frames = request_data.get("frames", [])
+    fps = request_data.get("fps", 25)
+    if frames and desktop_clients:
+        await broadcast_frames_to_desktop(frames, fps)
+    return {"pushed": len(frames)}
 
 
 # ============================================================================
