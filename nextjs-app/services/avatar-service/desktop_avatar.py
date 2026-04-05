@@ -15,12 +15,83 @@ import base64
 import json
 import sqlite3
 
+import numpy as np
+from PIL import Image as PILImage
+from io import BytesIO
+
 from PyQt6.QtWidgets import QApplication, QWidget, QLabel, QMenu
 from PyQt6.QtCore import Qt, QTimer, QPoint
-from PyQt6.QtGui import QPixmap, QAction, QCursor
+from PyQt6.QtGui import QPixmap, QAction, QCursor, QBitmap, QImage, QRegion
 
 
 DB_PATH = os.path.expanduser("~/projects/Choom/nextjs-app/prisma/dev.db")
+
+# Background colors to detect and make transparent
+BG_COLORS = [
+    (0x15, 0x0d, 0x21),  # Choom dark purple
+    (0x0f, 0x0a, 0x1a),  # Choom darker variant
+    (0x00, 0x00, 0x00),  # Pure black
+    (0x1a, 0x10, 0x25),  # Another dark purple variant
+]
+BG_TOLERANCE = 40  # color distance threshold
+
+
+def create_mask_from_image(pixmap: QPixmap) -> QBitmap:
+    """Create a window mask using flood-fill from corners to find background.
+
+    Detects background color from corner pixels, flood-fills from edges,
+    then erodes to remove dark fringe and smooths for clean edges.
+    """
+    from scipy.ndimage import binary_dilation, binary_erosion, binary_fill_holes, gaussian_filter
+    from PIL import Image as PILImg
+
+    # Convert QPixmap to numpy
+    qimg = pixmap.toImage().convertToFormat(QImage.Format.Format_RGBA8888)
+    w, h = qimg.width(), qimg.height()
+    ptr = qimg.bits()
+    ptr.setsize(w * h * 4)
+    arr = np.frombuffer(ptr, dtype=np.uint8).reshape(h, w, 4).copy()
+    rgb = arr[:, :, :3].astype(float)
+
+    # Sample background color from corner regions
+    cs = max(5, min(w, h) // 20)
+    corners = [rgb[:cs, :cs], rgb[:cs, -cs:], rgb[-cs:, :cs], rgb[-cs:, -cs:]]
+    bg_color = np.mean([c.reshape(-1, 3).mean(axis=0) for c in corners], axis=0)
+    print(f"[DesktopAvatar] BG color: RGB({bg_color[0]:.0f},{bg_color[1]:.0f},{bg_color[2]:.0f})")
+
+    # Find pixels similar to background (tolerance 30)
+    dist = np.sqrt(np.sum((rgb - bg_color) ** 2, axis=2))
+    is_bg = dist < 30
+
+    # Flood-fill from border pixels
+    border = np.zeros((h, w), dtype=bool)
+    border[0, :] = border[-1, :] = border[:, 0] = border[:, -1] = True
+    bg_mask = border & is_bg
+    for _ in range(max(w, h)):
+        grown = binary_dilation(bg_mask) & is_bg
+        new = grown | bg_mask
+        if np.array_equal(new, bg_mask):
+            break
+        bg_mask = new
+
+    # Foreground with holes filled
+    fg = binary_fill_holes(~bg_mask)
+
+    # Erode to trim dark fringe, minimal dilation back
+    fg = binary_erosion(fg, iterations=2)
+    fg = binary_dilation(fg, iterations=1)
+
+    # Smooth edges
+    fg_float = gaussian_filter(fg.astype(float), sigma=2.5)
+    fg_smooth = fg_float > 0.4
+
+    fg_pct = fg_smooth.sum() / (h * w) * 100
+    print(f"[DesktopAvatar] Mask: {fg_pct:.0f}% foreground")
+
+    # QBitmap: BLACK=visible, WHITE=invisible
+    mask_gray = np.where(fg_smooth, 0, 255).astype(np.uint8)
+    PILImg.fromarray(mask_gray, mode='L').save('/tmp/_avatar_mask.bmp')
+    return QBitmap('/tmp/_avatar_mask.bmp')
 
 
 class AvatarWindow(QWidget):
@@ -79,6 +150,21 @@ class AvatarWindow(QWidget):
             )
             self.label.setPixmap(scaled)
             self.label.resize(self.size())
+            self._update_mask()
+
+    def _update_mask(self):
+        """Apply window mask to cut out background pixels."""
+        if self._original_pixmap:
+            scaled = self._original_pixmap.scaled(
+                self.size(),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            try:
+                mask = create_mask_from_image(scaled)
+                self.setMask(QRegion(mask))
+            except Exception as e:
+                print(f"[DesktopAvatar] Mask error: {e}")
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
