@@ -93,17 +93,18 @@ export function ChatInterface({
   // Only block if ANOTHER choom has the live tab (not this one, not null)
   const isLiveBlocked =
     ui.activeLiveChoomId !== null && ui.activeLiveChoomId !== currentChoom?.id;
-  const canGoLive = avatarEnabled && hasAvatar && avatarServiceUp && !isLiveBlocked;
+  // Allow opening Live tab even if service is temporarily down (shows static photo)
+  const canGoLive = avatarEnabled && hasAvatar && !isLiveBlocked;
 
-  // Auto-switch to Chat if Live becomes unavailable
+  // Auto-switch to Chat only if avatar is explicitly disabled (not on temp health blips)
   React.useEffect(() => {
-    if (activeTab === 'live' && !canGoLive) {
+    if (activeTab === 'live' && !avatarEnabled) {
       setActiveTab('chat');
       if (ui.activeLiveChoomId === currentChoom?.id) {
         setActiveLiveChoomId(null);
       }
     }
-  }, [canGoLive, activeTab, currentChoom?.id, ui.activeLiveChoomId, setActiveLiveChoomId]);
+  }, [avatarEnabled, activeTab, currentChoom?.id, ui.activeLiveChoomId, setActiveLiveChoomId]);
 
   const handleTabChange = (tab: 'chat' | 'live') => {
     if (tab === 'live' && !canGoLive) return;
