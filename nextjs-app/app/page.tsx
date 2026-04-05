@@ -118,14 +118,26 @@ export default function Home() {
             return false;
           }
 
-          // 'live' mode requires Live tab open
-          if (mode === 'live' && !liveId) {
-            return false; // Live tab not open — normal TTS
+          if (mode === 'desktop') {
+            // Desktop: TTS plays normally, animate fires in background
+            // Frames go to desktop via WebSocket, slight lag is expected
+            fetch('/api/avatar/animate', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                choomId: choom.id,
+                imageBase64: choom.avatarUrl,
+                audioBase64,
+              }),
+            }).catch(() => {});
+            return false; // TTS plays audio normally
           }
 
-          // Both 'live' and 'desktop' use the same path:
-          // Hold audio → animate → play via clip queue (synced)
-          // Desktop also gets frames via WebSocket to the desktop window
+          if (mode === 'live' && !liveId) {
+            return false;
+          }
+
+          // Live tab: hold audio → animate → play via clip queue (synced)
           fetch('/api/avatar/animate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },

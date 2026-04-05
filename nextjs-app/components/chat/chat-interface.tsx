@@ -226,20 +226,6 @@ export function ChatInterface({
         />
       )}
 
-      {/* Off-screen LiveAvatarView for desktop mode — provides clip queue for audio sync.
-          Uses visibility:hidden (not display:none) so requestAnimationFrame keeps firing. */}
-      {choomAvatarMode === 'desktop' && hasAvatar && currentChoom && activeTab !== 'live' && (
-        <div style={{ position: 'absolute', left: '-9999px', width: '1px', height: '1px', overflow: 'hidden' }}>
-          <LiveAvatarView
-            ref={liveAvatarRef}
-            choomId={currentChoom.id}
-            avatarUrl={currentChoom.avatarUrl}
-            messages={messages}
-            isSpeaking={isSpeaking}
-            isStreaming={isStreaming}
-          />
-        </div>
-      )}
 
       {/* Input area */}
       <InputArea
