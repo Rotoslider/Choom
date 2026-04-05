@@ -62,7 +62,6 @@ export function Sidebar({
     currentChoomId,
     currentChatId,
     services,
-    chooms,
   } = useAppStore();
 
   // Count connected services — exclude avatar if no Chooms use it
