@@ -66,6 +66,12 @@ export function ChatInterface({
 
   const [activeTab, setActiveTab] = useState<'chat' | 'live'>('chat');
 
+  // Reset to Chat tab when switching Chooms + release any Live lock
+  React.useEffect(() => {
+    setActiveTab('chat');
+    setActiveLiveChoomId(null);
+  }, [currentChoom?.id, setActiveLiveChoomId]);
+
   const handleSend = useCallback(
     async (message: string, attachment?: ImageAttachment) => {
       setIsLoading(true);
