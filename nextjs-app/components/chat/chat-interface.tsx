@@ -226,6 +226,20 @@ export function ChatInterface({
         />
       )}
 
+      {/* Hidden LiveAvatarView for desktop mode — provides the clip queue for audio sync */}
+      {choomAvatarMode === 'desktop' && hasAvatar && currentChoom && activeTab !== 'live' && (
+        <div style={{ display: 'none' }}>
+          <LiveAvatarView
+            ref={liveAvatarRef}
+            choomId={currentChoom.id}
+            avatarUrl={currentChoom.avatarUrl}
+            messages={messages}
+            isSpeaking={isSpeaking}
+            isStreaming={isStreaming}
+          />
+        </div>
+      )}
+
       {/* Input area */}
       <InputArea
         onSend={handleSend}

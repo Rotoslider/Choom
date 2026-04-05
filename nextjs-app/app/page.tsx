@@ -86,28 +86,12 @@ export default function Home() {
 
   // Live avatar ref for playing MuseTalk-generated frames
   const liveAvatarRef = useRef<LiveAvatarHandle | null>(null);
-  // Desktop mode audio queue — sequential playback without Live tab
-  const desktopAudioQueueRef = useRef<HTMLAudioElement[]>([]);
-  const desktopPlayingRef = useRef(false);
   // Refs for live mode state (avoids stale closures in TTS callback)
   const liveChoomIdRef = useRef<string | null>(null);
   const currentChoomRef = useRef(currentChoom);
 
   // Abort controller for stopping generation
   const abortControllerRef = useRef<AbortController | null>(null);
-
-  // Desktop audio sequential playback
-  const playNextDesktopAudio = () => {
-    if (desktopAudioQueueRef.current.length === 0) {
-      desktopPlayingRef.current = false;
-      return;
-    }
-    desktopPlayingRef.current = true;
-    const audio = desktopAudioQueueRef.current.shift()!;
-    audio.onended = () => playNextDesktopAudio();
-    audio.onerror = () => playNextDesktopAudio();
-    audio.play().catch(() => playNextDesktopAudio());
-  };
 
   // Initialize TTS when settings or current Choom change
   useEffect(() => {
@@ -134,40 +118,14 @@ export default function Home() {
             return false;
           }
 
-          if (mode === 'desktop') {
-            // Desktop: hold audio until frames are generated, then play synced
-            // Frames go to desktop via WebSocket, audio plays here sequentially
-            fetch('/api/avatar/animate', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                choomId: choom.id,
-                imageBase64: choom.avatarUrl,
-                audioBase64,
-              }),
-            })
-              .then(() => {
-                // Frames sent via WebSocket — now queue audio to play in sync
-                desktopAudioQueueRef.current.push(audioElement);
-                if (!desktopPlayingRef.current) {
-                  playNextDesktopAudio();
-                }
-              })
-              .catch(() => {
-                // Service error — still play audio
-                desktopAudioQueueRef.current.push(audioElement);
-                if (!desktopPlayingRef.current) {
-                  playNextDesktopAudio();
-                }
-              });
-            return true; // handled — don't queue in TTS
-          }
-
+          // 'live' mode requires Live tab open
           if (mode === 'live' && !liveId) {
             return false; // Live tab not open — normal TTS
           }
 
-          // Live tab mode — hold audio until frames arrive, play synced
+          // Both 'live' and 'desktop' use the same path:
+          // Hold audio → animate → play via clip queue (synced)
+          // Desktop also gets frames via WebSocket to the desktop window
           fetch('/api/avatar/animate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
