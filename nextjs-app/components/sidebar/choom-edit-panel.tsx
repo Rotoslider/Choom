@@ -693,6 +693,15 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave }: ChoomEditP
           ? { characterPrompt: selfPortraitSettings.characterPrompt }
           : undefined;
 
+      // If avatar photo changed, clear the avatar service cache for this choom
+      if (avatarUrl !== choom.avatarUrl) {
+        fetch('/api/avatar/animate/clear-cache', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ choomId: choom.id }),
+        }).catch(() => {});
+      }
+
       await onSave({
         id: choom.id,
         name,
