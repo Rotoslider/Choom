@@ -10,7 +10,7 @@ const AVATAR_SERVICE_URL = process.env.AVATAR_SERVICE_URL || 'http://127.0.0.1:8
  */
 export async function POST(request: NextRequest) {
   try {
-    const { choomId, imageBase64, audioBase64 } = await request.json();
+    const { choomId, imageBase64, audioBase64, includeAudio } = await request.json();
 
     if (!choomId || !audioBase64) {
       return NextResponse.json(
@@ -26,6 +26,7 @@ export async function POST(request: NextRequest) {
         choom_id: choomId,
         image_base64: imageBase64 || '',
         audio_base64: audioBase64,
+        includeAudio: includeAudio || false,
       }),
     });
 
