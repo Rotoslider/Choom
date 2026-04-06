@@ -37,6 +37,7 @@ All 86 tools are organized into 23 modular **skills** with progressive disclosur
 - **Markdown Rendering**: Chat messages rendered with `react-markdown` and `react-syntax-highlighter` (oneDark theme) for proper code blocks, tables, lists, links, and headings
 - **LLM Fallback Redundancy**: Each Choom can have two fallback LLM models (local or cloud) that automatically activate on timeout or connection failure. Fallback timeouts are halved for fast failure cascade. A successful fallback is retried before advancing to the next in the chain. Works across all execution paths — direct chat, Signal, delegation, cron jobs
 - **Execution Traces & Nightly Doctor**: Every agentic loop execution writes a structured JSON trace capturing tool calls (with duration, error class, parallel flag), nudges, fallbacks, compaction events, and token usage. A nightly diagnostic job (22:00) analyzes traces, computes daily aggregates (tool failure rates, avg iterations, per-Choom stats), detects anomalies (high error rate, excessive nudging, frequent fallbacks, misconfigured tools), and sends a report via Signal
+- **Live Avatar**: Real-time talking head animation powered by LivePortrait — each Choom gets a photorealistic animated avatar driven by TTS audio with head motion, blinks, and lip sync. Three modes per Choom: Off, Live Tab (in-app), or Desktop (floating window on your desktop with background removal). Avatar service runs on GPU at 20+ fps. See [Live Avatar](#live-avatar) for details
 - **Web Search**: Brave Search, SerpAPI (Google), or self-hosted SearXNG with automatic cascading fallback (e.g., Brave → SerpAPI → SearXNG). Configure all three and the system auto-switches on 429/5xx errors
 - **Habit Tracker**: Log daily activities via Signal or chat (e.g., "habit went to Walmart", "habit took a shower"). Structured storage in SQLite (not vector memory) with category auto-detection, location/quantity extraction, streak tracking, and a dedicated `/habits` dashboard with GitHub-style activity heatmap, daily trend charts, category pie charts, and top activities breakdown. 11 default categories (vehicle, hygiene, shopping, outdoor, maintenance, health, food, travel, social, finance, alcohol) with customizable icons and colors. **Category management**: rename, merge duplicates (select 2+ → pick target), delete, and create new categories from the UI. Auto-syncs category list from entry data so orphaned categories (e.g., LLM typos like "beverages" vs "beverage") surface for cleanup. 5 tools: `log_habit`, `query_habits`, `habit_stats`, `manage_categories`, `delete_habit`
 ![Habit Tracker](docs/screenshots/habit-tracker.png)
@@ -1247,6 +1248,73 @@ SQLite via Prisma ORM. (dev.db)
 - `POST /api/automations` - Create automation or trigger existing one (Run Now)
 - `PUT /api/automations` - Update automation (name, schedule, steps, settings)
 - `DELETE /api/automations` - Delete automation
+
+## Live Avatar
+
+Real-time talking head animation for each Choom, powered by [LivePortrait](https://github.com/KwaiVGI/LivePortrait). Each Choom's avatar photo is animated with head motion, natural blinks, and audio-driven lip sync from TTS output.
+
+![Live Avatar Settings](docs/screenshots/live-avatar-settings.png)
+
+### Avatar Modes
+
+Each Choom can be set to one of three modes in **Settings → Avatar**:
+
+| Mode | Behavior |
+|------|----------|
+| **Off** | No animation. Normal chat only |
+| **Live Tab** | Animated avatar in the Live tab within Choom. Only active when viewing the Live tab |
+| **Desktop** | Floating avatar window on your desktop. Animates while chatting in any tab. Audio plays from the desktop window, synced with lip animation |
+
+### Desktop Avatar
+
+![Desktop Avatar](docs/screenshots/live-avatar-desktop.png)
+
+The desktop avatar is a frameless, always-on-top, draggable window with background removal:
+
+- **Drag**: Left-click and drag to reposition
+- **Resize**: Scroll wheel to scale up/down
+- **Opacity**: Right-click → set transparency (30–100%)
+- **Background removal**: Automatic flood-fill detection removes the photo background, showing only the head/body
+
+### How It Works
+
+1. **LivePortrait** generates face animation from the Choom's photo at 20+ fps on GPU
+2. **Audio features** (RMS amplitude + spectral brightness) extracted from TTS audio drive mouth shapes — bright sounds (ee, s) spread lips, dark sounds (oo, ah) round lips and open jaw
+3. **Head motion** from sinusoidal coefficients with multiple non-harmonic frequencies for organic, non-repeating movement
+4. **Blinks** via LivePortrait's `retarget_eye` at natural random intervals (3-6 seconds)
+5. **Compositing**: Face rendered at 256×256, resized to 512×512, warped back to full image via homography matrix with soft elliptical mask
+
+### Architecture
+
+```
+TTS Audio → Avatar Service (FastAPI, port 8020) → LivePortrait Engine
+                                                      ↓
+                                              Generated Frames (JPEG)
+                                                      ↓
+                                    ┌─────────────────┴──────────────────┐
+                                    ↓                                    ↓
+                            HTTP Response                        WebSocket Broadcast
+                            (Live Tab mode)                      (Desktop mode)
+                                    ↓                                    ↓
+                            Browser clip queue                   PyQt6 desktop window
+                            (audio + frames synced)              (audio + frames synced)
+```
+
+### Requirements
+
+- **GPU**: NVIDIA GPU with CUDA support (tested on RTX PRO 6000 Blackwell, 96GB VRAM — only uses ~2GB)
+- **LivePortrait**: Cloned to `~/projects/LivePortrait` with pretrained weights
+- **MuseTalk venv**: Python virtual environment with PyTorch, mediapipe, soundfile, scipy, PyQt6
+- **Avatar service**: `services/avatar-service/start.sh` (auto-managed from Settings when a Choom has avatar enabled)
+
+### Photo Tips
+
+For best results, use a Choom avatar photo that is:
+- Front-facing, looking at camera
+- Neutral expression with mouth closed
+- Well-lit, sharp focus
+- Square or portrait orientation (768×1024 works well)
+- Natural photo preferred over AI-generated 3D renders
 
 ## Getting Started
 
