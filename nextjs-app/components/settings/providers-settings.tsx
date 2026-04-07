@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Plus, Trash2, Server, Eye, EyeOff } from 'lucide-react';
+import { Plus, Trash2, Server, Eye, EyeOff, RefreshCw } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import {
@@ -44,6 +44,12 @@ const PRESETS: Record<string, Partial<LLMProviderConfig>> = {
       'meta/llama-3.3-70b-instruct',
     ],
   },
+  lmstudio: {
+    name: 'Local LM Studio',
+    type: 'openai',
+    endpoint: 'http://127.0.0.1:1234/v1',
+    models: [],
+  },
   custom: {
     name: 'Custom Provider',
     type: 'openai',
@@ -58,6 +64,23 @@ export function ProvidersSettings() {
   const [showAddForm, setShowAddForm] = useState(false);
   const [presetType, setPresetType] = useState<string>('anthropic');
   const [visibleKeys, setVisibleKeys] = useState<Set<string>>(new Set());
+  const [loadingModels, setLoadingModels] = useState<Set<string>>(new Set());
+
+  const fetchProviderModels = async (providerId: string, endpoint: string) => {
+    if (!endpoint) return;
+    setLoadingModels(prev => new Set(prev).add(providerId));
+    try {
+      const res = await fetch(`/api/services/models?endpoint=${encodeURIComponent(endpoint)}`);
+      if (res.ok) {
+        const data = await res.json();
+        const modelIds = (data.models || []).map((m: { id: string }) => m.id);
+        if (modelIds.length > 0) {
+          updateProvider(providerId, { models: modelIds });
+        }
+      }
+    } catch { /* ignore */ }
+    setLoadingModels(prev => { const next = new Set(prev); next.delete(providerId); return next; });
+  };
 
   const addProvider = () => {
     const preset = PRESETS[presetType];
@@ -111,6 +134,7 @@ export function ProvidersSettings() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
+                <SelectItem value="lmstudio">Local LM Studio</SelectItem>
                 <SelectItem value="anthropic">Anthropic (Claude)</SelectItem>
                 <SelectItem value="openai">OpenAI (GPT)</SelectItem>
                 <SelectItem value="nvidia">NVIDIA Build</SelectItem>
@@ -130,12 +154,13 @@ export function ProvidersSettings() {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Server className="h-4 w-4 text-green-400" />
-            <span className="font-medium text-sm">Local (LM Studio / Ollama)</span>
+            <span className="font-medium text-sm">Default Local</span>
           </div>
-          <span className="text-xs text-muted-foreground">Default — configured in LLM settings</span>
+          <span className="text-xs text-muted-foreground">Configured in Settings &gt; LLM</span>
         </div>
         <p className="text-xs text-muted-foreground">
-          Uses the endpoint and model from Settings &gt; LLM. No API key needed.
+          The fallback when no provider is selected. Uses the endpoint from Settings &gt; LLM.
+          Add Local LM Studio providers below for multiple instances on different machines.
         </p>
       </div>
 
@@ -181,7 +206,7 @@ export function ProvidersSettings() {
                   type={visibleKeys.has(provider.id) ? 'text' : 'password'}
                   value={provider.apiKey || ''}
                   onChange={(e) => updateProvider(provider.id, { apiKey: e.target.value })}
-                  placeholder="sk-..."
+                  placeholder="sk-... (optional for local)"
                   className="text-sm pr-9"
                 />
                 <Button
@@ -223,7 +248,21 @@ export function ProvidersSettings() {
           </div>
 
           <div className="space-y-1">
-            <label className="text-xs font-medium">Models (comma-separated)</label>
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-medium">Models (comma-separated)</label>
+              {provider.endpoint && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-2 text-xs"
+                  disabled={loadingModels.has(provider.id)}
+                  onClick={() => fetchProviderModels(provider.id, provider.endpoint)}
+                >
+                  <RefreshCw className={`h-3 w-3 mr-1 ${loadingModels.has(provider.id) ? 'animate-spin' : ''}`} />
+                  Fetch Models
+                </Button>
+              )}
+            </div>
             <Input
               value={provider.models.join(', ')}
               onChange={(e) =>
@@ -231,11 +270,11 @@ export function ProvidersSettings() {
                   models: e.target.value.split(',').map(m => m.trim()).filter(Boolean),
                 })
               }
-              placeholder="claude-sonnet-4-5-20250929, claude-haiku-4-5-20251001"
+              placeholder="model-name-1, model-name-2"
               className="text-sm"
             />
             <p className="text-xs text-muted-foreground">
-              Models available in project settings dropdown
+              Models available in dropdowns. Use Fetch Models to auto-detect from endpoint.
             </p>
           </div>
         </div>

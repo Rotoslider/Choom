@@ -949,6 +949,11 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave }: ChoomEditP
                         setLlmProviderId(v);
                         setLlmEndpoint(provider?.endpoint || '');
                         setLlmModel(provider?.models?.[0] || '');
+                        // For providers with endpoints (especially local LM Studio),
+                        // fetch live models so dropdown is populated even if provider.models is empty
+                        if (provider?.endpoint && (!provider.models || provider.models.length === 0)) {
+                          fetchLocalModels(provider.endpoint);
+                        }
                       }
                     }}
                   >
