@@ -1023,11 +1023,14 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave }: ChoomEditP
                       type="number"
                       value={llmTimeoutSec}
                       onChange={(e) => setLlmTimeoutSec(e.target.value)}
-                      placeholder="120"
+                      placeholder="180"
                       min="30"
                       max="600"
                     />
-                    <p className="text-xs text-muted-foreground">Max time to wait for LLM response per iteration (default: 120s)</p>
+                    <p className="text-xs text-muted-foreground">
+                      Wall-clock timeout per iteration (default: 180s).
+                      Between-token timeout = 75% of this ({Math.max(120, Math.floor((parseInt(llmTimeoutSec) || 180) * 0.75))}s) — how long silence is tolerated mid-stream.
+                    </p>
                   </div>
 
                   <Separator />

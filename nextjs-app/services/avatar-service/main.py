@@ -242,10 +242,17 @@ async def animate(req: AnimateRequest):
         os.unlink(audio_path)
 
         # Encode frames as base64 JPEGs (frames are BGR)
+        # Downscale to half resolution for faster streaming (face detail is
+        # rendered at 512x512 internally, full-res adds no visual quality)
         import cv2
+        MAX_ANIM_DIM = 512  # cap longest side
         frame_data = []
         for frame in frames:
-            _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
+            h, w = frame.shape[:2]
+            if max(h, w) > MAX_ANIM_DIM:
+                scale = MAX_ANIM_DIM / max(h, w)
+                frame = cv2.resize(frame, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+            _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
             frame_data.append(base64.b64encode(buf.tobytes()).decode())
 
         engine_fps = liveportrait.fps if ANIMATION_ENGINE == "liveportrait" else musetalk.fps
@@ -253,7 +260,12 @@ async def animate(req: AnimateRequest):
         # Include idle frame for LivePortrait (prevents zoom jump in frontend)
         idle_frame_b64 = None
         if ANIMATION_ENGINE == "liveportrait" and "idle_frame_bgr" in ref_data:
-            _, buf = cv2.imencode(".jpg", ref_data["idle_frame_bgr"], [cv2.IMWRITE_JPEG_QUALITY, 95])
+            idle = ref_data["idle_frame_bgr"]
+            h, w = idle.shape[:2]
+            if max(h, w) > MAX_ANIM_DIM:
+                scale = MAX_ANIM_DIM / max(h, w)
+                idle = cv2.resize(idle, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+            _, buf = cv2.imencode(".jpg", idle, [cv2.IMWRITE_JPEG_QUALITY, 85])
             idle_frame_b64 = base64.b64encode(buf.tobytes()).decode()
 
         # Broadcast frames (+ audio if requested) to desktop avatar clients

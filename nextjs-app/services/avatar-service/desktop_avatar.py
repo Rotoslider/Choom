@@ -282,15 +282,19 @@ class AvatarWindow(QWidget):
         """Play WAV audio from base64."""
         import tempfile
         try:
+            # Kill any previous audio to prevent overlap (double talk)
+            if hasattr(self, '_audio_process') and self._audio_process and self._audio_process.poll() is None:
+                self._audio_process.kill()
+                self._audio_process.wait()
+
             raw = base64.b64decode(audio_b64)
-            # Save to temp file and play with QProcess or subprocess
             tmp = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
             tmp.write(raw)
             tmp.close()
 
             import subprocess
             # Use aplay (ALSA) for low-latency audio on Linux
-            subprocess.Popen(
+            self._audio_process = subprocess.Popen(
                 ['aplay', '-q', tmp.name],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
