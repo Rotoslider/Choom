@@ -676,7 +676,10 @@ Include a warm greeting, the weather summary (mention if wind under 15mph is goo
                 services = health.get('services', {})
                 issues = []
 
+                optional_services = {'avatar'}
                 for service_name, service_info in services.items():
+                    if service_name in optional_services:
+                        continue
                     if isinstance(service_info, dict):
                         status = service_info.get('status', 'unknown')
                         if status != 'connected':
@@ -1991,7 +1994,13 @@ Be practical. Only work on things that can actually be accomplished with the too
             services = health.get('services', {})
             issues = []
 
+            # Optional services: only alert if they were previously connected
+            # (i.e., intentionally running). Avatar is off by default.
+            optional_services = {'avatar'}
+
             for service_name, service_info in services.items():
+                if service_name in optional_services:
+                    continue  # Don't alert on optional services being down
                 if isinstance(service_info, dict):
                     status = service_info.get('status', 'unknown')
                     if status != 'connected':

@@ -172,10 +172,12 @@ export function HealthDashboard({ open, onOpenChange }: HealthDashboardProps) {
     }
   }, [open]);
 
-  const connectedCount = Object.values(serviceStatus).filter(
-    (s) => s === 'connected'
-  ).length;
-  const totalCount = Object.keys(serviceStatus).length;
+  // Match the visible services filter — exclude avatar from counts when no Choom uses it
+  const countEntries = Object.entries(serviceStatus).filter(
+    ([key]) => key !== 'avatar' || anyAvatarEnabled
+  );
+  const connectedCount = countEntries.filter(([, s]) => s === 'connected').length;
+  const totalCount = countEntries.length;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

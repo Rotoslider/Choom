@@ -3329,21 +3329,21 @@ export async function POST(request: NextRequest) {
       const globalProvider = providers.find(
         (p: LLMProviderConfig) => p.id === globalProviderId
       );
-      if (globalProvider && globalProvider.apiKey) {
+      if (globalProvider) {
         const providerSettings: LLMSettings = {
           ...llmSettings,
           endpoint: globalProvider.endpoint,
         };
         if (globalProvider.type === 'anthropic') {
           const { AnthropicClient } = await import('@/lib/anthropic-client');
-          llmClient = new AnthropicClient(providerSettings, globalProvider.apiKey, globalProvider.endpoint);
+          llmClient = new AnthropicClient(providerSettings, globalProvider.apiKey || '', globalProvider.endpoint);
           console.log(`   🔌 Layer 2b (global provider): ${globalProvider.name} (anthropic) model=${llmSettings.model}`);
         } else {
-          llmClient = new LLMClient(providerSettings, globalProvider.apiKey);
+          llmClient = new LLMClient(providerSettings, globalProvider.apiKey || undefined);
           console.log(`   🔌 Layer 2b (global provider): ${globalProvider.name} (openai) model=${llmSettings.model}`);
         }
         llmSettings.endpoint = globalProvider.endpoint;
-        usingCloudProvider = true;
+        usingCloudProvider = !isLocalEndpoint(globalProvider.endpoint);
         activeProviderId = globalProvider.id;
       }
     } else if (choomHasExplicitLocalModel && globalProviderId) {
@@ -3355,7 +3355,7 @@ export async function POST(request: NextRequest) {
       const choomProvider = providers.find(
         (p: LLMProviderConfig) => p.id === choom.llmProviderId
       );
-      if (choomProvider && choomProvider.apiKey) {
+      if (choomProvider) {
         const choomModel = choom.llmModel || choomProvider.models[0] || llmSettings.model;
         const providerSettings: LLMSettings = {
           ...llmSettings,
@@ -3365,18 +3365,25 @@ export async function POST(request: NextRequest) {
 
         if (choomProvider.type === 'anthropic') {
           const { AnthropicClient } = await import('@/lib/anthropic-client');
-          llmClient = new AnthropicClient(providerSettings, choomProvider.apiKey, choomProvider.endpoint);
+          llmClient = new AnthropicClient(providerSettings, choomProvider.apiKey || '', choomProvider.endpoint);
           console.log(`   🔌 Layer 3b (Choom provider): ${choomProvider.name} (anthropic) model=${choomModel}`);
         } else {
-          llmClient = new LLMClient(providerSettings, choomProvider.apiKey);
+          llmClient = new LLMClient(providerSettings, choomProvider.apiKey || undefined);
           console.log(`   🔌 Layer 3b (Choom provider): ${choomProvider.name} (openai) model=${choomModel}`);
         }
         llmSettings.model = choomModel;
         llmSettings.endpoint = choomProvider.endpoint;
-        usingCloudProvider = true;
+        usingCloudProvider = !isLocalEndpoint(choomProvider.endpoint);
         activeProviderId = choomProvider.id;
       }
     }
+    // Capture the Choom's resolved primary model BEFORE task override.
+    // Used to fall back to the primary when a heartbeat/cron task override fails.
+    const preOverrideModel = llmSettings.model;
+    const preOverrideEndpoint = llmSettings.endpoint;
+    const preOverrideProviderId = activeProviderId;
+    const preOverrideIsCloud = usingCloudProvider;
+
     // Layer 4: Per-task model override (highest priority)
     // Heartbeats, automations, and other scheduled tasks can specify a model+provider
     // that overrides everything — including the Choom's own DB settings.
@@ -3386,7 +3393,7 @@ export async function POST(request: NextRequest) {
       const overrideProviderId = taskModelOverride.provider_id;
       if (overrideProviderId && overrideProviderId !== '_local' && providers.length > 0) {
         const overrideProvider = providers.find((p: LLMProviderConfig) => p.id === overrideProviderId);
-        if (overrideProvider && overrideProvider.apiKey) {
+        if (overrideProvider) {
           const overrideSettings: LLMSettings = {
             ...llmSettings,
             model: taskModelOverride.model,
@@ -3394,13 +3401,13 @@ export async function POST(request: NextRequest) {
           };
           if (overrideProvider.type === 'anthropic') {
             const { AnthropicClient } = await import('@/lib/anthropic-client');
-            llmClient = new AnthropicClient(overrideSettings, overrideProvider.apiKey, overrideProvider.endpoint);
+            llmClient = new AnthropicClient(overrideSettings, overrideProvider.apiKey || '', overrideProvider.endpoint);
           } else {
-            llmClient = new LLMClient(overrideSettings, overrideProvider.apiKey);
+            llmClient = new LLMClient(overrideSettings, overrideProvider.apiKey || undefined);
           }
           llmSettings.model = taskModelOverride.model;
           llmSettings.endpoint = overrideProvider.endpoint;
-          usingCloudProvider = true;
+          usingCloudProvider = !isLocalEndpoint(overrideProvider.endpoint);
           activeProviderId = overrideProvider.id;
           console.log(`   🎯 Layer 4 (task override): ${overrideProvider.name} model=${taskModelOverride.model}`);
         }
@@ -3838,7 +3845,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
       const provider = providers.find(
         (p: LLMProviderConfig) => p.id === detectedProject!.metadata.llmProviderId
       );
-      if (provider && provider.apiKey) {
+      if (provider) {
         const projectModel = detectedProject.metadata.llmModel || provider.models[0] || llmSettings.model;
         const providerSettings: LLMSettings = {
           ...llmSettings,
@@ -3848,16 +3855,15 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
 
         if (provider.type === 'anthropic') {
           const { AnthropicClient } = await import('@/lib/anthropic-client');
-          llmClient = new AnthropicClient(providerSettings, provider.apiKey, provider.endpoint);
+          llmClient = new AnthropicClient(providerSettings, provider.apiKey || '', provider.endpoint);
           console.log(`   🔌 Layer 4 (project provider): ${provider.name} (anthropic) model=${projectModel}`);
         } else {
-          // OpenAI-compatible with API key
-          llmClient = new LLMClient(providerSettings, provider.apiKey);
+          llmClient = new LLMClient(providerSettings, provider.apiKey || undefined);
           console.log(`   🔌 Layer 4 (project provider): ${provider.name} (openai) model=${projectModel}`);
         }
         llmSettings.model = projectModel;
         llmSettings.endpoint = provider.endpoint;
-        usingCloudProvider = true;
+        usingCloudProvider = !isLocalEndpoint(provider.endpoint);
       }
     }
 
@@ -3894,8 +3900,8 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           if (activeProvider?.type === 'anthropic' && activeProvider.apiKey) {
             const { AnthropicClient } = await import('@/lib/anthropic-client');
             llmClient = new AnthropicClient(llmSettings, activeProvider.apiKey, activeProvider.endpoint);
-          } else if (activeProvider?.apiKey) {
-            llmClient = new LLMClient(llmSettings, activeProvider.apiKey);
+          } else if (activeProvider) {
+            llmClient = new LLMClient(llmSettings, activeProvider.apiKey || undefined);
           } else {
             llmClient = new LLMClient(llmSettings);
           }
@@ -3907,9 +3913,37 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
       }
     }
 
+    // The actual local LM Studio endpoint for local fallbacks.
+    // If the Choom has a custom local endpoint (e.g., different LM Studio instance),
+    // use that; otherwise fall back to the env/code default.
+    // Do NOT use llmSettings.endpoint here — it may have been overwritten by a cloud
+    // provider in Layers 2b/3b/4.
+    const localLMStudioEndpoint = (!choom.llmProviderId && choom.llmEndpoint)
+      ? choom.llmEndpoint
+      : defaultLLMSettings.endpoint;
+
     // Build fallback model configurations (tried in order if primary times out or errors)
     type FallbackConfig = { model: string; providerId: string | null; label: string };
     const fallbackConfigs: FallbackConfig[] = [];
+
+    // When a task override is active (heartbeat/cron using a different model than the
+    // Choom's primary), prepend the primary model as fallback #0. This way if the
+    // heartbeat model fails, we try the Choom's trusted primary before burning through
+    // the configured fallback chain (which might be the same model that just failed).
+    const taskOverrideActive = !!(taskModelOverride?.model) &&
+      llmSettings.model !== preOverrideModel;
+    if (taskOverrideActive && preOverrideModel) {
+      const preProvider = preOverrideProviderId !== 'local'
+        ? providers.find((p: LLMProviderConfig) => p.id === preOverrideProviderId) : null;
+      const preLabel = preProvider ? `${preProvider.name}/${preOverrideModel}` : `local/${preOverrideModel}`;
+      fallbackConfigs.push({
+        model: preOverrideModel,
+        providerId: preOverrideProviderId !== 'local' ? preOverrideProviderId : null,
+        label: `${preLabel} (primary)`,
+      });
+      console.log(`   🔄 Task override active — prepended primary model as fallback #0: ${preLabel}`);
+    }
+
     const fbEntries = [
       { model: choom.llmFallbackModel1, providerId: choom.llmFallbackProvider1 },
       { model: choom.llmFallbackModel2, providerId: choom.llmFallbackProvider2 },
@@ -3919,20 +3953,20 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
       const provider = fb.providerId ? providers.find((p: LLMProviderConfig) => p.id === fb.providerId) : null;
       const model = fb.model || provider?.models?.[0] || llmSettings.model;
       const label = provider ? `${provider.name}/${model}` : `local/${model}`;
+      // Skip fallback entries that duplicate the currently-active model+provider
+      // (e.g., heartbeat uses Gemma and fallback #1 is also Gemma on same endpoint)
+      const activeModel = llmSettings.model;
+      const activeEndpoint = llmSettings.endpoint;
+      const fbEndpoint = provider?.endpoint || localLMStudioEndpoint;
+      if (model === activeModel && fbEndpoint === activeEndpoint) {
+        console.log(`   ⏭️  Skipping fallback ${label} — same model+endpoint as active`);
+        continue;
+      }
       fallbackConfigs.push({ model, providerId: fb.providerId || null, label });
     }
     if (fallbackConfigs.length > 0) {
       console.log(`   🔄 Fallback models: ${fallbackConfigs.map((f, i) => `#${i + 1} ${f.label}`).join(', ')}`);
     }
-
-    // The actual local LM Studio endpoint for local fallbacks.
-    // If the Choom has a custom local endpoint (e.g., different LM Studio instance),
-    // use that; otherwise fall back to the env/code default.
-    // Do NOT use llmSettings.endpoint here — it may have been overwritten by a cloud
-    // provider in Layers 2b/3b/4.
-    const localLMStudioEndpoint = (!choom.llmProviderId && choom.llmEndpoint)
-      ? choom.llmEndpoint
-      : defaultLLMSettings.endpoint;
 
     // Helper to create an LLM client from a fallback config
     async function createClientForFallback(fb: FallbackConfig): Promise<{ client: { streamChat: LLMClient['streamChat'] }; settings: LLMSettings }> {
@@ -3967,7 +4001,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
 
       if (fb.providerId) {
         const provider = providers.find((p: LLMProviderConfig) => p.id === fb.providerId);
-        if (provider && provider.apiKey) {
+        if (provider) {
           fbSettings.endpoint = provider.endpoint;
           if (provider.type === 'anthropic') {
             // Reset sampling params to Anthropic defaults — don't inherit
@@ -3977,9 +4011,9 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             delete (fbSettings as any).topK;
             delete (fbSettings as any).repetitionPenalty;
             const { AnthropicClient } = await import('@/lib/anthropic-client');
-            return { client: new AnthropicClient(fbSettings, provider.apiKey, provider.endpoint), settings: fbSettings };
+            return { client: new AnthropicClient(fbSettings, provider.apiKey || '', provider.endpoint), settings: fbSettings };
           }
-          return { client: new LLMClient(fbSettings, provider.apiKey), settings: fbSettings };
+          return { client: new LLMClient(fbSettings, provider.apiKey || undefined), settings: fbSettings };
         }
       }
       // Local model fallback — use the pre-provider local endpoint (LM Studio),
@@ -4291,17 +4325,17 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             const simpleProviderId = (clientLLMSettings as Record<string, unknown>)?.simpleTasksProviderId as string | undefined;
             if (simpleProviderId && simpleProviderId !== '_local' && providers.length > 0) {
               const simpleProvider = providers.find((p: LLMProviderConfig) => p.id === simpleProviderId);
-              if (simpleProvider && simpleProvider.apiKey) {
+              if (simpleProvider) {
                 const simpleSettings: LLMSettings = { ...llmSettings, model: simpleTasksModel, endpoint: simpleProvider.endpoint };
                 if (simpleProvider.type === 'anthropic') {
                   const { AnthropicClient } = await import('@/lib/anthropic-client');
-                  llmClient = new AnthropicClient(simpleSettings, simpleProvider.apiKey, simpleProvider.endpoint);
+                  llmClient = new AnthropicClient(simpleSettings, simpleProvider.apiKey || '', simpleProvider.endpoint);
                 } else {
-                  llmClient = new LLMClient(simpleSettings, simpleProvider.apiKey);
+                  llmClient = new LLMClient(simpleSettings, simpleProvider.apiKey || undefined);
                 }
                 llmSettings.model = simpleTasksModel;
                 llmSettings.endpoint = simpleProvider.endpoint;
-                usingCloudProvider = true;
+                usingCloudProvider = !isLocalEndpoint(simpleProvider.endpoint);
                 resolvedProvider = simpleProvider.id;
                 console.log(`   🔀 ${choomTag} Simple task routing: ${simpleProvider.name}/${simpleTasksModel} (intent: ${intentToolHint})`);
               }
@@ -4414,7 +4448,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             let BETWEEN_TOKEN_MS: number;
             if (isLocal) {
               FIRST_TOKEN_MS = Math.max(120000, timeoutMs - 15000);
-              BETWEEN_TOKEN_MS = 120000;
+              BETWEEN_TOKEN_MS = Math.max(120000, Math.floor(timeoutMs * 0.75));
             } else if (isCloudInference) {
               // Generous first-token for queuing, tight between-token
               FIRST_TOKEN_MS = Math.max(120000, timeoutMs - 15000);
@@ -4425,6 +4459,8 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               BETWEEN_TOKEN_MS = 30000;
             }
             let firstTokenReceived = false;
+            let lastChunkTime = Date.now();
+            let chunkCount = 0;
             let inactivityTimer: ReturnType<typeof setTimeout> = undefined!;
             let rejectInactivity: (err: Error) => void;
             const inactivityPromise = new Promise<never>((_, reject) => {
@@ -4435,6 +4471,8 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             inactivityPromise.catch(() => {}); // suppress unhandled rejection after race
             const resetInactivity = (hasContent: boolean = false) => {
               clearTimeout(inactivityTimer);
+              lastChunkTime = Date.now();
+              chunkCount++;
               // Only switch from first-token to between-token mode when actual
               // content (text or tool_calls) arrives — not on empty SSE setup
               // chunks. Otherwise the generous prefill timeout gets replaced
@@ -4447,7 +4485,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               const currentTimeout = firstTokenReceived ? BETWEEN_TOKEN_MS : FIRST_TOKEN_MS;
               inactivityTimer = setTimeout(() => rejectInactivity(new Error(
                 firstTokenReceived
-                  ? `LLM response timeout (no data for ${BETWEEN_TOKEN_MS / 1000}s)`
+                  ? `LLM response timeout (no data for ${currentTimeout / 1000}s, last chunk ${Math.round((Date.now() - lastChunkTime) / 1000)}s ago, ${chunkCount} chunks received)`
                   : `LLM response timeout (no first token for ${FIRST_TOKEN_MS / 1000}s)`
               )), currentTimeout);
             };
@@ -4617,7 +4655,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                     let fbBetweenTokenMs: number;
                     if (fbIsLocal) {
                       fbFirstTokenMs = Math.max(120000, fbTimeoutMs - 15000);
-                      fbBetweenTokenMs = 120000;
+                      fbBetweenTokenMs = Math.max(120000, Math.floor(fbTimeoutMs * 0.75));
                     } else if (fbIsCloudInference) {
                       fbFirstTokenMs = Math.max(120000, fbTimeoutMs - 15000);
                       fbBetweenTokenMs = 45000;

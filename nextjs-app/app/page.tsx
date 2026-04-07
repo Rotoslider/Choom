@@ -178,7 +178,7 @@ export default function Home() {
   useEffect(() => { liveChoomIdRef.current = ui.activeLiveChoomId; }, [ui.activeLiveChoomId]);
   useEffect(() => { currentChoomRef.current = currentChoom; }, [currentChoom]);
 
-  // Fetch initial data
+  // Fetch initial data + auto-start avatar service if needed
   useEffect(() => {
     const fetchData = async () => {
       try {
@@ -193,6 +193,40 @@ export default function Home() {
             setCurrentChoom(choomsData[0].id);
             setCurrentChoomData(choomsData[0]);
           }
+
+          // Auto-start avatar service if any Choom has it enabled
+          const anyAvatarEnabled = choomsData.some(
+            (c: { avatarMode?: string }) => c.avatarMode && c.avatarMode !== 'off'
+          );
+          if (anyAvatarEnabled) {
+            // Check if service is already running before starting
+            try {
+              const healthRes = await fetch('/api/avatar/service', { method: 'GET' }).catch(() => null);
+              const isRunning = healthRes?.ok && (await healthRes.json().catch(() => null))?.running;
+              if (!isRunning) {
+                console.log('🎭 Avatar service needed — auto-starting');
+                fetch('/api/avatar/service', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ action: 'start' }),
+                }).catch(() => {});
+
+                // Also start desktop window if any Choom is in desktop mode
+                const desktopChoom = choomsData.find(
+                  (c: { avatarMode?: string; name: string }) => c.avatarMode === 'desktop'
+                );
+                if (desktopChoom) {
+                  setTimeout(() => {
+                    fetch('/api/avatar/service', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ action: 'start-desktop', choomName: desktopChoom.name }),
+                    }).catch(() => {});
+                  }, 8000); // wait for service to start
+                }
+              }
+            } catch { /* service check failed, will retry via health loop */ }
+          }
         }
       } catch (error) {
         console.error('Failed to fetch data:', error);
@@ -203,6 +237,23 @@ export default function Home() {
 
     fetchData();
   }, []);
+
+  // Graceful shutdown: stop avatar service when tab/window is closed.
+  // Does NOT change avatarMode settings — they persist for next startup.
+  // On refresh, auto-start on mount will restart the service.
+  useEffect(() => {
+    const handlePageHide = () => {
+      const anyEnabled = chooms.some(c => c.avatarMode && c.avatarMode !== 'off');
+      if (anyEnabled) {
+        navigator.sendBeacon(
+          '/api/avatar/service',
+          new Blob([JSON.stringify({ action: 'stop' })], { type: 'application/json' })
+        );
+      }
+    };
+    window.addEventListener('pagehide', handlePageHide);
+    return () => window.removeEventListener('pagehide', handlePageHide);
+  }, [chooms]);
 
   // Fetch chats when choom changes, and poll for new Signal-created chats
   useEffect(() => {

@@ -211,6 +211,31 @@ export const BUILTIN_LLM_PROFILES: LLMModelProfile[] = [
     maxTokens: 4096,
     contextLength: 131072,
   },
+  // Google Gemma 4 models (multimodal — vision profiles also below)
+  {
+    modelId: 'gemma-4-26b-a4b-it',
+    label: 'Gemma 4 26B-A4B IT (MoE 4B active)',
+    builtIn: true,
+    temperature: 0.7,
+    topP: 0.95,
+    maxTokens: 4096,
+    contextLength: 128000,
+    topK: 40,
+    repetitionPenalty: 1.0,
+    enableThinking: false,
+  },
+  {
+    modelId: 'gemma-4-31b-it',
+    label: 'Gemma 4 31B IT',
+    builtIn: true,
+    temperature: 0.7,
+    topP: 0.95,
+    maxTokens: 4096,
+    contextLength: 128000,
+    topK: 40,
+    repetitionPenalty: 1.0,
+    enableThinking: false,
+  },
   // Anthropic models — do NOT set topP; Anthropic rejects requests with both
   // temperature and top_p. Temperature alone is their preferred default.
   {
@@ -350,6 +375,27 @@ export const BUILTIN_VISION_PROFILES: VisionModelProfile[] = [
     maxImageDimension: 1280,
     maxImageSizeBytes: 20 * 1024 * 1024,
     supportedFormats: ['png', 'jpeg', 'webp', 'gif'],
+  },
+  // Google Gemma 4 (multimodal — native vision support)
+  {
+    modelId: 'gemma-4-26b-a4b-it',
+    label: 'Gemma 4 26B-A4B Vision',
+    builtIn: true,
+    maxTokens: 2048,
+    temperature: 0.3,
+    maxImageDimension: 1280,
+    maxImageSizeBytes: 20 * 1024 * 1024,
+    supportedFormats: ['png', 'jpeg', 'webp'],
+  },
+  {
+    modelId: 'gemma-4-31b-it',
+    label: 'Gemma 4 31B Vision',
+    builtIn: true,
+    maxTokens: 2048,
+    temperature: 0.3,
+    maxImageDimension: 1280,
+    maxImageSizeBytes: 20 * 1024 * 1024,
+    supportedFormats: ['png', 'jpeg', 'webp'],
   },
 ];
 
