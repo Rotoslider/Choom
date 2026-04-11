@@ -3764,13 +3764,45 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
         }
       }
 
+      // Third: if still no project detected, fall back to this Choom's assigned
+      // home project (if any). This prevents Chooms (like Eve) from creating
+      // fresh top-level folders every time they need to save a file when no
+      // project is explicitly named. The fallback is marked as a DEFAULT so
+      // the model knows it can still choose a different project if asked.
+      let isAssignedFallback = false;
+      if (!detectedProject) {
+        const choomNameLower = choom.name.toLowerCase();
+        const assignedProjects = allProjects.filter(
+          p => (p.metadata.assignedChoom || '').toLowerCase() === choomNameLower
+        );
+        if (assignedProjects.length > 0) {
+          // Prefer most recently modified (listProjects already sorts by lastModified desc)
+          detectedProject = assignedProjects[0];
+          isAssignedFallback = true;
+          console.log(`   🏠 ${choom.name} has no explicit project — falling back to assigned home project "${detectedProject.folder}"`);
+        }
+      }
+
       // Inject project context so LLM uses the exact folder name
       if (detectedProject) {
-        const projMaxIter = detectedProject.metadata.maxIterations || MAX_ITERATIONS;
-        enrichedMessage += `\n\n[System: Active project: "${detectedProject.folder}" (${projMaxIter} thinking rounds available). Use this EXACT folder name for all workspace file operations. Do NOT create a new folder with different casing or naming.]`;
+        // For explicit project detection, honor the project's maxIterations (dedicated work).
+        // For the home-fallback case, stick with the default iteration count — the home
+        // project is just a folder hint, not an invitation to spend 100 rounds on a
+        // "what's the weather?" query.
+        const projMaxIter = isAssignedFallback
+          ? MAX_ITERATIONS
+          : (detectedProject.metadata.maxIterations || MAX_ITERATIONS);
+        if (isAssignedFallback) {
+          // Softer hint: this is the Choom's default workspace, not a hard lock.
+          // They can still create a new project if the user asks for one explicitly.
+          enrichedMessage += `\n\n[System: Your default workspace is "${detectedProject.folder}" (this is YOUR project folder as ${choom.name}). Save any files you create inside "${detectedProject.folder}/" — do NOT create a new top-level folder for everyday work. Only create a new project if the user explicitly asks for one.]`;
+          currentMessages[0].content += `\n\n## YOUR WORKSPACE\nYour home project folder is \`${detectedProject.folder}/\`. When saving files without an explicit project named by the user, save them inside \`${detectedProject.folder}/\` (e.g. \`${detectedProject.folder}/notes/today.md\`). Do NOT create new top-level folders unless the user explicitly asks you to start a new project.`;
+        } else {
+          enrichedMessage += `\n\n[System: Active project: "${detectedProject.folder}" (${projMaxIter} thinking rounds available). Use this EXACT folder name for all workspace file operations. Do NOT create a new folder with different casing or naming.]`;
+        }
         // Also update system prompt with the correct iteration limit
         currentMessages[0].content += `\nYou have ${projMaxIter} thinking rounds available. Each round can include multiple parallel tool calls — calling 5 tools in one round only uses 1 round, not 5. Do not stop early thinking you are running out of rounds.`;
-        console.log(`   📂 Project "${detectedProject.folder}" detected — injecting context (maxIterations: ${projMaxIter})`);
+        console.log(`   📂 Project "${detectedProject.folder}" ${isAssignedFallback ? 'assigned as home (fallback)' : 'detected'} — injecting context (maxIterations: ${projMaxIter})`);
       } else {
         // No project detected — use default limit
         currentMessages[0].content += `\nYou have ${MAX_ITERATIONS} thinking rounds available. Each round can include multiple parallel tool calls — calling 5 tools in one round only uses 1 round, not 5. Do not stop early thinking you are running out of rounds.`;
@@ -4163,7 +4195,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             }
           }
 
-          let imageGenCount = 0; // Track images generated across plan + loop (cap at 3)
+          let imageGenCount = 0; // Per-batch image gen counter (cap at 5 per batch; resets each agentic loop iteration)
           let planExecuted = false;
           let planFullySucceeded = false;
           let planHadDelegations = false;
@@ -4180,11 +4212,11 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
 
                 // Execute plan with progress streaming
                 const planToolExecutor = async (toolCall: ToolCall, _iter: number): Promise<ToolResult> => {
-                  // Enforce image gen cap across plan + agentic loop
-                  if (toolCall.name === 'generate_image' && imageGenCount >= 3) {
+                  // Enforce per-batch image gen cap in plan mode (max 5 per plan batch)
+                  if (toolCall.name === 'generate_image' && imageGenCount >= 5) {
                     const capped: ToolResult = {
                       toolCallId: toolCall.id, name: toolCall.name, result: null,
-                      error: `Image generation limit reached (${imageGenCount}/3 this request). Skip this step.`,
+                      error: `Image generation limit reached (${imageGenCount}/5 this batch). Skip this step.`,
                     };
                     send({ type: 'tool_call', toolCall });
                     send({ type: 'tool_result', toolResult: capped });
@@ -4367,6 +4399,11 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
 
           while (iteration < maxIterations) {
             iteration++;
+
+            // Reset per-batch image gen counter each iteration — the cap is "5 per batch",
+            // not "5 per request". A Choom can generate 5 images, save them, do other work,
+            // and then generate 5 more in a later iteration as needed.
+            imageGenCount = 0;
 
             // Early exit: if the SSE stream was closed (e.g., delegation aborted by
             // orchestrator, or client disconnected), stop processing immediately.
@@ -5163,10 +5200,12 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 return { toolCallId: tc.id, name: tc.name, result: cachedObj };
               }
 
-              // --- Image generation cap ---
-              if (tc.name === 'generate_image' && imageGenCount >= 3) {
-                console.log(`   🖼️  Skipping generate_image (${imageGenCount}/3 already generated this request)`);
-                return { toolCallId: tc.id, name: tc.name, result: { success: false, message: `Image generation limit reached (${imageGenCount}/3 this turn). Cannot generate more images in this request.` } };
+              // --- Image generation cap (per batch) ---
+              // Note: the batch-aware check above (imageGenCount + pendingImageGenInBatch)
+              // catches this first. This is a safety net for any path that skips that check.
+              if (tc.name === 'generate_image' && imageGenCount >= 5) {
+                console.log(`   🖼️  Skipping generate_image (${imageGenCount}/5 already generated this batch)`);
+                return { toolCallId: tc.id, name: tc.name, result: { success: false, message: `Image generation limit reached (${imageGenCount}/5 this batch). Wait for the next iteration to generate more images.` } };
               }
 
               // --- Per-tool call counter ---
@@ -5359,11 +5398,13 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             const preFlightResults = new Map<string, ToolResult>(); // tc.id → result
             const pendingCalls: typeof toolCalls = [];
             for (const tc of toolCalls) {
-              // Batch-aware image gen cap: count calls already queued in this batch
-              if (tc.name === 'generate_image' && imageGenCount + pendingImageGenInBatch >= 3) {
+              // Batch-aware image gen cap: count calls already queued in this batch.
+              // Cap is 5 per batch; imageGenCount resets at the start of each iteration,
+              // so later iterations can generate more images if the workflow needs it.
+              if (tc.name === 'generate_image' && imageGenCount + pendingImageGenInBatch >= 5) {
                 const total = imageGenCount + pendingImageGenInBatch;
-                console.log(`   🖼️  Skipping generate_image (${total}/3 already queued this request)`);
-                const skippedImg: ToolResult = { toolCallId: tc.id, name: tc.name, result: { success: false, message: `Image generation limit reached (${total}/3 this turn). Cannot generate more images.` } };
+                console.log(`   🖼️  Skipping generate_image (${total}/5 already queued this batch)`);
+                const skippedImg: ToolResult = { toolCallId: tc.id, name: tc.name, result: { success: false, message: `Image generation limit reached (${total}/5 this batch). You can generate more images in a later iteration if needed.` } };
                 preFlightResults.set(tc.id, skippedImg);
                 allToolResults.push(skippedImg);
                 continue;
