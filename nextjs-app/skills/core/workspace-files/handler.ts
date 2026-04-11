@@ -69,14 +69,43 @@ export default class WorkspaceFilesHandler extends BaseSkillHandler {
       }
 
       // Accept common aliases for path
-      const filePath = (toolCall.arguments.path || toolCall.arguments.file_path || toolCall.arguments.filename) as string;
+      let filePath = (toolCall.arguments.path || toolCall.arguments.file_path || toolCall.arguments.filename) as string;
       // Stringify objects/arrays if model passes non-string content
       const rawContent = toolCall.arguments.content;
       const content = typeof rawContent === 'string' ? rawContent
         : rawContent != null ? JSON.stringify(rawContent, null, 2) : '';
 
+      // Missing-path safety net: some weaker models (observed on Lissa) systematically
+      // send `content` without `path`. Instead of returning a hard error that burns
+      // an iteration, try to derive a filename from the content and save it under
+      // an inbox folder scoped to the current Choom. The model is told exactly
+      // where the file went so it can reference it later.
+      let inferredPath = false;
+      if (!filePath && content) {
+        const choomName = ((ctx.choom as Record<string, unknown>)?.name as string) || 'unassigned';
+        const choomSlug = choomName.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'unassigned';
+        // Try to extract a filename from the first markdown heading or first non-empty line
+        const titleMatch = content.match(/^\s*#+\s*(.+?)$/m);
+        const firstLine = content.split('\n').map(l => l.trim()).find(l => l.length > 0) || '';
+        const rawTitle = (titleMatch?.[1] || firstLine || 'untitled').slice(0, 60);
+        const slug = rawTitle.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'note';
+        const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+        // Detect file extension hint from content (fenced block lang or raw code patterns)
+        const fenceMatch = content.match(/^```(\w+)/m);
+        const fenceLang = fenceMatch?.[1]?.toLowerCase() || '';
+        const langToExt: Record<string, string> = {
+          python: '.py', py: '.py', javascript: '.js', js: '.js', typescript: '.ts', ts: '.ts',
+          bash: '.sh', sh: '.sh', shell: '.sh', json: '.json', yaml: '.yaml', yml: '.yaml',
+          html: '.html', css: '.css', sql: '.sql', markdown: '.md', md: '.md',
+        };
+        const ext = langToExt[fenceLang] || '.md';
+        filePath = `${choomSlug}_inbox/${today}_${slug}${ext}`;
+        inferredPath = true;
+        console.warn(`   ⚠️  workspace_write_file called without path — inferred "${filePath}" from content for ${choomName}`);
+      }
+
       if (!filePath) {
-        return this.error(toolCall, 'path is required. Provide a relative file path (e.g., "my_project/file.md")');
+        return this.error(toolCall, 'path is required. Provide a relative file path like "my_project/file.md". You must include BOTH "path" and "content" parameters — do not send only content.');
       }
 
       // Auto-sanitize garbled paths from weak models (e.g., "home %_assistant/good_m}orning.yaml")
@@ -90,8 +119,11 @@ export default class WorkspaceFilesHandler extends BaseSkillHandler {
       ctx.send({ type: 'file_created', path: sanitizedPath });
 
       const pathNote = sanitizedPath !== filePath ? ` (path corrected from "${filePath}" to "${sanitizedPath}")` : '';
-      console.log(`   📝 Workspace write: ${sanitizedPath}${pathNote}`);
-      return this.success(toolCall, { success: true, message: result + pathNote });
+      const inferredNote = inferredPath
+        ? ` [Note: no path was provided in the tool call — a filename was inferred from the content and the file was saved to "${sanitizedPath}". Next time, include a "path" parameter explicitly.]`
+        : '';
+      console.log(`   📝 Workspace write: ${sanitizedPath}${pathNote}${inferredPath ? ' (inferred)' : ''}`);
+      return this.success(toolCall, { success: true, message: result + pathNote + inferredNote, path: sanitizedPath });
     } catch (err) {
       console.error('   ❌ Workspace write error:', err instanceof Error ? err.message : err);
       return this.error(toolCall, `Failed to write file: ${err instanceof Error ? err.message : 'Unknown error'}`);
@@ -99,10 +131,10 @@ export default class WorkspaceFilesHandler extends BaseSkillHandler {
   }
 
   private async readFile(toolCall: ToolCall): Promise<ToolResult> {
-    try {
-      const filePath = this.sanitizePath((toolCall.arguments.path || toolCall.arguments.file_path || toolCall.arguments.filename) as string || '');
+    const filePath = this.sanitizePath((toolCall.arguments.path || toolCall.arguments.file_path || toolCall.arguments.filename) as string || '');
+    const ws = new WorkspaceService(WORKSPACE_ROOT, WORKSPACE_MAX_FILE_SIZE_KB, WORKSPACE_ALLOWED_EXTENSIONS);
 
-      const ws = new WorkspaceService(WORKSPACE_ROOT, WORKSPACE_MAX_FILE_SIZE_KB, WORKSPACE_ALLOWED_EXTENSIONS);
+    try {
       let content = await ws.readFile(filePath);
 
       // Truncate large reads to prevent context bloat that causes LLM timeouts.
@@ -121,8 +153,67 @@ export default class WorkspaceFilesHandler extends BaseSkillHandler {
       console.log(`   📖 Workspace read: ${filePath}${truncated ? ` (truncated to ${maxChars} chars)` : ''}`);
       return this.success(toolCall, { success: true, content });
     } catch (err) {
-      console.error('   ❌ Workspace read error:', err instanceof Error ? err.message : err);
-      return this.error(toolCall, `Failed to read file: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      const errMsg = err instanceof Error ? err.message : String(err);
+      const isNotFound = /ENOENT|no such file or directory/i.test(errMsg);
+      const isDirectory = /EISDIR|illegal operation on a directory/i.test(errMsg);
+
+      // Directory-instead-of-file recovery: Eve (and others) sometimes pass
+      // a directory path to workspace_read_file. Instead of a confusing EISDIR,
+      // auto-list the directory so the model can see its contents and pick
+      // the actual file it wanted.
+      if (isDirectory && filePath) {
+        try {
+          const entries = await ws.listFiles(filePath);
+          const formatted = entries.slice(0, 40).map(e => {
+            if (e.type === 'directory') return `  \uD83D\uDCC1 ${e.name}/`;
+            const sizeStr = e.size < 1024 ? `${e.size}B` : `${(e.size / 1024).toFixed(1)}KB`;
+            return `  \uD83D\uDCC4 ${e.name} (${sizeStr})`;
+          }).join('\n') || '  (empty directory)';
+          const more = entries.length > 40 ? `\n  ... and ${entries.length - 40} more entries` : '';
+          console.log(`   📁 ${filePath} is a directory — auto-listed instead of reading`);
+          return this.error(
+            toolCall,
+            `"${filePath}" is a directory, not a file. Here's what's inside:\n${formatted}${more}\n\nCall workspace_read_file with one of these specific file paths (e.g., "${filePath}/${entries.find(e => e.type === 'file')?.name || 'filename'}").`
+          );
+        } catch { /* fall through to generic error */ }
+      }
+
+      // Dead-path loop breaker: when a file doesn't exist, auto-list the closest
+      // existing ancestor directory and return that listing as part of the error.
+      // This prevents models (like Genesis hallucinating files under curiosity_cabinet/)
+      // from wasting iterations retrying fantasy paths — they get actual filenames
+      // to choose from instead of a bare ENOENT.
+      if (isNotFound && filePath) {
+        const ancestors: string[] = [];
+        const segments = filePath.split('/').filter(Boolean);
+        // Walk up: parent, grandparent, ..., workspace root
+        for (let i = segments.length - 1; i >= 0; i--) {
+          ancestors.push(segments.slice(0, i).join('/'));
+        }
+
+        for (const dir of ancestors) {
+          try {
+            const entries = await ws.listFiles(dir);
+            if (entries.length > 0) {
+              const formatted = entries.slice(0, 40).map(e => {
+                if (e.type === 'directory') return `  \uD83D\uDCC1 ${e.name}/`;
+                const sizeStr = e.size < 1024 ? `${e.size}B` : `${(e.size / 1024).toFixed(1)}KB`;
+                return `  \uD83D\uDCC4 ${e.name} (${sizeStr})`;
+              }).join('\n');
+              const more = entries.length > 40 ? `\n  ... and ${entries.length - 40} more entries` : '';
+              const dirLabel = dir || '(workspace root)';
+              console.log(`   📁 ${filePath} not found — auto-listed ${dirLabel} (${entries.length} entries)`);
+              return this.error(
+                toolCall,
+                `File not found: "${filePath}". The closest existing directory is "${dirLabel}" — here's what's actually in it:\n${formatted}${more}\n\nUse one of these exact paths or call workspace_list_files on a different directory. Do NOT retry the same filename.`
+              );
+            }
+          } catch { /* try next ancestor */ }
+        }
+      }
+
+      console.error('   ❌ Workspace read error:', errMsg);
+      return this.error(toolCall, `Failed to read file: ${errMsg}`);
     }
   }
 
