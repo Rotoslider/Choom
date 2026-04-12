@@ -65,6 +65,19 @@ const WORKSPACE_IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.
 const WORKSPACE_ALL_EXTENSIONS = ['.md', '.txt', '.json', '.py', '.ts', '.tsx', '.js', '.jsx', '.html', '.css', '.csv', '.sh', '.bash', '.yaml', '.yml', '.xml', '.sql', '.toml', '.ini', '.cfg', '.r', '.R', '.ipynb', '.log', ...WORKSPACE_IMAGE_EXTENSIONS];
 const MAX_IMAGE_FILE_SIZE_KB = 10 * 1024; // 10MB
 
+/**
+ * Redact base64-encoded image data from a string. Prisma errors and other
+ * upstream exceptions sometimes include the full `data:image/...;base64,...`
+ * URL in their messages, which leaks multi-KB blobs into logs, traces, and
+ * the terminal. Replace any such URL with a short placeholder.
+ */
+function redactBase64(s: string): string {
+  if (!s) return s;
+  return s
+    .replace(/data:image\/[a-zA-Z0-9+.-]+;base64,[A-Za-z0-9+/=\s]{40,}/g, 'data:image/...[base64 redacted]')
+    .replace(/"imageUrl"\s*:\s*"[^"]{200,}"/g, '"imageUrl":"[redacted]"');
+}
+
 const TOOL_NAMES = new Set(['generate_image', 'save_generated_image']);
 
 export default class ImageGenerationHandler extends BaseSkillHandler {
@@ -152,6 +165,21 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
       // Build the prompt (before lock, since this is CPU-only)
       // -------------------------------------------------------------------
       let prompt = toolCall.arguments.prompt as string;
+
+      // Required-parameter guard: some weak models (Gemma 4 26B observed)
+      // emit generate_image calls with empty or missing `prompt`. Fail fast
+      // with a clear, actionable error BEFORE reserving the GPU lock or
+      // hitting Stable Diffusion. Without this guard, the call proceeds,
+      // SD generates random imagery from an undefined prompt, and the
+      // database insert fails — leaking the base64 imageUrl into the
+      // Prisma error message.
+      if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
+        const argKeys = Object.keys(toolCall.arguments || {});
+        return this.error(
+          toolCall,
+          `generate_image requires a 'prompt' argument describing the image to create. You called it with ${argKeys.length === 0 ? 'no arguments' : `args: [${argKeys.join(', ')}]`}. Retry with {"prompt": "a detailed description of the image", "aspect": "portrait"} (or another aspect). Do NOT call generate_image again without a prompt.`
+        );
+      }
 
       if (isSelfPortrait && modeSettings.characterPrompt) {
         prompt = `${modeSettings.characterPrompt}, ${prompt}`;
@@ -317,8 +345,14 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
         imageId: savedImage.id,
       });
     } catch (imageError) {
-      console.error(`   ❌ Image generation FAILED:`, imageError instanceof Error ? imageError.message : imageError);
-      return this.error(toolCall, `Image generation failed: ${imageError instanceof Error ? imageError.message : 'Unknown error'}`);
+      // Redact base64 data URLs from error messages. Prisma's invalid-args
+      // error dumps the full call arguments including imageUrl, and that
+      // imageUrl is a `data:image/...base64,...` blob that leaks multi-KB
+      // of base64 into logs, traces, terminal, and the model's next iteration.
+      const rawMsg = imageError instanceof Error ? imageError.message : String(imageError);
+      const safeMsg = redactBase64(rawMsg);
+      console.error(`   ❌ Image generation FAILED:`, safeMsg);
+      return this.error(toolCall, `Image generation failed: ${safeMsg}`);
     }
   }
 

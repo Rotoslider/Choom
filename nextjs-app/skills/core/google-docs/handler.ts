@@ -48,6 +48,20 @@ export default class GoogleDocsHandler extends BaseSkillHandler {
 
         case 'read_document': {
           const documentId = toolCall.arguments.document_id as string;
+
+          // Safety net: if the LLM passes a workspace file path instead of a
+          // Google Docs ID, redirect it to workspace_read_file. Google Docs
+          // IDs are opaque alphanumeric strings (no slashes, no file extensions);
+          // anything containing "/" or ending in a common extension is clearly
+          // a local file path and the Google API would return a cryptic 404.
+          const looksLikePath = /[\\/]|\.(?:md|txt|py|ts|tsx|js|jsx|json|yaml|yml|html|css|csv|log|sh|sql|xml|toml|ini|cfg)$/i.test(documentId || '');
+          if (looksLikePath) {
+            return this.error(
+              toolCall,
+              `"${documentId}" looks like a workspace file path, not a Google Docs document ID. Use workspace_read_file with path="${documentId}" instead. read_document only accepts opaque Google Drive IDs like "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms".`
+            );
+          }
+
           const result = await googleClient.readDocument(documentId);
 
           console.log(`   [docs] Read document: "${result.title}" (${result.content.length} chars)`);

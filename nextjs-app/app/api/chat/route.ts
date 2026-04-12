@@ -537,6 +537,156 @@ function createJsonToolCallFilter(): {
 }
 
 /**
+ * Streaming filter for Gemma 4 26B's text-emitted tool calls. Gemma's tokenizer
+ * has special-token markers for tool calls, but when served via LM Studio those
+ * tokens come out as literal text with a broken shape:
+ *
+ *   <|tool_call>call:send_notification{message:<|"|>hello world<|"|>}<tool_call|>
+ *
+ * Note the asymmetric markers (`<|tool_call>` open, `<tool_call|>` close) and
+ * the `<|"|>` pseudo-quote delimiter. Without this filter, the block leaks
+ * into visible output AND the tool never executes — the model then confabulates
+ * that it sent the notification when it didn't.
+ *
+ * Like the XML/JSON filters, this buffers partial markers across chunks so
+ * streaming doesn't split a block mid-marker.
+ */
+function createGemmaToolCallFilter(): {
+  filter: (text: string) => string;
+  getCaptured: () => { id: string; name: string; arguments: Record<string, unknown> }[];
+  flush: () => string;
+} {
+  let pendingBuffer = '';
+  const captured: { id: string; name: string; arguments: Record<string, unknown> }[] = [];
+
+  const OPEN = '<|tool_call>';
+  const CLOSE = '<tool_call|>';
+
+  function tryParseBlock(inner: string): boolean {
+    // Block shape: call:NAME{args}
+    const m = inner.match(/^\s*call\s*:\s*([A-Za-z0-9_]+)\s*\{([\s\S]*)\}\s*$/);
+    if (!m) return false;
+    const name = m[1];
+    // Normalize Gemma's <|"|> pseudo-quote to a real quote before parsing
+    const argsStr = m[2].replace(/<\|"\|>/g, '"');
+
+    const args: Record<string, unknown> = {};
+
+    // Lenient key-value extraction:
+    // 1. Quoted string values: key:"value" (handles commas / spaces inside)
+    const kvString = /([A-Za-z_][A-Za-z0-9_]*)\s*:\s*"((?:[^"\\]|\\.)*)"/g;
+    let kv: RegExpExecArray | null;
+    while ((kv = kvString.exec(argsStr)) !== null) {
+      args[kv[1]] = kv[2].replace(/\\"/g, '"').replace(/\\n/g, '\n').replace(/\\t/g, '\t');
+    }
+
+    // 2. Numeric / bool / null values: key:123, key:true, key:null
+    const kvPrimitive = /([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(-?\d+(?:\.\d+)?|true|false|null)\b/g;
+    let kvn: RegExpExecArray | null;
+    while ((kvn = kvPrimitive.exec(argsStr)) !== null) {
+      if (args[kvn[1]] !== undefined) continue; // don't overwrite a string capture
+      const v = kvn[2];
+      if (v === 'true') args[kvn[1]] = true;
+      else if (v === 'false') args[kvn[1]] = false;
+      else if (v === 'null') args[kvn[1]] = null;
+      else args[kvn[1]] = Number(v);
+    }
+
+    // Only capture when we successfully extracted at least one arg. Empty-args
+    // Gemma blocks are dangerous — the route.ts pre-flight check would then
+    // have to catch them, and a silently-captured call with no params tends
+    // to fail downstream in confusing ways. Let legit no-arg calls come
+    // through the structured tool_calls API instead.
+    if (Object.keys(args).length > 0) {
+      captured.push({
+        id: `gemmatc_${Date.now()}_${captured.length}`,
+        name,
+        arguments: args,
+      });
+      return true;
+    }
+    return false;
+  }
+
+  function filter(text: string): string {
+    if (!text && !pendingBuffer) return '';
+    text = pendingBuffer + (text || '');
+    pendingBuffer = '';
+
+    let result = '';
+    let pos = 0;
+
+    while (pos < text.length) {
+      const openIdx = text.indexOf(OPEN, pos);
+
+      if (openIdx === -1) {
+        // No opening marker. Check if the tail could be a partial prefix
+        // split across streaming chunks (e.g., "...<|tool" in one chunk,
+        // "_call>..." in the next).
+        const remaining = text.slice(pos);
+        const lastLt = remaining.lastIndexOf('<');
+        if (lastLt !== -1 && (remaining.length - lastLt) <= OPEN.length) {
+          const tail = remaining.slice(lastLt);
+          if (OPEN.startsWith(tail)) {
+            result += remaining.slice(0, lastLt);
+            pendingBuffer = tail;
+            break;
+          }
+        }
+        result += remaining;
+        break;
+      }
+
+      // Emit any text before the open marker
+      result += text.slice(pos, openIdx);
+
+      // Find the matching close marker
+      const contentStart = openIdx + OPEN.length;
+      const closeIdx = text.indexOf(CLOSE, contentStart);
+      if (closeIdx === -1) {
+        // Block not complete — buffer from the open marker onward.
+        // Safety valve: if the buffer grows huge, something's wrong —
+        // release it as normal text so we don't leak memory.
+        const bufferedLen = text.length - openIdx;
+        if (bufferedLen > 20000) {
+          result += text.slice(openIdx);
+        } else {
+          pendingBuffer = text.slice(openIdx);
+        }
+        break;
+      }
+
+      const block = text.slice(contentStart, closeIdx);
+      const parsed = tryParseBlock(block);
+      if (!parsed) {
+        // Parse failed. Swallow the block to avoid leaking broken syntax to
+        // the user, but log so we can see unhandled Gemma shapes in dev.
+        console.warn(`   ⚠️  Gemma tool_call block didn't parse: ${block.slice(0, 120)}`);
+      }
+      pos = closeIdx + CLOSE.length;
+    }
+
+    return result;
+  }
+
+  function flush(): string {
+    const buf = pendingBuffer;
+    pendingBuffer = '';
+    // If the buffer starts with a partial/incomplete Gemma block, drop it —
+    // don't leak broken `<|tool_call>...` into the user-visible output.
+    if (buf.startsWith('<') && (OPEN.startsWith(buf) || buf.startsWith(OPEN))) {
+      if (buf.startsWith(OPEN)) {
+        console.warn(`   ⚠️  Gemma tool_call block never completed (stream ended) — dropping ${buf.length} chars`);
+      }
+      return '';
+    }
+    return buf;
+  }
+
+  return { filter, getCaptured: () => captured, flush };
+}
+
+/**
  * Parse captured <tool_call> XML blocks into structured tool calls.
  * Handles two formats:
  *   1. XML args: tool_name<arg_key>k</arg_key><arg_value>v</arg_value>...
@@ -4546,6 +4696,9 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             // JSON tool-call filter: strips [{"name":"...","parameters":{...}}] arrays
             // emitted as plain text (common with Qwen/Mistral models)
             const jsonToolCallFilter = createJsonToolCallFilter();
+            // Gemma 4 tool-call filter: strips <|tool_call>call:name{args}<tool_call|>
+            // blocks emitted as text when Gemma's special tokens aren't tokenized
+            const gemmaToolCallFilter = createGemmaToolCallFilter();
             // Hoisted so fallback loop can also contribute captured blocks
             let capturedXmlToolCalls: string[] = [];
             let capturedFbJsonToolCalls: { id: string; name: string; arguments: Record<string, unknown> }[] = [];
@@ -4571,6 +4724,9 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                     visible = toolCallXmlFilter.filter(visible);
                     if (visible) {
                       visible = jsonToolCallFilter.filter(visible);
+                    }
+                    if (visible) {
+                      visible = gemmaToolCallFilter.filter(visible);
                     }
                     if (visible) {
                       iterationContent += visible;
@@ -4614,6 +4770,13 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                   iterationContent += flushedJson;
                   if (!bufferForDedup) {
                     send({ type: 'content', content: flushedJson });
+                  }
+                }
+                const flushedGemma = gemmaToolCallFilter.flush();
+                if (flushedGemma) {
+                  iterationContent += flushedGemma;
+                  if (!bufferForDedup) {
+                    send({ type: 'content', content: flushedGemma });
                   }
                 }
               }
@@ -4887,6 +5050,59 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               toolCalls = validToolCalls;
             }
 
+            // Empty-args guard: some models (Gemma 4 26B observed) emit structured
+            // tool_calls with an empty arguments string that parses to `{}`. Without
+            // this check, the call proceeds into the handler with no params and fails
+            // in confusing ways downstream (e.g., generate_image runs with undefined
+            // prompt, succeeds in SD, then Prisma fails on the insert with the full
+            // base64 imageUrl in the error message).
+            //
+            // We only drop empty-args calls when the tool's schema declares required
+            // params — legitimate no-arg tools (e.g., get_memory_stats) are preserved.
+            // Dropped calls are converted into error results so the model sees the
+            // failure on the next iteration and retries with the correct arguments.
+            if (toolCalls.length > 0) {
+              const emptyArgReplacements: ToolResult[] = [];
+              const keptCalls: typeof toolCalls = [];
+              for (const tc of toolCalls) {
+                const hasArgs = tc.arguments && Object.keys(tc.arguments).length > 0;
+                if (!hasArgs) {
+                  const toolDef = activeTools.find(t => t.name === tc.name);
+                  const requiredParams = (toolDef?.parameters as { required?: string[] })?.required;
+                  if (requiredParams && requiredParams.length > 0) {
+                    const requiredList = requiredParams.join(', ');
+                    console.warn(`   ⚠️  ${choomTag} ${tc.name} called with empty arguments but requires [${requiredList}] — converting to error for retry`);
+                    emptyArgReplacements.push({
+                      toolCallId: tc.id,
+                      name: tc.name,
+                      result: null,
+                      error: `${tc.name} was called without any arguments, but requires: ${requiredList}. Retry the call with all required parameters. Do not call ${tc.name} with an empty args object again — include the required fields explicitly.`,
+                    });
+                    continue;
+                  }
+                }
+                keptCalls.push(tc);
+              }
+              toolCalls = keptCalls;
+              // Push the synthetic error results so the model sees them on the next iteration
+              for (const r of emptyArgReplacements) {
+                allToolResults.push(r);
+                send({ type: 'tool_call', toolCall: { id: r.toolCallId, name: r.name, arguments: {} } });
+                send({ type: 'tool_result', toolResult: r });
+                traceBuilder.recordToolCall({
+                  id: r.toolCallId,
+                  name: r.name,
+                  args: {},
+                  success: false,
+                  error: r.error,
+                  errorClass: 'param',
+                  iteration,
+                  parallel: false,
+                  blocked: true,
+                });
+              }
+            }
+
             // Parse any XML <tool_call> blocks captured during streaming.
             // These are tool calls emitted as text by local models instead of structured calls.
             // Primary filter captures are always available; fallback captures are added
@@ -4912,6 +5128,19 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               for (const jtc of capturedJsonTCs) {
                 console.log(`   🔧 ${choomTag} Parsed JSON tool call: ${jtc.name}(${JSON.stringify(jtc.arguments).slice(0, 80)})`);
                 toolCalls.push(jtc);
+              }
+            }
+
+            // Parse any Gemma 4 <|tool_call>call:name{...}<tool_call|> blocks
+            // captured during streaming. These look like tool calls the model
+            // "already executed" but actually never hit the API layer.
+            const capturedGemmaTCs = gemmaToolCallFilter.getCaptured();
+            if (capturedGemmaTCs.length > 0) {
+              for (const gtc of capturedGemmaTCs) {
+                if (gtc.name && /^[a-zA-Z0-9_-]+$/.test(gtc.name)) {
+                  console.log(`   🔧 ${choomTag} Parsed Gemma tool call: ${gtc.name}(${JSON.stringify(gtc.arguments).slice(0, 80)})`);
+                  toolCalls.push(gtc);
+                }
               }
             }
 

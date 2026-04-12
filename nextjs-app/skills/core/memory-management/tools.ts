@@ -3,13 +3,13 @@ import type { ToolDefinition } from '@/lib/types';
 export const tools: ToolDefinition[] = [
   {
     name: 'remember',
-    description: 'Store a new memory (fact, preference, event, or conversation snippet). Use when the user shares something important to remember or explicitly asks you to remember something.',
+    description: 'Store a new memory (fact, preference, event, or conversation snippet). Use when the user shares something important to remember or explicitly asks you to remember something. REQUIRED: both "title" (short label) AND "content" (the actual text to store).',
     parameters: {
       type: 'object',
       properties: {
-        title: { type: 'string', description: 'Short title for the memory' },
-        content: { type: 'string', description: 'Full text content to store' },
-        tags: { type: 'string', description: 'Comma-separated tags, e.g., "personal, preference"' },
+        title: { type: 'string', description: 'Short title for the memory (1 sentence)' },
+        content: { type: 'string', description: 'REQUIRED. Full text content of the memory — the actual thing to store. Must be a non-empty string. Example: "User prefers dark mode in all apps."' },
+        tags: { type: 'string', description: 'Comma-separated string of tags (NOT an array). Example: "personal, preference, ui" — do not pass an array like ["personal","preference"].' },
         importance: { type: 'number', description: 'Importance level 1-10 (default 5). Higher = more important.' },
         memory_type: {
           type: 'string',

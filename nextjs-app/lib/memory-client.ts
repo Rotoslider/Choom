@@ -188,9 +188,47 @@ export async function executeMemoryTool(
 ): Promise<MemoryServerResult> {
   switch (toolName) {
     case 'remember': {
-      const content = args.content as string;
+      // Accept content under common aliases (body/text) some local models use
+      const rawContent = (args.content || args.body || args.text) as unknown;
+      // Stringify if model passed an object/array instead of a string
+      const content: string = typeof rawContent === 'string'
+        ? rawContent
+        : rawContent != null ? JSON.stringify(rawContent) : '';
+
       // Auto-generate title from content if model omits it
       const title = (args.title as string) || (content ? content.slice(0, 60).replace(/[^\w\s'-]/g, '').trim() : 'Untitled memory');
+
+      // Hard guard: content is required by the memory server and by the tool
+      // schema. Return a clear, actionable error instead of forwarding an
+      // invalid request and letting the server return a validation blob.
+      if (!content || !content.trim()) {
+        const hadTitle = !!args.title;
+        return {
+          success: false,
+          reason: hadTitle
+            ? `'content' is required for remember. You provided title="${String(args.title).slice(0, 80)}" but no content. Retry with both fields — content should be the full text of the memory, not just a label.`
+            : `'content' is required for remember. Retry with a non-empty content string containing the text you want to store.`,
+        };
+      }
+
+      // Tag coercion: weak models (Gemma 4, some Qwen variants) ignore the
+      // declared string type and pass arrays like ["#topic1","#topic2"]. The
+      // Python memory server then returns a type_error. Coerce here so the
+      // call succeeds on the first try.
+      let tags: string = '';
+      if (Array.isArray(args.tags)) {
+        tags = (args.tags as unknown[])
+          .filter(t => t != null)
+          .map(t => String(t).replace(/^#/, '').trim())
+          .filter(Boolean)
+          .join(', ');
+      } else if (typeof args.tags === 'string') {
+        tags = args.tags;
+      } else if (args.tags != null) {
+        // Some other type — stringify defensively
+        tags = String(args.tags);
+      }
+
       let importance = args.importance != null ? Math.round(args.importance as number) : undefined;
       // Cap importance for heartbeat tasks to prevent memory dilution
       if (options?.isHeartbeat && importance !== undefined && importance > HEARTBEAT_MAX_IMPORTANCE) {
@@ -200,7 +238,7 @@ export async function executeMemoryTool(
         title,
         content,
         {
-          tags: args.tags as string,
+          tags,
           importance,
           memory_type: args.memory_type as MemoryType,
           companion_id: companionId,
