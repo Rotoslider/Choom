@@ -1226,10 +1226,13 @@ Be practical. Only work on things that can actually be accomplished with the too
                 if response.tool_calls:
                     reward += 0.2  # actively used tools
 
-                # Extract machine-readable summary
-                match = re.search(r'\[HEARTBEAT_SUMMARY:\s*(.+?)\]', response.content)
+                # Extract machine-readable summary (supports both formats)
+                match = re.search(
+                    r'(?:\[HEARTBEAT_SUMMARY:\s*(.+?)\]|HB_SUMMARY\s*=\s*(.+?)(?:\n|$))',
+                    response.content,
+                )
                 if match:
-                    summary = match.group(1).strip()
+                    summary = (match.group(1) or match.group(2) or "").strip()
                 else:
                     summary = f"{action_id} heartbeat"
 
@@ -1367,11 +1370,38 @@ Be practical. Only work on things that can actually be accomplished with the too
             response = self.choom.send_message(choom_name, prompt, is_heartbeat=True, task_model_override=task_model_override)
 
             if response.content:
-                # Strip machine-readable summary tag before sending to user
+                # Clean LLM output before Signal delivery
                 import re
+                display_content = response.content
+
+                # 1. Strip machine-readable summary tags (both old and new formats, any count)
                 display_content = re.sub(
-                    r'\n?\[HEARTBEAT_SUMMARY:\s*.+?\]', '', response.content
-                ).strip()
+                    r'\n?\[HEARTBEAT_SUMMARY:\s*.+?\]', '', display_content
+                )
+                display_content = re.sub(
+                    r'\n?HB_SUMMARY\s*=\s*[^\n]*', '', display_content
+                )
+
+                # 2. Strip trailing self-referential confirmations (LLM describing what it just did)
+                trailing_patterns = [
+                    r'\n+(?:Done|All done|All set)[\s\S]{0,300}$',
+                    r'\n+(?:The )?[Nn]otification (?:has been |was )?sent[\s\S]{0,200}$',
+                    r'\n+I(?:\'ve| have)? (?:just )?sent you [\s\S]{0,200}$',
+                    r'\n+(?:Message|Heartbeat) (?:has been |was )?(?:delivered|sent)[\s\S]{0,200}$',
+                ]
+                for pat in trailing_patterns:
+                    display_content = re.sub(pat, '', display_content, flags=re.IGNORECASE)
+
+                # 3. Repetition-loop detection — truncate at first run of an 15+ char substring repeating 5+ times
+                rep_match = re.search(r'(.{15,}?)(?:\1){4,}', display_content)
+                if rep_match:
+                    cutoff = rep_match.start()
+                    logger.warning(
+                        f"Heartbeat [{choom_name}] repetition loop detected at char {cutoff}, truncating"
+                    )
+                    display_content = display_content[:cutoff].rstrip()
+
+                display_content = display_content.strip()
 
                 self.send_message_to_owner(
                     display_content or response.content,

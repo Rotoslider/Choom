@@ -3668,7 +3668,9 @@ export async function POST(request: NextRequest) {
     }
 
     // Build system prompt with explicit tool instructions
+    const projectNameNote = `\n\n## PROJECT NAME\nThis project is called "Choom" (rhymes with "room"). If you see "Choo" in your memories or past conversations, it was a typo from Signal autocorrect — the correct name is always "Choom". Use "Choom" when referring to the project.`;
     const systemPrompt = `${choom.systemPrompt || 'You are a helpful AI assistant.'}
+${projectNameNote}
 ${growthInfo}
 ${timeInfo}${weatherInfo}${homeAssistantInfo}${recentImagesInfo}
 
@@ -5294,7 +5296,8 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                     !calledToolNames.has('workspace_write_file')) {
                   unfinishedSteps.push('update/write file (workspace_write_file)');
                 }
-                if (/(?:send|notify|notification|signal|let me know|tell me)/i.test(msgLower) &&
+                if (!suppressNotifications &&
+                    /(?:send|notify|notification|signal|let me know|tell me)/i.test(msgLower) &&
                     !calledToolNames.has('send_notification')) {
                   unfinishedSteps.push('send notification (send_notification)');
                 }
@@ -5640,13 +5643,61 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               return result;
             };
 
-            // Phase 1: Run pre-flight checks on all tool calls.
+            // Phase 0: Dedup identical calls within this iteration + cap batch size.
+            // Local models (especially small ones) can go feral and emit 100+ identical
+            // calls in a single iteration. Dedup collapses them to one canonical execution;
+            // the cap rejects runaway batches with instructive feedback.
+            const MAX_PARALLEL_BATCH = 15;
+            const dedupMap = new Map<string, string>(); // key → canonical tc.id
+            const canonicalResults = new Map<string, ToolResult>(); // canonical tc.id → result
+            const duplicateAliases = new Map<string, string>(); // duplicate tc.id → canonical tc.id
+            const uniqueCalls: typeof toolCalls = [];
+            const cappedResults = new Map<string, ToolResult>(); // tc.id → error result for capped
+
+            for (const tc of toolCalls) {
+              const key = `${tc.name}::${JSON.stringify(tc.arguments || {})}`;
+              const canonical = dedupMap.get(key);
+              if (canonical) {
+                duplicateAliases.set(tc.id, canonical);
+              } else {
+                dedupMap.set(key, tc.id);
+                if (uniqueCalls.length >= MAX_PARALLEL_BATCH) {
+                  const capped: ToolResult = {
+                    toolCallId: tc.id,
+                    name: tc.name,
+                    result: {
+                      success: false,
+                      message: `Too many tool calls in one iteration (limit: ${MAX_PARALLEL_BATCH} unique calls). You are likely in a loop — slow down, make fewer focused calls, and check your earlier tool results before calling more.`,
+                    },
+                    error: `Batch cap exceeded (${MAX_PARALLEL_BATCH})`,
+                  };
+                  cappedResults.set(tc.id, capped);
+                } else {
+                  uniqueCalls.push(tc);
+                }
+              }
+            }
+
+            if (duplicateAliases.size > 0 || cappedResults.size > 0) {
+              console.log(
+                `   🧹 Dedup: ${toolCalls.length} calls → ${uniqueCalls.length} unique` +
+                (duplicateAliases.size > 0 ? ` (${duplicateAliases.size} duplicates collapsed)` : '') +
+                (cappedResults.size > 0 ? ` | 🚫 ${cappedResults.size} capped` : '')
+              );
+              for (const capped of cappedResults.values()) {
+                allToolResults.push(capped);
+                consecutiveFailures++;
+                send({ type: 'tool_result', toolResult: capped });
+              }
+            }
+
+            // Phase 1: Run pre-flight checks on (deduped) tool calls.
             // Track pending image gen calls within this batch to enforce the cap
             // BEFORE execution (otherwise all N calls pass when imageGenCount=0).
             let pendingImageGenInBatch = 0;
             const preFlightResults = new Map<string, ToolResult>(); // tc.id → result
             const pendingCalls: typeof toolCalls = [];
-            for (const tc of toolCalls) {
+            for (const tc of uniqueCalls) {
               // Batch-aware image gen cap: count calls already queued in this batch.
               // Cap is 5 per batch; imageGenCount resets at the start of each iteration,
               // so later iterations can generate more images if the workflow needs it.
@@ -5705,9 +5756,25 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               allToolResults.push(result);
             }
 
-            // Merge results in original tool call order
+            // Merge results in original tool call order (handling dedup aliases + cap)
             for (const tc of toolCalls) {
-              const r = preFlightResults.get(tc.id) || parallelResults.get(tc.id) || sequentialResults.get(tc.id);
+              let r = cappedResults.get(tc.id)
+                || preFlightResults.get(tc.id)
+                || parallelResults.get(tc.id)
+                || sequentialResults.get(tc.id);
+              if (!r) {
+                // Duplicate call — alias to canonical's result
+                const canonicalId = duplicateAliases.get(tc.id);
+                if (canonicalId) {
+                  const canonicalResult = preFlightResults.get(canonicalId)
+                    || parallelResults.get(canonicalId)
+                    || sequentialResults.get(canonicalId);
+                  if (canonicalResult) {
+                    r = { ...canonicalResult, toolCallId: tc.id };
+                    allToolResults.push(r);
+                  }
+                }
+              }
               if (r) iterationResults.push(r);
             }
 
