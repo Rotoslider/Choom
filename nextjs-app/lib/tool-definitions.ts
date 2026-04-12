@@ -30,8 +30,8 @@ export const memoryTools: ToolDefinition[] = [
         },
         memory_type: {
           type: 'string',
-          description: 'Category: "conversation", "fact", "preference", "event", "task", "ephemeral"',
-          enum: ['conversation', 'fact', 'preference', 'event', 'task', 'ephemeral'],
+          description: 'Category: "conversation", "fact", "preference", "event", "task", "ephemeral", "relationship" (emotional context about your bond with someone)',
+          enum: ['conversation', 'fact', 'preference', 'event', 'task', 'ephemeral', 'relationship'],
         },
       },
       required: ['title', 'content'],
@@ -65,8 +65,8 @@ export const memoryTools: ToolDefinition[] = [
       properties: {
         memory_type: {
           type: 'string',
-          description: 'Category to search: "conversation", "fact", "preference", "event", "task", "ephemeral"',
-          enum: ['conversation', 'fact', 'preference', 'event', 'task', 'ephemeral'],
+          description: 'Category to search: "conversation", "fact", "preference", "event", "task", "ephemeral", "relationship"',
+          enum: ['conversation', 'fact', 'preference', 'event', 'task', 'ephemeral', 'relationship'],
         },
         limit: {
           type: 'number',
@@ -162,7 +162,7 @@ export const memoryTools: ToolDefinition[] = [
         memory_type: {
           type: 'string',
           description: 'New category (optional)',
-          enum: ['conversation', 'fact', 'preference', 'event', 'task', 'ephemeral'],
+          enum: ['conversation', 'fact', 'preference', 'event', 'task', 'ephemeral', 'relationship'],
         },
       },
       required: ['memory_id'],
