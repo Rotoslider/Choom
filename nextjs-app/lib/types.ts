@@ -504,7 +504,7 @@ export interface Memory {
   match_type?: 'semantic' | 'semantic_fallback' | 'structured';
 }
 
-export type MemoryType = 'conversation' | 'fact' | 'preference' | 'event' | 'task' | 'ephemeral';
+export type MemoryType = 'conversation' | 'fact' | 'preference' | 'event' | 'task' | 'ephemeral' | 'relationship';
 
 export interface MemorySearchRequest {
   query: string;

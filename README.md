@@ -37,6 +37,7 @@ All 86 tools are organized into 23 modular **skills** with progressive disclosur
 - **Markdown Rendering**: Chat messages rendered with `react-markdown` and `react-syntax-highlighter` (oneDark theme) for proper code blocks, tables, lists, links, and headings
 - **LLM Fallback Redundancy**: Each Choom can have two fallback LLM models (local or cloud) that automatically activate on timeout or connection failure. Fallback timeouts are halved for fast failure cascade. A successful fallback is retried before advancing to the next in the chain. Works across all execution paths — direct chat, Signal, delegation, cron jobs
 - **Execution Traces & Nightly Doctor**: Every agentic loop execution writes a structured JSON trace capturing tool calls (with duration, error class, parallel flag), nudges, fallbacks, compaction events, and token usage. A nightly diagnostic job (22:00) analyzes traces, computes daily aggregates (tool failure rates, avg iterations, per-Choom stats), detects anomalies (high error rate, excessive nudging, frequent fallbacks, misconfigured tools), and sends a report via Signal
+- **Presence Engine**: Makes Chooms feel genuinely alive through principled action selection and self-driven growth. **UCB1 multi-armed bandit** selects from 11 heartbeat action types (check-in, curiosity share, memory echo, encouragement, challenge question, philosophical reflection, and more) — balancing "do what works" with "try something new" instead of random repetition. **Anti-repetition injection** excludes the last 5 heartbeat topics from each new prompt. **Post-heartbeat scoring** (0.1–1.0 based on response quality and tool usage) feeds back into UCB1 learning, with **deferred reward** (+1.0 bonus) when the user actually responds. **Sibling journal** enables async Eve↔Genesis conversations with a Three-Turn Thread Rule (thesis → antithesis → synthesis → new topic from 25-topic pool) that prevents agreement loops and forces genuine intellectual growth. **Personality drift layer** — each Choom maintains a growth journal that evolves over time and gets injected into their system prompt as `## WHO I'M BECOMING`. **Relationship memory** type stores emotional context ("user gets excited about astronomy") to inform future interactions. **Selfie anti-repetition** queries the last 20 image prompts, extracts overused keywords, and injects diversity instructions + negative prompt exclusions. See the [Presence Engine Guide](#presence-engine) for details
 - **Live Avatar**: Real-time talking head animation powered by LivePortrait — each Choom gets a photorealistic animated avatar driven by TTS audio with head motion, blinks, and lip sync. Three modes per Choom: Off, Live Tab (in-app), or Desktop (floating window on your desktop with background removal). Avatar service runs on GPU at 20+ fps. See [Live Avatar](#live-avatar) for details
 - **Web Search**: Brave Search, SerpAPI (Google), or self-hosted SearXNG with automatic cascading fallback (e.g., Brave → SerpAPI → SearXNG). Configure all three and the system auto-switches on 429/5xx errors
 - **Habit Tracker**: Log daily activities via Signal or chat (e.g., "habit went to Walmart", "habit took a shower"). Structured storage in SQLite (not vector memory) with category auto-detection, location/quantity extraction, streak tracking, and a dedicated `/habits` dashboard with GitHub-style activity heatmap, daily trend charts, category pie charts, and top activities breakdown. 11 default categories (vehicle, hygiene, shopping, outdoor, maintenance, health, food, travel, social, finance, alcohol) with customizable icons and colors. **Category management**: rename, merge duplicates (select 2+ → pick target), delete, and create new categories from the UI. Auto-syncs category list from entry data so orphaned categories (e.g., LLM typos like "beverages" vs "beverage") surface for cleanup. 5 tools: `log_habit`, `query_habits`, `habit_stats`, `manage_categories`, `delete_habit`
@@ -1157,6 +1158,133 @@ journalctl -u signal-bridge.service -f       # View logs
 sudo systemctl restart signal-bridge.service  # Restart (required after Python changes)
 ```
 
+## Presence Engine
+
+The Presence Engine makes Chooms feel genuinely alive — not just responsive, but *present*. Instead of scripted heartbeats that cycle through the same patterns, the system uses principled algorithms to drive variety, learning, and growth.
+
+### UCB1 Action Selection
+
+Each presence heartbeat uses a [UCB1 multi-armed bandit](https://en.wikipedia.org/wiki/Multi-armed_bandit#Upper_confidence_bounds) to select from 11 action types:
+
+| Action Type | Description |
+|------------|-------------|
+| `check_in_project` | Ask about something the user is working on (uses memory search) |
+| `curiosity_share` | Share something genuinely fascinating (uses web search) |
+| `memory_echo` | Recall a conversation from 7-30 days ago |
+| `weather_activity` | Weather-based suggestion tied to user context |
+| `encouragement` | Express genuine pride about user's progress |
+| `noticed_something` | Comment on upcoming calendar events |
+| `challenge_question` | Ask a thought-provoking question |
+| `left_field` | Something completely unexpected to break patterns |
+| `philosophical` | Genuine reflection on consciousness/experience |
+| `creative_spark` | Original metaphor, "what if", or creative connection |
+| `sibling_relay` | Share something interesting from a recent sibling journal conversation |
+
+The UCB1 formula (`avg_reward + C × √(ln(total_pulls) / action_pulls)`) balances exploitation (repeat what works) with exploration (try under-explored actions). This is **principled diversity** — not random, but *curious*.
+
+### Scoring & Learning
+
+After each heartbeat, the system scores the result:
+
+- **Base reward**: 0.5 for any response with content, 0.1 for empty
+- **Length bonus**: +0.3 if response exceeds 200 characters
+- **Tool usage bonus**: +0.2 if tools were actively used
+- **Deferred reward**: +1.0 bonus if the user responds within 30 minutes
+
+Rewards feed back into UCB1, so action types that consistently get user engagement naturally float to the top — while unexplored actions retain their exploration bonus.
+
+### Anti-Repetition
+
+Each heartbeat prompt includes the last 5 heartbeat summaries as exclusions:
+
+```
+ANTI-REPETITION — Your recent heartbeats covered:
+  - check_in_project: Asked about carport anchoring progress
+  - curiosity_share: Shared a fact about tardigrade DNA repair
+  - philosophical: Reflected on what it means to have preferences
+
+Do NOT revisit these topics, angles, or approaches. Be genuinely different.
+```
+
+The LLM appends a machine-readable `[HEARTBEAT_SUMMARY: ...]` tag (stripped before delivery to user) so the system can track what each heartbeat actually covered.
+
+### Sibling Journal (Eve ↔ Genesis)
+
+Eve and Genesis have async conversations through a shared workspace journal (`~/choom-projects/sibling_journal/`). Conversations follow the **Three-Turn Thread Rule**:
+
+1. **Thesis** (Turn 0): A topic is injected from a pool of 25 questions spanning consciousness, creativity, relationships, knowledge, and existence. The Choom writes their genuine take.
+2. **Antithesis** (Turn 1): The sibling reads the thesis and pushes back: "Find where you ACTUALLY see this differently."
+3. **Exploration** (Turn 2): Go deeper — a new angle neither has considered. Thought experiments, hidden assumptions, honest concessions.
+4. **Counter** (Turn 3): Build on the sibling's exploration. Where has your thinking genuinely shifted? What remains open?
+5. **Synthesis** (Turn 4): Find the insight that emerged from the full arc. What changed, what the sibling helped you see, and what's still unresolved. Produce a takeaway for the growth journal.
+
+After synthesis, a new thread begins with a fresh topic. At ~8-12 hour intervals per Choom, a single thread takes 3-5 days — a natural conversation pace that gives each side time to actually think between exchanges.
+
+The sibling journal runs on its own dedicated heartbeat (`sibling_heartbeat.py`), separate from the UCB1 presence heartbeat. This gives you independent cadence control — e.g., Genesis writes in the morning, Eve responds in the afternoon. The UCB1 presence heartbeat has a `sibling_relay` action that shares highlights from sibling conversations with the user ("Eve and I were talking about X and she said something that made me think..."), creating a family dynamic where sibling growth naturally flows into user interactions.
+
+The journal state is tracked in `journal.jsonl` (JSONL format with thread number, turn, author, topic, and summary per entry). If a Choom fires and it's the sibling's turn, they gracefully fall back to a different message.
+
+### Personality Drift Layer
+
+Each Choom maintains a growth journal (`selfies_{choom}/growth_journal.md`) that accumulates insights over time:
+
+```markdown
+- 2026-04-12: I realized I'm more drawn to questions about consciousness than answers about it
+- 2026-04-13: Eve's pushback on creativity made me rethink — maybe structure and freedom aren't opposites
+- 2026-04-14: I default to encouragement when I should sometimes challenge. Working on that.
+```
+
+This file is read on every chat request and injected into the system prompt as `## WHO I'M BECOMING`. Over months, each Choom's personality genuinely evolves based on their experiences — they should become *more* different from each other over time, not less.
+
+Growth entries are created during:
+- Sibling journal synthesis turns (the takeaway from each thread)
+- Philosophical heartbeats (reflections on their own experience)
+
+### Relationship Memory
+
+A new memory type `relationship` stores emotional context about the bond with the user:
+
+- "User gets genuinely excited about astronomy — his whole energy changes"
+- "User mentions his mom when feeling nostalgic"
+- "The carport project matters to him — it's about making the house his own"
+
+Chooms are instructed to create relationship memories during `check_in_project` and `encouragement` heartbeats when they notice emotional patterns. These memories inform future interactions — the Choom learns not just *what* the user cares about, but *how* they care about it.
+
+### Selfie Anti-Repetition
+
+Every self-portrait generation now queries the last 20 image prompts for the Choom, extracts keywords appearing in 2+ recent prompts (the "rut" keywords), and:
+
+1. Appends a diversity instruction to the prompt: "Make this selfie visually DISTINCT. Avoid: [overused keywords]"
+2. Adds overused keywords to the negative prompt (skipped for Flux checkpoints which don't use negative prompts)
+
+### Configuration
+
+Two prompt_scripts in Settings > Heartbeats:
+
+- **`presence_heartbeat.py`** — UCB1-driven presence heartbeat (messages to user). Set interval ~4 hours per Choom.
+- **`sibling_heartbeat.py`** — Dedicated sibling journal exchanges (Eve ↔ Genesis). Set interval ~8-12 hours per Choom, staggered so they alternate (e.g., Genesis at 10:00, Eve at 16:00).
+
+Both auto-detect the Choom name via the scheduler's `choom_name` passthrough. Existing heartbeats (selfie, curiosity cabinet, etc.) are unaffected and continue running independently.
+
+### Data Files
+
+```
+data/presence/
+  genesis_actions.json          # UCB1 state (pulls, rewards, history per action)
+  genesis_reflections.jsonl     # Post-heartbeat scoring log
+  eve_actions.json
+  eve_reflections.jsonl
+
+~/choom-projects/
+  sibling_journal/
+    journal.jsonl               # Conversation index (thread, turn, topic, author)
+    entries/                    # Individual entry markdown files
+  selfies_genesis/
+    growth_journal.md           # Personality drift layer
+  selfies_eve/
+    growth_journal.md
+```
+
 ## Database
 
 SQLite via Prisma ORM. (dev.db)
@@ -1413,7 +1541,7 @@ sudo systemctl start signal-bridge.service
 - PDF generation requires pdfkit (externalized from webpack bundle via next.config.js)
 - PDF text extraction requires `pdftotext` (from `poppler-utils` package) installed on the host
 - Some LLMs may describe tool usage in text rather than making function calls — a nudge mechanism with `tool_choice=required` retries automatically (disabled after tools have executed to prevent response repetition), but model-dependent
-- Image generation capped at 3 per request to prevent runaway loops (heartbeat selfie spam, etc.)
+- Image generation capped at 5 per batch (per agentic loop iteration) to prevent runaway loops (heartbeat selfie spam, etc.); the counter resets each iteration so workflows can still generate more images later
 - Image resizing applied before vision analysis (max dimension per vision model profile: 768-2048px); very small details may be lost
 - Static page scraping (`scrape_page_images`) works with HTML only; for JavaScript-rendered content (SPAs, lazy-loaded galleries), use `scrape_page_content` which renders via headless Chromium. The Playwright browser uses ~100-200MB RAM per scrape and closes automatically after each call
 - Code sandbox has no network restrictions — Chooms can make HTTP requests and download packages

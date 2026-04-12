@@ -236,6 +236,9 @@ class SignalBridge:
                 # Record user activity so heartbeats defer while we're active
                 self.choom.record_user_activity(choom_name)
 
+                # Presence Engine: check if user is responding to a recent heartbeat
+                self._check_heartbeat_response(choom_name)
+
                 response = self.choom.send_message(choom_name, cleaned_message)
 
                 # Log response details for debugging
@@ -268,6 +271,39 @@ class SignalBridge:
 
         except Exception as e:
             logger.error(f"Error processing message: {e}", exc_info=True)
+
+    def _check_heartbeat_response(self, choom_name: str):
+        """Check if user is responding to a recent heartbeat and give bonus reward.
+        Called by the Presence Engine to track which heartbeat types get engagement."""
+        try:
+            import time as time_mod
+
+            # Access the scheduler's last heartbeat tracker (shared singleton)
+            last_hb = getattr(self.scheduler, "_last_heartbeat", {}).get(choom_name.lower())
+            if not last_hb:
+                return
+
+            # Only count responses within 30 minutes of heartbeat
+            elapsed = time_mod.time() - last_hb["timestamp"]
+            if elapsed > 1800:
+                return
+
+            action_id = last_hb["action_id"]
+
+            from heartbeat_ucb1 import HeartbeatUCB1
+            ucb1 = HeartbeatUCB1(choom_name)
+            ucb1.record_user_response(action_id)
+
+            # Clear to prevent double-counting
+            del self.scheduler._last_heartbeat[choom_name.lower()]
+
+            logger.info(
+                f"Presence deferred reward: user responded to {choom_name}/{action_id} "
+                f"heartbeat ({elapsed:.0f}s later)"
+            )
+
+        except Exception as e:
+            logger.debug(f"Deferred reward check: {e}")
 
     def _handle_voice_note(self, attachment: dict) -> Optional[str]:
         """

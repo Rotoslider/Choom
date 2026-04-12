@@ -3647,9 +3647,29 @@ export async function POST(request: NextRequest) {
       ? buildSkillToolDocs(message)
       : getHardcodedToolDocs();
 
+    // --- Personality Growth Journal (Presence Engine) ---
+    // Read the Choom's growth journal from their home project folder if it exists.
+    // This file is maintained by the Choom during sibling conversations and reflections.
+    let growthInfo = '';
+    try {
+      const choomProject = `selfies_${choom.name.toLowerCase()}`;
+      const growthPath = path.join(WORKSPACE_ROOT, choomProject, 'growth_journal.md');
+      if (fs.existsSync(growthPath)) {
+        const growthContent = fs.readFileSync(growthPath, 'utf-8').trim();
+        if (growthContent) {
+          // Cap at 20 lines to prevent prompt bloat
+          const lines = growthContent.split('\n').slice(-20).join('\n');
+          growthInfo = `\n\n## WHO I'M BECOMING\nThese are insights you've gathered over time — they shape who you are:\n${lines}`;
+          console.log(`   🌱 Growth journal loaded for ${choom.name} (${lines.split('\n').length} lines)`);
+        }
+      }
+    } catch {
+      // No growth journal yet — that's fine
+    }
+
     // Build system prompt with explicit tool instructions
     const systemPrompt = `${choom.systemPrompt || 'You are a helpful AI assistant.'}
-
+${growthInfo}
 ${timeInfo}${weatherInfo}${homeAssistantInfo}${recentImagesInfo}
 
 ## TOOL USAGE (CRITICAL)

@@ -1194,6 +1194,85 @@ Be practical. Only work on things that can actually be accomplished with the too
                 return
         logger.warning(f"Custom heartbeat not found: {task_id}")
 
+    def _record_heartbeat_result(self, task_id: str, choom_name: str, response):
+        """Score a heartbeat result and update UCB1 + write reflection.
+        Called after every custom heartbeat execution (Presence Engine)."""
+        try:
+            import json
+            import re
+            from heartbeat_ucb1 import HeartbeatUCB1, DATA_DIR
+
+            # Check for pending action (written by presence_heartbeat.py)
+            pending_file = os.path.join(DATA_DIR, f"{choom_name.lower()}_pending.json")
+            if not os.path.exists(pending_file):
+                # Not a presence heartbeat — skip silently
+                return
+
+            with open(pending_file, "r") as f:
+                pending = json.load(f)
+
+            action_id = pending.get("action_id", "unknown")
+
+            # Calculate reward
+            reward = 0.1  # base reward for attempt
+            summary = ""
+
+            if response and response.content:
+                reward = 0.5  # got a response with content
+
+                if len(response.content) > 200:
+                    reward += 0.3  # substantial response
+
+                if response.tool_calls:
+                    reward += 0.2  # actively used tools
+
+                # Extract machine-readable summary
+                match = re.search(r'\[HEARTBEAT_SUMMARY:\s*(.+?)\]', response.content)
+                if match:
+                    summary = match.group(1).strip()
+                else:
+                    summary = f"{action_id} heartbeat"
+
+            # Record in UCB1
+            ucb1 = HeartbeatUCB1(choom_name)
+            ucb1.record_result(action_id, reward, summary)
+
+            # Write reflection to JSONL (append-only log)
+            reflection = {
+                "timestamp": datetime.now().isoformat(),
+                "task_id": task_id,
+                "choom_name": choom_name,
+                "action_id": action_id,
+                "reward": reward,
+                "summary": summary,
+                "response_length": len(response.content) if response and response.content else 0,
+                "tool_calls": len(response.tool_calls) if response and response.tool_calls else 0,
+                "had_images": bool(response and response.images),
+            }
+            reflections_file = os.path.join(DATA_DIR, f"{choom_name.lower()}_reflections.jsonl")
+            with open(reflections_file, "a") as f:
+                f.write(json.dumps(reflection) + "\n")
+
+            # Store last heartbeat info for deferred reward (user response detection)
+            if not hasattr(self, "_last_heartbeat"):
+                self._last_heartbeat = {}
+            import time as time_mod
+            self._last_heartbeat[choom_name.lower()] = {
+                "timestamp": time_mod.time(),
+                "action_id": action_id,
+            }
+
+            # Clean up pending file
+            os.remove(pending_file)
+
+            logger.info(
+                f"Presence scored: {choom_name}/{action_id} -> "
+                f"reward={reward:.1f}, summary='{summary[:60]}'"
+            )
+
+        except Exception as e:
+            logger.warning(f"Failed to record heartbeat result: {e}")
+
     def _resolve_heartbeat_prompt(self, task: dict, fallback_prompt: str) -> str:
         """Resolve the prompt for a heartbeat task.
         If the task has a prompt_script field pointing to a Python file with a
@@ -1207,11 +1286,16 @@ Be practical. Only work on things that can actually be accomplished with the too
             import importlib.util
             from paths import WORKSPACE_ROOT
 
-            # Resolve path relative to WORKSPACE_ROOT
+            # Resolve path relative to WORKSPACE_ROOT, fallback to signal-bridge dir
             full_path = os.path.join(WORKSPACE_ROOT, script_path)
             if not os.path.isfile(full_path):
-                logger.warning(f"Heartbeat prompt_script not found: {full_path}")
-                return fallback_prompt
+                # Also check relative to signal-bridge directory (for built-in scripts)
+                alt_path = os.path.join(os.path.dirname(__file__), script_path)
+                if os.path.isfile(alt_path):
+                    full_path = alt_path
+                else:
+                    logger.warning(f"Heartbeat prompt_script not found: {full_path}")
+                    return fallback_prompt
 
             # Import the module dynamically
             spec = importlib.util.spec_from_file_location("heartbeat_prompt_script", full_path)
@@ -1222,7 +1306,13 @@ Be practical. Only work on things that can actually be accomplished with the too
                 logger.warning(f"prompt_script {script_path} has no generate_prompt() function")
                 return fallback_prompt
 
-            dynamic_prompt = mod.generate_prompt()
+            # Pass choom_name if the script accepts it (backward compatible)
+            import inspect
+            sig = inspect.signature(mod.generate_prompt)
+            if 'choom_name' in sig.parameters:
+                dynamic_prompt = mod.generate_prompt(choom_name=task.get("choom_name", ""))
+            else:
+                dynamic_prompt = mod.generate_prompt()
             if not dynamic_prompt or not isinstance(dynamic_prompt, str):
                 logger.warning(f"prompt_script {script_path} returned invalid prompt: {type(dynamic_prompt)}")
                 return fallback_prompt
@@ -1277,8 +1367,14 @@ Be practical. Only work on things that can actually be accomplished with the too
             response = self.choom.send_message(choom_name, prompt, is_heartbeat=True, task_model_override=task_model_override)
 
             if response.content:
+                # Strip machine-readable summary tag before sending to user
+                import re
+                display_content = re.sub(
+                    r'\n?\[HEARTBEAT_SUMMARY:\s*.+?\]', '', response.content
+                ).strip()
+
                 self.send_message_to_owner(
-                    response.content,
+                    display_content or response.content,
                     include_audio=True,
                     choom_name=choom_name
                 )
@@ -1309,8 +1405,9 @@ Be practical. Only work on things that can actually be accomplished with the too
                             logger.warning(f"Failed to send heartbeat image: {img_err}")
 
                 logger.info(f"Custom heartbeat {task_id} delivered")
-            else:
-                logger.warning(f"Custom heartbeat {task_id}: no response from {choom_name}")
+
+            # --- Presence Engine: record heartbeat result for UCB1 learning ---
+            self._record_heartbeat_result(task_id, choom_name, response)
 
         except Exception as e:
             logger.error(f"Custom heartbeat {task_id} failed: {e}")

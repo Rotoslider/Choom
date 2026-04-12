@@ -143,6 +143,66 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
       }
 
       // -------------------------------------------------------------------
+      // Selfie anti-repetition: inject diversity for self-portraits
+      // -------------------------------------------------------------------
+      let selfieDiversityNote = '';
+      let selfieNegativeKeywords = '';
+      if (isSelfPortrait) {
+        try {
+          const recentImages = await prisma.generatedImage.findMany({
+            where: { choomId },
+            orderBy: { createdAt: 'desc' },
+            take: 20,
+            select: { prompt: true },
+          });
+
+          if (recentImages.length > 0) {
+            const stopWords = new Set([
+              'a', 'an', 'the', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+              'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
+              'should', 'may', 'might', 'can', 'need', 'to', 'of', 'in', 'for',
+              'on', 'with', 'at', 'by', 'from', 'as', 'into', 'through', 'during',
+              'before', 'after', 'above', 'below', 'between', 'out', 'off', 'over',
+              'under', 'and', 'but', 'or', 'not', 'so', 'yet', 'both', 'each',
+              'few', 'more', 'most', 'other', 'some', 'such', 'very', 'just',
+              'because', 'if', 'when', 'where', 'how', 'all', 'any', 'every',
+              'this', 'that', 'these', 'those', 'who', 'which', 'what',
+              'image', 'photo', 'picture', 'portrait', 'self', 'selfie', 'woman',
+              'man', 'person', 'looking', 'wearing', 'standing', 'sitting', 'style',
+              'her', 'his', 'she', 'him', 'its', 'they', 'them', 'their', 'your',
+            ]);
+
+            const wordCounts = new Map<string, number>();
+            for (const img of recentImages) {
+              const words = img.prompt.toLowerCase().replace(/[^a-z\s]/g, '').split(/\s+/);
+              const seen = new Set<string>();
+              for (const w of words) {
+                if (w.length > 2 && !stopWords.has(w) && !seen.has(w)) {
+                  seen.add(w);
+                  wordCounts.set(w, (wordCounts.get(w) || 0) + 1);
+                }
+              }
+            }
+
+            // Keywords appearing in 2+ recent prompts are "overused"
+            const repeatedKeywords = [...wordCounts.entries()]
+              .filter(([, count]) => count >= 2)
+              .sort((a, b) => b[1] - a[1])
+              .slice(0, 20)
+              .map(([word]) => word);
+
+            if (repeatedKeywords.length > 0) {
+              selfieDiversityNote = `. DIVERSITY: Make this selfie visually DISTINCT from recent ones. Overused concepts to AVOID: ${repeatedKeywords.join(', ')}. Try a completely different setting, outfit, lighting, mood, or activity`;
+              selfieNegativeKeywords = repeatedKeywords.slice(0, 10).join(', ');
+              console.log(`   🎲 Selfie diversity: excluding ${repeatedKeywords.length} overused keywords: ${repeatedKeywords.slice(0, 8).join(', ')}...`);
+            }
+          }
+        } catch (diversityErr) {
+          console.warn(`   ⚠️ Selfie diversity check failed:`, diversityErr instanceof Error ? diversityErr.message : diversityErr);
+        }
+      }
+
+      // -------------------------------------------------------------------
       // Get the appropriate mode settings
       // -------------------------------------------------------------------
       const modeSettings = isSelfPortrait
@@ -179,6 +239,11 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
           toolCall,
           `generate_image requires a 'prompt' argument describing the image to create. You called it with ${argKeys.length === 0 ? 'no arguments' : `args: [${argKeys.join(', ')}]`}. Retry with {"prompt": "a detailed description of the image", "aspect": "portrait"} (or another aspect). Do NOT call generate_image again without a prompt.`
         );
+      }
+
+      // Append selfie diversity instruction (before character/prefix additions)
+      if (selfieDiversityNote) {
+        prompt = prompt + selfieDiversityNote;
       }
 
       if (isSelfPortrait && modeSettings.characterPrompt) {
@@ -272,7 +337,8 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
 
         const result = await imageGenClient.generate({
           prompt,
-          negativePrompt: toolCall.arguments.negative_prompt as string || (modeSettings.negativePrompt as string) || imageGenSettings.defaultNegativePrompt,
+          negativePrompt: (toolCall.arguments.negative_prompt as string || (modeSettings.negativePrompt as string) || imageGenSettings.defaultNegativePrompt)
+            + (selfieNegativeKeywords && checkpointType !== 'flux' ? `, ${selfieNegativeKeywords}` : ''),
           width: genWidth,
           height: genHeight,
           steps: (typeof toolCall.arguments.steps === 'number' ? toolCall.arguments.steps : parseInt(toolCall.arguments.steps as string)) || (modeSettings.steps as number) || imageGenSettings.defaultSteps,
