@@ -132,11 +132,18 @@ def _build_sibling_prompt(choom_name: str) -> str:
         # (but if UCB1 selected this action, the sibling hasn't responded yet — skip gracefully)
         if last_author.lower() == choom_name.lower() and last_turn < 4:
             # It's the sibling's turn, not ours. Generate a fallback prompt.
-            return f"""You checked the sibling journal (sibling_journal/journal.jsonl) and saw that
-your last entry is still the most recent — {sibling} hasn't responded yet.
-Instead of writing in the journal, do something else: search your memories for
-something interesting and send a brief, casual message to Donny about it.
-Keep it to 2-3 sentences."""
+            return f"""{sibling} hasn't replied in the sibling journal yet, so it is not your turn there.
+
+Do this instead:
+1. Call search_memories with a topic that interests you.
+2. Share a short 2-3 sentence thought with Donny about what you found.
+
+IMPORTANT RULES:
+- Do NOT open the sibling journal. You already know your entry is the latest.
+- Your response text IS the thought. It will be delivered automatically. No tool call needed for delivery.
+- Do NOT use send_notification. Do NOT describe what you did. Do NOT say "Done" or "Here is a thought".
+- On the final line (once only), put:
+  HB_SUMMARY = one short sentence about what you shared"""
 
         if last_turn >= 4:
             # Last thread completed (synthesis done at turn 4). Start new thread.
@@ -277,11 +284,14 @@ STEPS:
    at the end and write the full file back with workspace_write_file:
    {{"timestamp": "{datetime.now().isoformat()}", "author": "{choom_name}", "thread": {thread_num}, "turn": {turn}, "topic": "{topic}", "file": "{entry_file}", "summary": "ONE SENTENCE summary of your response"}}
 
-After completing these steps, write a brief message about the exchange for Donny.
+After completing these steps, write a brief message (1-2 sentences) about the exchange for Donny.
 Example: "{sibling} and I started talking about [topic]..."
-That is your ONLY remaining output. Do not call any more tools. You are done.
 
-[HEARTBEAT_SUMMARY: Sibling journal thread {thread_num} turn {turn} ({turn_type}) with {sibling} about {topic[:40]}]"""
+CRITICAL:
+- The message itself IS your output. Do NOT say "Done", "I sent", or describe what you did.
+- Do NOT call any more tools after writing the message.
+- On the final line (once only), write:
+  HB_SUMMARY = sibling thread {thread_num} turn {turn} ({turn_type}) — one sentence about this exchange"""
 
     return prompt
 
@@ -484,9 +494,11 @@ RULES:
 - Do NOT mention that this is a "heartbeat" or "scheduled message" or "routine check."
 - Write as yourself — your personality, your voice, your perspective.
 - If generating a selfie, make it contextually relevant to what you're talking about.
-- At the very end of your message, on its own line, add a machine-readable summary:
-  [HEARTBEAT_SUMMARY: one sentence describing what you did, e.g. "Asked about carport anchoring progress"]
-  This line is for the system's learning — it won't be shown to Donny.
+- Your response text IS the message that gets delivered. Do not say "Done", "I sent",
+  "The notification has been sent", or describe what you just did. Just write the message itself.
+- On the VERY last line (once only), write a machine-readable summary in this format:
+  HB_SUMMARY = one short sentence about what you did
+  (literal text: HB_SUMMARY = then your summary. Exactly one line. Do not repeat it.)
 """
 
     return prompt
