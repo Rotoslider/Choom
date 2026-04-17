@@ -20,6 +20,7 @@ const nodeRequire = createRequire(import.meta.url || __filename);
 import { tools as memoryTools } from '@/skills/core/memory-management/tools';
 import { tools as imageGenTools } from '@/skills/core/image-generation/tools';
 import { tools as webSearchTools } from '@/skills/core/web-searching/tools';
+import { tools as knowledgeGraphTools } from '@/skills/core/knowledge-graph/tools';
 import { tools as weatherTools } from '@/skills/core/weather-forecasting/tools';
 import { tools as calendarTools } from '@/skills/core/google-calendar/tools';
 import { tools as tasksTools } from '@/skills/core/google-tasks/tools';
@@ -45,6 +46,7 @@ import { tools as habitTools } from '@/skills/core/habit-tracker/tools';
 import { default as MemoryHandler } from '@/skills/core/memory-management/handler';
 import { default as ImageGenHandler } from '@/skills/core/image-generation/handler';
 import { default as WebSearchHandler } from '@/skills/core/web-searching/handler';
+import { default as KnowledgeGraphHandler } from '@/skills/core/knowledge-graph/handler';
 import { default as WeatherHandler } from '@/skills/core/weather-forecasting/handler';
 import { default as CalendarHandler } from '@/skills/core/google-calendar/handler';
 import { default as TasksHandler } from '@/skills/core/google-tasks/handler';
@@ -131,6 +133,7 @@ const CORE_SKILLS: SkillDef[] = [
   { dirName: 'memory-management', tools: memoryTools, handler: MemoryHandler },
   { dirName: 'image-generation', tools: imageGenTools, handler: ImageGenHandler },
   { dirName: 'web-searching', tools: webSearchTools, handler: WebSearchHandler },
+  { dirName: 'knowledge-graph', tools: knowledgeGraphTools, handler: KnowledgeGraphHandler },
   { dirName: 'weather-forecasting', tools: weatherTools, handler: WeatherHandler },
   { dirName: 'google-calendar', tools: calendarTools, handler: CalendarHandler },
   { dirName: 'google-tasks', tools: tasksTools, handler: TasksHandler },
