@@ -11,6 +11,7 @@ import { ForgeRAGClient, executeForgeRAGTool } from '@/lib/forgerag-client';
 
 const FORGERAG_TOOLS = new Set([
   'ask_engineering_question',
+  'find_relevant_chunks',
   'search_engineering_docs',
   'query_knowledge_graph',
   'explore_entity',
