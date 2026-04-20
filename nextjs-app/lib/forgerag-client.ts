@@ -75,6 +75,9 @@ export class ForgeRAGClient {
     return this.request('/search/answer', 'POST', {
       query,
       limit: options.limit || 5,
+      // "auto" uses chunk-aware RRF hybrid (BGE-M3 + BM25 + bge-reranker)
+      // fused with Nemotron visual. Callers can still override to
+      // "keyword" / "visual" / "semantic" / "hybrid".
       search_mode: options.search_mode || 'auto',
       use_vision: options.use_vision !== false,
       use_graph: options.use_graph !== false,
@@ -101,6 +104,33 @@ export class ForgeRAGClient {
       query,
       limit: options.limit || 5,
       candidate_pool: options.candidate_pool || 30,
+    });
+  }
+
+  /**
+   * Chunk-level retrieval — BGE-M3 dense + BM25 + bge-reranker over
+   * structural chunks (paragraphs, tables, figures, equations).
+   * Returns raw chunk text + summary + section_path for precise
+   * quoting, without running the VLM. Use this when you need to cite
+   * a specific paragraph or table rather than synthesize an answer.
+   */
+  async searchChunks(
+    query: string,
+    options: {
+      limit?: number;
+      chunk_type?: string;
+      collection?: string;
+      rerank?: boolean;
+    } = {}
+  ): Promise<ForgeResult> {
+    return this.request('/search/chunks', 'POST', {
+      query,
+      limit: options.limit || 10,
+      rerank: options.rerank !== false,
+      ...(options.chunk_type ? { chunk_type: options.chunk_type } : {}),
+      ...(options.collection
+        ? { filters: { collection: options.collection } }
+        : {}),
     });
   }
 
@@ -189,6 +219,17 @@ export async function executeForgeRAGTool(
       }
       return client.searchVisual(query, {
         limit: Number(args.limit) || 5,
+      });
+    }
+
+    case 'find_relevant_chunks': {
+      const query = String(args.query || '');
+      if (!query) return { success: false, reason: 'query is required' };
+      return client.searchChunks(query, {
+        limit: Number(args.limit) || 10,
+        chunk_type: args.chunk_type ? String(args.chunk_type) : undefined,
+        collection: args.collection ? String(args.collection) : undefined,
+        rerank: args.rerank !== false,
       });
     }
 

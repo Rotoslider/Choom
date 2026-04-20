@@ -4,10 +4,13 @@ export const tools: ToolDefinition[] = [
   {
     name: 'ask_engineering_question',
     description:
-      'Ask a question about engineering materials, processes, standards, or specifications. ' +
-      'The system searches the knowledge graph, retrieves relevant pages from engineering ' +
-      'handbooks, reads the actual page images using a vision LLM, and synthesizes an ' +
-      'answer with [Page N] citations. Use this as the primary research tool.',
+      'Ask a question about engineering materials, processes, standards, formulas, ' +
+      'reference tables, or specifications. The system uses RRF hybrid retrieval ' +
+      '(BGE-M3 dense + BM25 + bge-reranker cross-encoder) over structural chunks, ' +
+      'augments with Nemotron visual search for charts/diagrams, retrieves relevant ' +
+      'pages from engineering handbooks, reads the actual page images using a vision ' +
+      'LLM, and synthesizes an answer with [Page N] citations. Use this as the ' +
+      'primary research tool when you want a synthesized answer.',
     parameters: {
       type: 'object',
       properties: {
@@ -27,6 +30,47 @@ export const tools: ToolDefinition[] = [
         limit: {
           type: 'number',
           description: 'Number of source pages to read (default 5, max 10). More pages = more thorough but slower.',
+        },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'find_relevant_chunks',
+    description:
+      'Retrieve the most relevant structural CHUNKS (paragraphs, tables, figures, ' +
+      'equations) for a query without synthesizing an answer. Uses BGE-M3 dense + ' +
+      'BM25 + bge-reranker over the chunk-level index. Returns raw chunk text + ' +
+      'LLM-generated summary + section path + page/document linkage. Use this when ' +
+      'you want to quote specific paragraphs or inspect specific tables, or when ' +
+      'you want to gather evidence before synthesizing. Faster than ' +
+      'ask_engineering_question (no VLM pass) — ideal for "what does section X say" ' +
+      'or "find the tap drill table" queries.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description:
+            'The topic or phrase to search for. Natural language works ' +
+            'well — summaries smooth out jargon differences.',
+        },
+        chunk_type: {
+          type: 'string',
+          description:
+            'Optional: filter to a specific structural type. "table" for ' +
+            'reference tables, "figure" for figure captions, "equation" for ' +
+            'formula blocks, "list" for enumerated items, "text" for prose ' +
+            'paragraphs. Omit to return all types.',
+          enum: ['text', 'table', 'figure', 'equation', 'list', 'caption', 'heading'],
+        },
+        collection: {
+          type: 'string',
+          description: 'Optional: limit to a specific collection.',
+        },
+        limit: {
+          type: 'number',
+          description: 'Max chunks to return (default 10, max 50).',
         },
       },
       required: ['query'],
