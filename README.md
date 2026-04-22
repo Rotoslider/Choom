@@ -725,6 +725,8 @@ The queue is a file-based JSONL at `data/self_followups/{choomId}.jsonl`. The Si
 
 **Orchestrator pattern** (Aloy-style): delegate now, `schedule_self_followup` 2 hours later with a prompt like "Check if Genesis dropped `choom_commons/for_aloy/report.md` and summarize."
 
+**Monitoring.** Settings → **Followups** tab lists every pending and recently-fired followup across all Chooms: Choom name, human-readable trigger time ("in 35 min", "in 2 hrs"), the prompt, optional reason, and entry id. Auto-refreshes every 30s. Trash icon on each pending row cancels the entry (same effect as calling `cancel_self_followup`, marks it consumed so the scheduler skips it). Fired entries show what the Choom told itself and when.
+
 ### Plan Mode + Delegation
 
 Plans can include `delegate` step types alongside regular `tool` steps:

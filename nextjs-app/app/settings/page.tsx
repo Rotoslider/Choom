@@ -12,6 +12,7 @@ import {
   Cloud,
   Calendar,
   Heart,
+  Clock,
   Palette,
   Eye,
   FolderOpen,
@@ -40,6 +41,7 @@ import { YTDownloaderSettings } from '@/components/settings/yt-downloader-settin
 import { AutomationsSettings } from '@/components/settings/automations-settings';
 import { HomeAssistantSettings } from '@/components/settings/homeassistant-settings';
 import { AvatarSettingsPanel } from '@/components/settings/avatar-settings';
+import { SelfFollowupsSettings } from '@/components/settings/self-followups-settings';
 import { cn } from '@/lib/utils';
 
 type Section =
@@ -51,6 +53,7 @@ type Section =
   | 'weather'
   | 'cron'
   | 'heartbeat'
+  | 'followups'
   | 'reminders'
   | 'vision'
   | 'projects'
@@ -70,6 +73,7 @@ const sections: { id: Section; label: string; icon: React.ReactNode }[] = [
   { id: 'weather', label: 'Weather', icon: <Cloud className="h-4 w-4" /> },
   { id: 'cron', label: 'Cron Jobs', icon: <Calendar className="h-4 w-4" /> },
   { id: 'heartbeat', label: 'Heartbeats', icon: <Heart className="h-4 w-4" /> },
+  { id: 'followups', label: 'Followups', icon: <Clock className="h-4 w-4" /> },
   { id: 'reminders', label: 'Reminders', icon: <Calendar className="h-4 w-4" /> },
   { id: 'vision', label: 'Optic', icon: <Eye className="h-4 w-4" /> },
   { id: 'projects', label: 'Projects', icon: <FolderOpen className="h-4 w-4" /> },
@@ -138,6 +142,7 @@ export default function SettingsPage() {
             {activeSection === 'weather' && <WeatherSettings />}
             {activeSection === 'cron' && <CronSettings />}
             {activeSection === 'heartbeat' && <HeartbeatSettings />}
+            {activeSection === 'followups' && <SelfFollowupsSettings />}
             {activeSection === 'reminders' && <RemindersSettings />}
             {activeSection === 'vision' && <VisionSettings />}
             {activeSection === 'projects' && <ProjectsSettings />}
