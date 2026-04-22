@@ -20,6 +20,7 @@ import { SearchSettings } from './search-settings';
 import { WeatherSettings } from './weather-settings';
 import { AppearanceSettings } from './appearance-settings';
 import { ScheduledSettings } from './scheduled-settings';
+import { SelfFollowupsSettings } from './self-followups-settings';
 import { AvatarSettingsPanel } from './avatar-settings';
 import { useAppStore } from '@/lib/store';
 
@@ -57,6 +58,7 @@ export function SettingsPanel({ open, onOpenChange }: SettingsPanelProps) {
             <TabsTrigger value="search">Search</TabsTrigger>
             <TabsTrigger value="weather">Weather</TabsTrigger>
             <TabsTrigger value="scheduled">Tasks</TabsTrigger>
+            <TabsTrigger value="followups">Followups</TabsTrigger>
             <TabsTrigger value="avatar">Avatar</TabsTrigger>
             <TabsTrigger value="appearance">Theme</TabsTrigger>
           </TabsList>
@@ -92,6 +94,10 @@ export function SettingsPanel({ open, onOpenChange }: SettingsPanelProps) {
 
             <TabsContent value="scheduled" className="mt-0 space-y-4">
               <ScheduledSettings />
+            </TabsContent>
+
+            <TabsContent value="followups" className="mt-0 space-y-4">
+              <SelfFollowupsSettings />
             </TabsContent>
 
             <TabsContent value="avatar" className="mt-0 space-y-4">
