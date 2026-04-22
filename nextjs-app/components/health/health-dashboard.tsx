@@ -31,7 +31,7 @@ import type { ServiceHealth } from '@/lib/types';
 interface ServiceInfo {
   name: string;
   key: keyof ServiceHealth;
-  icon: React.ElementType;
+  icon: React.ComponentType<{ className?: string }>;
   description: string;
   defaultPort: string;
 }

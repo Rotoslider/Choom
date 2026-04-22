@@ -90,21 +90,34 @@ export default class ImageAnalysisHandler extends BaseSkillHandler {
       // If image_id is provided, look up the generated image from the database
       let imageBase64 = toolCall.arguments.image_base64 as string | undefined;
       if (toolCall.arguments.image_id && !imageBase64) {
+        const imageId = toolCall.arguments.image_id as string;
         try {
           const genImage = await prisma.generatedImage.findUnique({
-            where: { id: toolCall.arguments.image_id as string },
+            where: { id: imageId },
           });
           if (genImage?.imageUrl) {
-            // Extract base64 from data URL if present
             const dataUrl = genImage.imageUrl;
             if (dataUrl.startsWith('data:')) {
               imageBase64 = dataUrl.split(',')[1];
             } else {
               imageBase64 = dataUrl;
             }
-            console.log(`   👁️  Loaded generated image ${toolCall.arguments.image_id} from DB for analysis`);
+            console.log(`   👁️  Loaded generated image ${imageId} from DB for analysis`);
           } else {
-            throw new Error(`Generated image ${toolCall.arguments.image_id} not found in database`);
+            // Stale-image-id guard: list current valid IDs for this Choom.
+            const recent = await prisma.generatedImage.findMany({
+              where: { choomId: ctx.choomId },
+              orderBy: { createdAt: 'desc' },
+              take: 5,
+              select: { id: true, prompt: true },
+            });
+            const list = recent.length === 0
+              ? '(no images have been generated for this Choom yet)'
+              : recent.map(r => `  - ${r.id} :: "${(r.prompt || '').slice(0, 60)}"`).join('\n');
+            return this.error(
+              toolCall,
+              `Image id "${imageId}" was not found — it may be from a previous request or was never created. Current valid image ids for this Choom (most recent first):\n${list}\n\nRetry analyze_image with one of these ids, or use image_path / image_url instead.`
+            );
           }
         } catch (dbErr) {
           throw new Error(`Failed to load generated image: ${dbErr instanceof Error ? dbErr.message : 'Unknown error'}`);

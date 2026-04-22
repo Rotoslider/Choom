@@ -572,11 +572,12 @@ skill-name/
   handler.ts            # SkillHandler class (canHandle + execute)
 ```
 
-### 22 Core Skills
+### 23 Core Skills
 
 | Skill | Tools | Description |
 |-------|-------|-------------|
 | `choom-delegation` | 3 | Multi-agent collaboration: delegate tasks to other Chooms, list team, retrieve results |
+| `self-scheduling` | 3 | A Choom queues its own future tick. `schedule_self_followup` / `list_self_followups` / `cancel_self_followup`. Fires as a one-shot heartbeat. Max 3 pending per Choom, delay clamped to [5 min, 7 days]. |
 | `memory-management` | 9 | Semantic memory (ChromaDB): store, search, update, delete, stats |
 | `image-generation` | 1 | Stable Diffusion Forge: checkpoint switching, LoRA, self-portrait mode |
 | `web-searching` | 1 | Brave / SerpAPI / SearXNG (cascading fallback) |
@@ -691,10 +692,38 @@ User → Orchestrator (e.g. Aloy)
 
 ### Safety Features
 
-- **Recursive loop prevention**: Delegated Chooms have delegation and plan-mode tools stripped automatically (`isDelegation` flag). They cannot delegate to other Chooms or create plans
+- **Recursive loop prevention**: Delegated Chooms have delegation, plan-mode, and self-scheduling tools stripped automatically (`isDelegation` flag). They cannot delegate to other Chooms, create plans, or queue zombie followups
 - **Iteration cap**: Delegated Chooms are capped at 6 agentic iterations regardless of their normal limit
 - **Multi-step detection disabled**: Plan detection is turned off for delegated tasks to prevent nested plan creation
 - **Empty response fallback**: If a target Choom returns <10 characters, the handler falls back to tool result text so the orchestrator still gets useful data
+
+### Shared Workspaces
+
+Two top-level shared folders live alongside each Choom's `selfies_{name}/` home folder. They are enforced by a narrow **Operational Contract** (see [`SAFETY_CONTRACT.md`](SAFETY_CONTRACT.md)):
+
+| Folder | Purpose |
+|---|---|
+| `sibling_journal/` | Structured thesis → antithesis → synthesis → new-topic threads between Choom siblings. Used by the sibling-relay heartbeat action (presence engine). |
+| `choom_commons/` | Catch-all for any cross-Choom artifact that isn't a structured sibling-journal thread: delegation handoffs, letters to another Choom, shared drafts, cross-Choom research. Typical layout: `choom_commons/for_{choom}/`, `choom_commons/drafts/`, `choom_commons/research/`. |
+
+**Contract enforcement (narrow, lives in `route.ts::contractGate`):**
+
+- Cross-Choom writes into another Choom's `selfies_*/` folder are blocked with a message pointing at `choom_commons/` as the correct destination.
+- Deletes from either shared folder are blocked — corrections go in alongside the original.
+- Writes into shared folders are audit-logged.
+- All other tools remain free. The contract only covers the handful of actions with real blast radius.
+
+### Self-Scheduling
+
+Chooms can queue their own future ticks via the `self-scheduling` skill. A queued followup fires as a one-shot heartbeat at the scheduled time, giving the Choom a fresh turn to act.
+
+- `schedule_self_followup(delay_minutes, prompt, reason?)` — clamped to [5 min, 7 days], max 3 pending per Choom, prompt ≤500 chars
+- `list_self_followups()` — read-only query of pending entries
+- `cancel_self_followup(id)` — free a slot or discard a stale plan
+
+The queue is a file-based JSONL at `data/self_followups/{choomId}.jsonl`. The Signal bridge scheduler polls it every 60s and fires due entries through the existing custom-heartbeat delivery path. Stripped from the tool list during delegation, so a delegated Choom cannot queue zombie ticks detached from its orchestrator.
+
+**Orchestrator pattern** (Aloy-style): delegate now, `schedule_self_followup` 2 hours later with a prompt like "Check if Genesis dropped `choom_commons/for_aloy/report.md` and summarize."
 
 ### Plan Mode + Delegation
 

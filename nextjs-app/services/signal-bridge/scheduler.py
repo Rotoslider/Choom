@@ -203,6 +203,9 @@ class ScheduledTaskManager:
         # Poll for manual triggers from the web GUI (every 10s)
         self.add_interval_task('trigger_poll', self._check_triggers, seconds=10)
 
+        # Poll the self-followup queue (Chooms scheduling their own next tick)
+        self.add_interval_task('self_followup_poll', self._check_self_followups, seconds=60)
+
         logger.info("Default scheduled tasks configured from bridge config")
 
     def add_cron_task(self, task_id: str, func: Callable, **cron_kwargs):
@@ -1226,14 +1229,25 @@ Be practical. Only work on things that can actually be accomplished with the too
                 if response.tool_calls:
                     reward += 0.2  # actively used tools
 
-                # Extract machine-readable summary (supports both formats)
-                match = re.search(
-                    r'(?:\[HEARTBEAT_SUMMARY:\s*(.+?)\]|HB_SUMMARY\s*=\s*(.+?)(?:\n|$))',
-                    response.content,
-                )
-                if match:
-                    summary = (match.group(1) or match.group(2) or "").strip()
-                else:
+                # Extract machine-readable summary. Preferred: heartbeat_complete
+                # tool call (new path, since 2026-04-13). Fallback: HB_SUMMARY text
+                # tag (legacy path, kept for any in-flight/retrying clients).
+                summary = ""
+                for tc in (response.tool_calls or []):
+                    if tc.get("name") == "heartbeat_complete":
+                        args = tc.get("arguments") or {}
+                        tc_summary = args.get("summary", "")
+                        if isinstance(tc_summary, str) and tc_summary.strip():
+                            summary = tc_summary.strip()
+                            break
+                if not summary:
+                    match = re.search(
+                        r'(?:\[HEARTBEAT_SUMMARY:\s*(.+?)\]|HB_SUMMARY\s*=\s*(.+?)(?:\n|$))',
+                        response.content,
+                    )
+                    if match:
+                        summary = (match.group(1) or match.group(2) or "").strip()
+                if not summary:
                     summary = f"{action_id} heartbeat"
 
             # Record in UCB1
@@ -1367,19 +1381,34 @@ Be practical. Only work on things that can actually be accomplished with the too
 
         logger.info(f"Running custom heartbeat: {task_id} -> {choom_name}")
         try:
-            response = self.choom.send_message(choom_name, prompt, is_heartbeat=True, task_model_override=task_model_override)
+            # Fresh chat per heartbeat: prior heartbeats in the persistent chat
+            # contained legacy "HB_SUMMARY = ..." text; weak local models mimic
+            # their own prior outputs regardless of what the current prompt says.
+            # Anti-repetition context is already injected via the prompt's
+            # `anti_rep` block — we don't need chat history for continuity.
+            response = self.choom.send_message(
+                choom_name, prompt,
+                is_heartbeat=True,
+                fresh_chat=True,
+                task_model_override=task_model_override,
+            )
 
             if response.content:
                 # Clean LLM output before Signal delivery
                 import re
                 display_content = response.content
 
-                # 1. Strip machine-readable summary tags (both old and new formats, any count)
+                # 1. Strip machine-readable summary tags — broad coverage:
+                #    - [HEARTBEAT_SUMMARY: ...] / [HEARTBEAT SUMMARY: ...] / HEARTBEAT_SUMMARY = ...
+                #    - HB_SUMMARY = ... / HB SUMMARY: ... / **HB_SUMMARY**: ...
+                #    Handles = or :, underscore or space, optional markdown bold/brackets.
                 display_content = re.sub(
-                    r'\n?\[HEARTBEAT_SUMMARY:\s*.+?\]', '', display_content
+                    r'\n?\*{0,2}\[?HEARTBEAT[_ ]SUMMARY\]?\*{0,2}\s*[:=]\s*[^\n\]]*\]?',
+                    '', display_content
                 )
                 display_content = re.sub(
-                    r'\n?HB_SUMMARY\s*=\s*[^\n]*', '', display_content
+                    r'\n?\*{0,2}HB[_ ]SUMMARY\*{0,2}\s*[:=]\s*[^\n]*',
+                    '', display_content
                 )
 
                 # 2. Strip trailing self-referential confirmations (LLM describing what it just did)
@@ -1403,8 +1432,20 @@ Be practical. Only work on things that can actually be accomplished with the too
 
                 display_content = display_content.strip()
 
+                # If scrubbing emptied the content entirely, skip delivery rather
+                # than falling back to raw (which would leak HB_SUMMARY tags to
+                # Signal and TTS). This happens when the model emits ONLY the tag.
+                if not display_content:
+                    logger.warning(
+                        f"Heartbeat [{choom_name}] produced only scrubbed content — "
+                        f"skipping Signal delivery (raw len={len(response.content)})"
+                    )
+                    # Still run UCB1 scoring below so the bad attempt is logged.
+                    self._record_heartbeat_result(task_id, choom_name, response)
+                    return
+
                 self.send_message_to_owner(
-                    display_content or response.content,
+                    display_content,
                     include_audio=True,
                     choom_name=choom_name
                 )
@@ -1441,6 +1482,108 @@ Be practical. Only work on things that can actually be accomplished with the too
 
         except Exception as e:
             logger.error(f"Custom heartbeat {task_id} failed: {e}")
+
+    # =========================================================================
+    # Self-Followups (Choom-scheduled one-shot heartbeats)
+    # =========================================================================
+
+    def _check_self_followups(self):
+        """Poll data/self_followups/*.jsonl for due entries. Fire each as a one-shot
+        heartbeat and mark the entry consumed. Queue files are written by the
+        schedule_self_followup tool (skills/core/self-scheduling/handler.ts).
+        """
+        import json
+        from datetime import datetime, timezone
+
+        queue_dir = os.path.join(os.path.dirname(__file__), "..", "..", "data", "self_followups")
+        if not os.path.isdir(queue_dir):
+            return
+
+        now = datetime.now(timezone.utc)
+
+        for fname in os.listdir(queue_dir):
+            if not fname.endswith(".jsonl"):
+                continue
+            fpath = os.path.join(queue_dir, fname)
+            try:
+                with open(fpath, "r") as f:
+                    lines = [ln for ln in f.read().splitlines() if ln.strip()]
+            except Exception as e:
+                logger.warning(f"self_followup: could not read {fpath}: {e}")
+                continue
+
+            entries = []
+            changed = False
+            for line in lines:
+                try:
+                    entries.append(json.loads(line))
+                except Exception:
+                    # Skip malformed lines but keep them unchanged
+                    continue
+
+            for entry in entries:
+                if entry.get("consumed"):
+                    continue
+                try:
+                    trigger_at = datetime.fromisoformat(entry["trigger_at"].replace("Z", "+00:00"))
+                except Exception:
+                    logger.warning(f"self_followup: bad trigger_at on {entry.get('id')}, marking consumed")
+                    entry["consumed"] = True
+                    changed = True
+                    continue
+
+                if trigger_at.tzinfo is None:
+                    trigger_at = trigger_at.replace(tzinfo=timezone.utc)
+
+                if trigger_at > now:
+                    continue
+
+                choom_name = entry.get("choom_name") or "unknown"
+                prompt = entry.get("prompt") or ""
+                task_id = f"self_followup_{entry.get('id', 'unknown')}"
+
+                logger.info(
+                    f"Firing self-followup {entry.get('id')} → {choom_name} "
+                    f"(scheduled {entry['trigger_at']}, reason: {entry.get('reason', '')})"
+                )
+                try:
+                    # Reuse the heartbeat delivery path — same as custom heartbeats.
+                    # respect_quiet=False because the Choom scheduled this itself;
+                    # if it happens to land in quiet hours, the Choom can always
+                    # call send_notification inside the followup if appropriate.
+                    self._execute_custom_heartbeat(
+                        task_id=task_id,
+                        choom_name=choom_name,
+                        prompt=prompt,
+                        respect_quiet=True,
+                    )
+                except Exception as exec_err:
+                    logger.error(f"self_followup fire failed for {entry.get('id')}: {exec_err}")
+
+                entry["consumed"] = True
+                entry["fired_at"] = now.isoformat()
+                changed = True
+
+            if changed:
+                try:
+                    # Prune entries older than 7 days to keep the file bounded
+                    cutoff = now.timestamp() - 7 * 24 * 3600
+                    kept = []
+                    for e in entries:
+                        try:
+                            created = datetime.fromisoformat(e.get("created_at", "").replace("Z", "+00:00"))
+                            if created.tzinfo is None:
+                                created = created.replace(tzinfo=timezone.utc)
+                            if created.timestamp() < cutoff and e.get("consumed"):
+                                continue
+                        except Exception:
+                            pass
+                        kept.append(e)
+                    with open(fpath, "w") as f:
+                        for e in kept:
+                            f.write(json.dumps(e) + "\n")
+                except Exception as write_err:
+                    logger.error(f"self_followup: failed to rewrite {fpath}: {write_err}")
 
     # =========================================================================
     # Skill-Based Automations

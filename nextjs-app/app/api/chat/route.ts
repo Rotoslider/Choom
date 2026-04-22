@@ -160,7 +160,8 @@ const WORKSPACE_IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.
 const WORKSPACE_DOWNLOAD_EXTENSIONS = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.pptx', '.zip', '.tar', '.gz', '.xml', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.log', '.sh', '.bash', '.sql', '.r', '.R', '.ipynb'];
 
 // Maximum agentic loop iterations
-const MAX_ITERATIONS = 100;
+const MAX_ITERATIONS = 50;
+const HEARTBEAT_DEFAULT_MAX_ITERATIONS = 15;
 
 // Global lock for image generation to prevent checkpoint race conditions
 // when multiple requests try to switch checkpoints simultaneously
@@ -3239,6 +3240,67 @@ Use workspace tools for writing reports, saving code, creating structured projec
 // Used when USE_SKILL_DISPATCH=true
 // ============================================================================
 
+/**
+ * Contract gate — narrow enforcement of SAFETY_CONTRACT.md. Runs just before
+ * the handler executes. Returns null to let the call through, or a ToolResult
+ * to short-circuit with an error or benign no-op.
+ *
+ * Most contract items are enforced elsewhere (MAX_CALLS_PER_TOOL, delegation
+ * tool stripping, send_notification suppression, image cap, schedule_self_followup
+ * internal cap). This gate only handles the genuinely new cases:
+ *   - workspace_write_file: audit-log writes into shared top-level paths
+ *   - workspace_delete_file: block deletes outside the Choom's own folder
+ *     and block all deletes inside sibling_journal/
+ */
+function contractGate(toolCall: ToolCall, ctx: ToolContext): ToolResult | null {
+  const choomName = (ctx.choom as Record<string, unknown>)?.name as string || '';
+  const choomSlug = choomName.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  const ownFolderPrefix = choomSlug ? `selfies_${choomSlug}/` : '';
+
+  const SHARED_TOP = new Set(['sibling_journal', 'choom_commons']);
+
+  if (toolCall.name === 'workspace_write_file') {
+    const rawPath = (toolCall.arguments.path || toolCall.arguments.file_path || toolCall.arguments.filename) as string || '';
+    const firstSeg = rawPath.split('/').filter(Boolean)[0] || '';
+    const isShared = SHARED_TOP.has(firstSeg);
+    const isOwn = ownFolderPrefix && rawPath.startsWith(ownFolderPrefix);
+    if (isShared) {
+      console.log(`   📒 [contract] ${choomName} writing to shared ${firstSeg}/: ${rawPath}`);
+    } else if (ownFolderPrefix && !isOwn && firstSeg.startsWith('selfies_') && firstSeg !== `selfies_${choomSlug}`) {
+      // Cross-Choom write into another Choom's selfies folder — block.
+      return {
+        toolCallId: toolCall.id,
+        name: toolCall.name,
+        error: `Blocked: cannot write into another Choom's folder (${firstSeg}/). Your folder is ${ownFolderPrefix}. For messages/artifacts intended for another Choom, write to choom_commons/ (e.g. choom_commons/for_eve/your_note.md). For structured back-and-forth conversations, use sibling_journal/.`,
+        result: null,
+      };
+    }
+  }
+
+  if (toolCall.name === 'workspace_delete_file') {
+    const rawPath = (toolCall.arguments.path || toolCall.arguments.file_path) as string || '';
+    const firstSeg = rawPath.split('/').filter(Boolean)[0] || '';
+    if (SHARED_TOP.has(firstSeg)) {
+      return {
+        toolCallId: toolCall.id,
+        name: toolCall.name,
+        error: `Blocked: ${firstSeg}/ is a shared folder — never delete from it. If an entry is wrong, write a correction instead.`,
+        result: null,
+      };
+    }
+    if (ownFolderPrefix && firstSeg.startsWith('selfies_') && !rawPath.startsWith(ownFolderPrefix)) {
+      return {
+        toolCallId: toolCall.id,
+        name: toolCall.name,
+        error: `Blocked: cannot delete from another Choom's folder (${firstSeg}/). Your folder is ${ownFolderPrefix}.`,
+        result: null,
+      };
+    }
+  }
+
+  return null;
+}
+
 async function executeToolCallViaSkills(
   toolCall: ToolCall,
   ctx: ToolContext
@@ -3307,9 +3369,22 @@ async function executeToolCallViaSkills(
     message: ctx.message,
     send: ctx.send,
     sessionFileCount: ctx.sessionFileCount,
+    activeProjectFolder: ctx.activeProjectFolder,
+    suppressNotifications: ctx.suppressNotifications,
+    isHeartbeat: ctx.isHeartbeat,
     skillDoc: skill.fullDoc,
     getReference: (fileName: string) => registry.getLevel3Reference(skill.metadata.name, fileName),
   };
+
+  // Narrow contract gate (see SAFETY_CONTRACT.md). Only the handful of tools
+  // that touch shared state or have unusual blast radius land here — most are
+  // already constrained by MAX_CALLS_PER_TOOL, the suppressNotifications flag,
+  // or the delegation tool-stripping. Don't expand unless the Doctor shows a
+  // failure mode that requires it.
+  const gated = contractGate(toolCall, ctx);
+  if (gated) {
+    return gated;
+  }
 
   try {
     return await skill.handler.execute(toolCall, handlerCtx);
@@ -3785,15 +3860,32 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
       activeTools = [];
     }
 
-    // Delegation mode: strip delegation + plan tools to prevent recursive delegation loops
+    // Delegation mode: strip delegation + plan tools to prevent recursive delegation loops.
+    // Also strip heartbeat_complete — that tool only makes sense during a heartbeat.
+    // Strip schedule_self_followup too — a delegated Choom shouldn't queue its own
+    // future ticks detached from the orchestrator's flow; it should return a result.
     if (isDelegation) {
       const delegationTools = new Set([
         'delegate_to_choom', 'list_team', 'get_delegation_result',
         'create_plan', 'execute_plan', 'adjust_plan',
+        'heartbeat_complete',
+        'schedule_self_followup', 'list_self_followups', 'cancel_self_followup',
       ]);
       const before = activeTools.length;
       activeTools = activeTools.filter(t => !delegationTools.has(t.name));
       console.log(`   🔒 Delegation mode: stripped ${before - activeTools.length} delegation/plan tools → ${activeTools.length} tools`);
+    }
+
+    // heartbeat_complete is the agentic-loop terminator for the Presence Engine.
+    // It MUST be hidden from every non-heartbeat flow (regular chat, Signal, web UI,
+    // goal review, morning briefing) — otherwise models could call it and silently
+    // end a user conversation.
+    if (!isHeartbeat) {
+      const before = activeTools.length;
+      activeTools = activeTools.filter(t => t.name !== 'heartbeat_complete');
+      if (before !== activeTools.length) {
+        console.log(`   🔒 Non-heartbeat: stripped heartbeat_complete tool`);
+      }
     }
 
     // Build raw history messages (before compaction).
@@ -3968,7 +4060,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           // Softer hint: this is the Choom's default workspace, not a hard lock.
           // They can still create a new project if the user asks for one explicitly.
           enrichedMessage += `\n\n[System: Your default workspace is "${detectedProject.folder}" (this is YOUR project folder as ${choom.name}). Save any files you create inside "${detectedProject.folder}/" — do NOT create a new top-level folder for everyday work. Only create a new project if the user explicitly asks for one.]`;
-          currentMessages[0].content += `\n\n## YOUR WORKSPACE\nYour home project folder is \`${detectedProject.folder}/\`. When saving files without an explicit project named by the user, save them inside \`${detectedProject.folder}/\` (e.g. \`${detectedProject.folder}/notes/today.md\`). Do NOT create new top-level folders unless the user explicitly asks you to start a new project.`;
+          currentMessages[0].content += `\n\n## YOUR WORKSPACE\nYour home project folder is \`${detectedProject.folder}/\`. When saving files without an explicit project named by the user, save them inside \`${detectedProject.folder}/\` (e.g. \`${detectedProject.folder}/notes/today.md\`). Do NOT create new top-level folders unless the user explicitly asks you to start a new project.\n\n**Shared top-level folders (NOT inside your home folder, NEVER prefix with \`selfies_*/\`):**\n- \`sibling_journal/\` — structured async conversation between Choom siblings (thesis → antithesis → synthesis threads). Paths: \`sibling_journal/entries/007_eve_antithesis.md\`, \`sibling_journal/journal.jsonl\`.\n- \`choom_commons/\` — catch-all shared space for anything cross-Choom that isn't a structured sibling-journal thread: delegation handoffs, notes to another Choom, shared drafts, cross-Choom research. If you're writing something FOR another Choom and there's no better home for it, put it here. Example: \`choom_commons/for_eve/response_to_consciousness_question.md\`, \`choom_commons/drafts/shared_plan.md\`.\n- Your \`growth_journal.md\` IS inside your home folder: \`${detectedProject.folder}/growth_journal.md\`.\n\nYou may NEVER write to another Choom's \`selfies_*/\` folder. If you need to leave something for another Choom, use \`choom_commons/\`.`;
         } else {
           enrichedMessage += `\n\n[System: Active project: "${detectedProject.folder}" (${projMaxIter} thinking rounds available). Use this EXACT folder name for all workspace file operations. Do NOT create a new folder with different casing or naming.]`;
         }
@@ -4259,6 +4351,14 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
         let projectIterationLimitApplied = false;
         let fallbackAttempt = 0; // Tracks which fallback to try next (0 = try #1, 1 = try #2)
 
+        // Heartbeat default cap: tight enough to stop runaway repetition loops but
+        // generous enough for a 10-step heartbeat with a couple retries. An explicit
+        // maxIterationsOverride from the scheduler still wins below.
+        if (isHeartbeat) {
+          maxIterations = HEARTBEAT_DEFAULT_MAX_ITERATIONS;
+          console.log(`   💓 [${choom.name}] Heartbeat mode: maxIterations → ${maxIterations}`);
+        }
+
         // Apply per-Choom iteration limit (from <!-- max_iterations: N --> in system prompt)
         if (choomMaxIterations > 0) {
           maxIterations = choomMaxIterations;
@@ -4526,6 +4626,23 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           const simpleTasksEnabled = (clientLLMSettings as Record<string, unknown>)?.simpleTasksEnabled;
           const simpleTasksModel = (clientLLMSettings as Record<string, unknown>)?.simpleTasksModel as string | undefined;
           if (simpleTasksEnabled && simpleTasksModel && intentToolHint && SIMPLE_TASK_TOOLS.has(intentToolHint) && !body.taskModelOverride) {
+            // Apply the simple-tasks model's profile BEFORE building the client/settings, so the
+            // swapped model runs with its own params (temp, topP, contextLength, topK, etc.) rather
+            // than inheriting the primary model's profile that was applied earlier in this request.
+            const stUserProfiles = (settings?.modelProfiles as LLMModelProfile[]) || [];
+            const stProfile = findLLMProfile(simpleTasksModel, stUserProfiles);
+            if (stProfile) {
+              if (stProfile.temperature !== undefined) llmSettings.temperature = stProfile.temperature;
+              if (stProfile.topP !== undefined) llmSettings.topP = stProfile.topP;
+              if (stProfile.maxTokens !== undefined) llmSettings.maxTokens = stProfile.maxTokens;
+              if (stProfile.contextLength !== undefined) llmSettings.contextLength = stProfile.contextLength;
+              if (stProfile.frequencyPenalty !== undefined) llmSettings.frequencyPenalty = stProfile.frequencyPenalty;
+              if (stProfile.presencePenalty !== undefined) llmSettings.presencePenalty = stProfile.presencePenalty;
+              if (stProfile.topK !== undefined) llmSettings.topK = stProfile.topK;
+              if (stProfile.repetitionPenalty !== undefined) llmSettings.repetitionPenalty = stProfile.repetitionPenalty;
+              if (stProfile.enableThinking !== undefined) llmSettings.enableThinking = stProfile.enableThinking;
+              console.log(`   📋 Applied profile for simple-tasks model ${simpleTasksModel}`);
+            }
             const simpleProviderId = (clientLLMSettings as Record<string, unknown>)?.simpleTasksProviderId as string | undefined;
             if (simpleProviderId && simpleProviderId !== '_local' && providers.length > 0) {
               const simpleProvider = providers.find((p: LLMProviderConfig) => p.id === simpleProviderId);
@@ -5433,6 +5550,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               'list_emails', 'read_email', 'search_emails',
               'search_contacts', 'get_contact',
               'search_youtube', 'get_video_details', 'get_channel_info', 'get_playlist_items',
+              'list_self_followups',
             ]);
 
             const iterationResults: ToolResult[] = [];
@@ -5836,6 +5954,35 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 tool_call_id: tr.toolCallId,
                 name: tr.name,
               });
+            }
+
+            // --- Heartbeat terminator: the Choom signaled it's done with this heartbeat.
+            // Break before the next LLM call so weak local models can't regenerate the
+            // message body. The summary argument is available to the scheduler via
+            // response.tool_calls for UCB1 reward scoring.
+            if (isHeartbeat && iterationResults.some(r => r.name === 'heartbeat_complete' && !r.error)) {
+              console.log(`   💓 ${choomTag} heartbeat_complete called — ending agentic loop`);
+              break;
+            }
+
+            // --- Semantic repetition guard: catch models that loop-generate the same
+            // paragraph across iterations. Covers local models (Gemma, GLM) that have
+            // weak repetition penalties. Applies to ALL flows, not just heartbeats.
+            // Trigger: a 200+ char substring of this iteration's text appears in a
+            // PRIOR iteration's text. Pure exact-match dupes are already caught earlier;
+            // this catches paraphrased-but-overlapping repeats.
+            if (iterationContent && iterationContent.length >= 200 && iterationTexts.length >= 2) {
+              const current = iterationContent.trim();
+              const OVERLAP_MIN = 200;
+              const probe = current.slice(0, Math.min(OVERLAP_MIN, current.length));
+              let overlapFound = false;
+              for (let i = 0; i < iterationTexts.length - 1; i++) {
+                if (iterationTexts[i].includes(probe)) { overlapFound = true; break; }
+              }
+              if (overlapFound) {
+                console.warn(`   🔁 ${choomTag} Repetition loop detected — current iteration repeats a prior iteration's paragraph. Breaking loop at iteration ${iteration}.`);
+                break;
+              }
             }
 
             // --- Consecutive failure abort: tell LLM to stop and present results ---

@@ -44,6 +44,9 @@ Thumbs.db
 # Execution traces (runtime diagnostic data)
 **/data/traces/
 
+# Self-followup queue (runtime per-Choom JSONL, written by the self-scheduling skill)
+**/data/self_followups/
+
 # Logs
 *.log
 
