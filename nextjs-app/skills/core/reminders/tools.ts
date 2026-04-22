@@ -4,7 +4,7 @@ export const tools: ToolDefinition[] = [
   {
     name: 'create_reminder',
     description:
-      'Create a timed reminder that will be delivered via Signal message. Use when the user says "remind me", "set a reminder", or asks to be notified at a specific time. Supports relative minutes or absolute time.',
+      'USER-FACING reminder. Creates a Signal message that will be delivered to Donny at a future time. Use ONLY when Donny says "remind me…", "set a reminder…", or asks to be notified. Do NOT use to schedule your own future turns — for that, use schedule_self_followup.',
     parameters: {
       type: 'object',
       properties: {

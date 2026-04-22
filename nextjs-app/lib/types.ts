@@ -332,8 +332,16 @@ export function computeImageDimensions(
   size: ImageSize,
   aspect: ImageAspect
 ): { width: number; height: number } {
-  const longestSide = IMAGE_SIZES[size];
-  const { w, h } = IMAGE_ASPECTS[aspect];
+  // Weak models sometimes pass an aspect with quote/backslash bleed from XML
+  // tool-call parsing (e.g. `wide\"`). Coerce into a valid key or fall back
+  // to 'square' rather than destructuring undefined.
+  const sizeKey = IMAGE_SIZES[size] ? size : 'medium';
+  const longestSide = IMAGE_SIZES[sizeKey];
+  const aspectKey = IMAGE_ASPECTS[aspect] ? aspect : 'square';
+  if (aspectKey !== aspect) {
+    console.warn(`   ⚠️  Unknown image aspect "${aspect}" — falling back to "square"`);
+  }
+  const { w, h } = IMAGE_ASPECTS[aspectKey];
 
   if (w >= h) {
     // Landscape or square - width is the longest side

@@ -41,6 +41,7 @@ import { tools as planModeTools } from '@/skills/core/plan-mode/tools';
 import { tools as homeAssistantTools } from '@/skills/core/home-assistant/tools';
 import { tools as delegationTools } from '@/skills/core/choom-delegation/tools';
 import { tools as habitTools } from '@/skills/core/habit-tracker/tools';
+import { tools as selfSchedulingTools } from '@/skills/core/self-scheduling/tools';
 
 // Import all core skill handlers
 import { default as MemoryHandler } from '@/skills/core/memory-management/handler';
@@ -67,6 +68,7 @@ import { default as PlanModeHandler } from '@/skills/core/plan-mode/handler';
 import { default as HomeAssistantHandler } from '@/skills/core/home-assistant/handler';
 import { default as DelegationHandler } from '@/skills/core/choom-delegation/handler';
 import { default as HabitHandler } from '@/skills/core/habit-tracker/handler';
+import { default as SelfSchedulingHandler } from '@/skills/core/self-scheduling/handler';
 
 // ============================================================================
 // YAML Frontmatter Parser (minimal)
@@ -154,6 +156,7 @@ const CORE_SKILLS: SkillDef[] = [
   { dirName: 'home-assistant', tools: homeAssistantTools, handler: HomeAssistantHandler },
   { dirName: 'choom-delegation', tools: delegationTools, handler: DelegationHandler },
   { dirName: 'habit-tracker', tools: habitTools, handler: HabitHandler },
+  { dirName: 'self-scheduling', tools: selfSchedulingTools, handler: SelfSchedulingHandler },
 ];
 
 let loaded = false;

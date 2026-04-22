@@ -1,8 +1,19 @@
 import { BaseSkillHandler, SkillHandlerContext } from '@/lib/skill-handler';
 import type { ToolCall, ToolResult } from '@/lib/types';
 import prisma from '@/lib/db';
+import { Agent, fetch as undiciFetch } from 'undici';
+import { WORKSPACE_ROOT } from '@/lib/config';
+
+const DELEG_WORKSPACE_MAX_FILE_KB = 1024;
+const DELEG_WORKSPACE_EXTS = ['.md', '.txt', '.json', '.jsonl', '.py', '.ts', '.tsx', '.js', '.jsx', '.html', '.css', '.csv', '.tsv', '.sh', '.bash', '.yaml', '.yml', '.xml', '.sql', '.toml', '.ini', '.cfg', '.log'];
 
 const TOOL_NAMES = new Set(['delegate_to_choom', 'list_team', 'get_delegation_result']);
+
+// Dedicated dispatcher for delegation fetches. undici's default bodyTimeout
+// (300s between chunks) kills long SSE streams when a slow local-model worker
+// has a gap between iterations. Our explicit AbortController (timeout_seconds)
+// is the single source of truth for delegation deadlines.
+const delegationDispatcher = new Agent({ bodyTimeout: 0, headersTimeout: 0 });
 
 // Cache delegation results for retrieval within the session
 const delegationResults = new Map<string, DelegationResult>();
@@ -102,8 +113,11 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
     try {
       // 1. If continuing a previous delegation, reuse the same Choom and chat
       let targetChoom: { id: string; name: string } | undefined;
-      let delegationChatId: string;
-      let delegationId: string;
+      // Definite-assignment asserted (!): every code path below either assigns
+      // these directly or falls through to the `if (!isContinuation)` block,
+      // but TypeScript can't correlate the isContinuation cross-branch flow.
+      let delegationChatId!: string;
+      let delegationId!: string;
       let isContinuation = false;
 
       if (continueDelegationId) {
@@ -223,9 +237,12 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), timeoutSeconds * 1000);
 
-      let response: Response;
+      // Use undici fetch directly (not the Next.js-patched global fetch), so
+      // our dispatcher with bodyTimeout=0 is actually honored and Next.js
+      // doesn't instrument/cache this long-running internal SSE call.
+      let response: Awaited<ReturnType<typeof undiciFetch>>;
       try {
-        response = await fetch(`${baseUrl}/api/chat`, {
+        response = await undiciFetch(`${baseUrl}/api/chat`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -236,6 +253,7 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
             isDelegation: true, // Tells chat route: strip delegation tools, disable plan detection
           }),
           signal: controller.signal,
+          dispatcher: delegationDispatcher,
         });
       } catch (fetchErr) {
         clearTimeout(timeout);
@@ -342,22 +360,37 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
           }
         }
       } catch (streamErr) {
-        // AbortController fired during stream read = timeout
+        // Any stream-read failure — AbortError (timeout), undici "terminated"
+        // (socket died mid-stream), ECONNRESET, premature close. Worker may have
+        // completed real work (files written) before the transport failed, so
+        // treat all of these the same: preserve partial results + checkpoint.
         clearTimeout(timeout);
         reader.releaseLock();
         const elapsed = Math.round((Date.now() - startTime) / 1000);
-        if ((streamErr as Error).name === 'AbortError') {
-          // If we got partial content, return it as a partial result instead of failing
+        const errObj = streamErr as Error & { cause?: { message?: string; code?: string } };
+        const errName = errObj.name || '';
+        const errMsg = errObj.message || '';
+        const causeMsg = errObj.cause?.message || '';
+        const causeCode = errObj.cause?.code || '';
+        const isAbort = errName === 'AbortError';
+        const isTransport = /terminated|socket|ECONNRESET|ECONNREFUSED|UND_ERR|premature/i.test(
+          `${errName} ${errMsg} ${causeMsg} ${causeCode}`
+        );
+        const reasonLabel = isAbort
+          ? `timed out after ${elapsed}s`
+          : `lost connection after ${elapsed}s (${errMsg || causeMsg || errName || 'unknown'})`;
+
+        if (isAbort || isTransport) {
+          // If we got partial content or tool calls, return as partial instead of failing
           if (content.trim().length > 20 || toolCallsUsed.length > 0) {
-            console.warn(`   ⚠️  [${targetChoom.name}] Delegation timed out after ${elapsed}s but has partial results (${content.length} chars, ${toolCallsUsed.length} tool calls) — returning partial`);
+            console.warn(`   ⚠️  [${targetChoom.name}] Delegation ${reasonLabel} but has partial results (${content.length} chars, ${toolCallsUsed.length} tool calls) — returning partial`);
             let partialResponse = content.trim();
             if (!partialResponse || partialResponse.length < 20) {
-              // No text content — use accumulated tool results as fallback
               if (toolResultTexts.length > 0) {
-                partialResponse = `[${targetChoom.name} timed out after ${elapsed}s. Tool results from ${toolCallsUsed.length} calls below]\n\n${toolResultTexts.join('\n\n')}`;
-                console.log(`   🤝 [${targetChoom.name}] Timeout fallback: using ${toolResultTexts.length} tool result texts (${partialResponse.length} chars)`);
+                partialResponse = `[${targetChoom.name} ${reasonLabel}. Tool results from ${toolCallsUsed.length} calls below]\n\n${toolResultTexts.join('\n\n')}`;
+                console.log(`   🤝 [${targetChoom.name}] Fallback: using ${toolResultTexts.length} tool result texts (${partialResponse.length} chars)`);
               } else {
-                partialResponse = `[${targetChoom.name} timed out after ${elapsed}s with ${toolCallsUsed.length} tool calls but no text response]`;
+                partialResponse = `[${targetChoom.name} ${reasonLabel} with ${toolCallsUsed.length} tool calls but no text response]`;
               }
             }
 
@@ -367,11 +400,11 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
             if (workerProjectFolder && (toolResultTexts.length > 0 || content.trim().length > 50)) {
               try {
                 const { WorkspaceService } = await import('@/lib/workspace-service');
-                const ws = new WorkspaceService();
+                const ws = new WorkspaceService(WORKSPACE_ROOT, DELEG_WORKSPACE_MAX_FILE_KB, DELEG_WORKSPACE_EXTS);
                 const progressContent = [
                   `# Delegation Progress — ${targetChoom.name}`,
                   `**Task:** ${task.slice(0, 200)}`,
-                  `**Status:** Timed out after ${elapsed}s (${toolCallsUsed.length} tool calls, ${doneIterations || '?'} iterations)`,
+                  `**Status:** ${isAbort ? 'Timed out' : 'Connection lost'} after ${elapsed}s (${toolCallsUsed.length} tool calls, ${doneIterations || '?'} iterations)`,
                   `**Time:** ${new Date().toISOString()}`,
                   '',
                   '## Tool Calls Made',
@@ -408,7 +441,7 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
               maxIterations: doneMaxIterations,
             };
             delegationResults.set(delegationId, result);
-            // Track the timeout so the next delegation to this choom auto-continues
+            // Track so the next delegation to this choom auto-continues
             recentTimeouts.set(targetChoom.name.toLowerCase(), { delegationId, timestamp: Date.now() });
             return this.success(toolCall, {
               success: true,
@@ -420,10 +453,11 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
               incomplete: true,
               project_folder: workerProjectFolder,
               progress_file: checkpointPath,
-              message: `${targetChoom.name} timed out after ${elapsed}s but partial work was captured.${checkpointPath ? ` Progress saved to "${checkpointPath}" — read it with workspace_read_file for full details.` : ''} To continue, re-delegate to ${targetChoom.name} with continue_delegation_id="${delegationId}".`,
+              message: `${targetChoom.name} ${reasonLabel} but partial work was captured.${checkpointPath ? ` Progress saved to "${checkpointPath}" — read it with workspace_read_file for full details.` : ''} To continue, re-delegate to ${targetChoom.name} with continue_delegation_id="${delegationId}".`,
             });
           }
-          return this.error(toolCall, `Delegation to "${targetChoom.name}" timed out after ${elapsed}s (${timeoutSeconds}s limit). ${toolCallsUsed.length > 0 ? `${toolCallsUsed.length} tools were called before timeout.` : 'No tools were called.'}`);
+          const limitNote = isAbort ? ` (${timeoutSeconds}s limit)` : '';
+          return this.error(toolCall, `Delegation to "${targetChoom.name}" ${reasonLabel}${limitNote}. ${toolCallsUsed.length > 0 ? `${toolCallsUsed.length} tools were called before failure.` : 'No tools were called.'}`);
         }
         throw streamErr;
       } finally {

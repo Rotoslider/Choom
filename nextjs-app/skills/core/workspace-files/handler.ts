@@ -16,6 +16,27 @@ const TOOL_NAMES = new Set([
   'workspace_rename_project',
 ]);
 
+// Top-level shared workspaces. These live at the workspace root and must NOT
+// be prefixed by a Choom's selfies_ folder. Chooms repeatedly make the mistake
+// of writing `selfies_genesis/sibling_journal/...` — strip the prefix.
+const SHARED_TOP_LEVEL_DIRS = new Set([
+  'sibling_journal',
+  'choom_commons',
+]);
+
+function stripMisplacedSharedPrefix(filePath: string): string {
+  if (!filePath) return filePath;
+  const parts = filePath.split('/').filter(Boolean);
+  if (parts.length < 2) return filePath;
+  // Pattern: selfies_X/<shared_dir>/...  →  <shared_dir>/...
+  if (parts[0].startsWith('selfies_') && SHARED_TOP_LEVEL_DIRS.has(parts[1])) {
+    const corrected = parts.slice(1).join('/');
+    console.warn(`   🔀 Path corrected: "${filePath}" → "${corrected}" (${parts[1]} is top-level, not inside selfies_*)`);
+    return corrected;
+  }
+  return filePath;
+}
+
 export default class WorkspaceFilesHandler extends BaseSkillHandler {
   canHandle(toolName: string): boolean {
     return TOOL_NAMES.has(toolName);
@@ -109,7 +130,7 @@ export default class WorkspaceFilesHandler extends BaseSkillHandler {
       }
 
       // Auto-sanitize garbled paths from weak models (e.g., "home %_assistant/good_m}orning.yaml")
-      const sanitizedPath = this.sanitizePath(filePath);
+      const sanitizedPath = stripMisplacedSharedPrefix(this.sanitizePath(filePath));
 
       const ws = new WorkspaceService(WORKSPACE_ROOT, WORKSPACE_MAX_FILE_SIZE_KB, WORKSPACE_ALLOWED_EXTENSIONS);
       const result = await ws.writeFile(sanitizedPath, content);
@@ -131,7 +152,7 @@ export default class WorkspaceFilesHandler extends BaseSkillHandler {
   }
 
   private async readFile(toolCall: ToolCall): Promise<ToolResult> {
-    const filePath = this.sanitizePath((toolCall.arguments.path || toolCall.arguments.file_path || toolCall.arguments.filename) as string || '');
+    const filePath = stripMisplacedSharedPrefix(this.sanitizePath((toolCall.arguments.path || toolCall.arguments.file_path || toolCall.arguments.filename) as string || ''));
     const ws = new WorkspaceService(WORKSPACE_ROOT, WORKSPACE_MAX_FILE_SIZE_KB, WORKSPACE_ALLOWED_EXTENSIONS);
 
     try {
@@ -219,7 +240,7 @@ export default class WorkspaceFilesHandler extends BaseSkillHandler {
 
   private async listFiles(toolCall: ToolCall): Promise<ToolResult> {
     try {
-      const dirPath = this.sanitizePath((toolCall.arguments.path as string) || '');
+      const dirPath = stripMisplacedSharedPrefix(this.sanitizePath((toolCall.arguments.path as string) || ''));
 
       const ws = new WorkspaceService(WORKSPACE_ROOT, WORKSPACE_MAX_FILE_SIZE_KB, WORKSPACE_ALLOWED_EXTENSIONS);
       const entries = await ws.listFiles(dirPath);

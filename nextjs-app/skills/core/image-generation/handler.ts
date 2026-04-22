@@ -275,9 +275,13 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
         genWidth = argWidth;
         genHeight = argHeight;
       } else {
-        const size = (toolCall.arguments.size as ImageSize) || (modeSettings.size as ImageSize) || 'medium';
-        const aspect = (toolCall.arguments.aspect as ImageAspect) || (modeSettings.aspect as ImageAspect)
-          || (isSelfPortrait ? 'portrait' : 'square');
+        // Strip stray quotes/backslashes some models leak in via XML tool-call
+        // parsing bleed (e.g. aspect="wide\""). Coerce to a known key or fall through.
+        const cleanEnum = (v: unknown): string => typeof v === 'string' ? v.replace(/["\\\s]/g, '').toLowerCase() : '';
+        const rawSize = cleanEnum(toolCall.arguments.size) || cleanEnum(modeSettings.size) || 'medium';
+        const rawAspect = cleanEnum(toolCall.arguments.aspect) || cleanEnum(modeSettings.aspect) || (isSelfPortrait ? 'portrait' : 'square');
+        const size = rawSize as ImageSize;
+        const aspect = rawAspect as ImageAspect;
 
         const dims = computeImageDimensions(size, aspect);
         genWidth = dims.width;
@@ -436,7 +440,21 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
       });
 
       if (!genImage?.imageUrl) {
-        return this.error(toolCall, `Image not found with id "${imageId}". Make sure to use the imageId returned by generate_image.`);
+        // Stale-image-id guard: list current valid IDs for this Choom so the model
+        // can pick the right one instead of retrying a fantasy/expired id.
+        const recent = await prisma.generatedImage.findMany({
+          where: { choomId: ctx.choomId },
+          orderBy: { createdAt: 'desc' },
+          take: 5,
+          select: { id: true, prompt: true, createdAt: true },
+        });
+        const list = recent.length === 0
+          ? '(no images have been generated for this Choom yet — call generate_image first)'
+          : recent.map(r => `  - ${r.id} :: "${(r.prompt || '').slice(0, 60)}"`).join('\n');
+        return this.error(
+          toolCall,
+          `Image id "${imageId}" was not found — it may be from a previous request or was never created. Current valid image ids for this Choom (most recent first):\n${list}\n\nCall save_generated_image again with one of these ids, or call generate_image first if you meant to create a new image.`
+        );
       }
 
       // Extract base64 data from data URL
