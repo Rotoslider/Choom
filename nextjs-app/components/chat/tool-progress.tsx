@@ -67,7 +67,12 @@ export function ToolProgress({ iteration, maxIterations, steps, isActive }: Tool
                   <span className="text-muted-foreground/50 ml-1">
                     ({Object.entries(step.toolCall.arguments)
                       .filter(([, v]) => v !== undefined && v !== null)
-                      .map(([k, v]) => `${k}: ${String(v).slice(0, 30)}`)
+                      .map(([k, v]) => {
+                        // Objects/arrays stringified with String() become [object Object],
+                        // which misleads users into thinking the Choom sent bad data.
+                        const s = typeof v === 'object' ? JSON.stringify(v) : String(v);
+                        return `${k}: ${s.slice(0, 40)}${s.length > 40 ? '…' : ''}`;
+                      })
                       .join(', ')})
                   </span>
                 )}

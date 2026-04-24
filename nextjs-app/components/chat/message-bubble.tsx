@@ -114,6 +114,24 @@ function MarkdownContent({ content }: { content: string }) {
               </a>
             );
           },
+          // Inline images: only render <img> for real fetchable URLs (http/https,
+          // data:, or /api/ routes). Workspace-relative paths like "selfies_eve/foo.png"
+          // can't be served by Next.js and would produce a 404 flood on every re-render.
+          // Show those as a filename chip instead so the reference is still visible.
+          img({ src, alt }) {
+            const cleanSrc = typeof src === 'string' ? src.trim() : '';
+            if (!cleanSrc) return null;
+            const isFetchable = /^(https?:\/\/|data:|\/api\/)/i.test(cleanSrc);
+            if (!isFetchable) {
+              const filename = cleanSrc.split('/').pop() || cleanSrc;
+              return (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 my-0.5 rounded bg-muted text-xs font-mono text-muted-foreground">
+                  📎 {filename}
+                </span>
+              );
+            }
+            return <img src={cleanSrc} alt={alt || ''} className="max-w-full rounded my-1" />;
+          },
           p({ children }) {
             return <p className="mb-2 last:mb-0">{children}</p>;
           },
@@ -248,9 +266,10 @@ export function MessageBubble({
       : message.toolResults
     : [];
 
-  // Extract generated images from tool results
+  // Extract generated images from tool results (generate_image + ha_get_camera_snapshot
+  // both persist to GeneratedImage and return an imageId the UI can fetch/render).
   const generatedImages = toolResults
-    .filter((tr) => tr.name === 'generate_image' && tr.result && typeof tr.result === 'object')
+    .filter((tr) => (tr.name === 'generate_image' || tr.name === 'ha_get_camera_snapshot') && tr.result && typeof tr.result === 'object')
     .map((tr) => {
       const result = tr.result as { imageUrl?: string; imageId?: string };
       return { imageUrl: result.imageUrl, imageId: result.imageId };
