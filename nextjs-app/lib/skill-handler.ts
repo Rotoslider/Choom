@@ -33,6 +33,10 @@ export interface SkillHandlerContext {
   // Active project context (passed to delegation so target Choom knows where to work)
   activeProjectFolder?: string;
 
+  // Request-scope flags (propagated from route.ts ToolContext)
+  suppressNotifications?: boolean;
+  isHeartbeat?: boolean;
+
   // Skill-specific context (injected by registry)
   skillDoc: string;
   getReference: (fileName: string) => Promise<string>;
