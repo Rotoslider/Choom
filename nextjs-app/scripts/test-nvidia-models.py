@@ -39,7 +39,6 @@ MODELS = [
     "meta/llama-3.1-405b-instruct",
     "mistralai/mistral-nemotron",
     "minimaxai/minimax-m2.5",
-    "minimaxai/minimax-m2.1",
 ]
 
 SIMPLE_PROMPT = [
