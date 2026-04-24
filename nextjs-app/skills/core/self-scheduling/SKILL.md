@@ -28,9 +28,11 @@ dependencies: []
 - `reason` (optional): one-line log note for the Doctor. Example: "checking on yesterday's house project".
 
 ## Limits (safety contract)
-- Max 10 queued followups per Choom at any time. If you hit the cap, cancel an old one first with `cancel_self_followup` or wait until one fires.
+- **Concurrent pending cap: 100 per Choom.** This is a hard ceiling on how many UN-FIRED followups you can have queued at once — it is NOT a daily or per-request quota. Once a followup fires (or you cancel it with `cancel_self_followup`), its slot frees up immediately and you can schedule another. So 3/day × 30 days = 90 pending is fine; you'd still have room for 10 more ad-hoc followups on top of the schedule.
+- Each Choom has its own independent counter. Eve's 100 does not affect Genesis's 100.
 - Delay is clamped to [5 min, 30 days]. Anything outside is rejected.
 - The prompt is capped at 1000 chars — be concise.
+- If you hit the cap, use `list_self_followups` to review what you have, cancel stale ones, or wait until some fire. Do not retry the same schedule call in a loop.
 
 ## How it runs
 - When the followup fires, you will receive it as a heartbeat-style prompt. You are free to call tools, save a memory, send a notification to Donny, or do nothing — same as any heartbeat.
