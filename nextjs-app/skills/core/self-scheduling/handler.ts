@@ -15,7 +15,7 @@ const QUEUE_DIR = path.resolve(process.cwd(), 'data', 'self_followups');
 const MIN_DELAY_MIN = 5;
 const MAX_DELAY_MIN = 30 * 24 * 60; // 30 days
 const MAX_PROMPT_CHARS = 1000;
-const MAX_PENDING_PER_CHOOM = 10;
+const MAX_PENDING_PER_CHOOM = 100;
 
 interface QueueEntry {
   id: string;
