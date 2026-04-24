@@ -21,6 +21,7 @@ import {
 } from '@/components/ui/tooltip';
 import { useAppStore } from '@/lib/store';
 import { cn } from '@/lib/utils';
+import { useLiveModels } from '@/lib/hooks/use-live-models';
 import type { LLMProviderConfig, LLMModelProfile } from '@/lib/types';
 import {
   getEffectiveLLMProfiles,
@@ -31,6 +32,7 @@ import {
 interface ModelOption {
   id: string;
   name: string;
+  loaded?: boolean;
 }
 
 export function LLMSettings() {
@@ -87,6 +89,14 @@ export function LLMSettings() {
   useEffect(() => {
     fetchModels();
   }, [llm.endpoint, llm.llmProviderId]);
+
+  // Live models for the simple-tasks picker (separate from the primary picker so its provider can differ).
+  const simpleTasksLive = useLiveModels({
+    providerId: llm.simpleTasksProviderId && llm.simpleTasksProviderId !== '_local' ? llm.simpleTasksProviderId : undefined,
+    providers,
+    localEndpoint: !llm.simpleTasksProviderId || llm.simpleTasksProviderId === '_local' ? llm.endpoint : undefined,
+    enabled: !!llm.simpleTasksEnabled,
+  });
 
   // Detect model changes and prompt to load profile
   useEffect(() => {
@@ -268,25 +278,15 @@ export function LLMSettings() {
           )}
         </div>
         {(() => {
+          // Always prefer the live-fetched `models` (from the provider's actual endpoint).
+          // Fall back to the persisted `provider.models` cache only if the live fetch returned nothing.
           const selectedProvider = providers.find((p: LLMProviderConfig) => p.id === llm.llmProviderId);
-          if (selectedProvider && selectedProvider.models.length > 0) {
-            return (
-              <Select
-                value={llm.model}
-                onValueChange={(v) => updateLLMSettings({ model: v })}
-              >
-                <SelectTrigger className="hover:border-primary/50 transition-colors">
-                  <SelectValue placeholder="Select a model" />
-                </SelectTrigger>
-                <SelectContent>
-                  {selectedProvider.models.map((m: string) => (
-                    <SelectItem key={m} value={m}>{m}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            );
-          }
-          return models.length > 0 ? (
+          const liveOptions: ModelOption[] = models.length > 0
+            ? models
+            : (selectedProvider?.models || []).map((m: string) => ({ id: m, name: m }));
+          const stale = !!llm.model && liveOptions.length > 0 && !liveOptions.some((m) => m.id === llm.model);
+          return liveOptions.length > 0 ? (
+            <>
             <Select
               value={llm.model}
               onValueChange={(v) => updateLLMSettings({ model: v })}
@@ -295,13 +295,22 @@ export function LLMSettings() {
                 <SelectValue placeholder="Select a model" />
               </SelectTrigger>
               <SelectContent>
-                {models.map((model) => (
+                {liveOptions.map((model) => (
                   <SelectItem key={model.id} value={model.id}>
-                    {model.name}
+                    <span className="flex items-center gap-2">
+                      {model.loaded && <span className="inline-block h-2 w-2 rounded-full bg-green-500" title="Loaded in LM Studio" />}
+                      {model.name}
+                    </span>
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
+            {stale && (
+              <p className="text-xs text-amber-600 dark:text-amber-500 mt-1">
+                ⚠ Saved model <code className="font-mono">{llm.model}</code> is not in this endpoint&apos;s current list. Pick one above.
+              </p>
+            )}
+            </>
           ) : (
             <Input
               value={llm.model}
@@ -531,17 +540,11 @@ export function LLMSettings() {
                 value={llm.simpleTasksProviderId || '_local'}
                 onChange={(e) => {
                   const pid = e.target.value;
-                  const updates: Record<string, unknown> = {
+                  // Clear the saved model on provider switch — the live hook will refetch and user picks fresh.
+                  updateLLMSettings({
                     simpleTasksProviderId: pid === '_local' ? undefined : pid,
-                  };
-                  // Auto-select first model for the provider
-                  if (pid === '_local') {
-                    updates.simpleTasksModel = models[0]?.id || '';
-                  } else {
-                    const prov = providers.find(p => p.id === pid);
-                    updates.simpleTasksModel = prov?.models?.[0] || '';
-                  }
-                  updateLLMSettings(updates);
+                    simpleTasksModel: '',
+                  });
                 }}
                 className="bg-muted border border-border rounded px-2 py-1 text-sm flex-1"
               >
@@ -553,19 +556,23 @@ export function LLMSettings() {
             </div>
             <div className="flex items-center gap-2">
               <label className="text-xs text-muted-foreground w-16">Model</label>
-              <select
-                value={llm.simpleTasksModel || ''}
-                onChange={(e) => updateLLMSettings({ simpleTasksModel: e.target.value })}
-                className="bg-muted border border-border rounded px-2 py-1 text-sm flex-1"
-              >
-                <option value="">(not set)</option>
-                {(llm.simpleTasksProviderId && llm.simpleTasksProviderId !== '_local'
-                  ? providers.find(p => p.id === llm.simpleTasksProviderId)?.models || []
-                  : models.map(m => m.id)
-                ).map((m) => (
-                  <option key={m} value={m}>{m.split('/').pop()}</option>
-                ))}
-              </select>
+              {(() => {
+                const options = simpleTasksLive.models.map((m) => m.id);
+                const saved = llm.simpleTasksModel || '';
+                const stale = !!saved && options.length > 0 && !options.includes(saved);
+                return (
+                  <select
+                    value={stale ? '' : saved}
+                    onChange={(e) => updateLLMSettings({ simpleTasksModel: e.target.value })}
+                    className="bg-muted border border-border rounded px-2 py-1 text-sm flex-1"
+                  >
+                    <option value="">{stale ? `⚠ Saved: ${saved} (not available — pick one)` : '(not set)'}</option>
+                    {options.map((m) => (
+                      <option key={m} value={m}>{m.split('/').pop()}</option>
+                    ))}
+                  </select>
+                );
+              })()}
             </div>
             <p className="text-[10px] text-muted-foreground ml-[4.5rem]">
               Routes: reminders, habits, calendar, weather, tasks, memory, notifications
