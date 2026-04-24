@@ -496,9 +496,10 @@ RULES:
 - If generating a selfie, make it contextually relevant to what you're talking about.
 - Your response text IS the message that gets delivered. Do not say "Done", "I sent",
   "The notification has been sent", or describe what you just did. Just write the message itself.
-- On the VERY last line (once only), write a machine-readable summary in this format:
-  HB_SUMMARY = one short sentence about what you did
-  (literal text: HB_SUMMARY = then your summary. Exactly one line. Do not repeat it.)
+- When you have finished writing the message, call the `heartbeat_complete` tool ONCE
+  with a one-sentence `summary` argument describing what you did (topic/tone/anything
+  notable). This is how you end the heartbeat — do not keep generating text after calling it.
+  Do NOT write "HB_SUMMARY = ..." as text — use the tool call.
 """
 
     return prompt

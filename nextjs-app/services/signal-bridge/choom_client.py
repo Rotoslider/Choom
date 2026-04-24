@@ -505,6 +505,17 @@ class ChoomClient:
             import re as _re
             content = _re.sub(r'<tool_call>.*?</tool_call>', '', content, flags=_re.DOTALL).strip()
 
+        # Strip any leaked heartbeat-summary text from weak local models that ignore
+        # the heartbeat_complete tool and fall back to the legacy HB_SUMMARY text tag.
+        # scheduler.py also scrubs this before Signal delivery, but stripping here keeps
+        # the tag out of DB-persisted assistant messages too (caller sees clean content).
+        # Covers: = or :, underscore or space, optional **bold** / [brackets] / prefix.
+        if 'HB_SUMMARY' in content or 'HB SUMMARY' in content or 'HEARTBEAT_SUMMARY' in content or 'HEARTBEAT SUMMARY' in content:
+            import re as _re2
+            content = _re2.sub(r'\n?\*{0,2}\[?HEARTBEAT[_ ]SUMMARY\]?\*{0,2}\s*[:=]\s*[^\n\]]*\]?', '', content)
+            content = _re2.sub(r'\n?\*{0,2}HB[_ ]SUMMARY\*{0,2}\s*[:=]\s*[^\n]*', '', content)
+            content = content.strip()
+
         logger.info(f"Chat complete - content: {len(content)} chars, tool_calls: {len(tool_calls)}, tool_results: {len(tool_results)}, images: {len(images)}")
 
         return ChatResponse(
