@@ -5,6 +5,7 @@ import { Clock, Calendar, Sun, Zap, Music, ChevronDown, ChevronRight, Info, Play
 import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { useLiveModels } from '@/lib/hooks/use-live-models';
 
 interface TaskConfig {
   enabled: boolean;
@@ -18,6 +19,8 @@ interface LLMProvider {
   id: string;
   name: string;
   models: string[];
+  endpoint: string;
+  apiKey?: string;
 }
 
 interface BridgeConfig {
@@ -100,26 +103,12 @@ export function CronSettings() {
   const [config, setConfig] = useState<BridgeConfig | null>(null);
   const [saving, setSaving] = useState(false);
   const [expandedTask, setExpandedTask] = useState<string | null>(null);
-  const [localModels, setLocalModels] = useState<string[]>([]);
 
   useEffect(() => {
     fetch('/api/bridge-config')
       .then((r) => r.json())
       .then(setConfig)
       .catch(console.error);
-
-    // Fetch local LM Studio models
-    fetch('/api/bridge-config')
-      .then((r) => r.json())
-      .then((data) => {
-        const endpoint = data?.llm?.endpoint || 'http://192.168.1.145:1234/v1';
-        return fetch(`${endpoint}/models`);
-      })
-      .then((r) => r.json())
-      .then((data) => {
-        setLocalModels((data?.data || []).map((m: { id: string }) => m.id).filter(Boolean));
-      })
-      .catch(() => setLocalModels([]));
   }, []);
 
   const saveConfig = useCallback(
@@ -337,65 +326,20 @@ export function CronSettings() {
                     </div>
                     {/* Model override for LLM-backed tasks */}
                     {(taskId === 'morning_briefing' || taskId === 'goal_review') && (
-                      <div className="mt-3 pt-3 border-t border-border/30 space-y-1">
-                        <p className="text-xs text-muted-foreground font-medium">Model override (optional)</p>
-                        <div className="flex items-center gap-2">
-                          <select
-                            value={taskConfig.provider_id || '_local'}
-                            onChange={(e) => {
-                              const pid = e.target.value;
-                              const prov = (config?.providers || []).find(p => p.id === pid);
-                              const updated = {
-                                ...config!,
-                                tasks: {
-                                  ...config!.tasks,
-                                  [taskId]: {
-                                    ...taskConfig,
-                                    provider_id: pid === '_local' ? undefined : pid,
-                                    model: pid === '_local' ? (localModels[0] || undefined) : (prov?.models?.[0] || undefined),
-                                  },
-                                },
-                              };
-                              setConfig(updated);
-                              saveConfig(updated);
-                            }}
-                            className="bg-muted border border-border rounded px-2 py-1 text-xs"
-                          >
-                            <option value="_local">Local (LM Studio)</option>
-                            {(config?.providers || []).map((p) => (
-                              <option key={p.id} value={p.id}>{p.name}</option>
-                            ))}
-                          </select>
-                          <select
-                            value={taskConfig.model || ''}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              const updated = {
-                                ...config!,
-                                tasks: {
-                                  ...config!.tasks,
-                                  [taskId]: {
-                                    ...taskConfig,
-                                    model: val || null,
-                                    provider_id: val ? taskConfig.provider_id : null,
-                                  },
-                                },
-                              };
-                              setConfig(updated);
-                              saveConfig(updated);
-                            }}
-                            className="bg-muted border border-border rounded px-2 py-1 text-xs flex-1 min-w-0"
-                          >
-                            <option value="">Choom default</option>
-                            {(taskConfig.provider_id && taskConfig.provider_id !== '_local'
-                              ? (config?.providers || []).find(p => p.id === taskConfig.provider_id)?.models || []
-                              : localModels
-                            ).map((m) => (
-                              <option key={m} value={m}>{m.split('/').pop()}</option>
-                            ))}
-                          </select>
-                        </div>
-                      </div>
+                      <CronModelPicker
+                        taskId={taskId}
+                        taskConfig={taskConfig}
+                        providers={config?.providers || []}
+                        localEndpoint={config?.llm?.endpoint || 'http://192.168.1.145:1234/v1'}
+                        onSave={(updatedTask) => {
+                          const updated = {
+                            ...config!,
+                            tasks: { ...config!.tasks, [taskId]: updatedTask },
+                          };
+                          setConfig(updated);
+                          saveConfig(updated);
+                        }}
+                      />
                     )}
                   </div>
                 </div>
@@ -445,6 +389,56 @@ export function CronSettings() {
           <div className="p-3 rounded bg-muted/50 font-mono">add to groceries: milk</div>
           <div className="p-3 rounded bg-muted/50 font-mono">show groceries</div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+interface CronModelPickerProps {
+  taskId: string;
+  taskConfig: TaskConfig;
+  providers: LLMProvider[];
+  localEndpoint: string;
+  onSave: (updated: TaskConfig) => void;
+}
+
+function CronModelPicker({ taskConfig, providers, localEndpoint, onSave }: CronModelPickerProps) {
+  const providerIdForHook = taskConfig.provider_id && taskConfig.provider_id !== '_local' ? taskConfig.provider_id : undefined;
+  const localForHook = !taskConfig.provider_id || taskConfig.provider_id === '_local' ? localEndpoint : undefined;
+  const { models: live } = useLiveModels({ providerId: providerIdForHook, providers, localEndpoint: localForHook });
+  const options = live.map((m) => m.id);
+  const stale = !!taskConfig.model && options.length > 0 && !options.includes(taskConfig.model);
+
+  return (
+    <div className="mt-3 pt-3 border-t border-border/30 space-y-1">
+      <p className="text-xs text-muted-foreground font-medium">Model override (optional)</p>
+      <div className="flex items-center gap-2">
+        <select
+          value={taskConfig.provider_id || '_local'}
+          onChange={(e) => {
+            const pid = e.target.value;
+            onSave({ ...taskConfig, provider_id: pid === '_local' ? undefined : pid, model: undefined });
+          }}
+          className="bg-muted border border-border rounded px-2 py-1 text-xs"
+        >
+          <option value="_local">Local (LM Studio)</option>
+          {providers.map((p) => (
+            <option key={p.id} value={p.id}>{p.name}</option>
+          ))}
+        </select>
+        <select
+          value={stale ? '' : (taskConfig.model || '')}
+          onChange={(e) => {
+            const val = e.target.value;
+            onSave({ ...taskConfig, model: val || undefined, provider_id: val ? taskConfig.provider_id : undefined });
+          }}
+          className="bg-muted border border-border rounded px-2 py-1 text-xs flex-1 min-w-0"
+        >
+          <option value="">{stale ? `⚠ Saved: ${taskConfig.model} (not available — pick one)` : 'Choom default'}</option>
+          {options.map((m) => (
+            <option key={m} value={m}>{m.split('/').pop()}</option>
+          ))}
+        </select>
       </div>
     </div>
   );

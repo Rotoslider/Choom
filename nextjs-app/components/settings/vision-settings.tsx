@@ -246,45 +246,31 @@ export function VisionSettings() {
             <label htmlFor="vision-model">Model</label>
             <div className="flex gap-2">
               {(() => {
+                // Always prefer the live-fetched `models` list (reflects the actual endpoint).
+                // Fall back to the persisted `provider.models` cache only if the live fetch is empty.
                 const selectedProvider = providers.find((p: LLMProviderConfig) => p.id === settings.vision.visionProviderId);
-                if (selectedProvider && selectedProvider.models.length > 0) {
-                  return (
-                    <Select
-                      value={settings.vision.model}
-                      onValueChange={(value) => updateVisionSettings({ model: value })}
-                    >
-                      <SelectTrigger id="vision-model" className="flex-1">
-                        <SelectValue placeholder="Select a model" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {selectedProvider.models.map((m: string) => (
-                          <SelectItem key={m} value={m}>{m}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  );
-                }
+                const liveOptions: string[] = models.length > 0
+                  ? models
+                  : (selectedProvider?.models || []);
+                const saved = settings.vision.model;
+                const stale = !!saved && liveOptions.length > 0 && !liveOptions.includes(saved);
                 return (
                   <>
                     <Select
-                      value={settings.vision.model}
+                      value={stale ? '' : saved}
                       onValueChange={(value) => updateVisionSettings({ model: value })}
                     >
                       <SelectTrigger id="vision-model" className="flex-1">
-                        <SelectValue placeholder="Select a model" />
+                        <SelectValue placeholder={stale ? `⚠ Saved: ${saved} (not available — pick one)` : 'Select a model'} />
                       </SelectTrigger>
                       <SelectContent>
-                        {models.length > 0 ? (
-                          models.map((model) => (
-                            <SelectItem key={model} value={model}>
-                              {model}
-                            </SelectItem>
+                        {liveOptions.length > 0 ? (
+                          liveOptions.map((m) => (
+                            <SelectItem key={m} value={m}>{m}</SelectItem>
                           ))
-                        ) : (
-                          <SelectItem value={settings.vision.model}>
-                            {settings.vision.model}
-                          </SelectItem>
-                        )}
+                        ) : saved ? (
+                          <SelectItem value={saved}>{saved}</SelectItem>
+                        ) : null}
                       </SelectContent>
                     </Select>
                     <Button

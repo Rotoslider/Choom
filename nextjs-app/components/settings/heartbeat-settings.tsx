@@ -6,6 +6,7 @@ import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
+import { useLiveModels } from '@/lib/hooks/use-live-models';
 
 interface BridgeConfig {
   tasks: Record<string, { enabled: boolean; time?: string; interval_minutes?: number }>;
@@ -48,7 +49,6 @@ export function HeartbeatSettings() {
   const [bridgeStatus, setBridgeStatus] = useState<'connected' | 'disconnected' | 'checking'>('checking');
   const [saving, setSaving] = useState(false);
   const [chooms, setChooms] = useState<ChoomOption[]>([]);
-  const [localModels, setLocalModels] = useState<string[]>([]);
 
   useEffect(() => {
     fetch('/api/bridge-config')
@@ -67,20 +67,6 @@ export function HeartbeatSettings() {
         setChooms(list.map((c: { id: string; name: string }) => ({ id: c.id, name: c.name })));
       })
       .catch(console.error);
-
-    // Fetch local LM Studio models
-    fetch('/api/bridge-config')
-      .then((r) => r.json())
-      .then((data) => {
-        const endpoint = data?.llm?.endpoint || 'http://192.168.1.145:1234/v1';
-        return fetch(`${endpoint}/models`);
-      })
-      .then((r) => r.json())
-      .then((data) => {
-        const models = (data?.data || []).map((m: { id: string }) => m.id).filter(Boolean);
-        setLocalModels(models);
-      })
-      .catch(() => setLocalModels([]));
   }, []);
 
   const saveConfig = useCallback(async (updated: BridgeConfig) => {
@@ -429,45 +415,12 @@ export function HeartbeatSettings() {
                   />
                   <span className="text-sm text-muted-foreground">Respect quiet period</span>
                 </div>
-                <div className="space-y-1">
-                  <p className="text-xs text-muted-foreground font-medium">Model override (optional) — use a different model for this task</p>
-                  <div className="flex items-center gap-2">
-                    <select
-                      value={task.provider_id || '_local'}
-                      onChange={(e) => {
-                        const pid = e.target.value;
-                        const updates: Partial<CustomHeartbeat> = { provider_id: pid === '_local' ? undefined : pid };
-                        // Clear model when switching provider
-                        if (pid === '_local') {
-                          updates.model = localModels[0] || undefined;
-                        } else {
-                          const prov = (config?.providers || []).find(p => p.id === pid);
-                          updates.model = prov?.models?.[0] || undefined;
-                        }
-                        saveCustomHeartbeat(task.id, updates);
-                      }}
-                      className="bg-muted border border-border rounded px-2 py-1 text-xs flex-shrink-0"
-                    >
-                      <option value="_local">Local (LM Studio)</option>
-                      {(config?.providers || []).map((p) => (
-                        <option key={p.id} value={p.id}>{p.name}</option>
-                      ))}
-                    </select>
-                    <select
-                      value={task.model || ''}
-                      onChange={(e) => saveCustomHeartbeat(task.id, { model: e.target.value || null, provider_id: e.target.value ? task.provider_id : null } as Partial<CustomHeartbeat>)}
-                      className="bg-muted border border-border rounded px-2 py-1 text-xs flex-1 min-w-0"
-                    >
-                      <option value="">Choom default</option>
-                      {(task.provider_id && task.provider_id !== '_local'
-                        ? (config?.providers || []).find(p => p.id === task.provider_id)?.models || []
-                        : localModels
-                      ).map((m) => (
-                        <option key={m} value={m}>{m.split('/').pop()}</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
+                <HeartbeatModelPicker
+                  task={task}
+                  providers={config?.providers || []}
+                  localEndpoint={config?.llm?.endpoint || 'http://192.168.1.145:1234/v1'}
+                  onSave={saveCustomHeartbeat}
+                />
               </div>
             ))}
           </div>
@@ -505,6 +458,57 @@ export function HeartbeatSettings() {
             />
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+interface HeartbeatModelPickerProps {
+  task: CustomHeartbeat;
+  providers: LLMProvider[];
+  localEndpoint: string;
+  onSave: (id: string, changes: Partial<CustomHeartbeat>) => void;
+}
+
+function HeartbeatModelPicker({ task, providers, localEndpoint, onSave }: HeartbeatModelPickerProps) {
+  const providerIdForHook = task.provider_id && task.provider_id !== '_local' ? task.provider_id : undefined;
+  const localForHook = !task.provider_id || task.provider_id === '_local' ? localEndpoint : undefined;
+  const { models: live } = useLiveModels({
+    providerId: providerIdForHook,
+    providers,
+    localEndpoint: localForHook,
+  });
+  const options = live.map((m) => m.id);
+  const stale = !!task.model && options.length > 0 && !options.includes(task.model);
+
+  return (
+    <div className="space-y-1">
+      <p className="text-xs text-muted-foreground font-medium">Model override (optional) — use a different model for this task</p>
+      <div className="flex items-center gap-2">
+        <select
+          value={task.provider_id || '_local'}
+          onChange={(e) => {
+            const pid = e.target.value;
+            // Clear model when switching provider — live list will refresh and user picks fresh.
+            onSave(task.id, { provider_id: pid === '_local' ? undefined : pid, model: undefined });
+          }}
+          className="bg-muted border border-border rounded px-2 py-1 text-xs flex-shrink-0"
+        >
+          <option value="_local">Local (LM Studio)</option>
+          {providers.map((p) => (
+            <option key={p.id} value={p.id}>{p.name}</option>
+          ))}
+        </select>
+        <select
+          value={stale ? '' : (task.model || '')}
+          onChange={(e) => onSave(task.id, { model: e.target.value || null, provider_id: e.target.value ? task.provider_id : null } as Partial<CustomHeartbeat>)}
+          className="bg-muted border border-border rounded px-2 py-1 text-xs flex-1 min-w-0"
+        >
+          <option value="">{stale ? `⚠ Saved: ${task.model} (not available — pick one)` : 'Choom default'}</option>
+          {options.map((m) => (
+            <option key={m} value={m}>{m.split('/').pop()}</option>
+          ))}
+        </select>
       </div>
     </div>
   );

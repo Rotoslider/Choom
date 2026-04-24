@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState, useMemo, useCallback } from 'react';
+import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { RefreshCw, Info, Save, X, Plus, Trash2, Wand2, Check, AlertCircle, Loader2 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -30,6 +30,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Separator } from '@/components/ui/separator';
 import type { Choom, LoraConfig, ImageModeSettings, ImageSize, ImageAspect, LLMProviderConfig } from '@/lib/types';
 import { IMAGE_SIZES, IMAGE_ASPECTS, computeImageDimensions } from '@/lib/types';
+import { useLiveModels } from '@/lib/hooks/use-live-models';
 import { Switch } from '@/components/ui/switch';
 import { useAppStore } from '@/lib/store';
 import { cn } from '@/lib/utils';
@@ -44,6 +45,7 @@ interface ChoomEditPanelProps {
 interface ModelOption {
   id: string;
   name: string;
+  loaded?: boolean;
 }
 
 interface VoiceOption {
@@ -601,11 +603,37 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave }: ChoomEditP
   // Accepts an optional override so callers can pass the correct endpoint
   // immediately after a state change (React batches setState, so reading
   // `llmEndpoint` inside the same event handler would return the OLD value).
-  const fetchLocalModels = async (endpointOverride?: string) => {
+  // Track the endpoint the current `models` state belongs to, so stale responses from a previous
+  // endpoint (e.g., Mac fetch resolving after the user switched to PC) can be discarded.
+  const activeModelsEndpoint = useRef<string>('');
+
+  // Live model lists for fallback pickers. Each refetches when its provider/endpoint changes.
+  const fb1Local = llmFallbackProvider1 === '_local' ? (llmEndpoint || settings.llm.endpoint) : undefined;
+  const fb2Local = llmFallbackProvider2 === '_local' ? (llmEndpoint || settings.llm.endpoint) : undefined;
+  const fb1Live = useLiveModels({
+    providerId: llmFallbackProvider1 && llmFallbackProvider1 !== '_none' && llmFallbackProvider1 !== '_local' ? llmFallbackProvider1 : undefined,
+    providers: settings.providers || [],
+    localEndpoint: fb1Local,
+    enabled: open && !!llmFallbackProvider1 && llmFallbackProvider1 !== '_none',
+  });
+  const fb2Live = useLiveModels({
+    providerId: llmFallbackProvider2 && llmFallbackProvider2 !== '_none' && llmFallbackProvider2 !== '_local' ? llmFallbackProvider2 : undefined,
+    providers: settings.providers || [],
+    localEndpoint: fb2Local,
+    enabled: open && !!llmFallbackProvider2 && llmFallbackProvider2 !== '_none',
+  });
+
+  const fetchLocalModels = async (endpointOverride?: string, apiKeyOverride?: string) => {
+    const ep = endpointOverride || llmEndpoint || settings.llm.endpoint;
+    if (!ep) return;
+    activeModelsEndpoint.current = ep;
     try {
-      const ep = endpointOverride || llmEndpoint || settings.llm.endpoint;
-      const res = await fetch(`/api/services/models?endpoint=${encodeURIComponent(ep)}`);
+      const params = new URLSearchParams({ endpoint: ep });
+      if (apiKeyOverride) params.set('apiKey', apiKeyOverride);
+      const res = await fetch(`/api/services/models?${params}`);
       if (res.ok) {
+        // If the user switched endpoints while this fetch was in flight, drop the result.
+        if (activeModelsEndpoint.current !== ep) return;
         const data = await res.json();
         const seen = new Set<string>();
         setModels((data.models || []).filter((m: ModelOption) => {
@@ -619,6 +647,17 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave }: ChoomEditP
     }
   };
 
+  // Refetch models live whenever the user picks a different provider (or clears it back to local).
+  useEffect(() => {
+    if (!open) return;
+    if (llmProviderId) {
+      const provider = (settings.providers || []).find((p: LLMProviderConfig) => p.id === llmProviderId);
+      if (provider?.endpoint) fetchLocalModels(provider.endpoint, provider.apiKey || undefined);
+    } else if (llmEndpoint || settings.llm.endpoint) {
+      fetchLocalModels(llmEndpoint || settings.llm.endpoint);
+    }
+  }, [llmProviderId, llmEndpoint, open]);
+
   // Fetch options from services
   const fetchOptions = async () => {
     setIsLoadingOptions(true);
@@ -626,8 +665,9 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave }: ChoomEditP
       const ttsEndpointParam = encodeURIComponent(settings.tts.endpoint);
       const imageGenEndpointParam = encodeURIComponent(settings.imageGen.endpoint);
 
-      const [modelsRes, voicesRes, checkpointsRes] = await Promise.allSettled([
-        fetchLocalModels(settings.llm.endpoint),
+      // Note: model fetching is owned by the [llmProviderId, llmEndpoint, open] effect — it
+      // knows the correct endpoint (provider-specific vs. local). Don't fetch here or it races.
+      const [voicesRes, checkpointsRes] = await Promise.allSettled([
         fetch(`/api/services/voices?endpoint=${ttsEndpointParam}`),
         fetch(`/api/services/checkpoints?endpoint=${imageGenEndpointParam}`),
       ]);
@@ -938,22 +978,18 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave }: ChoomEditP
                   <Select
                     value={llmProviderId || '_local'}
                     onValueChange={(v) => {
+                      // Clear models immediately so the dropdown doesn't flash the previous provider's
+                      // list while the new fetch is in flight. The [llmProviderId, ...] effect will repopulate.
+                      setModels([]);
                       if (v === '_local') {
                         setLlmProviderId('');
                         setLlmEndpoint('');
                         setLlmModel('');
-                        // Pass the local endpoint directly — state hasn't updated yet
-                        fetchLocalModels(settings.llm.endpoint);
                       } else {
                         const provider = (settings.providers || []).find((p: LLMProviderConfig) => p.id === v);
                         setLlmProviderId(v);
                         setLlmEndpoint(provider?.endpoint || '');
                         setLlmModel(provider?.models?.[0] || '');
-                        // For providers with endpoints (especially local LM Studio),
-                        // fetch live models so dropdown is populated even if provider.models is empty
-                        if (provider?.endpoint && (!provider.models || provider.models.length === 0)) {
-                          fetchLocalModels(provider.endpoint);
-                        }
                       }
                     }}
                   >
@@ -973,31 +1009,75 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave }: ChoomEditP
                     <label className="text-sm font-medium">Model</label>
                     {(() => {
                       const selectedProvider = (settings.providers || []).find((p: LLMProviderConfig) => p.id === llmProviderId);
-                      if (selectedProvider && selectedProvider.models.length > 0) {
-                        // Provider model dropdown
+                      // For provider-backed Chooms, prefer live-fetched models; fall back to persisted cache.
+                      if (selectedProvider) {
+                        const liveOptions: ModelOption[] = models.length > 0
+                          ? models
+                          : (selectedProvider.models || []).map((m: string) => ({ id: m, name: m }));
+                        if (liveOptions.length > 0) {
+                          // If the saved model isn't in the live list, don't let <SelectValue/> display it
+                          // as the selected text — clear the value so the placeholder surfaces the warning.
+                          const stale = !!llmModel && !liveOptions.some((m) => m.id === llmModel);
+                          return (
+                            <Select
+                              value={stale ? '' : (llmModel || '_default')}
+                              onValueChange={(v) => setLlmModel(v === '_default' ? '' : v)}
+                            >
+                              <SelectTrigger>
+                                <SelectValue placeholder={stale ? `⚠ Saved: ${llmModel} (not available — pick one)` : 'Select model'} />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="_default">Default ({liveOptions[0].name})</SelectItem>
+                                {liveOptions.map((m) => (
+                                  <SelectItem key={m.id} value={m.id}>
+                                    <span className="flex items-center gap-2">
+                                      {m.loaded && <span className="inline-block h-2 w-2 rounded-full bg-green-500" title="Loaded in LM Studio" />}
+                                      {m.name}
+                                    </span>
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          );
+                        }
+                      }
+                      // Local models dropdown or text input
+                      if (models.length > 0) {
+                        const stale = !!llmModel && !models.some((m) => m.id === llmModel);
                         return (
-                          <Select value={llmModel || '_default'} onValueChange={(v) => setLlmModel(v === '_default' ? '' : v)}>
-                            <SelectTrigger><SelectValue placeholder="Select model" /></SelectTrigger>
+                          <Select
+                            value={stale ? '' : (llmModel || '__default__')}
+                            onValueChange={(v) => setLlmModel(v === '__default__' ? '' : v)}
+                          >
+                            <SelectTrigger>
+                              <SelectValue placeholder={stale ? `⚠ Saved: ${llmModel} (not available — pick one)` : 'Use default model'} />
+                            </SelectTrigger>
                             <SelectContent>
-                              <SelectItem value="_default">Default ({selectedProvider.models[0]})</SelectItem>
-                              {selectedProvider.models.map((m: string) => (
-                                <SelectItem key={m} value={m}>{m}</SelectItem>
+                              <SelectItem value="__default__">Use default model</SelectItem>
+                              {models.map((model) => (
+                                <SelectItem key={model.id} value={model.id}>
+                                  <span className="flex items-center gap-2">
+                                    {model.loaded && <span className="inline-block h-2 w-2 rounded-full bg-green-500" title="Loaded in LM Studio" />}
+                                    {model.name}
+                                  </span>
+                                </SelectItem>
                               ))}
                             </SelectContent>
                           </Select>
                         );
                       }
-                      // Local models dropdown or text input
-                      return models.length > 0 ? (
-                        <Select value={llmModel || '__default__'} onValueChange={(v) => setLlmModel(v === '__default__' ? '' : v)}>
-                          <SelectTrigger><SelectValue placeholder="Use default model" /></SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="__default__">Use default model</SelectItem>
-                            {models.map((model) => <SelectItem key={model.id} value={model.id}>{model.name}</SelectItem>)}
-                          </SelectContent>
-                        </Select>
-                      ) : (
-                        <Input value={llmModel} onChange={(e) => setLlmModel(e.target.value)} placeholder="Leave empty to use default" />
+                      return <Input value={llmModel} onChange={(e) => setLlmModel(e.target.value)} placeholder="Leave empty to use default" />;
+                    })()}
+                    {/* Warn when the saved model isn't in the current list (covers both local and provider paths). */}
+                    {llmModel && (() => {
+                      const liveIds = models.length > 0
+                        ? models.map((m) => m.id)
+                        : (llmProviderId ? ((settings.providers || []).find((p: LLMProviderConfig) => p.id === llmProviderId)?.models || []) : []);
+                      if (liveIds.length === 0 || liveIds.includes(llmModel)) return null;
+                      return (
+                        <p className="text-xs text-amber-600 dark:text-amber-500">
+                          ⚠ Saved model <code className="font-mono">{llmModel}</code> is not in this endpoint&apos;s current list. Pick a model above to fix.
+                        </p>
                       );
                     })()}
                   </div>
@@ -1074,30 +1154,33 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave }: ChoomEditP
                         </SelectContent>
                       </Select>
                       {llmFallbackProvider1 && llmFallbackProvider1 !== '_none' && (() => {
-                        const fb1Provider = llmFallbackProvider1 !== '_local' ? (settings.providers || []).find((p: LLMProviderConfig) => p.id === llmFallbackProvider1) : null;
-                        if (fb1Provider && fb1Provider.models.length > 0) {
-                          return (
-                            <Select value={llmFallbackModel1 || '_default'} onValueChange={(v) => setLlmFallbackModel1(v === '_default' ? '' : v)}>
-                              <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select model" /></SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="_default">Default ({fb1Provider.models[0]})</SelectItem>
-                                {fb1Provider.models.map((m: string) => (
-                                  <SelectItem key={m} value={m}>{m}</SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          );
+                        const options = fb1Live.models;
+                        if (options.length === 0) {
+                          return <Input value={llmFallbackModel1} onChange={(e) => setLlmFallbackModel1(e.target.value)} placeholder="Model name (leave empty = none)" className="h-8 text-xs" />;
                         }
-                        return models.length > 0 ? (
-                          <Select value={llmFallbackModel1 || '__default__'} onValueChange={(v) => setLlmFallbackModel1(v === '__default__' ? '' : v)}>
-                            <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select model" /></SelectTrigger>
+                        const stale = !!llmFallbackModel1 && !options.some((m) => m.id === llmFallbackModel1);
+                        const defaultSentinel = llmFallbackProvider1 === '_local' ? '__default__' : '_default';
+                        const defaultLabel = llmFallbackProvider1 === '_local' ? 'Same as primary' : `Default (${options[0].name})`;
+                        return (
+                          <Select
+                            value={stale ? '' : (llmFallbackModel1 || defaultSentinel)}
+                            onValueChange={(v) => setLlmFallbackModel1(v === defaultSentinel ? '' : v)}
+                          >
+                            <SelectTrigger className="h-8 text-xs">
+                              <SelectValue placeholder={stale ? `⚠ Saved: ${llmFallbackModel1} (not available)` : 'Select model'} />
+                            </SelectTrigger>
                             <SelectContent>
-                              <SelectItem value="__default__">Same as primary</SelectItem>
-                              {models.map((model) => <SelectItem key={model.id} value={model.id}>{model.name}</SelectItem>)}
+                              <SelectItem value={defaultSentinel}>{defaultLabel}</SelectItem>
+                              {options.map((m) => (
+                                <SelectItem key={m.id} value={m.id}>
+                                  <span className="flex items-center gap-2">
+                                    {m.loaded && <span className="inline-block h-2 w-2 rounded-full bg-green-500" title="Loaded in LM Studio" />}
+                                    {m.name}
+                                  </span>
+                                </SelectItem>
+                              ))}
                             </SelectContent>
                           </Select>
-                        ) : (
-                          <Input value={llmFallbackModel1} onChange={(e) => setLlmFallbackModel1(e.target.value)} placeholder="Model name (leave empty = none)" className="h-8 text-xs" />
                         );
                       })()}
                     </div>
@@ -1134,30 +1217,33 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave }: ChoomEditP
                         </SelectContent>
                       </Select>
                       {llmFallbackProvider2 && llmFallbackProvider2 !== '_none' && (() => {
-                        const fb2Provider = llmFallbackProvider2 !== '_local' ? (settings.providers || []).find((p: LLMProviderConfig) => p.id === llmFallbackProvider2) : null;
-                        if (fb2Provider && fb2Provider.models.length > 0) {
-                          return (
-                            <Select value={llmFallbackModel2 || '_default'} onValueChange={(v) => setLlmFallbackModel2(v === '_default' ? '' : v)}>
-                              <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select model" /></SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="_default">Default ({fb2Provider.models[0]})</SelectItem>
-                                {fb2Provider.models.map((m: string) => (
-                                  <SelectItem key={m} value={m}>{m}</SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          );
+                        const options = fb2Live.models;
+                        if (options.length === 0) {
+                          return <Input value={llmFallbackModel2} onChange={(e) => setLlmFallbackModel2(e.target.value)} placeholder="Model name (leave empty = none)" className="h-8 text-xs" />;
                         }
-                        return models.length > 0 ? (
-                          <Select value={llmFallbackModel2 || '__default__'} onValueChange={(v) => setLlmFallbackModel2(v === '__default__' ? '' : v)}>
-                            <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select model" /></SelectTrigger>
+                        const stale = !!llmFallbackModel2 && !options.some((m) => m.id === llmFallbackModel2);
+                        const defaultSentinel = llmFallbackProvider2 === '_local' ? '__default__' : '_default';
+                        const defaultLabel = llmFallbackProvider2 === '_local' ? 'Same as primary' : `Default (${options[0].name})`;
+                        return (
+                          <Select
+                            value={stale ? '' : (llmFallbackModel2 || defaultSentinel)}
+                            onValueChange={(v) => setLlmFallbackModel2(v === defaultSentinel ? '' : v)}
+                          >
+                            <SelectTrigger className="h-8 text-xs">
+                              <SelectValue placeholder={stale ? `⚠ Saved: ${llmFallbackModel2} (not available)` : 'Select model'} />
+                            </SelectTrigger>
                             <SelectContent>
-                              <SelectItem value="__default__">Same as primary</SelectItem>
-                              {models.map((model) => <SelectItem key={model.id} value={model.id}>{model.name}</SelectItem>)}
+                              <SelectItem value={defaultSentinel}>{defaultLabel}</SelectItem>
+                              {options.map((m) => (
+                                <SelectItem key={m.id} value={m.id}>
+                                  <span className="flex items-center gap-2">
+                                    {m.loaded && <span className="inline-block h-2 w-2 rounded-full bg-green-500" title="Loaded in LM Studio" />}
+                                    {m.name}
+                                  </span>
+                                </SelectItem>
+                              ))}
                             </SelectContent>
                           </Select>
-                        ) : (
-                          <Input value={llmFallbackModel2} onChange={(e) => setLlmFallbackModel2(e.target.value)} placeholder="Model name (leave empty = none)" className="h-8 text-xs" />
                         );
                       })()}
                     </div>
