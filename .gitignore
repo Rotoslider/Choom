@@ -47,11 +47,21 @@ Thumbs.db
 # Self-followup queue (runtime per-Choom JSONL, written by the self-scheduling skill)
 **/data/self_followups/
 
+# Presence engine runtime data (UCB1 action stats + reflection log, written by scheduler)
+**/data/presence/
+
+# Avatar service model weights (large binaries, fetched locally)
+**/avatar-service/models/
+
+# YouTube cookies (auth material for yt-dlp)
+**/youtube-cookies.txt
+
+# Ad-hoc avatar test script
+**/avatar-service/test_glb.py
+
 # Logs
 *.log
 
 # Lock files (not needed for project - no CI)
 package-lock.json
 nextjs-app/tests/
-services/avatar-service/models/
-services/avatar-service/test_glb.py
