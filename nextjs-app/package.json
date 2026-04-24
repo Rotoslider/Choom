@@ -58,6 +58,7 @@
     "sharp": "^0.34.5",
     "tailwind-merge": "^2.5.0",
     "three": "^0.183.2",
+    "undici": "^8.1.0",
     "zustand": "^4.5.0"
   },
   "devDependencies": {
