@@ -577,7 +577,7 @@ skill-name/
 | Skill | Tools | Description |
 |-------|-------|-------------|
 | `choom-delegation` | 3 | Multi-agent collaboration: delegate tasks to other Chooms, list team, retrieve results |
-| `self-scheduling` | 3 | A Choom queues its own future tick. `schedule_self_followup` / `list_self_followups` / `cancel_self_followup`. Fires as a one-shot heartbeat. Max 3 pending per Choom, delay clamped to [5 min, 7 days]. |
+| `self-scheduling` | 3 | A Choom queues its own future tick. `schedule_self_followup` / `list_self_followups` / `cancel_self_followup`. Fires as a one-shot heartbeat. Max 10 pending per Choom, delay clamped to [5 min, 30 days]. |
 | `memory-management` | 9 | Semantic memory (ChromaDB): store, search, update, delete, stats |
 | `image-generation` | 1 | Stable Diffusion Forge: checkpoint switching, LoRA, self-portrait mode |
 | `web-searching` | 1 | Brave / SerpAPI / SearXNG (cascading fallback) |
@@ -717,7 +717,7 @@ Two top-level shared folders live alongside each Choom's `selfies_{name}/` home 
 
 Chooms can queue their own future ticks via the `self-scheduling` skill. A queued followup fires as a one-shot heartbeat at the scheduled time, giving the Choom a fresh turn to act.
 
-- `schedule_self_followup(delay_minutes, prompt, reason?)` — clamped to [5 min, 7 days], max 3 pending per Choom, prompt ≤500 chars
+- `schedule_self_followup(delay_minutes, prompt, reason?)` — clamped to [5 min, 30 days], max 10 pending per Choom, prompt ≤1000 chars
 - `list_self_followups()` — read-only query of pending entries
 - `cancel_self_followup(id)` — free a slot or discard a stale plan
 

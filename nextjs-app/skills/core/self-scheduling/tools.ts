@@ -10,7 +10,7 @@ export const tools: ToolDefinition[] = [
       properties: {
         delay_minutes: {
           type: 'number',
-          description: 'Minutes from now to fire the followup. Clamped to [5, 10080] (5 min to 7 days).',
+          description: 'Minutes from now to fire the followup. Clamped to [5, 43200] (5 min to 30 days).',
         },
         prompt: {
           type: 'string',

@@ -23,14 +23,14 @@ dependencies: []
 - To replace the existing heartbeat cadence. This is for specific one-off followups, not recurring ticks.
 
 ## Parameters
-- `delay_minutes` (required): minutes from now. Clamped to [5, 10080] (5 min → 7 days).
+- `delay_minutes` (required): minutes from now. Clamped to [5, 43200] (5 min → 30 days).
 - `prompt` (required): what to tell future-you when the followup fires. Write it as a message TO yourself, third-person is fine. Example: "Ask Donny how the house work went yesterday — he mentioned finishing around 6pm and was worried about the heat."
 - `reason` (optional): one-line log note for the Doctor. Example: "checking on yesterday's house project".
 
 ## Limits (safety contract)
-- Max 3 queued followups per Choom at any time. If you hit the cap, cancel an old one first with `cancel_self_followup` or wait until one fires.
-- Delay is clamped to [5 min, 7 days]. Anything outside is rejected.
-- The prompt is capped at 500 chars — be concise.
+- Max 10 queued followups per Choom at any time. If you hit the cap, cancel an old one first with `cancel_self_followup` or wait until one fires.
+- Delay is clamped to [5 min, 30 days]. Anything outside is rejected.
+- The prompt is capped at 1000 chars — be concise.
 
 ## How it runs
 - When the followup fires, you will receive it as a heartbeat-style prompt. You are free to call tools, save a memory, send a notification to Donny, or do nothing — same as any heartbeat.
