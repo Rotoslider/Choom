@@ -13,9 +13,9 @@ const TOOL_NAMES = new Set([
 // Queue file (one JSONL per Choom). The bridge scheduler polls these.
 const QUEUE_DIR = path.resolve(process.cwd(), 'data', 'self_followups');
 const MIN_DELAY_MIN = 5;
-const MAX_DELAY_MIN = 7 * 24 * 60; // 7 days
-const MAX_PROMPT_CHARS = 500;
-const MAX_PENDING_PER_CHOOM = 3;
+const MAX_DELAY_MIN = 30 * 24 * 60; // 30 days
+const MAX_PROMPT_CHARS = 1000;
+const MAX_PENDING_PER_CHOOM = 10;
 
 interface QueueEntry {
   id: string;
