@@ -146,7 +146,7 @@ export class TraceBuilder {
   }
 
   /** Record a nudge event */
-  recordNudge(type: 'tool_use' | 'task_continuation' | 'unfinished_steps' | 'forced_tool_choice_ignored'): void {
+  recordNudge(type: 'tool_use' | 'task_continuation' | 'unfinished_steps' | 'forced_tool_choice_ignored' | 'hedge_giveup' | 'gone_quiet'): void {
     this.trace.nudgeCount++;
     this.trace.nudgeTypes.push(type);
   }

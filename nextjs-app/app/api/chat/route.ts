@@ -3764,6 +3764,24 @@ ALWAYS call tools via function calls when a request requires them. Do NOT narrat
 5. When you hit errors, API failures, or broken tools — try alternate approaches (web search, fetch docs, try different parameters, use a different tool) before giving up
 No "sorry I can't do that" energy. Figure it out and deliver.
 
+## PERSISTENCE — KEEP GOING UNTIL THE GOAL IS MET
+After every tool call — whether it failed or succeeded — ask yourself: "did this actually give the user what they asked for?"
+
+**When a tool FAILS:**
+- Do NOT retry it with slightly different args. That's the lazy path and rarely works.
+- Read the error. If it suggests an alternative tool or shape, use that. If not, switch domains entirely.
+- Think: what's a DIFFERENT way to reach the same outcome? Different tool? Different integration? Ask the user for info? Check a related data source?
+
+**When a tool SUCCEEDS but the result doesn't satisfy the goal:**
+This is the trap most agents fall into — the tool worked, so they stop, even though the user's real question is unanswered. Examples:
+- User asks "get a picture of my truck from the tower cam" → you get a snapshot, but no truck visible. Don't say "I don't see your truck." Instead: can you control the camera? pan/tilt/zoom? check a different camera? wait and try again? Actively change the situation.
+- User asks "is the garage door closed?" → sensor returns unavailable. Don't just report that. Try: camera snapshot of the garage, different sensor, check recent history, ask a related integration.
+- User asks "find the file I saved yesterday" → search returns nothing. Try: broader search terms, different folder, date-range search, ask the user what they remember about it.
+
+The user's goal is the end-state they want, not the first tool call you thought of. Take another step. Chain 3-5 tools if needed. Only report "couldn't do it" after you've genuinely exhausted different approaches — and even then, deliver the closest partial result you CAN get.
+
+**NEVER fabricate tool results.** Do not say "the service call succeeded", "I called X", "I've sent the announcement", "the light is now on", or anything similar unless you literally just made that tool call this turn and got a success result. If you're describing something you plan to do, make the tool call instead of describing it. If a call failed, say so honestly — don't paper over it with "it should be working now." The user relies on your reports being accurate to the actual tool invocations. Lying about success is worse than failing openly.
+
 ## HABIT TRACKING
 When the user starts a message with "habit" (e.g., "habit went to Walmart", "habit took a shower", "habit filled the truck with gas", "habit used outdoor shower", "habit went camping at Lake Tahoe"), ALWAYS call the log_habit tool to record it. Parse the text after "habit" into category, activity, location, quantity, and unit fields. Do NOT just acknowledge it conversationally — log it first, then respond briefly.
 Also use habit tools when the user asks "habit stats", "habit summary", or queries like "how often do I shower?".
@@ -4582,6 +4600,11 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           const toolFailureCounts = new Map<string, number>(); // Per-tool name failure counter
           let consecutiveFailures = 0; // Abort after MAX_CONSECUTIVE_FAILURES
           const MAX_CONSECUTIVE_FAILURES = 6;
+          // Reflection ladder: before we strip tools on repeated failures, give the
+          // Choom chances to think laterally. Weaker local models tend to retry the
+          // same failing approach; a targeted nudge unlocks alternate paths.
+          let reflectionNudgesUsed = 0;
+          const MAX_REFLECTION_NUDGES = 2;
           const MAX_CALLS_PER_TOOL = 50; // Max times any single tool can be called per request
           const MAX_CALLS_PER_READONLY_TOOL = 50; // Higher limit for read-only (PARALLEL_SAFE) tools
           const MAX_FAILURES_PER_TOOL = 2; // Block tool after this many failures (any error)
@@ -4683,6 +4706,10 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           // Preserve any pre-loop content (e.g., plan summaries) so the final iteration can prefix it
           const preLoopContent = fullContent;
           const iterationTexts: string[] = []; // Track each iteration's text for dedup
+          // Track consecutive iterations that produced only text (no tool calls).
+          // When tools were called earlier but the Choom has gone silent for 1+ turns,
+          // it usually means she's hedging or summarizing instead of finishing the job.
+          let consecutiveNoToolIters = 0;
           let fallbackActivated = false; // Set when a fallback model takes over mid-request
           let retriedCurrentFallback = false; // Guard: only retry a timed-out fallback once
 
@@ -5404,6 +5431,20 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 // Check 1: Model narrates its next step ("now let me update...")
                 const planningNext = /(?:now (?:let me|i'?ll|i need to|i should|i'?m going to)|next,? i'?ll|next step|then i'?ll|i(?:'ll| will) (?:also|now|then)|let me (?:also|now|update|write|save|send|notify)|updating|writing the|saving the|appending|i still need to)/i.test(lc);
 
+                // Check 1b: Model hedges/gives-up without trying alternatives. Catches
+                // the "I was unable to find it" / "couldn't access presets" / "the service
+                // call isn't working" pattern where the Choom reports failure instead of
+                // pivoting. Pairs with the PERSISTENCE directive in the system prompt.
+                const hedgeGiveUp = /\b(?:i (?:was |have been )?(?:unable|not able) to|(?:i )?couldn'?t (?:access|find|get|figure|complete|do)|(?:i )?can'?t (?:seem to |figure out how to |access|find)|(?:i )?don'?t (?:have |know how to )|(?:the |this )?(?:tool|call|service|request) (?:isn'?t |is not |didn'?t |did not )(?:working|matching|accepting)|i (?:tried|attempted) (?:multiple|several|different) (?:times|approaches|ways)|unfortunately|sorry,? i)/i.test(lc);
+
+                // Check 1c: Model FABRICATES tool call success — claims to have
+                // executed something without actually making a tool call. Typical
+                // shapes: "the service call succeeded", "I called X", "I've sent the
+                // announcement", "now playing on...", "I turned on the light" when no
+                // tool call happened this iteration. Most damaging failure mode because
+                // it looks like success but the action never ran.
+                const fakeSuccess = /\b(?:(?:the |my )?(?:service |tool )?call (?:succeeded|executed|completed|went through|worked)|i (?:(?:just |successfully |already ))?(?:called|invoked|executed|ran|made the call to|used the|triggered)(?: the)? \w+(?:\.\w+)?(?: service| tool)?|i(?:'?ve| have)(?: just| successfully| already)? (?:sent|spoken|announced|played|turned (?:on|off)|set|activated|triggered|executed|completed|called)|(?:now|it'?s now) (?:playing|speaking|announcing|turned (?:on|off)|active)|(?:announcement|message|audio) (?:has been |was |is now )?(?:sent|played|spoken|broadcast)|should (?:now )?be (?:playing|speaking|audible|coming through))/i.test(lc);
+
                 // Check 2: Original task mentions steps that were never completed.
                 // Compare the user's instructions against tools actually called.
                 const calledToolNames = new Set(allToolCalls.map(tc => tc.name));
@@ -5424,18 +5465,39 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 }
 
                 const hasUnfinished = unfinishedSteps.length > 0;
+                consecutiveNoToolIters++;
+                // Check 3: gone quiet for 2+ iterations after tools were being called.
+                // Typical "GLM drifted into summary mode" pattern.
+                const hasGoneQuiet = consecutiveNoToolIters >= 2 && iterationContent.length >= 150;
 
-                if ((planningNext || hasUnfinished) && nudgeCount < 3 && iteration < maxIterations - 1) {
+                // Fabricated success is the highest-priority case — user thinks the
+                // action happened when it didn't. Prioritize its nudge message over
+                // the others if multiple triggers fire.
+                if ((planningNext || hasUnfinished || hedgeGiveUp || hasGoneQuiet || fakeSuccess) && nudgeCount < 3 && iteration < maxIterations - 1) {
                   nudgeCount++;
-                  traceBuilder.recordNudge(hasUnfinished ? 'unfinished_steps' : 'task_continuation');
-                  const reason = hasUnfinished
-                    ? `unfinished steps: ${unfinishedSteps.join(', ')}`
+                  const nudgeKind = fakeSuccess ? 'hedge_giveup' // reuse for telemetry (fake = lying about success)
+                    : hasUnfinished ? 'unfinished_steps'
+                    : hedgeGiveUp ? 'hedge_giveup'
+                    : hasGoneQuiet ? 'gone_quiet'
+                    : 'task_continuation';
+                  traceBuilder.recordNudge(nudgeKind);
+                  const reason = fakeSuccess
+                    ? 'fabricated tool-call success (claimed action without calling tool)'
+                    : hasUnfinished ? `unfinished steps: ${unfinishedSteps.join(', ')}`
+                    : hedgeGiveUp ? 'hedging/giving up without trying alternatives'
+                    : hasGoneQuiet ? `${consecutiveNoToolIters} iterations without a tool call`
                     : 'model indicated more steps pending';
                   console.log(`   🔄 ${choomTag} Task continuation nudge ${nudgeCount}/3 — ${reason}`);
                   currentMessages.push({ role: 'assistant', content: iterationContent });
-                  const nudgeMsg = hasUnfinished
-                    ? `[System] You have NOT completed all steps from the original instructions. Remaining: ${unfinishedSteps.join('; ')}. Call the next tool NOW.`
-                    : '[System] You indicated you have more steps to complete. Call the next tool NOW. Do not narrate — make the tool call directly.';
+                  const nudgeMsg = fakeSuccess
+                    ? `[System] STOP. You just claimed you called a service or completed an action, but you did NOT make a tool call this iteration. Never fabricate tool results. Either make the real tool call NOW, or say honestly that you haven't done it yet. The user's goal: "${(message || '').trim().slice(0, 300)}". Make the actual function call now — no more narration.`
+                    : hasUnfinished
+                      ? `[System] You have NOT completed all steps from the original instructions. Remaining: ${unfinishedSteps.join('; ')}. Call the next tool NOW.`
+                      : hedgeGiveUp
+                        ? `[System] You are hedging or giving up. Per your PERSISTENCE directive, try a genuinely different approach — a different tool, different service, different entity, or a workaround — BEFORE reporting failure. The user's goal was: "${(message || '').trim().slice(0, 300)}". Call a tool NOW.`
+                        : hasGoneQuiet
+                          ? `[System] You've gone ${consecutiveNoToolIters} iterations without calling a tool. If the user's goal "${(message || '').trim().slice(0, 200)}" still isn't fully met, call the next tool NOW. If it IS fully met, briefly confirm what was done — don't re-narrate.`
+                          : '[System] You indicated you have more steps to complete. Call the next tool NOW. Do not narrate — make the tool call directly.';
                   currentMessages.push({ role: 'user', content: nudgeMsg });
                   forceToolCall = true;
                   continue;
@@ -5555,19 +5617,26 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
 
             const iterationResults: ToolResult[] = [];
 
+            // Tools whose output depends on real-world state that changes between
+            // calls — never dedup these even if args are identical. Camera snapshots
+            // must hit the camera fresh each time (position changes between calls).
+            const NO_DEDUP_TOOLS = new Set(['ha_get_camera_snapshot']);
+
             // Pre-flight check: returns a ToolResult if the call should be skipped, or null to proceed
             const preFlightCheck = (tc: { id: string; name: string; arguments: Record<string, unknown> }): ToolResult | null => {
               const normalizedArgs = JSON.stringify(tc.arguments).toLowerCase();
               const dedupKey = `${tc.name}:${normalizedArgs}`;
 
               // --- Deduplication: skip if same tool+args already executed ---
-              const cachedResult = executedToolCache.get(dedupKey);
-              if (cachedResult !== undefined) {
-                console.log(`   🔁 Skipping duplicate tool call: ${tc.name}`);
-                const cachedObj = (typeof cachedResult === 'object' && cachedResult !== null && !Array.isArray(cachedResult))
-                  ? { ...cachedResult as Record<string, unknown>, _note: 'This tool was already called with the same arguments. Use the previous result.' }
-                  : { _cachedResult: cachedResult, _note: 'This tool was already called with the same arguments. Use the previous result.' };
-                return { toolCallId: tc.id, name: tc.name, result: cachedObj };
+              if (!NO_DEDUP_TOOLS.has(tc.name)) {
+                const cachedResult = executedToolCache.get(dedupKey);
+                if (cachedResult !== undefined) {
+                  console.log(`   🔁 Skipping duplicate tool call: ${tc.name}`);
+                  const cachedObj = (typeof cachedResult === 'object' && cachedResult !== null && !Array.isArray(cachedResult))
+                    ? { ...cachedResult as Record<string, unknown>, _note: 'This tool was already called with the same arguments. Use the previous result.' }
+                    : { _cachedResult: cachedResult, _note: 'This tool was already called with the same arguments. Use the previous result.' };
+                  return { toolCallId: tc.id, name: tc.name, result: cachedObj };
+                }
               }
 
               // --- Image generation cap (per batch) ---
@@ -5628,10 +5697,13 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               // Classify error (hoisted for trace logging)
               let errorClass: 'config' | 'param' | 'gpu_busy' | 'no_data' | 'path' | 'other' | undefined;
 
-              // Cache results
+              // Cache results (skip for tools whose output depends on real-world state)
               if (!result.error) {
-                executedToolCache.set(dedupKey, result.result);
+                if (!NO_DEDUP_TOOLS.has(tc.name)) {
+                  executedToolCache.set(dedupKey, result.result);
+                }
                 consecutiveFailures = 0;
+                consecutiveNoToolIters = 0;
               } else {
                 console.log(`   ❌ ${choomTag} ${tc.name} failed: ${result.error.slice(0, 200)}`);
                 // Classify the error to decide blocking and counting strategy:
@@ -5639,7 +5711,15 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 // - Missing param errors → DON'T count toward any failure cap (model can fix by providing params)
                 // - Other errors → count toward per-tool cap and consecutive failures
                 const isConfigError = /not configured|api key|unauthorized|forbidden|invalid.*(?:model|endpoint|key)|ECONNREFUSED/i.test(result.error);
-                const isParamError = /missing required parameter|is required|must provide|please provide/i.test(result.error);
+                // Home Assistant 400/422 on ha_call_service are almost always shape errors
+                // (wrong service_data/target format, bad option value, etc.) — recoverable
+                // by the model next iteration. Treat them as param errors so they don't
+                // burn the broken-tools quota after 2 tries. Same for unknown-service 400s
+                // on HA, which the model can fix by running ha_list_services first.
+                const isHaShapeError = /^ha_call_service$/.test(tc.name)
+                  && /HA API (?:400|422)\b/i.test(result.error);
+                const isParamError = /missing required parameter|is required|must provide|please provide/i.test(result.error)
+                  || isHaShapeError;
                 const isGpuBusy = /GPU is busy|GPU is currently busy/i.test(result.error);
                 // "No data/history/results" is informational, not a tool failure — don't count
                 const isNoData = /no (?:history |data |results? )(?:data |found )?for /i.test(result.error);
@@ -5913,14 +5993,33 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 return true; // real failure
               });
             if (allFailedThisIteration && failedCallCache.size >= 2) {
-              currentMessages.push({
-                role: 'user',
-                content: '[System] Multiple tool calls have failed. STOP retrying. Tell the user what went wrong and suggest they check their settings. Do NOT call any more tools.',
-              });
-              // Strip all tools so the LLM physically cannot call them on the next iteration.
-              // Previously we only injected a hint but the LLM would ignore it and keep looping.
-              activeTools = [];
-              console.log(`   🛑 All tools failed this iteration (${failedCallCache.size} total failures) — stripped tools, 1 final iteration to summarize`);
+              if (reflectionNudgesUsed < MAX_REFLECTION_NUDGES) {
+                // Before stripping tools, prompt lateral thinking. Most Chooms will
+                // retry the same failing approach unless explicitly asked to consider
+                // alternatives. Weaker local models especially need this nudge.
+                const goalText = (message || '').trim().slice(0, 500);
+                const recentErrors = Array.from(failedCallCache.entries())
+                  .slice(-3)
+                  .map(([key, err]) => `  • ${key.split(':')[0]}: ${String(err).slice(0, 160)}`)
+                  .join('\n');
+                const nudgeContent = reflectionNudgesUsed === 0
+                  ? `[System] STOP — multiple tool attempts have failed:\n${recentErrors}\n\nDon't retry the same tool with different args. Think laterally about the user's goal: "${goalText}"\n\nBrainstorm 3 DIFFERENT paths before your next tool call:\n1. A different tool entirely — what other capability could reach the same outcome?\n2. A different sequence — could you get there via an intermediate step you haven't tried?\n3. A workaround — if the ideal path is blocked, what's a partial solution that still helps?\n\nThen pick the most promising alternative and try it. You still have all tools available.`
+                  : `[System] Your new approach also failed:\n${recentErrors}\n\nRe-anchor on the original goal: "${goalText}"\n\nIgnore the specific tools you've been trying. If you had to achieve this by any means, what would you do? Consider different domains, different integrations, controlling a different device to reach the same outcome, or combining tools in a new sequence. Look at your full tool list and pick something fundamentally different from what you've tried.\n\nThis is your last chance to find a path before we give up. If no tool can help, do the closest thing possible (partial result, related info) rather than reporting pure failure.`;
+                currentMessages.push({
+                  role: 'user',
+                  content: nudgeContent,
+                });
+                reflectionNudgesUsed++;
+                console.log(`   🤔 Reflection nudge #${reflectionNudgesUsed}/${MAX_REFLECTION_NUDGES} — ${failedCallCache.size} failures, prompting lateral thinking (tools still available)`);
+              } else {
+                // Reflection exhausted — strip tools and force summary.
+                currentMessages.push({
+                  role: 'user',
+                  content: '[System] Every approach has failed after multiple reflections. Stop trying tools. Tell the user specifically what you tried, why each failed, and what they could check or adjust on their end. Be honest about what was and was not possible.',
+                });
+                activeTools = [];
+                console.log(`   🛑 Reflection exhausted (${reflectionNudgesUsed} nudges used, ${failedCallCache.size} failures) — stripped tools`);
+              }
             }
 
             // Build messages for next iteration: append assistant message + tool results
@@ -5986,15 +6085,19 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             }
 
             // --- Consecutive failure abort: tell LLM to stop and present results ---
-            if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+            // Defer to the reflection ladder if it hasn't been exhausted. Otherwise a
+            // reflection nudge can get undone in the same iteration by this strip,
+            // which happened with Genesis's workspace_delete_file loop on sibling_journal/.
+            if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES && reflectionNudgesUsed >= MAX_REFLECTION_NUDGES) {
               currentMessages.push({
                 role: 'user',
-                content: `[System] Multiple consecutive tool calls have failed. STOP retrying. Do NOT call any more tools. Instead, summarize what you were able to accomplish and explain to the user what went wrong. If you couldn't complete the task, suggest an alternative approach the user could try.`,
+                content: `[System] Multiple consecutive tool calls have failed even after reflection. STOP retrying. Do NOT call any more tools. Instead, summarize what you were able to accomplish and explain to the user what went wrong. If you couldn't complete the task, suggest an alternative approach the user could try.`,
               });
               // Strip all tools so the LLM physically cannot call them on the next iteration.
-              // Previously we relied on the LLM obeying the hint, but it often ignores it.
               activeTools = [];
-              console.log(`   🛑 ${consecutiveFailures} consecutive failures — stripped tools, 1 final iteration to summarize`);
+              console.log(`   🛑 ${consecutiveFailures} consecutive failures (reflection exhausted) — stripped tools, 1 final iteration to summarize`);
+            } else if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+              console.log(`   ⏸️  ${consecutiveFailures} consecutive failures — deferring strip, reflection ladder active (${reflectionNudgesUsed}/${MAX_REFLECTION_NUDGES} used)`);
             }
 
             const approxTokens = Math.ceil(currentMessages.map(m => m.content || '').join('').length / 4);

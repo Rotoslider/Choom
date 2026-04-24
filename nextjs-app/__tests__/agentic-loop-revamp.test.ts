@@ -273,15 +273,22 @@ describe('5. Image Generation Batch-Aware Cap', () => {
   });
 
   test('batch counter is checked before pre-flight', () => {
-    expect(routeContent).toContain('imageGenCount + pendingImageGenInBatch >= 3');
+    expect(routeContent).toContain('imageGenCount + pendingImageGenInBatch >= 5');
   });
 
   test('batch counter is incremented when call passes pre-flight', () => {
     expect(routeContent).toContain("if (tc.name === 'generate_image') pendingImageGenInBatch++");
   });
 
+  test('imageGenCount resets each iteration so cap is per-batch, not per-request', () => {
+    // The reset must happen inside the while loop so later iterations can generate more images
+    const loopStart = routeContent.indexOf('while (iteration < maxIterations)');
+    const resetPos = routeContent.indexOf('imageGenCount = 0;', loopStart);
+    expect(resetPos).toBeGreaterThan(loopStart);
+  });
+
   test('batch cap check happens BEFORE generic pre-flight check', () => {
-    const batchCapPos = routeContent.indexOf('imageGenCount + pendingImageGenInBatch >= 3');
+    const batchCapPos = routeContent.indexOf('imageGenCount + pendingImageGenInBatch >= 5');
     const genericPreFlightPos = routeContent.indexOf('const skipped = preFlightCheck(tc)');
     // The batch-aware cap should be checked first, then generic pre-flight
     expect(batchCapPos).toBeLessThan(genericPreFlightPos);
