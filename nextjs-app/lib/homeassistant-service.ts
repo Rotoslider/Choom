@@ -35,6 +35,7 @@ export interface HAHistorySummary {
 const stateCache: Map<string, { data: HAEntity; expiresAt: number }> = new Map();
 const allStatesCache: { data: HAEntity[]; expiresAt: number } | null = { data: [], expiresAt: 0 };
 let allStatesCacheRef = allStatesCache;
+let servicesCatalogCache: { data: Record<string, Record<string, unknown>>; expiresAt: number } | null = null;
 
 export class HomeAssistantService {
   private settings: HomeAssistantSettings;
@@ -66,7 +67,17 @@ export class HomeAssistantService {
 
     if (!resp.ok) {
       const text = await resp.text().catch(() => '');
-      throw new Error(`HA API ${resp.status}: ${text || resp.statusText}`);
+      // HA sometimes returns a JSON body with a message field, sometimes bare text,
+      // sometimes just the HTTP status line. Prefer the JSON message when available
+      // so callers see "Entity not found" instead of "400: Bad Request".
+      let detail = text || resp.statusText;
+      try {
+        const parsed = JSON.parse(text);
+        if (parsed && typeof parsed === 'object' && 'message' in parsed) {
+          detail = String((parsed as { message: unknown }).message);
+        }
+      } catch { /* not JSON, keep raw */ }
+      throw new Error(`HA API ${resp.status}: ${detail}`);
     }
 
     return resp.json() as Promise<T>;
@@ -130,15 +141,23 @@ export class HomeAssistantService {
       entities = entities.filter(e => e.entity_id.startsWith(domainPrefix));
     }
 
-    // Filter by area (check attributes.area or friendly_name containing area)
+    // Filter by area. Prefer HA's area registry (via template helper area_entities())
+    // which respects device→area inheritance. Fall back to friendly-name substring
+    // matching if the area isn't in the registry or the template call fails.
     if (area) {
-      const areaLower = area.toLowerCase();
-      entities = entities.filter(e => {
-        const attrs = e.attributes;
-        const friendlyName = String(attrs.friendly_name || '').toLowerCase();
-        const entityArea = String(attrs.area || '').toLowerCase();
-        return entityArea.includes(areaLower) || friendlyName.includes(areaLower);
-      });
+      const registryIds = await this.resolveAreaEntities(area);
+      if (registryIds && registryIds.length > 0) {
+        const idSet = new Set(registryIds);
+        entities = entities.filter(e => idSet.has(e.entity_id));
+      } else {
+        const areaLower = area.toLowerCase();
+        entities = entities.filter(e => {
+          const attrs = e.attributes;
+          const friendlyName = String(attrs.friendly_name || '').toLowerCase();
+          const entityArea = String(attrs.area || '').toLowerCase();
+          return entityArea.includes(areaLower) || friendlyName.includes(areaLower);
+        });
+      }
     }
 
     return entities;
@@ -146,28 +165,157 @@ export class HomeAssistantService {
 
   /**
    * Call a HA service — POST /api/services/{domain}/{service}
+   *
+   * HA's REST service endpoint takes a FLAT body (not the WebSocket {target, data}
+   * shape). target.entity_id / area_id / device_id all go at the top level alongside
+   * the service data fields. Examples:
+   *   {"entity_id": "light.kitchen", "brightness": 128}
+   *   {"area_id": "kitchen"}
+   *   {"entity_id": "select.tower_ptz_preset", "option": "Driveway"}
+   *
+   * Accepts either an explicit entityId parameter or a target object (or both);
+   * flattens everything onto a single body so callers can pass whichever form the
+   * model produced.
    */
   async callService(
     domain: string,
     service: string,
-    entityId: string,
-    serviceData?: Record<string, unknown>
+    entityId?: string,
+    serviceData?: Record<string, unknown>,
+    target?: { entity_id?: string | string[]; area_id?: string | string[]; device_id?: string | string[] }
   ): Promise<HAEntity[]> {
-    const body: Record<string, unknown> = {
-      entity_id: entityId,
-      ...serviceData,
-    };
+    const body: Record<string, unknown> = {};
+
+    // Flatten target → top-level. REST API understands area_id / device_id at top level
+    // (same as the WebSocket target form, just not wrapped).
+    if (target) {
+      if (target.entity_id !== undefined) body.entity_id = target.entity_id;
+      if (target.area_id !== undefined) body.area_id = target.area_id;
+      if (target.device_id !== undefined) body.device_id = target.device_id;
+    }
+    // Explicit entityId param overrides any target.entity_id.
+    if (entityId) body.entity_id = entityId;
+    // Merge service data fields last so they override any same-name target keys
+    // (shouldn't happen, but defensive).
+    if (serviceData) Object.assign(body, serviceData);
 
     const result = await this.apiFetch<HAEntity[]>(
       `/api/services/${domain}/${service}`,
       { method: 'POST', body: JSON.stringify(body) }
     );
 
-    // Invalidate cache for affected entity
-    stateCache.delete(entityId);
+    // Invalidate cache.
+    if (entityId) stateCache.delete(entityId);
+    if (typeof body.entity_id === 'string') stateCache.delete(body.entity_id);
     allStatesCacheRef = { data: [], expiresAt: 0 };
 
     return result;
+  }
+
+  /**
+   * Look up whether a given domain.service exists. Uses a short-lived per-process
+   * cache of the services catalog. Returns the list of real services in that
+   * domain if the requested one doesn't exist, or null if the domain itself is
+   * unknown. Returns `true` if the service exists.
+   */
+  async verifyServiceExists(domain: string, service: string): Promise<true | { siblings: string[] } | null> {
+    try {
+      const catalog = await this.listServicesCached();
+      const svcMap = catalog[domain];
+      if (!svcMap) return null;
+      if (svcMap[service]) return true;
+      return { siblings: Object.keys(svcMap) };
+    } catch {
+      // On network error, don't block the call — let HA respond authoritatively.
+      return true;
+    }
+  }
+
+  private async listServicesCached(): Promise<Record<string, Record<string, unknown>>> {
+    const now = Date.now();
+    const cacheTTL = 60_000;
+    if (servicesCatalogCache && servicesCatalogCache.expiresAt > now) {
+      return servicesCatalogCache.data;
+    }
+    const data = await this.listServices();
+    servicesCatalogCache = { data, expiresAt: now + cacheTTL };
+    return data;
+  }
+
+  /**
+   * List all available services on this HA instance — GET /api/services
+   * Returns the service catalog grouped by domain. Useful for discovering real
+   * service names before calling (Chooms often hallucinate service names like
+   * `camera.available_ptz_presets` that don't exist).
+   */
+  async listServices(domain?: string): Promise<Record<string, Record<string, unknown>>> {
+    const data = await this.apiFetch<Array<{ domain: string; services: Record<string, unknown> }>>('/api/services');
+    const grouped: Record<string, Record<string, unknown>> = {};
+    for (const entry of data) {
+      if (domain && entry.domain !== domain) continue;
+      grouped[entry.domain] = entry.services;
+    }
+    return grouped;
+  }
+
+  /**
+   * Fire a custom event — POST /api/events/{event_type}
+   * Useful for triggering automations that listen on `event:` triggers.
+   */
+  async fireEvent(eventType: string, eventData?: Record<string, unknown>): Promise<{ message: string }> {
+    return this.apiFetch<{ message: string }>(
+      `/api/events/${eventType}`,
+      {
+        method: 'POST',
+        body: JSON.stringify(eventData || {}),
+      }
+    );
+  }
+
+  /**
+   * Render a Jinja2 template against live HA state — POST /api/template
+   * HA exposes helpers like area_entities('kitchen'), is_state('...'), states.*, etc.
+   * Returns the rendered string (always a string from HA; caller parses JSON if needed).
+   */
+  async renderTemplate(template: string, variables?: Record<string, unknown>): Promise<string> {
+    if (!this.settings.accessToken) {
+      throw new Error('Home Assistant access token not configured');
+    }
+    const url = `${this.baseUrl}/api/template`;
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.settings.accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ template, ...(variables && { variables }) }),
+    });
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => '');
+      throw new Error(`HA template ${resp.status}: ${text || resp.statusText}`);
+    }
+    return resp.text();
+  }
+
+  /**
+   * Resolve an area name (case-insensitive) to the list of entity_ids assigned to it
+   * in HA's area registry (includes entities whose device is in that area). Uses the
+   * template endpoint so it works with long-lived access tokens over REST.
+   *
+   * Returns null if the template fails (area doesn't exist or rendering error) —
+   * caller can fall back to friendly-name matching.
+   */
+  async resolveAreaEntities(areaName: string): Promise<string[] | null> {
+    const safeName = areaName.replace(/'/g, "\\'");
+    const tmpl = `{{ area_entities('${safeName}') | list | tojson }}`;
+    try {
+      const rendered = await this.renderTemplate(tmpl);
+      const parsed = JSON.parse(rendered);
+      if (!Array.isArray(parsed) || parsed.length === 0) return null;
+      return parsed.filter((s): s is string => typeof s === 'string');
+    } catch {
+      return null;
+    }
   }
 
   /**
