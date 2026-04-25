@@ -85,7 +85,7 @@ const sections: { id: Section; label: string; icon: React.ReactNode }[] = [
   { id: 'automations', label: 'Automations', icon: <Workflow className="h-4 w-4" /> },
   { id: 'home-assistant', label: 'Smart Home', icon: <Home className="h-4 w-4" /> },
   { id: 'avatar', label: 'Avatar', icon: <Eye className="h-4 w-4" /> },
-  { id: 'bridge-log', label: 'Bridge Log', icon: <FileText className="h-4 w-4" /> },
+  { id: 'bridge-log', label: 'Logs', icon: <FileText className="h-4 w-4" /> },
   { id: 'appearance', label: 'Theme', icon: <Palette className="h-4 w-4" /> },
 ];
 

@@ -1013,15 +1013,23 @@ A Python daemon that connects Chooms to Signal messaging via `signal-cli`.
 - **Lock file**: `/tmp/signal-bridge.lock` prevents duplicate instances. Restart the bridge with `sudo systemctl restart signal-bridge` — never launch `python bridge.py` manually while the systemd service is enabled, or systemd's `Restart=always` policy will fight your manual instance for the lock and the log will fill with `ERROR - Another instance of signal-bridge is already running!` every ~10s
 - **Emoji stripping**: Emojis are removed from text before TTS synthesis
 
-### Bridge Log Viewer
+### Logs Hub
 
-Settings → **Bridge Log** tails the live scheduler/bridge log inside the GUI — no terminal needed.
+Settings → **Logs** is a single tab with three sub-views — live bridge log, doctor reports, and YouTube downloader runs. Every viewer renders selectable text (drag-highlight + Ctrl+C, right-click copy, or use the **Copy** button to grab the whole pane).
 
-- File: `nextjs-app/data/logs/bridge.log` (rotating, 5 MB × 3 backups). Same file whether the bridge runs via systemd or manually; configure with `$LOG_FILE`.
-- Live tail with 5-second auto-refresh (pauseable). Last 512 KB (up to 2000 lines) of the file is read on each fetch.
-- Level filter: `ALL` / `DEBUG` / `INFO` / `WARNING` / `ERROR` (cumulative — `WARNING` shows warnings + errors, etc.). Lines are color-coded: errors red, warnings amber, info default, debug muted.
-- Free-text search box filters by substring (case-insensitive), great for `self_followup`, a Choom name, or a specific task id.
-- Sticky-to-bottom scroll: stays pinned to newest as new lines arrive; scroll up and auto-scroll pauses so you can read.
+**Live Bridge** — tails the scheduler/bridge log file inside the GUI, no terminal needed.
+- File: `nextjs-app/data/logs/bridge.log` (rotating, 5 MB × 3 backups). Same file whether the bridge runs via systemd or manually; override with `$LOG_FILE`.
+- 5-second auto-refresh (pauseable). Last 512 KB / up to 2000 lines fetched per refresh.
+- Level filter: `ALL` / `DEBUG` / `INFO` / `WARNING` / `ERROR` (cumulative — `WARNING` shows warnings + errors). Lines color-coded: errors red, warnings amber, info default, debug muted.
+- Free-text substring search (case-insensitive). Sticky-to-bottom scroll that pauses when you scroll up.
+
+**Doctor Reports** — historical nightly diagnostic reports, browsable by date.
+- Reports stored at `data/traces/reports/report-YYYY-MM-DD.json`. Each entry now includes a `formatted_text` field (the same prose summary that gets sent to Signal at 22:00) so the GUI doesn't have to re-render from raw fields. Existing reports were backfilled in-place.
+- Date list on the left, full report on the right. Header shows request count and anomaly count for the selected date.
+
+**YouTube** — per-run reports for the YouTube downloader cron job.
+- Each scheduled run writes `data/yt_reports/yt-YYYY-MM-DD_HHMMSS.json` containing the formatted summary (downloads, errors, per-channel breakdown) plus structured results.
+- Run list on the left shows timestamp + dl/err/channel counts; viewer on the right shows the same summary that was sent to Signal.
 
 ### Reminders
 
@@ -1383,6 +1391,10 @@ SQLite via Prisma ORM. (dev.db)
 - `POST /api/logs` - Store log entries (single or batch)
 - `DELETE /api/logs` - Delete logs by chatId, choomId, all, or prune old entries. Chat deletion cascades to activity logs.
 - `GET /api/bridge-log?limit=&level=&q=` - Tail the Signal bridge log file (`data/logs/bridge.log`); 512 KB / 2000-line cap, level/search filters
+- `GET /api/reports/doctor` - List historical nightly doctor reports
+- `GET /api/reports/doctor?date=YYYY-MM-DD` - Read a specific doctor report (with `formatted_text` for direct render)
+- `GET /api/reports/yt` - List YouTube downloader runs
+- `GET /api/reports/yt?id=<run-id>` - Read a specific YT downloader run report
 - `GET /api/reminders` - List pending reminders
 - `DELETE /api/reminders?id=xxx` - Delete a reminder
 - `GET /api/self-followups` - List pending / fired / cancelled self-followups across all Chooms (powers the Followups settings panel)
