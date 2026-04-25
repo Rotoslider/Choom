@@ -176,14 +176,22 @@ export const BUILTIN_LLM_PROFILES: LLMModelProfile[] = [
     topK: 20,
   },
   {
+    // Qwen 3.6 35B-A3B — official non-thinking ("instruct") sampling per the
+    // model card: temp=0.7, top_p=0.80, top_k=20, presence_penalty=1.5.
+    // The model's GGUF in LM Studio routes ALL output (including <tool_call>
+    // XML) through delta.reasoning_content; route.ts salvages that channel
+    // when enableThinking=false. Tool calls use Anthropic-style tags:
+    // <function=NAME><parameter=KEY>VAL</parameter></function>
+    // (parsed via the qwen3_coder format branch in parseXmlToolCalls).
     modelId: 'qwen/qwen3.6-35b-a3b',
     label: 'Qwen 3.6 35B-A3B (Local)',
     builtIn: true,
     temperature: 0.7,
-    topP: 0.9,
+    topP: 0.80,
     maxTokens: 4096,
     contextLength: 131072,
     topK: 20,
+    presencePenalty: 1.5,
     enableThinking: false,
   },
   {
