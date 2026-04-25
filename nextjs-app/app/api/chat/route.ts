@@ -4590,7 +4590,12 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
 
                 console.log(`   📋 Plan complete: ${planResult.succeeded} succeeded, ${planResult.failed} failed`);
               } else {
-                console.log(`   📋 LLM determined no plan needed — falling through to simple loop`);
+                // createPlan returns null in two distinct cases:
+                //   (a) LLM intentionally returned {"goal": null} — request is simple
+                //   (b) JSON parse failed (the planner already logged the cause + raw response)
+                // The planner's own warnings above will show in (b), so this line
+                // only describes the benign (a) case to avoid contradicting them.
+                console.log(`   📋 No plan executed — falling through to simple loop (see [Planner] warnings above if a parse failure occurred)`);
               }
             } catch (planError) {
               console.warn(`   ⚠️  Planner error, falling back to simple loop:`, planError instanceof Error ? planError.message : planError);
