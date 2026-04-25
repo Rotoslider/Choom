@@ -4514,7 +4514,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             try {
               console.log(`   📋 Multi-step request detected — creating plan...`);
               const registry = getSkillRegistry();
-              const plan = await createPlan(currentMessages, registry, plannerClient || llmClient, activeTools);
+              const plan = await createPlan(currentMessages, registry, plannerClient || llmClient, activeTools, choom.name);
 
               if (plan) {
                 console.log(`   📋 Plan created: "${plan.goal}" (${plan.steps.length} steps)`);
