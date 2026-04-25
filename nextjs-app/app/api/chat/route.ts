@@ -689,19 +689,31 @@ function createGemmaToolCallFilter(): {
 
 /**
  * Parse captured <tool_call> XML blocks into structured tool calls.
- * Handles two formats:
- *   1. XML args: tool_name<arg_key>k</arg_key><arg_value>v</arg_value>...
- *   2. JSON body: {"name":"tool_name","arguments":{...}}
+ * Handles three formats:
+ *   1. JSON body (Hermes): {"name":"tool_name","arguments":{...}}
+ *   2. Anthropic-style: <function=tool_name><parameter=key>value</parameter>...</function>
+ *      (observed from Qwen 3.6 35B-A3B emitting via reasoning_content)
+ *   3. arg_key/arg_value: tool_name<arg_key>k</arg_key><arg_value>v</arg_value>...
  */
 function parseXmlToolCalls(
   xmlBlocks: string[],
 ): { id: string; name: string; arguments: Record<string, unknown> }[] {
   const results: { id: string; name: string; arguments: Record<string, unknown> }[] = [];
 
+  // Coerce a string value to boolean/number when it looks like one. Used by
+  // formats 2 and 3 below (JSON format already has typed values).
+  const coerce = (raw: string): unknown => {
+    const trimmed = raw.trim();
+    if (trimmed === 'true') return true;
+    if (trimmed === 'false') return false;
+    if (trimmed !== '' && !isNaN(Number(trimmed))) return Number(trimmed);
+    return raw; // preserve original whitespace for strings (callers may want it)
+  };
+
   for (let i = 0; i < xmlBlocks.length; i++) {
     const xml = xmlBlocks[i].trim();
 
-    // Try JSON format first: {"name": "tool_name", "arguments": {...}}
+    // Format 1: JSON body — {"name": "tool_name", "arguments": {...}}
     const jsonMatch = xml.match(/^\s*(\{[\s\S]*\})\s*$/);
     if (jsonMatch) {
       try {
@@ -714,10 +726,29 @@ function parseXmlToolCalls(
           });
           continue;
         }
-      } catch { /* fall through to XML arg parsing */ }
+      } catch { /* fall through */ }
     }
 
-    // XML args format: tool_name<arg_key>k</arg_key><arg_value>v</arg_value>...
+    // Format 2: Anthropic-style nested tags — <function=NAME><parameter=KEY>VALUE</parameter>...</function>
+    // Some local model templates (Qwen 3.6 35B-A3B) emit this shape inside a
+    // <tool_call> wrapper. The wrapper is already stripped by the streaming
+    // filter; we receive just the <function=...>...</function> body here.
+    const fnMatch = xml.match(/<function\s*=\s*([\w.-]+)\s*>/);
+    if (fnMatch) {
+      const name = fnMatch[1];
+      const args: Record<string, unknown> = {};
+      const paramRegex = /<parameter\s*=\s*([\w.-]+)\s*>([\s\S]*?)<\/parameter>/g;
+      let pm: RegExpExecArray | null;
+      while ((pm = paramRegex.exec(xml)) !== null) {
+        args[pm[1]] = coerce(pm[2].trim());
+      }
+      if (Object.keys(args).length > 0) {
+        results.push({ id: `xmltc_${Date.now()}_${i}`, name, arguments: args });
+        continue;
+      }
+    }
+
+    // Format 3: arg_key/arg_value pairs — tool_name<arg_key>k</arg_key><arg_value>v</arg_value>...
     const nameMatch = xml.match(/^\s*(\w+)/);
     if (!nameMatch) continue;
 
@@ -726,23 +757,11 @@ function parseXmlToolCalls(
     const argRegex = /<arg_key>\s*([^<]+?)\s*<\/arg_key>\s*<arg_value>([\s\S]*?)<\/arg_value>/g;
     let match;
     while ((match = argRegex.exec(xml)) !== null) {
-      const key = match[1].trim();
-      let value: unknown = match[2];
-      // Coerce booleans and numbers
-      if (value === 'true') value = true;
-      else if (value === 'false') value = false;
-      else if (typeof value === 'string' && value.trim() !== '' && !isNaN(Number(value))) {
-        value = Number(value);
-      }
-      args[key] = value;
+      args[match[1].trim()] = coerce(match[2]);
     }
 
     if (name && Object.keys(args).length > 0) {
-      results.push({
-        id: `xmltc_${Date.now()}_${i}`,
-        name,
-        arguments: args,
-      });
+      results.push({ id: `xmltc_${Date.now()}_${i}`, name, arguments: args });
     }
   }
 
