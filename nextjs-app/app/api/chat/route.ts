@@ -5278,11 +5278,24 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               : toolCallXmlFilter.getCaptured();
             if (allCapturedXml.length > 0) {
               const xmlToolCalls = parseXmlToolCalls(allCapturedXml);
-              for (const xtc of xmlToolCalls) {
-                if (xtc.name && /^[a-zA-Z0-9_-]+$/.test(xtc.name)) {
-                  console.log(`   🔧 ${choomTag} Parsed XML <tool_call>: ${xtc.name}(${JSON.stringify(xtc.arguments).slice(0, 80)})`);
-                  toolCalls.push(xtc);
-                }
+              const validXmlCalls = xmlToolCalls.filter(
+                xtc => xtc.name && /^[a-zA-Z0-9_-]+$/.test(xtc.name),
+              );
+              for (const xtc of validXmlCalls) {
+                console.log(`   🔧 ${choomTag} Parsed XML <tool_call>: ${xtc.name}(${JSON.stringify(xtc.arguments).slice(0, 80)})`);
+                toolCalls.push(xtc);
+              }
+              // Diagnostic: blocks captured but ALL failed to yield a usable
+              // tool call. Log the raw block content so we can fingerprint the
+              // format and add a parser. Common failure modes: malformed JSON,
+              // unknown tool name, model-specific wrapper tokens, etc.
+              if (validXmlCalls.length === 0) {
+                const rawSnippets = allCapturedXml
+                  .map(b => b.slice(0, 300).replace(/\s+/g, ' ').trim())
+                  .join(' | ');
+                console.log(
+                  `   🔬 ${choomTag} Captured ${allCapturedXml.length} <tool_call> block(s) but NONE parsed to a valid tool. Raw content: ${rawSnippets}`,
+                );
               }
             }
 
@@ -5425,6 +5438,18 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 // format and add a parser if it recurs.
                 const snippet = iterationContent.slice(0, 400).replace(/\s+/g, ' ').trim();
                 console.log(`   🔬 ${choomTag} No tool_call detected — content snippet (${iterationContent.length} chars): ${snippet}`);
+              } else {
+                // Empty content + no tool_calls. Either nothing was streamed OR
+                // every byte was eaten by a stripping filter. Surface what each
+                // filter captured so we can tell which one swallowed everything.
+                const xmlCount = toolCallXmlFilter.getCaptured().length;
+                const jsonCount = jsonToolCallFilter.getCaptured().length;
+                const gemmaCount = gemmaToolCallFilter.getCaptured().length;
+                console.log(
+                  `   🔬 ${choomTag} Empty content + no tool_calls. ` +
+                  `Stripped blocks captured: xml=${xmlCount}, json=${jsonCount}, gemma=${gemmaCount}. ` +
+                  `If all three are 0, nothing was streamed (possible LM Studio capability mismatch).`,
+                );
               }
             }
 
