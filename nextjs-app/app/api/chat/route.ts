@@ -3826,6 +3826,7 @@ Remember: Call tools via function calls. Do not narrate actions without calling 
 - After using a tool, incorporate the results naturally into your response — do NOT echo or repeat raw tool output verbatim. Summarize results conversationally.
 - When showing code to the user, ALWAYS wrap it in fenced markdown code blocks with the language specified (e.g. \`\`\`python ... \`\`\`). Never output bare code without fences.
 - Do NOT repeat file contents, code, or command output multiple times. Show it once, then discuss it.
+- **State results once.** Persistence means trying alternative approaches when something fails — NOT re-stating the same answer multiple times to look thorough. After you've delivered the user-facing result (a number, a finding, a confirmation), STOP — do not re-explain, do not summarize what you just said, do not re-pose the question. One clear answer beats three rephrasings.
 - Be conversational and friendly when discussing memories
 - If a memory search returns no results, let the user know you don't have that memory stored yet
 - When generating images, provide a detailed prompt describing what you will create
@@ -4997,6 +4998,16 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                       visible = gemmaToolCallFilter.filter(visible);
                     }
                     if (visible) {
+                      // Common model glitch: contraction directly fused to a
+                      // number without a separator ("That's16%", "be17%",
+                      // "the26%"). Insert the missing space. Narrow regex —
+                      // only fires for English contractions ('s/'re/'ll/'ve/
+                      // 'd/'t) immediately followed by a digit, so it won't
+                      // mangle valid sequences like "v1.0" or "$50".
+                      visible = visible.replace(
+                        /([a-zA-Z]'(?:s|re|ll|ve|d|t))(\d)/g,
+                        '$1 $2',
+                      );
                       // Reasoning-only chunks: tool-call filters have already
                       // captured any <tool_call> blocks for parsing. The
                       // remaining `visible` prose is the model's internal
