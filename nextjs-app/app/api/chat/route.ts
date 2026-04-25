@@ -4613,6 +4613,8 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           const strongToolIntent = /\b(what(?:'?s| is) the weather|weather (?:like|today|tomorrow|forecast)|search (?:for|the web)|look up|find (?:me|out)|generate (?:an? |some )?(?:image|picture|photo|selfie|portrait)|take a (?:selfie|photo|picture)|create (?:a |an )?(?:image|picture)|make (?:me |an? )?(?:image|picture|selfie)|(?:please |can you |you should )remember (?:that|this|my|i |the |for )|(?<!i )(?<!i'll )remember (?:that |this |my |i |the |for )|(?:don'?t |never )forget (?:that|this|my|i )|(?:save|store|note|keep) (?:this|that|my|the |it )(?:in |to |as )?(?:memory|mind)?|use (?:the )?remember(?: tool)?|remind me|set (?:a )?reminder|send (?:a )?(?:notification|message|alert)|check (?:the |my )?(?:calendar|schedule|tasks|email|inbox)|(?:any |do i have (?:any )?|what )(?:appointments?|meetings?|events?)|(?:am i |are we )(?:free|busy|available)|what(?:'?s| is) on (?:my )?(?:calendar|schedule|for )?(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this week|next week)|(?:what(?:'?s| is| do i have) )(?:scheduled|planned|coming up)|when (?:is|was|did) (?:my |the )?(?:next|last) |when (?:is|was) the last time i |when did i (?:last )?(?:go|get|have|see|do|visit|fill|take)|write (?:a |an )?(?:file|document|report)|read (?:the |my |this )?(?:file|document|pdf|report)|(?:look|take a look|glance) at (?:the |this |that )?(?:file|document|pdf|report)|open (?:the |this |that )?(?:pdf|report|document)|review (?:the |this |that )?(?:file|document|pdf|report)|list (?:my |the )?(?:files|projects|tasks)|download|scrape|analyze (?:this|the|that) (?:image|photo|picture)|turn (?:on|off) (?:the )?|(?:open|close) (?:the )?|(?:lights?|switch|fan|heater|thermostat) (?:on|off)|delegate|get (?:the )?(?:weather|forecast)|search (?:youtube|email|gmail|contacts)|draft (?:an? )?email|compose (?:an? )?email|^habit\b|habit (?:stats|summary|report|breakdown)|how (?:often|many times) (?:do|did|have) i )\b/i.test(msgLower);
           let forceToolCall = strongToolIntent; // Force tool_choice:'required' on first iteration if intent is strong
           const executedToolCache = new Map<string, unknown>(); // Dedup: normalizedKey → result
+          const dedupHitCounts = new Map<string, number>(); // How many times each dedup key was hit
+          let loopBreakRequested = false; // Set when a tight repeat-call loop is detected
           const failedCallCache = new Map<string, string>(); // Cache: dedupKey → error message
           const toolCallCounts = new Map<string, number>(); // Per-tool name call counter
           const brokenTools = new Set<string>(); // Tool names blocked due to config/auth errors
@@ -4744,6 +4746,15 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             // orchestrator, or client disconnected), stop processing immediately.
             if (streamClosed) {
               console.log(`   🛑 ${choomTag} Stream closed (client disconnected) — stopping agentic loop at iteration ${iteration}`);
+              break;
+            }
+
+            // Tight repeat-call loop detected during a previous iteration's
+            // dedup pass. The model is stuck calling the same tool with the
+            // same args. Tool result already returned a STOP error to it; if
+            // it still came back here, force termination.
+            if (loopBreakRequested) {
+              console.log(`   🛑 ${choomTag} Terminating agentic loop — repeat-call loop was detected and STOP error was returned to model`);
               break;
             }
 
@@ -5728,10 +5739,32 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               if (!NO_DEDUP_TOOLS.has(tc.name)) {
                 const cachedResult = executedToolCache.get(dedupKey);
                 if (cachedResult !== undefined) {
-                  console.log(`   🔁 Skipping duplicate tool call: ${tc.name}`);
+                  // Track repeat count. If the model keeps trying the same call
+                  // despite getting cached results back (Qwen 3.6 35B-A3B
+                  // observed: 10 identical send_notification calls in one
+                  // iteration), escalate the response so the agentic loop
+                  // breaks out instead of burning iterations on a stuck model.
+                  const hits = (dedupHitCounts.get(dedupKey) || 0) + 1;
+                  dedupHitCounts.set(dedupKey, hits);
+                  console.log(`   🔁 Skipping duplicate tool call: ${tc.name} (repeat #${hits})`);
+
+                  if (hits >= 5) {
+                    // Tight repeat loop — request loop termination after this iteration
+                    if (!loopBreakRequested) {
+                      console.log(`   🛑 ${choomTag} Repeat-call loop detected on ${tc.name} (${hits} hits) — will terminate agentic loop after this iteration`);
+                      loopBreakRequested = true;
+                    }
+                    return {
+                      toolCallId: tc.id,
+                      name: tc.name,
+                      result: null,
+                      error: `STOP. You have already called ${tc.name} with these exact arguments ${hits} times in this request. The action completed on the first call. Do not call this tool again — write a brief one-sentence acknowledgement to the user and end your turn.`,
+                    };
+                  }
+
                   const cachedObj = (typeof cachedResult === 'object' && cachedResult !== null && !Array.isArray(cachedResult))
-                    ? { ...cachedResult as Record<string, unknown>, _note: 'This tool was already called with the same arguments. Use the previous result.' }
-                    : { _cachedResult: cachedResult, _note: 'This tool was already called with the same arguments. Use the previous result.' };
+                    ? { ...cachedResult as Record<string, unknown>, _note: 'This tool was already called with the same arguments. Use the previous result. Do NOT call this tool again with these arguments.' }
+                    : { _cachedResult: cachedResult, _note: 'This tool was already called with the same arguments. Use the previous result. Do NOT call this tool again with these arguments.' };
                   return { toolCallId: tc.id, name: tc.name, result: cachedObj };
                 }
               }
