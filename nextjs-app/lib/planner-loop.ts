@@ -249,41 +249,47 @@ Rules:
       task: (s.task as string) || undefined,
     }));
 
-    // Step-level validation: reject the entire plan if any step is malformed.
-    // A bad step early in the dependency chain cascades — one self-delegation
-    // or empty toolName can knock out 6+ dependent steps. Better to fall back
-    // to the simple agentic loop than execute a half-broken plan.
-    const validationErrors: string[] = [];
+    // Per-step validation: mark bad steps as pre-failed but KEEP THE PLAN.
+    // A 10-step plan with one self-delegation should still execute the other
+    // 9 steps. Pre-failing the bad step lets dependents skip with a clear
+    // reason, while independent steps proceed normally. Only fall back to
+    // the simple loop if EVERY step is invalid (truly nothing to execute).
+    let badStepCount = 0;
     for (const step of steps) {
+      let reason: string | null = null;
+
       if (step.type === 'delegate') {
         if (!step.choomName || !String(step.choomName).trim()) {
-          validationErrors.push(`${step.id}: delegate step has empty choomName`);
-          continue;
-        }
-        if (callerChoomName && step.choomName.toLowerCase() === callerChoomName.toLowerCase()) {
-          validationErrors.push(`${step.id}: cannot delegate to yourself (${callerChoomName}) — use tools directly`);
-          continue;
-        }
-        if (!step.task || !String(step.task).trim()) {
-          validationErrors.push(`${step.id}: delegate step has empty task`);
+          reason = 'delegate step has empty choomName';
+        } else if (callerChoomName && step.choomName.toLowerCase() === callerChoomName.toLowerCase()) {
+          reason = `cannot delegate to yourself (${callerChoomName}) — should have been a direct tool call`;
+        } else if (!step.task || !String(step.task).trim()) {
+          reason = 'delegate step has empty task';
         }
       } else {
         // type === 'tool'
         if (!step.toolName || !String(step.toolName).trim()) {
-          validationErrors.push(`${step.id}: tool step has empty toolName`);
-          continue;
-        }
-        const skill = registry.getSkillForTool(step.toolName);
-        if (!skill) {
-          validationErrors.push(`${step.id}: unknown tool "${step.toolName}"`);
+          reason = 'tool step has empty toolName';
+        } else if (!registry.getSkillForTool(step.toolName)) {
+          reason = `unknown tool "${step.toolName}"`;
         }
       }
+
+      if (reason) {
+        badStepCount++;
+        console.warn(`[Planner] Pre-failing ${step.id}: ${reason}`);
+        // Mutate the step so the executor skips it and dependents see the
+        // reason in their cascade-skip log lines.
+        (step as PlanStep & { status: PlanStep['status']; error?: string }).status = 'failed';
+        (step as PlanStep & { error?: string }).error = `Validation: ${reason}`;
+      }
     }
-    if (validationErrors.length > 0) {
-      console.warn(`[Planner] Rejecting plan — ${validationErrors.length} validation error(s):`);
-      for (const e of validationErrors) console.warn(`  - ${e}`);
-      console.warn('[Planner] Falling back to simple agentic loop.');
+    if (badStepCount === steps.length) {
+      console.warn('[Planner] All steps failed validation — falling back to simple agentic loop.');
       return null;
+    }
+    if (badStepCount > 0) {
+      console.warn(`[Planner] Plan has ${badStepCount}/${steps.length} pre-failed steps; remaining ${steps.length - badStepCount} will still execute.`);
     }
 
     return {
@@ -502,7 +508,14 @@ export async function executePlan(
   const completedSteps = new Map<string, ToolResult>();
   const completedIds = new Set<string>();
   let succeeded = 0;
-  let failed = 0;
+  // Pre-count steps that failed validation at plan-creation time. Their
+  // dependents will get cascade-skipped by the deadlock pass below;
+  // independent steps will still execute. We just need the live tally to
+  // reflect that some steps were dead before we even started.
+  let failed = plan.steps.filter(s => s.status === 'failed').length;
+  if (failed > 0) {
+    console.log(`[Planner] ${failed} step(s) pre-failed at validation; remaining ${plan.steps.length - failed} will execute`);
+  }
   const toolCallCounter = { value: 0 }; // Shared mutable counter across parallel steps
   let aborted = false;
 
