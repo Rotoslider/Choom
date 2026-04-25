@@ -38,9 +38,35 @@ const BLOCKED_COMMAND_PATTERNS = [
   /\bdd\b\s.*of=\/dev/,  // raw disk write
 ];
 
+/**
+ * Strip heredoc bodies and quoted strings from a command before pattern
+ * matching. The blocked-pattern check should only scan the actual shell
+ * scaffolding — content the user is feeding INTO a command (file bodies via
+ * heredoc, quoted string literals) doesn't execute as a command, so seeing
+ * the word "sudo" in a research note shouldn't trigger the sudo block.
+ */
+function stripQuotedAndHeredocs(cmd: string): string {
+  let s = cmd;
+  // Heredoc bodies: <<[-]'?DELIM'? ... DELIM
+  s = s.replace(/<<-?\s*['"]?(\w+)['"]?[\s\S]*?(?:\n|^)\s*\1\b/g, '<<STRIPPED');
+  // Heredoc without a closing delimiter (still being written) — strip
+  // everything from the heredoc-start marker onward.
+  s = s.replace(/<<-?\s*['"]?\w+['"]?[\s\S]*$/, '<<STRIPPED');
+  // Single-quoted strings (no escapes inside in shell)
+  s = s.replace(/'[^']*'/g, "'STR'");
+  // Double-quoted strings (simple escape handling)
+  s = s.replace(/"(?:[^"\\]|\\.)*"/g, '"STR"');
+  return s;
+}
+
 function validateCommand(command: string): void {
+  // Run pattern checks against the stripped form so a literal "sudo" in a
+  // heredoc body or quoted string doesn't cause a false positive. The
+  // shell still sees the original command at runtime — this only affects
+  // our pre-flight regex screening.
+  const scanned = stripQuotedAndHeredocs(command);
   for (const pattern of BLOCKED_COMMAND_PATTERNS) {
-    if (pattern.test(command)) {
+    if (pattern.test(scanned)) {
       throw new Error(
         `Blocked command: "${command.slice(0, 80)}" — ` +
         `matched "${pattern.source}". ` +
