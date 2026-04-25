@@ -4914,7 +4914,39 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
 
             const streamPromise = (async () => {
               let reasoningContentSalvaged = false;
+              // Inline repetition detector — when the model regenerates the
+              // same paragraph multiple times mid-stream, every chunk has
+              // already been sent to the client and TTS by the time post-
+              // stream dedup runs. Abort the stream as soon as we detect a
+              // 60+ char substring repeating 3 times so TTS doesn't play
+              // duplicates aloud and Chatterbox doesn't get hammered.
+              let streamAbortedForRepetition = false;
+              let lastRepetitionScanLen = 0;
+              const detectRepetition = (text: string): boolean => {
+                if (text.length < 200) return false;
+                // Only scan periodically — every 200 chars of new content —
+                // since a substring search is O(n*m).
+                if (text.length - lastRepetitionScanLen < 200) return false;
+                lastRepetitionScanLen = text.length;
+                // Take the trailing 180 chars as the probe. If it appears
+                // 2+ MORE times earlier in the buffer (3+ total occurrences),
+                // we're in a regenerate-the-same-paragraph loop.
+                const probeLen = 180;
+                const probe = text.slice(-probeLen);
+                if (probe.length < 60) return false;
+                let count = 0;
+                let pos = 0;
+                while (pos < text.length - probeLen) {
+                  const idx = text.indexOf(probe, pos);
+                  if (idx === -1 || idx >= text.length - probeLen) break;
+                  count++;
+                  pos = idx + probeLen;
+                  if (count >= 2) return true; // 2 prior + 1 trailing = 3 total
+                }
+                return false;
+              };
               for await (const chunk of llmClient.streamChat(currentMessages, activeTools, undefined, toolChoiceOverride)) {
+                if (streamAbortedForRepetition) break;
                 if (!chunk.choices || !chunk.choices[0]) {
                   // Final usage-only chunks have no choices; capture below.
                   if (chunk.usage) {
@@ -4974,9 +5006,25 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                       // hand it to TTS. The agentic loop still works because
                       // tool calls were captured separately.
                       if (!chunkIsReasoningOnly) {
-                        iterationContent += visible;
-                        if (!bufferForDedup) {
-                          send({ type: 'content', content: visible });
+                        // Repetition check on the WOULD-BE accumulator so we
+                        // can suppress the chunk that completes the 3rd repeat
+                        // instead of streaming it and aborting after the fact.
+                        const wouldBe = iterationContent + visible;
+                        if (detectRepetition(wouldBe)) {
+                          console.warn(`   🔁 ${choomTag} Repetition detected mid-stream (180-char probe seen 3+ times). Aborting stream early to prevent TTS spam.`);
+                          streamAbortedForRepetition = true;
+                          // Keep iterationContent up to the end of the FIRST
+                          // occurrence of the repeating probe — drop the rest.
+                          const probe = wouldBe.slice(-180);
+                          const firstIdx = iterationContent.indexOf(probe);
+                          if (firstIdx !== -1 && firstIdx < iterationContent.length - 180) {
+                            iterationContent = iterationContent.slice(0, firstIdx + probe.length);
+                          }
+                        } else {
+                          iterationContent += visible;
+                          if (!bufferForDedup) {
+                            send({ type: 'content', content: visible });
+                          }
                         }
                       }
                     }
