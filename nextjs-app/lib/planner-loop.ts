@@ -181,7 +181,8 @@ Rules:
 - Limit web_search to 2-3 calls max per plan to avoid rate limiting. Prefer delegating research to other Chooms
 - If the request is simple (1-2 steps), respond with: {"goal": null}
 - Maximum 10 steps per plan
-- Only use tools from the available skills listed above`,
+- Only use tools from the available skills listed above
+- Keep "description" and "expectedOutcome" SHORT — under 80 chars each. The whole plan must fit in the response token budget; verbose descriptions cause JSON truncation and the plan is discarded`,
   };
 
   // Build planning messages: keep system + last few user/assistant messages + plan prompt
@@ -260,8 +261,17 @@ Rules:
       maxRetries: 2,
     };
   } catch (err) {
-    console.warn('[Planner] Failed to parse plan JSON:', err instanceof Error ? err.message : err);
-    console.warn('[Planner] Raw response:', responseText.slice(0, 500));
+    const errMsg = err instanceof Error ? err.message : String(err);
+    // Detect truncation: "Unterminated string" / "Expected ... but reached end"
+    // means the LLM ran out of tokens mid-plan. Log it distinctly so it's
+    // obvious the plan failed (vs the LLM choosing to skip planning).
+    const looksTruncated = /Unterminated|Unexpected end of JSON|Expected.*end of/i.test(errMsg);
+    if (looksTruncated) {
+      console.warn(`[Planner] Plan JSON appears TRUNCATED (likely hit max_tokens=${responseText.length} chars output). Falling back to simple loop. Consider raising the model's maxTokens or shortening step descriptions.`);
+    } else {
+      console.warn('[Planner] Failed to parse plan JSON:', errMsg);
+    }
+    console.warn('[Planner] Raw response (first 500 chars):', responseText.slice(0, 500));
     return null;
   }
 }
