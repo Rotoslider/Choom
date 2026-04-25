@@ -4878,11 +4878,39 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             const bufferForDedup = allToolCalls.length > 0 && iterationTexts.length > 0;
 
             const streamPromise = (async () => {
+              let unknownDeltaSamplesLogged = 0;
               for await (const chunk of llmClient.streamChat(currentMessages, activeTools, undefined, toolChoiceOverride)) {
                 const hasContent = !!(chunk.choices?.[0]?.delta?.content || chunk.choices?.[0]?.delta?.tool_calls);
                 resetInactivity(hasContent); // reset timer; only switch mode on actual content
                 if (!chunk.choices || !chunk.choices[0]) continue;
                 const choice = chunk.choices[0];
+
+                // Diagnostic: chunk arrived with a delta that has neither
+                // content nor tool_calls in the expected fields. Log the raw
+                // delta keys + a value sample so we can see what unknown
+                // field the model/server is using (e.g. reasoning_content,
+                // thinking, function_call, etc.). Cap to avoid spam.
+                const deltaObj = (choice.delta || {}) as Record<string, unknown>;
+                const deltaKeys = Object.keys(deltaObj);
+                const hasKnownPayload = !!(deltaObj.content || deltaObj.tool_calls);
+                if (
+                  !hasKnownPayload &&
+                  deltaKeys.length > 0 &&
+                  !deltaKeys.every(k => k === 'role') &&
+                  unknownDeltaSamplesLogged < 3
+                ) {
+                  unknownDeltaSamplesLogged++;
+                  const sample: Record<string, string> = {};
+                  for (const k of deltaKeys) {
+                    const v = deltaObj[k];
+                    sample[k] = typeof v === 'string'
+                      ? v.slice(0, 120)
+                      : JSON.stringify(v).slice(0, 120);
+                  }
+                  console.log(
+                    `   🔬 ${choomTag} Unknown delta fields (sample ${unknownDeltaSamplesLogged}/3): ${JSON.stringify(sample)}`,
+                  );
+                }
 
                 if (choice.delta.content) {
                   let visible = thinkFilter(choice.delta.content);
