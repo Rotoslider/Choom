@@ -37,6 +37,11 @@ export interface PlanStep {
   type?: 'tool' | 'delegate';
   choomName?: string; // Target Choom for delegate steps
   task?: string;      // Task description for delegate steps
+  // Pivot tracking: when a step's tool fails after maxRetries, the executor
+  // can ask the LLM for an alternative shape and rewrite this step in-place.
+  // Cap at 1 pivot attempt per step to prevent loops.
+  pivoted?: boolean;
+  pivotedFrom?: { toolName: string; args: Record<string, unknown>; reason: string };
 }
 
 export interface ExecutionPlan {
@@ -401,6 +406,141 @@ function resolveTemplateVars(
  * Execute a single plan step: build tool call, run it, handle retries.
  * Returns the final ToolResult after execution + any retries.
  */
+/**
+ * Step-level pivot. When a plan step's tool has failed after maxRetries,
+ * ask the LLM for an alternative shape (different tool or different
+ * arguments — same outcome) before giving up and cascading. Returns a
+ * mutated copy of the step's tool/args/etc. on success, or null when no
+ * viable alternative could be parsed.
+ *
+ * Capped: caller MUST set step.pivoted = true after applying so this is
+ * not invoked twice on the same step.
+ */
+async function pivotStep(opts: {
+  step: PlanStep;
+  errorMessage: string;
+  plan: ExecutionPlan;
+  registry: SkillRegistry;
+  llmClient: LLMClientLike;
+  callerChoomName?: string;
+}): Promise<Pick<PlanStep, 'type' | 'toolName' | 'args' | 'choomName' | 'task' | 'description'> | null> {
+  const { step, errorMessage, plan, registry, llmClient, callerChoomName } = opts;
+
+  // Compact skill catalog so the LLM sees what's available to substitute.
+  const skillSummaries = registry.getLevel1Summaries();
+
+  const originalShape =
+    step.type === 'delegate'
+      ? `delegate(choomName="${step.choomName || ''}", task=...)`
+      : `${step.toolName}(${Object.keys(step.args).join(', ')})`;
+
+  const pivotPrompt: ChatMessage = {
+    role: 'user',
+    content: `[System — Plan Step Pivot]
+A plan step has failed after the maximum number of retries. Generate ONE alternative step that achieves the SAME outcome via a different approach.
+
+Plan goal: ${plan.goal}
+Step that failed:
+  id: ${step.id}
+  description: ${step.description}
+  expectedOutcome: ${step.expectedOutcome}
+  original shape: ${originalShape}
+
+Failure reason:
+${errorMessage.slice(0, 800)}
+
+${callerChoomName ? `You are ${callerChoomName}. Do NOT generate a delegate step with choomName="${callerChoomName}" — that's self-delegation and will be rejected.\n\n` : ''}Available skills and tools:
+${skillSummaries}
+
+Rules for the alternative:
+- Reach the SAME expectedOutcome — don't lower the bar.
+- Either pick a different tool entirely OR keep the same tool with materially different arguments. Don't just retry the same call.
+- If the original was a tool step, the alternative can be either tool or delegate. Same in reverse.
+- If no viable alternative exists, respond with: {"alternative": null, "reason": "short explanation"}
+
+Respond with ONLY a JSON object (no markdown):
+{
+  "alternative": {
+    "type": "tool" | "delegate",
+    "description": "short — under 80 chars",
+    "toolName": "...",          // for type=tool
+    "args": { ... },            // for type=tool
+    "choomName": "...",         // for type=delegate (must NOT equal "${callerChoomName || ''}")
+    "task": "..."               // for type=delegate
+  },
+  "rationale": "one sentence explaining why this should work where the original didn't"
+}`,
+  };
+
+  let responseText = '';
+  try {
+    for await (const chunk of llmClient.streamChat([pivotPrompt], [], undefined, 'none')) {
+      const choice = chunk.choices[0];
+      if (choice?.delta?.content) responseText += choice.delta.content;
+    }
+  } catch (err) {
+    console.warn(`[Planner] Pivot LLM call failed for ${step.id}:`, err instanceof Error ? err.message : err);
+    return null;
+  }
+
+  // Parse JSON, tolerating ```json``` wrapping and stray prose
+  let cleaned = responseText.trim();
+  const codeBlockMatch = cleaned.match(/```json?\s*\n?([\s\S]*?)\n?\s*```/i);
+  if (codeBlockMatch) cleaned = codeBlockMatch[1].trim();
+
+  let parsed: { alternative?: Record<string, unknown> | null; rationale?: string } | null = null;
+  try { parsed = JSON.parse(cleaned); } catch { return null; }
+  if (!parsed?.alternative) {
+    console.log(`[Planner] Pivot for ${step.id}: LLM declined (no viable alternative)`);
+    return null;
+  }
+
+  const alt = parsed.alternative;
+  const altType = (alt.type as string) === 'delegate' ? 'delegate' : 'tool';
+
+  if (altType === 'delegate') {
+    const altChoom = String(alt.choomName || '').trim();
+    const altTask = String(alt.task || '').trim();
+    if (!altChoom || !altTask) return null;
+    if (callerChoomName && altChoom.toLowerCase() === callerChoomName.toLowerCase()) {
+      console.log(`[Planner] Pivot for ${step.id}: rejected — self-delegation`);
+      return null;
+    }
+    return {
+      type: 'delegate',
+      toolName: '',
+      args: {},
+      choomName: altChoom,
+      task: altTask,
+      description: String(alt.description || step.description).slice(0, 80),
+    };
+  }
+
+  const altToolName = String(alt.toolName || '').trim();
+  if (!altToolName) return null;
+  if (!registry.getSkillForTool(altToolName)) {
+    console.log(`[Planner] Pivot for ${step.id}: rejected — unknown tool "${altToolName}"`);
+    return null;
+  }
+  // Reject if the alternative is byte-identical to the original (no real pivot)
+  const altArgs = (alt.args as Record<string, unknown>) || {};
+  if (
+    altToolName === step.toolName &&
+    JSON.stringify(altArgs) === JSON.stringify(step.args)
+  ) {
+    console.log(`[Planner] Pivot for ${step.id}: rejected — alternative identical to original`);
+    return null;
+  }
+  return {
+    type: 'tool',
+    toolName: altToolName,
+    args: altArgs,
+    choomName: undefined,
+    task: undefined,
+    description: String(alt.description || step.description).slice(0, 80),
+  };
+}
+
 async function executeStep(
   step: PlanStep,
   plan: ExecutionPlan,
@@ -503,7 +643,12 @@ export async function executePlan(
   plan: ExecutionPlan,
   executeToolFn: (toolCall: ToolCall, iteration: number) => Promise<ToolResult>,
   watcher: WatcherLoop,
-  send: PlanStreamCallback
+  send: PlanStreamCallback,
+  pivotCtx?: {
+    registry: SkillRegistry;
+    llmClient: LLMClientLike;
+    callerChoomName?: string;
+  },
 ): Promise<{ succeeded: number; failed: number; results: Map<string, ToolResult> }> {
   const completedSteps = new Map<string, ToolResult>();
   const completedIds = new Set<string>();
@@ -604,10 +749,59 @@ export async function executePlan(
         }
 
         case 'retry': {
-          // If we get here, retries were exhausted inside executeStep
-          step.status = 'failed';
-          failed++;
-          send({ type: 'plan_step_update', stepId: step.id, status: 'failed', result: `Max retries (${plan.maxRetries}) exceeded` });
+          // Retries were exhausted inside executeStep. Before giving up, try
+          // a pivot: ask the LLM for an alternative shape (different tool or
+          // different args, same outcome). Only attempt once per step. If a
+          // viable alternative comes back, mutate the step in-place and
+          // requeue (status='pending') so the next wave picks it up. If not,
+          // mark failed and cascade as before.
+          const pivotErrMessage = result.error || 'Max retries exceeded with no specific error';
+          let pivoted = false;
+          if (pivotCtx && !step.pivoted) {
+            try {
+              const alt = await pivotStep({
+                step,
+                errorMessage: pivotErrMessage,
+                plan,
+                registry: pivotCtx.registry,
+                llmClient: pivotCtx.llmClient,
+                callerChoomName: pivotCtx.callerChoomName,
+              });
+              if (alt) {
+                console.log(
+                  `[Planner] 🔀 Pivoting ${step.id}: ${step.type === 'delegate' ? 'delegate→' + step.choomName : step.toolName} → ${alt.type === 'delegate' ? 'delegate→' + alt.choomName : alt.toolName}`,
+                );
+                step.pivotedFrom = {
+                  toolName: step.toolName,
+                  args: step.args,
+                  reason: pivotErrMessage.slice(0, 200),
+                };
+                step.type = alt.type;
+                step.toolName = alt.toolName;
+                step.args = alt.args;
+                step.choomName = alt.choomName;
+                step.task = alt.task;
+                step.description = alt.description;
+                step.pivoted = true;
+                step.retries = 0;       // fresh retry budget for the new shape
+                step.status = 'pending';
+                send({
+                  type: 'plan_step_update',
+                  stepId: step.id,
+                  status: 'pending',
+                  description: `Pivoted to: ${alt.type === 'delegate' ? `delegate→${alt.choomName}` : alt.toolName}`,
+                });
+                pivoted = true;
+              }
+            } catch (pivotErr) {
+              console.warn(`[Planner] Pivot attempt for ${step.id} threw:`, pivotErr instanceof Error ? pivotErr.message : pivotErr);
+            }
+          }
+          if (!pivoted) {
+            step.status = 'failed';
+            failed++;
+            send({ type: 'plan_step_update', stepId: step.id, status: 'failed', result: `Max retries (${plan.maxRetries}) exceeded` });
+          }
           break;
         }
 

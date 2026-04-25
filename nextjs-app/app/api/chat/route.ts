@@ -4560,7 +4560,11 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                   return result;
                 };
 
-                const planResult = await executePlan(plan, planToolExecutor, watcher, send);
+                const planResult = await executePlan(plan, planToolExecutor, watcher, send, {
+                  registry,
+                  llmClient: plannerClient || llmClient,
+                  callerChoomName: choom.name,
+                });
                 // Only mark plan as "executed" if it actually succeeded at something.
                 // A completely failed plan should let the model recover via the agentic loop.
                 planExecuted = planResult.succeeded > 0;
