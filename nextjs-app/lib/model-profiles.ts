@@ -176,7 +176,7 @@ export const BUILTIN_LLM_PROFILES: LLMModelProfile[] = [
     topK: 20,
   },
   {
-    modelId: 'qwen3.6-35b-a3b',
+    modelId: 'qwen/qwen3.6-35b-a3b',
     label: 'Qwen 3.6 35B-A3B (Local)',
     builtIn: true,
     temperature: 0.7,
@@ -184,6 +184,7 @@ export const BUILTIN_LLM_PROFILES: LLMModelProfile[] = [
     maxTokens: 4096,
     contextLength: 131072,
     topK: 20,
+    enableThinking: false,
   },
   {
     modelId: 'minimaxai/minimax-m2.7',
@@ -404,7 +405,7 @@ export const BUILTIN_VISION_PROFILES: VisionModelProfile[] = [
     supportedFormats: ['png', 'jpeg', 'webp'],
   },
   {
-    modelId: 'qwen3.6-35b-a3b',
+    modelId: 'qwen/qwen3.6-35b-a3b',
     label: 'Qwen 3.6 35B-A3B Vision (Local, MoE 3B active)',
     builtIn: true,
     maxTokens: 4096,
