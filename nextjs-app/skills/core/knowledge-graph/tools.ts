@@ -110,13 +110,17 @@ export const tools: ToolDefinition[] = [
   {
     name: 'query_knowledge_graph',
     description:
-      'Run a predefined graph query to find relationships between engineering entities. ' +
-      'Query types: "material_standards" (what standards govern a material?), ' +
-      '"process_materials" (what materials work with a process?), ' +
-      '"standard_cross_references" (what standards reference each other?), ' +
-      '"material_properties" (properties of a specific material), ' +
-      '"equipment_requirements" (what applies to an equipment type?), ' +
-      '"entity_pages" (all pages mentioning a specific entity).',
+      'Look up relationships for SPECIFIC NAMED engineering entities (codes, standards, ' +
+      'alloys, equipment types) that already exist in the curated graph. You must know the ' +
+      'exact entity name — this is a structured reference lookup, not a discovery tool. ' +
+      'For "latest/recent/weirdest/new" queries, novelty, or unnamed materials, use ' +
+      'web_search or scrape_page_content instead. ' +
+      'Query types: "material_standards" (what standards govern <named material>?), ' +
+      '"process_materials" (what materials work with <named process>?), ' +
+      '"standard_cross_references" (what standards reference <named standard>?), ' +
+      '"material_properties" (properties of <named material>), ' +
+      '"equipment_requirements" (what applies to <named equipment type>?), ' +
+      '"entity_pages" (all pages mentioning <named entity>).',
     parameters: {
       type: 'object',
       properties: {

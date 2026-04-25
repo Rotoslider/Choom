@@ -237,6 +237,39 @@ export async function executeForgeRAGTool(
       const queryType = String(args.query_type || '');
       const parameters = (args.parameters || {}) as Record<string, string>;
       if (!queryType) return { success: false, reason: 'query_type is required' };
+
+      // Pre-flight: validate that the required key for this query_type is present.
+      // Without this, ForgeRAG returns a terse "Missing required parameter X" 400
+      // and the LLM often gives up. Catching it here lets us return a richer hint
+      // that includes the exact key, an example, and a fallback suggestion.
+      const REQUIRED_KEY_BY_QUERY_TYPE: Record<string, { key: string; example: string }> = {
+        material_standards: { key: 'material', example: 'Alloy 625' },
+        process_materials: { key: 'process', example: 'GTAW' },
+        standard_cross_references: { key: 'standard', example: 'ASME BPVC Section IX' },
+        material_properties: { key: 'material', example: 'ASTM A36' },
+        equipment_requirements: { key: 'equipment', example: 'pressure vessel' },
+        entity_pages: { key: 'entity_name', example: 'C12000' },
+      };
+      const spec = REQUIRED_KEY_BY_QUERY_TYPE[queryType];
+      if (!spec) {
+        return {
+          success: false,
+          reason:
+            `Unknown query_type "${queryType}". Valid: ${Object.keys(REQUIRED_KEY_BY_QUERY_TYPE).join(', ')}.`,
+        };
+      }
+      const value = parameters[spec.key];
+      if (!value || !String(value).trim()) {
+        return {
+          success: false,
+          reason:
+            `query_knowledge_graph(query_type="${queryType}") needs parameters.${spec.key}. ` +
+            `Example: query_knowledge_graph({ query_type: "${queryType}", parameters: { ${spec.key}: "${spec.example}" } }). ` +
+            `This tool looks up specific named engineering entities (codes, standards, alloys). ` +
+            `For discovery, news, or "latest/weirdest/recent" queries, use web_search or scrape_page_content instead.`,
+        };
+      }
+
       return client.graphQuery(queryType, parameters, {
         limit: Number(args.limit) || 50,
       });
