@@ -20,6 +20,7 @@ import {
   Music,
   Workflow,
   Home,
+  FileText,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -42,6 +43,7 @@ import { AutomationsSettings } from '@/components/settings/automations-settings'
 import { HomeAssistantSettings } from '@/components/settings/homeassistant-settings';
 import { AvatarSettingsPanel } from '@/components/settings/avatar-settings';
 import { SelfFollowupsSettings } from '@/components/settings/self-followups-settings';
+import { BridgeLogSettings } from '@/components/settings/bridge-log-settings';
 import { cn } from '@/lib/utils';
 
 type Section =
@@ -62,6 +64,7 @@ type Section =
   | 'automations'
   | 'home-assistant'
   | 'avatar'
+  | 'bridge-log'
   | 'appearance';
 
 const sections: { id: Section; label: string; icon: React.ReactNode }[] = [
@@ -82,6 +85,7 @@ const sections: { id: Section; label: string; icon: React.ReactNode }[] = [
   { id: 'automations', label: 'Automations', icon: <Workflow className="h-4 w-4" /> },
   { id: 'home-assistant', label: 'Smart Home', icon: <Home className="h-4 w-4" /> },
   { id: 'avatar', label: 'Avatar', icon: <Eye className="h-4 w-4" /> },
+  { id: 'bridge-log', label: 'Bridge Log', icon: <FileText className="h-4 w-4" /> },
   { id: 'appearance', label: 'Theme', icon: <Palette className="h-4 w-4" /> },
 ];
 
@@ -151,6 +155,7 @@ export default function SettingsPage() {
             {activeSection === 'automations' && <AutomationsSettings />}
             {activeSection === 'home-assistant' && <HomeAssistantSettings />}
             {activeSection === 'avatar' && <AvatarSettingsPanel />}
+            {activeSection === 'bridge-log' && <BridgeLogSettings />}
             {activeSection === 'appearance' && <AppearanceSettings />}
           </div>
         </ScrollArea>

@@ -27,14 +27,21 @@ from choom_client import get_choom_client, get_tts_client, get_stt_client
 from scheduler import get_scheduler
 from google_client import get_google_client
 
-# Configure logging
+# Configure logging — stream + rotating file so the GUI log viewer has a stable target
+_log_handlers = [logging.StreamHandler()]
+try:
+    from logging.handlers import RotatingFileHandler
+    os.makedirs(os.path.dirname(config.LOG_FILE), exist_ok=True)
+    _log_handlers.append(
+        RotatingFileHandler(config.LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=3)
+    )
+except Exception as _log_err:  # pragma: no cover - best-effort
+    print(f"[bridge] Could not attach file log handler: {_log_err}", file=sys.stderr)
+
 logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        # logging.FileHandler(config.LOG_FILE) if os.path.exists(os.path.dirname(config.LOG_FILE)) else logging.NullHandler()
-    ]
+    handlers=_log_handlers,
 )
 logger = logging.getLogger(__name__)
 

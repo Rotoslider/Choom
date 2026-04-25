@@ -5,6 +5,8 @@ import prisma from '@/lib/db';
 
 const QUEUE_DIR = path.resolve(process.cwd(), 'data', 'self_followups');
 
+type FollowupStatus = 'pending' | 'fired' | 'cancelled' | 'error';
+
 interface QueueEntry {
   id: string;
   choom_id: string;
@@ -15,6 +17,15 @@ interface QueueEntry {
   created_at: string;
   consumed: boolean;
   fired_at?: string;
+  cancelled_at?: string;
+  status?: FollowupStatus;
+}
+
+function deriveStatus(e: QueueEntry): FollowupStatus {
+  if (e.status) return e.status;
+  if (!e.consumed) return 'pending';
+  if (e.fired_at) return 'fired';
+  return 'cancelled';
 }
 
 function readAllQueues(): QueueEntry[] {
@@ -53,16 +64,28 @@ export async function GET() {
     const enriched = all.map(e => ({
       ...e,
       choom_name: nameById.get(e.choom_id) || e.choom_name,
+      status: deriveStatus(e),
     }));
 
-    // Sort: pending first (by trigger_at asc), then fired (by fired_at/trigger_at desc)
-    const pending = enriched.filter(e => !e.consumed).sort((a, b) => a.trigger_at.localeCompare(b.trigger_at));
-    const fired = enriched.filter(e => e.consumed).sort((a, b) => (b.fired_at || b.trigger_at).localeCompare(a.fired_at || a.trigger_at));
+    const pending = enriched
+      .filter(e => e.status === 'pending')
+      .sort((a, b) => a.trigger_at.localeCompare(b.trigger_at));
+    const fired = enriched
+      .filter(e => e.status === 'fired')
+      .sort((a, b) => (b.fired_at || b.trigger_at).localeCompare(a.fired_at || a.trigger_at));
+    const cancelled = enriched
+      .filter(e => e.status === 'cancelled' || e.status === 'error')
+      .sort((a, b) => (b.cancelled_at || b.trigger_at).localeCompare(a.cancelled_at || a.trigger_at));
 
     return NextResponse.json({
       pending,
-      fired: fired.slice(0, 30), // cap the fired list
-      counts: { pending: pending.length, fired_recent: Math.min(fired.length, 30) },
+      fired: fired.slice(0, 30),
+      cancelled: cancelled.slice(0, 30),
+      counts: {
+        pending: pending.length,
+        fired_recent: Math.min(fired.length, 30),
+        cancelled_recent: Math.min(cancelled.length, 30),
+      },
     });
   } catch (err) {
     return NextResponse.json(
@@ -97,6 +120,8 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ error: `No pending followup with id "${id}"` }, { status: 404 });
     }
     entries[idx].consumed = true;
+    entries[idx].status = 'cancelled';
+    entries[idx].cancelled_at = new Date().toISOString();
     writeChoomQueue(choomId, entries);
 
     return NextResponse.json({ success: true, id });
