@@ -117,7 +117,8 @@ export async function createPlan(
   messages: ChatMessage[],
   registry: SkillRegistry,
   llmClient: LLMClientLike,
-  tools: ToolDefinition[]
+  tools: ToolDefinition[],
+  callerChoomName?: string,
 ): Promise<ExecutionPlan | null> {
   const skillSummaries = registry.getLevel1Summaries();
 
@@ -180,8 +181,10 @@ Rules:
 - Use {{step_N.result.field}} syntax in args/task to reference previous step outputs
 - Limit web_search to 2-3 calls max per plan to avoid rate limiting. Prefer delegating research to other Chooms
 - If the request is simple (1-2 steps), respond with: {"goal": null}
-- Maximum 10 steps per plan
-- Only use tools from the available skills listed above
+- **Prefer 2-4 steps. Maximum 10.** Plans with 6+ steps are rare and only justified when each step is independently verifiable — bigger plans usually mean over-decomposition. Open-ended creative requests ("surprise me") are NOT a license for 10 steps; pick a single creative thread and execute it tightly.
+- Only use tools from the available skills listed above${callerChoomName ? `
+- **YOU ARE ${callerChoomName}.** Do NOT generate a delegate step with choomName="${callerChoomName}" — you cannot delegate to yourself. If a step needs ${callerChoomName}'s capability, make it a "tool" step using ${callerChoomName}'s own tools, not a "delegate" step.` : ''}
+- Every "tool" step MUST have a non-empty toolName. Every "delegate" step MUST have a non-empty choomName + task. Steps missing these fields will be rejected and the plan will be discarded.
 - Keep "description" and "expectedOutcome" SHORT — under 80 chars each. The whole plan must fit in the response token budget; verbose descriptions cause JSON truncation and the plan is discarded`,
   };
 
@@ -246,13 +249,41 @@ Rules:
       task: (s.task as string) || undefined,
     }));
 
-    // Validate that all referenced tools exist
+    // Step-level validation: reject the entire plan if any step is malformed.
+    // A bad step early in the dependency chain cascades — one self-delegation
+    // or empty toolName can knock out 6+ dependent steps. Better to fall back
+    // to the simple agentic loop than execute a half-broken plan.
+    const validationErrors: string[] = [];
     for (const step of steps) {
-      const skill = registry.getSkillForTool(step.toolName);
-      if (!skill) {
-        console.warn(`[Planner] Step ${step.id} references unknown tool: ${step.toolName}`);
-        // Don't fail the whole plan; we'll handle it at execution time
+      if (step.type === 'delegate') {
+        if (!step.choomName || !String(step.choomName).trim()) {
+          validationErrors.push(`${step.id}: delegate step has empty choomName`);
+          continue;
+        }
+        if (callerChoomName && step.choomName.toLowerCase() === callerChoomName.toLowerCase()) {
+          validationErrors.push(`${step.id}: cannot delegate to yourself (${callerChoomName}) — use tools directly`);
+          continue;
+        }
+        if (!step.task || !String(step.task).trim()) {
+          validationErrors.push(`${step.id}: delegate step has empty task`);
+        }
+      } else {
+        // type === 'tool'
+        if (!step.toolName || !String(step.toolName).trim()) {
+          validationErrors.push(`${step.id}: tool step has empty toolName`);
+          continue;
+        }
+        const skill = registry.getSkillForTool(step.toolName);
+        if (!skill) {
+          validationErrors.push(`${step.id}: unknown tool "${step.toolName}"`);
+        }
       }
+    }
+    if (validationErrors.length > 0) {
+      console.warn(`[Planner] Rejecting plan — ${validationErrors.length} validation error(s):`);
+      for (const e of validationErrors) console.warn(`  - ${e}`);
+      console.warn('[Planner] Falling back to simple agentic loop.');
+      return null;
     }
 
     return {
