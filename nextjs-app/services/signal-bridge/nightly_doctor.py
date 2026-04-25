@@ -675,6 +675,12 @@ def run_diagnostics(lookback_days: int = 1) -> str:
 
     formatted = format_report(report)
 
+    # Stamp the formatted Signal text + generation time INTO the JSON so the
+    # GUI report viewer can render historical reports without re-running the
+    # Python formatter.
+    report["formatted_text"] = formatted
+    report["generated_at"] = datetime.now().isoformat()
+
     # Also save the raw report as JSON for historical analysis
     report_dir = TRACES_DIR / "reports"
     report_dir.mkdir(parents=True, exist_ok=True)

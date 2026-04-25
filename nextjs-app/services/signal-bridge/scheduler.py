@@ -2211,6 +2211,31 @@ Be practical. Only work on things that can actually be accomplished with the too
             total_dl = sum(len(r["downloaded"]) for r in results)
             total_err = sum(len(r["errors"]) for r in results)
 
+            # Persist the run report so it's viewable in the GUI Logs tab.
+            try:
+                import json as _json
+                from datetime import datetime as _dt
+                reports_dir = os.path.join(
+                    os.path.dirname(__file__), "..", "..", "data", "yt_reports"
+                )
+                os.makedirs(reports_dir, exist_ok=True)
+                ts = _dt.now()
+                report_path = os.path.join(
+                    reports_dir, f"yt-{ts.strftime('%Y-%m-%d_%H%M%S')}.json"
+                )
+                with open(report_path, "w") as fp:
+                    _json.dump({
+                        "generated_at": ts.isoformat(),
+                        "total_downloaded": total_dl,
+                        "total_errors": total_err,
+                        "channels_run": len(enabled_channels),
+                        "max_per_channel": max_per,
+                        "results": results,
+                        "formatted_text": summary,
+                    }, fp, indent=2, default=str)
+            except Exception as save_err:
+                logger.warning(f"YouTube download: failed to save report — {save_err}")
+
             if total_dl > 0 or total_err > 0:
                 self.send_message_to_owner(
                     summary,
