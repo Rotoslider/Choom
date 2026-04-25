@@ -5417,6 +5417,14 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               if (extracted) {
                 console.log(`   🧲 ${choomTag} Extracted tool call from text: ${extracted.name}(${JSON.stringify(extracted.arguments).slice(0, 80)})`);
                 toolCalls.push(extracted);
+              } else if (iterationContent.length > 0) {
+                // Diagnostic: model produced text but no tool_call AND our extractor
+                // failed. Often means the model emitted tool calls in a format we
+                // don't recognize (different XML wrapper, raw JSON without markers,
+                // model-specific tokens). Log a snippet so we can fingerprint the
+                // format and add a parser if it recurs.
+                const snippet = iterationContent.slice(0, 400).replace(/\s+/g, ' ').trim();
+                console.log(`   🔬 ${choomTag} No tool_call detected — content snippet (${iterationContent.length} chars): ${snippet}`);
               }
             }
 
