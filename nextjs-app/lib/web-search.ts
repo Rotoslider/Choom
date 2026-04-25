@@ -62,7 +62,34 @@ export class WebSearchService {
         throw error;
       }
     } else {
-      return this.searchSearXNG(query, limit);
+      // SearXNG-primary path. Fallback chain: SearXNG → Brave → SerpAPI when
+      // SearXNG returns a 429-shaped error (real 429, 5xx, OR our synthetic
+      // 'upstream engines blocked' detection from searchSearXNG above).
+      try {
+        return await this.searchSearXNG(query, limit);
+      } catch (error) {
+        const errMsg = error instanceof Error ? error.message : String(error);
+        if (!/(?:429|5\d\d|upstream engines blocked)/i.test(errMsg)) throw error;
+
+        if (this.settings.braveApiKey) {
+          console.warn(`   🔄 SearXNG failed (${errMsg.slice(0, 100)}), falling back to Brave`);
+          try {
+            return await this.searchBrave(query, limit);
+          } catch (braveError) {
+            const braveMsg = braveError instanceof Error ? braveError.message : String(braveError);
+            if (this.settings.serpApiKey && /(?:429|5\d\d)/.test(braveMsg)) {
+              console.warn(`   🔄 Brave also failed (${braveMsg}), falling back to SerpAPI`);
+              return this.searchSerpApi(query, limit);
+            }
+            throw braveError;
+          }
+        }
+        if (this.settings.serpApiKey) {
+          console.warn(`   🔄 SearXNG failed (${errMsg.slice(0, 100)}), falling back to SerpAPI`);
+          return this.searchSerpApi(query, limit);
+        }
+        throw error;
+      }
     }
   }
 
@@ -182,6 +209,35 @@ export class WebSearchService {
         snippet: r.content,
         publishedDate: r.publishedDate,
       }));
+
+    // Detect upstream-engine blocks. SearXNG returns 200 OK even when its
+    // configured engines (Brave/Google/DDG/Startpage) are individually rate-
+    // limited or CAPTCHA'd, so a thin/empty response here usually means the
+    // upstreams are blocked rather than 'no results found'. Surface this as
+    // a 429-shaped error so the search() fallback chain can route to a
+    // direct provider (Brave API / SerpAPI) with its own clean IP.
+    const unresponsive = (data.unresponsive_engines || data.unresponsive || []) as Array<unknown>;
+    const upstreamBlockRe = /too many requests|CAPTCHA|access denied|suspended|rate.?limit|forbidden|blocked|429/i;
+    const blockedEngines: string[] = [];
+    for (const entry of unresponsive) {
+      if (Array.isArray(entry)) {
+        const [name, reason] = entry as [unknown, unknown];
+        const reasonStr = String(reason || '');
+        if (upstreamBlockRe.test(reasonStr)) {
+          blockedEngines.push(`${name}: ${reasonStr.slice(0, 60)}`);
+        }
+      } else if (typeof entry === 'string' && upstreamBlockRe.test(entry)) {
+        blockedEngines.push(entry.slice(0, 80));
+      }
+    }
+    // If most engines are unresponsive AND we got essentially nothing back,
+    // treat as a 429 to trigger fallback. Allow legitimate empty results
+    // (e.g., obscure query) — we only fail when the engines themselves block.
+    if (blockedEngines.length >= 2 && results.length < 3) {
+      throw new Error(
+        `SearXNG 429: upstream engines blocked (${blockedEngines.join('; ')}). Results: ${results.length}. Falling back to direct provider.`,
+      );
+    }
 
     return {
       query,

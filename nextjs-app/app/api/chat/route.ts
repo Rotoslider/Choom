@@ -6182,11 +6182,20 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               }
             }
 
-            // Phase 2: Partition pending calls into parallel-safe and sequential
-            const parallelCalls = pendingCalls.filter(tc => PARALLEL_SAFE.has(tc.name));
+            // Phase 2: Partition pending calls into:
+            //   parallelCalls    — read-only tools that run concurrently
+            //   webSearchCalls   — read-only but rate-limited; serialize within
+            //                       a batch to avoid hammering SearXNG/upstream
+            //                       engines (Brave/Google trip 429s when 5 calls
+            //                       fan out to ~30 upstream requests/sec)
+            //   sequentialCalls  — mutating tools, one at a time
+            const parallelCalls = pendingCalls.filter(
+              tc => PARALLEL_SAFE.has(tc.name) && tc.name !== 'web_search',
+            );
+            const webSearchCalls = pendingCalls.filter(tc => tc.name === 'web_search');
             const sequentialCalls = pendingCalls.filter(tc => !PARALLEL_SAFE.has(tc.name));
 
-            // Execute parallel-safe tools concurrently
+            // Execute parallel-safe (non-search) tools concurrently
             const parallelResults = new Map<string, ToolResult>();
             if (parallelCalls.length > 1) {
               console.log(`   ⚡ Executing ${parallelCalls.length} read-only tools in parallel: ${parallelCalls.map(tc => tc.name).join(', ')}`);
@@ -6200,6 +6209,21 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               const result = await executeAndProcess(parallelCalls[0]);
               parallelResults.set(parallelCalls[0].id, result);
               allToolResults.push(result);
+            }
+
+            // Execute web_search calls SEQUENTIALLY (N=1 in flight). Each
+            // search completes before the next starts, so upstream engines
+            // see a steady trickle instead of a burst. No cap on total
+            // searches per request — model can do many, just not at once.
+            if (webSearchCalls.length > 0) {
+              if (webSearchCalls.length > 1) {
+                console.log(`   🔍 Executing ${webSearchCalls.length} web_search calls SEQUENTIALLY (N=1 in flight to protect SearXNG/upstreams)`);
+              }
+              for (const tc of webSearchCalls) {
+                const result = await executeAndProcess(tc);
+                parallelResults.set(tc.id, result);
+                allToolResults.push(result);
+              }
             }
 
             // Execute sequential (mutating) tools one at a time
