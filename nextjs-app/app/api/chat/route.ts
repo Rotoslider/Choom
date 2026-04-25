@@ -4878,39 +4878,44 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             const bufferForDedup = allToolCalls.length > 0 && iterationTexts.length > 0;
 
             const streamPromise = (async () => {
-              let unknownDeltaSamplesLogged = 0;
+              let reasoningContentSalvaged = false;
               for await (const chunk of llmClient.streamChat(currentMessages, activeTools, undefined, toolChoiceOverride)) {
-                const hasContent = !!(chunk.choices?.[0]?.delta?.content || chunk.choices?.[0]?.delta?.tool_calls);
-                resetInactivity(hasContent); // reset timer; only switch mode on actual content
-                if (!chunk.choices || !chunk.choices[0]) continue;
+                if (!chunk.choices || !chunk.choices[0]) {
+                  // Final usage-only chunks have no choices; capture below.
+                  if (chunk.usage) {
+                    totalPromptTokens += chunk.usage.prompt_tokens || 0;
+                    totalCompletionTokens += chunk.usage.completion_tokens || 0;
+                  }
+                  continue;
+                }
                 const choice = chunk.choices[0];
 
-                // Diagnostic: chunk arrived with a delta that has neither
-                // content nor tool_calls in the expected fields. Log the raw
-                // delta keys + a value sample so we can see what unknown
-                // field the model/server is using (e.g. reasoning_content,
-                // thinking, function_call, etc.). Cap to avoid spam.
-                const deltaObj = (choice.delta || {}) as Record<string, unknown>;
-                const deltaKeys = Object.keys(deltaObj);
-                const hasKnownPayload = !!(deltaObj.content || deltaObj.tool_calls);
+                // Some local models (Qwen 3.6 35B-A3B observed) route their
+                // entire completion — including <tool_call> XML — through
+                // delta.reasoning_content instead of delta.content, even when
+                // the request explicitly set chat_template_kwargs.enable_thinking
+                // = false. When the user disabled thinking, treat any
+                // reasoning_content as if it were regular content so the
+                // existing tool-call filters can parse it. Models that
+                // legitimately use reasoning_content for thinking will only
+                // emit it when thinking is enabled — preserving their behavior.
+                const deltaAny = choice.delta as { reasoning_content?: string } & typeof choice.delta;
                 if (
-                  !hasKnownPayload &&
-                  deltaKeys.length > 0 &&
-                  !deltaKeys.every(k => k === 'role') &&
-                  unknownDeltaSamplesLogged < 3
+                  llmSettings.enableThinking === false &&
+                  typeof deltaAny.reasoning_content === 'string' &&
+                  deltaAny.reasoning_content.length > 0 &&
+                  !choice.delta.content
                 ) {
-                  unknownDeltaSamplesLogged++;
-                  const sample: Record<string, string> = {};
-                  for (const k of deltaKeys) {
-                    const v = deltaObj[k];
-                    sample[k] = typeof v === 'string'
-                      ? v.slice(0, 120)
-                      : JSON.stringify(v).slice(0, 120);
+                  if (!reasoningContentSalvaged) {
+                    console.log(`   🔄 ${choomTag} Salvaging delta.reasoning_content as content (enableThinking=false but model still emits via reasoning channel)`);
+                    reasoningContentSalvaged = true;
                   }
-                  console.log(
-                    `   🔬 ${choomTag} Unknown delta fields (sample ${unknownDeltaSamplesLogged}/3): ${JSON.stringify(sample)}`,
-                  );
+                  // Mutate so the existing content path picks it up below.
+                  choice.delta.content = deltaAny.reasoning_content;
                 }
+
+                const hasContent = !!(choice.delta.content || choice.delta.tool_calls);
+                resetInactivity(hasContent);
 
                 if (choice.delta.content) {
                   let visible = thinkFilter(choice.delta.content);
