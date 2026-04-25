@@ -815,10 +815,13 @@ function tryRescueWriteFile(raw: string | undefined): Record<string, unknown> | 
 
   // Strategy 3: No JSON structure at all, but we know it's workspace_write_file.
   // Check if the raw string looks like code with a recognizable file path in the
-  // first or last few lines (models sometimes include the filename as a comment)
+  // first or last few lines (models sometimes include the filename as a comment).
+  // The trailing (?=\s|$) anchor prevents URL-shaped matches: "github.com" used
+  // to capture as "github.c" because \S+ greedy-backtracked into the .c branch.
+  // We also reject anything containing :// (URL) or whitespace before the path.
   const firstLine = raw.split('\n')[0] || '';
-  const fileExtMatch = firstLine.match(/(?:\/\/|#|--)\s*(?:File:\s*)?(\S+\.(?:ino|py|ts|js|cpp|c|h|yaml|yml|json|md))/i);
-  if (fileExtMatch) {
+  const fileExtMatch = firstLine.match(/(?:\/\/|#|--)\s*(?:File:\s*)?(\S+\.(?:ino|py|ts|js|cpp|c|h|yaml|yml|json|md))(?=\s|$)/i);
+  if (fileExtMatch && !/:\/\//.test(fileExtMatch[1])) {
     console.log(`   🔧 Rescued workspace_write_file (comment path): path="${fileExtMatch[1]}", content=${raw.length} chars`);
     return { path: fileExtMatch[1], content: raw };
   }
@@ -4625,6 +4628,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           const failedCallCache = new Map<string, string>(); // Cache: dedupKey → error message
           const toolCallCounts = new Map<string, number>(); // Per-tool name call counter
           const brokenTools = new Set<string>(); // Tool names blocked due to config/auth errors
+          const toolReplacementHints = new Map<string, string>(); // failedTool → "use X with Y" extracted from error messages
           const toolFailureCounts = new Map<string, number>(); // Per-tool name failure counter
           let consecutiveFailures = 0; // Abort after MAX_CONSECUTIVE_FAILURES
           const MAX_CONSECUTIVE_FAILURES = 6;
@@ -5854,7 +5858,20 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               // --- Broken tool blocking (config error or repeated failures) ---
               if (brokenTools.has(tc.name)) {
                 console.log(`   🚫 ${tc.name} blocked (broken tool — will not retry)`);
-                return { toolCallId: tc.id, name: tc.name, result: null, error: `${tc.name} has been disabled for this request because it failed repeatedly. Do NOT call ${tc.name} again. Tell the user what went wrong and suggest alternatives.` };
+                // If past errors explicitly told us what tool to use instead,
+                // surface that guidance in the block message — otherwise the
+                // model often hits the cap before realizing the error was
+                // pointing it at a specific replacement.
+                const replacementHint = toolReplacementHints.get(tc.name);
+                const hintLine = replacementHint
+                  ? ` ${replacementHint} (the prior errors explicitly told you this — follow them.)`
+                  : ' Tell the user what went wrong and suggest alternatives.';
+                return {
+                  toolCallId: tc.id,
+                  name: tc.name,
+                  result: null,
+                  error: `${tc.name} has been disabled for this request because it failed repeatedly. Do NOT call ${tc.name} again.${hintLine}`,
+                };
               }
 
               // --- Failed call cache ---
@@ -5922,6 +5939,27 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 const isPathError = /ENOENT|no such file or directory|file not found|path not found|does not exist|not found in project/i.test(result.error);
                 errorClass = isConfigError ? 'config' : isParamError ? 'param' : isGpuBusy ? 'gpu_busy' : isNoData ? 'no_data' : isPathError ? 'path' : 'other';
                 failedCallCache.set(dedupKey, result.error);
+
+                // Capture "Use TOOL_NAME ..." guidance from error messages.
+                // When a tool's error explicitly tells the model which tool
+                // to call instead, save it so we can surface it on the
+                // broken-tool block — otherwise the model retries the
+                // wrong tool until the per-tool cap kicks in (Aloy hit
+                // read_document 4× before giving up despite every error
+                // saying "Use workspace_read_file").
+                const useHintMatch = result.error.match(
+                  /\bUse\s+([a-z_][a-z0-9_]*)\b(?:\s+with\s+([^.]+))?/i,
+                );
+                if (useHintMatch) {
+                  const suggestedTool = useHintMatch[1];
+                  const suggestedArgs = useHintMatch[2]?.trim();
+                  if (suggestedTool !== tc.name) {
+                    const hint = suggestedArgs
+                      ? `Use \`${suggestedTool}\` with ${suggestedArgs.slice(0, 200)}`
+                      : `Use \`${suggestedTool}\` instead.`;
+                    toolReplacementHints.set(tc.name, hint);
+                  }
+                }
                 if (isNoData) {
                   // No data found is informational — the tool works, the entity just has no data.
                   // Don't count toward failure caps (prevents blocking ha_get_history etc.)
