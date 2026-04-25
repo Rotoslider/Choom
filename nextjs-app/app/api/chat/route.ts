@@ -4913,12 +4913,14 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 // entire completion — including <tool_call> XML — through
                 // delta.reasoning_content instead of delta.content, even when
                 // the request explicitly set chat_template_kwargs.enable_thinking
-                // = false. When the user disabled thinking, treat any
-                // reasoning_content as if it were regular content so the
-                // existing tool-call filters can parse it. Models that
-                // legitimately use reasoning_content for thinking will only
-                // emit it when thinking is enabled — preserving their behavior.
+                // = false. When the user disabled thinking, route reasoning
+                // tokens through the tool-call filters so the <tool_call>
+                // blocks get captured — but the leftover prose IS still the
+                // model's chain-of-thought, so we MUST NOT send it to the
+                // user / TTS / DB. Track which deltas came from this channel
+                // and discard their non-tool-call remainder.
                 const deltaAny = choice.delta as { reasoning_content?: string } & typeof choice.delta;
+                let chunkIsReasoningOnly = false;
                 if (
                   llmSettings.enableThinking === false &&
                   typeof deltaAny.reasoning_content === 'string' &&
@@ -4926,11 +4928,11 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                   !choice.delta.content
                 ) {
                   if (!reasoningContentSalvaged) {
-                    console.log(`   🔄 ${choomTag} Salvaging delta.reasoning_content as content (enableThinking=false but model still emits via reasoning channel)`);
+                    console.log(`   🔄 ${choomTag} Routing delta.reasoning_content through tool-call filters (enableThinking=false; reasoning prose will be hidden)`);
                     reasoningContentSalvaged = true;
                   }
-                  // Mutate so the existing content path picks it up below.
                   choice.delta.content = deltaAny.reasoning_content;
+                  chunkIsReasoningOnly = true;
                 }
 
                 const hasContent = !!(choice.delta.content || choice.delta.tool_calls);
@@ -4947,9 +4949,19 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                       visible = gemmaToolCallFilter.filter(visible);
                     }
                     if (visible) {
-                      iterationContent += visible;
-                      if (!bufferForDedup) {
-                        send({ type: 'content', content: visible });
+                      // Reasoning-only chunks: tool-call filters have already
+                      // captured any <tool_call> blocks for parsing. The
+                      // remaining `visible` prose is the model's internal
+                      // monologue ("The user is asking...", "Let me check...",
+                      // "Wait, looking back..."). Drop it on the floor —
+                      // don't append to iterationContent, don't stream, don't
+                      // hand it to TTS. The agentic loop still works because
+                      // tool calls were captured separately.
+                      if (!chunkIsReasoningOnly) {
+                        iterationContent += visible;
+                        if (!bufferForDedup) {
+                          send({ type: 'content', content: visible });
+                        }
                       }
                     }
                   } else if (choice.delta.content.length > 0) {
