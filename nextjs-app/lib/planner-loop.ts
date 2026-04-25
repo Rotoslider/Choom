@@ -48,6 +48,9 @@ export interface ExecutionPlan {
   goal: string;
   steps: PlanStep[];
   maxRetries: number;
+  // True after rePlanRemaining() has rewritten the pending tail. Bounded to
+  // 1 re-plan per plan to prevent infinite revision loops.
+  replannedOnce?: boolean;
 }
 
 export type PlanStreamCallback = (data: Record<string, unknown>) => void;
@@ -541,6 +544,195 @@ Respond with ONLY a JSON object (no markdown):
   };
 }
 
+/**
+ * Mid-plan re-planning. When the running plan has accumulated enough
+ * failures that the original step list is unlikely to deliver, ask the LLM
+ * to revise the REMAINING work given what's already known. Completed steps
+ * stay (the re-plan can reference their results); only the pending steps
+ * are replaced.
+ *
+ * Capped: caller MUST set plan.replannedOnce = true after applying so this
+ * is not invoked twice on the same plan.
+ *
+ * Returns an array of new PlanStep entries to replace the pending tail, or
+ * null if the LLM declined or returned an unusable plan.
+ */
+async function rePlanRemaining(opts: {
+  plan: ExecutionPlan;
+  completedSteps: Map<string, ToolResult>;
+  registry: SkillRegistry;
+  llmClient: LLMClientLike;
+  callerChoomName?: string;
+}): Promise<PlanStep[] | null> {
+  const { plan, completedSteps, registry, llmClient, callerChoomName } = opts;
+
+  const completed = plan.steps.filter(s => s.status === 'completed');
+  const failed = plan.steps.filter(s => s.status === 'failed');
+  const pending = plan.steps.filter(s => s.status === 'pending');
+  if (pending.length === 0) return null; // nothing to revise
+
+  const skillSummaries = registry.getLevel1Summaries();
+
+  const completedDigest = completed.map(s => {
+    const result = completedSteps.get(s.id);
+    const preview = result?.result
+      ? JSON.stringify(result.result).slice(0, 180).replace(/\s+/g, ' ')
+      : '(no result captured)';
+    return `  ${s.id} (${s.type === 'delegate' ? `delegate→${s.choomName}` : s.toolName}): ${preview}`;
+  }).join('\n');
+
+  const failedDigest = failed.map(s => {
+    const result = s.result || completedSteps.get(s.id);
+    const err = (result?.error || '(unknown failure)').slice(0, 200).replace(/\s+/g, ' ');
+    return `  ${s.id} (${s.type === 'delegate' ? `delegate→${s.choomName}` : s.toolName}): ${err}`;
+  }).join('\n');
+
+  const pendingDigest = pending.map(s =>
+    `  ${s.id}: ${s.description} — was: ${s.type === 'delegate' ? `delegate→${s.choomName}` : s.toolName}`,
+  ).join('\n');
+
+  const completedIdList = completed.map(s => s.id).join(', ');
+
+  const rePlanPrompt: ChatMessage = {
+    role: 'user',
+    content: `[System — Plan Revision]
+The original plan is partway done but has accumulated enough failures that the remaining steps as-written are unlikely to reach the goal. Revise the REMAINING work. Completed steps stay — your new steps can reference their results.
+
+Original goal: ${plan.goal}
+
+Completed steps (${completed.length}) — their results are available to reference via {{step_id.result.field}}:
+${completedDigest || '  (none)'}
+
+Failed steps (${failed.length}) — these did NOT produce useful results:
+${failedDigest || '  (none)'}
+
+Pending steps that have NOT yet executed (${pending.length}) — you may keep, drop, replace, or rewrite these:
+${pendingDigest}
+
+${callerChoomName ? `You are ${callerChoomName}. Do NOT delegate to yourself.\n\n` : ''}Available skills and tools:
+${skillSummaries}
+
+Output ONLY a JSON object listing the NEW REPLACEMENT steps for the pending tail. Don't repeat the completed/failed steps. Don't reuse their IDs. Use ids step_${plan.steps.length + 1}, step_${plan.steps.length + 2}, etc.
+
+Rules:
+- Each step is type "tool" or "delegate".
+- Tool steps: non-empty toolName from the catalog above + args object.
+- Delegate steps: non-empty choomName (≠ "${callerChoomName || ''}") + non-empty task.
+- dependsOn may reference completed step ids (${completedIdList || 'none'}) or other new steps in this list. Don't reference failed or pending step ids.
+- Keep description and expectedOutcome under 80 chars each.
+- 1-5 new steps total. If the goal is already met or unsalvageable, respond with {"steps": [], "rationale": "short reason"}.
+
+Format:
+{
+  "steps": [
+    { "id": "step_N", "type": "tool" | "delegate", "description": "...", "skillName": "...", "toolName": "...", "args": {...}, "choomName": "...", "task": "...", "dependsOn": [...], "expectedOutcome": "..." }
+  ],
+  "rationale": "one sentence on why this revision should reach the goal where the original failed"
+}`,
+  };
+
+  let responseText = '';
+  try {
+    for await (const chunk of llmClient.streamChat([rePlanPrompt], [], undefined, 'none')) {
+      const choice = chunk.choices[0];
+      if (choice?.delta?.content) responseText += choice.delta.content;
+    }
+  } catch (err) {
+    console.warn('[Planner] Re-plan LLM call failed:', err instanceof Error ? err.message : err);
+    return null;
+  }
+
+  let cleaned = responseText.trim();
+  const codeBlockMatch = cleaned.match(/```json?\s*\n?([\s\S]*?)\n?\s*```/i);
+  if (codeBlockMatch) cleaned = codeBlockMatch[1].trim();
+
+  let parsed: { steps?: unknown; rationale?: string } | null = null;
+  try { parsed = JSON.parse(cleaned); } catch { return null; }
+
+  if (!parsed || !Array.isArray(parsed.steps)) return null;
+  if ((parsed.steps as unknown[]).length === 0) {
+    console.log(`[Planner] Re-plan declined: ${parsed.rationale || 'empty steps'}`);
+    return null;
+  }
+
+  // Validate each new step. Reject the whole revision if anything is malformed
+  // — at re-plan time there's no second chance, and the original pending tail
+  // is being discarded, so a half-valid revision is worse than no revision.
+  const completedIdSet = new Set(completed.map(s => s.id));
+  const newIdSet = new Set<string>();
+  const validated: PlanStep[] = [];
+
+  for (let i = 0; i < (parsed.steps as unknown[]).length; i++) {
+    const raw = (parsed.steps as Record<string, unknown>[])[i] || {};
+    const id = String(raw.id || `step_${plan.steps.length + i + 1}`);
+    const type = (raw.type as string) === 'delegate' ? 'delegate' : 'tool';
+    const description = String(raw.description || `Revised step ${i + 1}`).slice(0, 120);
+    const skillName = String(raw.skillName || '');
+    const toolName = String(raw.toolName || '').trim();
+    const args = (raw.args as Record<string, unknown>) || {};
+    const dependsOn = Array.isArray(raw.dependsOn) ? (raw.dependsOn as string[]) : [];
+    const expectedOutcome = String(raw.expectedOutcome || '').slice(0, 120);
+    const choomName = String(raw.choomName || '').trim();
+    const task = String(raw.task || '').trim();
+
+    if (newIdSet.has(id)) {
+      console.warn(`[Planner] Re-plan rejected: duplicate step id "${id}"`);
+      return null;
+    }
+    if (completedIdSet.has(id)) {
+      console.warn(`[Planner] Re-plan rejected: new step "${id}" reuses a completed step id`);
+      return null;
+    }
+    newIdSet.add(id);
+
+    if (type === 'delegate') {
+      if (!choomName || !task) {
+        console.warn(`[Planner] Re-plan rejected: ${id} delegate missing choomName/task`);
+        return null;
+      }
+      if (callerChoomName && choomName.toLowerCase() === callerChoomName.toLowerCase()) {
+        console.warn(`[Planner] Re-plan rejected: ${id} self-delegation to ${callerChoomName}`);
+        return null;
+      }
+    } else {
+      if (!toolName) {
+        console.warn(`[Planner] Re-plan rejected: ${id} tool step has empty toolName`);
+        return null;
+      }
+      if (!registry.getSkillForTool(toolName)) {
+        console.warn(`[Planner] Re-plan rejected: ${id} unknown tool "${toolName}"`);
+        return null;
+      }
+    }
+
+    // Validate dependencies — they can only reference completed steps or
+    // other steps in this same revision list (resolved as we go).
+    for (const dep of dependsOn) {
+      if (!completedIdSet.has(dep) && !newIdSet.has(dep)) {
+        console.warn(`[Planner] Re-plan rejected: ${id} depends on "${dep}" which is neither completed nor in this revision`);
+        return null;
+      }
+    }
+
+    validated.push({
+      id,
+      description,
+      skillName,
+      toolName,
+      args,
+      dependsOn,
+      expectedOutcome,
+      status: 'pending',
+      retries: 0,
+      type,
+      choomName: choomName || undefined,
+      task: task || undefined,
+    });
+  }
+
+  return validated;
+}
+
 async function executeStep(
   step: PlanStep,
   plan: ExecutionPlan,
@@ -859,6 +1051,62 @@ export async function executePlan(
       const summary = `Plan aborted. ${succeeded} succeeded, ${failed} failed/skipped out of ${plan.steps.length} steps.`;
       send({ type: 'plan_completed', summary, succeeded, failed, total: plan.steps.length });
       return { succeeded, failed, results: completedSteps };
+    }
+
+    // Mid-plan re-planning: when enough of what we've executed has failed,
+    // the original pending tail probably won't reach the goal. Pause and
+    // ask the LLM to rewrite the remaining work given what's known. Only
+    // attempted once per plan (replannedOnce flag) to prevent loops.
+    if (pivotCtx && !plan.replannedOnce) {
+      const executedSoFar = succeeded + failed;
+      const remainingPending = plan.steps.filter(s => s.status === 'pending').length;
+      // Threshold: at least 3 executed, ≥30% failed, and there's still work
+      // pending that could benefit from a revision.
+      if (executedSoFar >= 3 && failed / executedSoFar >= 0.3 && remainingPending > 0) {
+        console.log(
+          `[Planner] 🔁 Re-plan threshold met: ${failed}/${executedSoFar} executed steps failed (${Math.round(100 * failed / executedSoFar)}%), ${remainingPending} pending. Requesting revision...`,
+        );
+        try {
+          const revisedSteps = await rePlanRemaining({
+            plan,
+            completedSteps,
+            registry: pivotCtx.registry,
+            llmClient: pivotCtx.llmClient,
+            callerChoomName: pivotCtx.callerChoomName,
+          });
+          plan.replannedOnce = true; // mark even on null so we don't retry
+          if (revisedSteps && revisedSteps.length > 0) {
+            // Drop the original pending tail, keep completed/failed/skipped
+            // history, append the revision. Step ids in the revision are
+            // guaranteed unique vs. existing by validation in rePlanRemaining.
+            const kept = plan.steps.filter(s => s.status !== 'pending');
+            plan.steps = [...kept, ...revisedSteps];
+            console.log(
+              `[Planner] 🔁 Plan revised: replaced ${remainingPending} pending step(s) with ${revisedSteps.length} new step(s).`,
+            );
+            send({
+              type: 'plan_revised',
+              kept: kept.length,
+              replaced: remainingPending,
+              added: revisedSteps.length,
+              steps: plan.steps.map(s => ({
+                id: s.id,
+                description: s.description,
+                toolName: s.type === 'delegate' ? `delegate → ${s.choomName}` : s.toolName,
+                status: s.status,
+                type: s.type || 'tool',
+              })),
+            });
+            // Loop continues — next iteration's wave selector picks up the
+            // new pending steps.
+          } else {
+            console.log('[Planner] 🔁 Re-plan returned no usable revision; continuing with original pending tail.');
+          }
+        } catch (rePlanErr) {
+          console.warn('[Planner] Re-plan threw:', rePlanErr instanceof Error ? rePlanErr.message : rePlanErr);
+          plan.replannedOnce = true;
+        }
+      }
     }
   }
 
