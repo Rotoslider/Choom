@@ -3,6 +3,7 @@ import type { ToolCall, ToolResult } from '@/lib/types';
 import prisma from '@/lib/db';
 import { Agent, fetch as undiciFetch } from 'undici';
 import { WORKSPACE_ROOT } from '@/lib/config';
+import { verifyDelegationClaims, formatVerificationBlock } from '@/lib/claim-verifier';
 
 const DELEG_WORKSPACE_MAX_FILE_KB = 1024;
 const DELEG_WORKSPACE_EXTS = ['.md', '.txt', '.json', '.jsonl', '.py', '.ts', '.tsx', '.js', '.jsx', '.html', '.css', '.csv', '.tsv', '.sh', '.bash', '.yaml', '.yml', '.xml', '.sql', '.toml', '.ini', '.cfg', '.log'];
@@ -527,6 +528,30 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
         toolCallCount: toolCallsUsed.length,
       });
 
+      // Claim verification: cross-check the delegate's response against the
+      // worker's project folder on disk. When the delegate's text claims to
+      // have created files that DO NOT exist, surface the discrepancy to the
+      // orchestrator so it can re-delegate or report honestly to the user
+      // instead of trusting a fabricated success report.
+      let claimVerification: Awaited<ReturnType<typeof verifyDelegationClaims>> = null;
+      if (workerProjectFolder) {
+        try {
+          claimVerification = await verifyDelegationClaims({
+            responseText: effectiveResponse,
+            workspaceRoot: WORKSPACE_ROOT,
+            projectFolder: workerProjectFolder,
+          });
+          if (claimVerification?.hadClaims) {
+            console.log(
+              `   🔎 [${targetChoom.name}] Claim verification: ${claimVerification.verified.length} verified, ${claimVerification.missing.length} missing` +
+              (claimVerification.missing.length > 0 ? ` — MISSING: ${claimVerification.missing.join(', ')}` : ''),
+            );
+          }
+        } catch (verifyErr) {
+          console.warn(`   ⚠️  [${targetChoom.name}] Claim verification failed:`, verifyErr instanceof Error ? verifyErr.message : verifyErr);
+        }
+      }
+
       // If the worker wrote files, the response should be a brief summary.
       // Detect if the response is still very large (worker ignored the instruction)
       // and truncate it — the orchestrator should read the files for full details.
@@ -544,8 +569,18 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
         console.log(`   🤝 [${targetChoom.name}] Truncated response for orchestrator: ${effectiveResponse.length} → ${responseForOrchestrator.length} chars (files written: ${fileWriteTools.length})`);
       }
 
+      // Append the verification block to the orchestrator-facing response so
+      // it lands directly in the model's tool result, alongside the original
+      // text the delegate produced. Discrepancies don't fail the call — the
+      // orchestrator gets the truth and decides what to do (re-delegate,
+      // ask the user, etc).
+      const verificationBlock = formatVerificationBlock(claimVerification);
+      if (verificationBlock) {
+        responseForOrchestrator += verificationBlock;
+      }
+
       const resultPayload: Record<string, unknown> = {
-        success: !incomplete,
+        success: !incomplete && !(claimVerification && claimVerification.missing.length > 0),
         delegation_id: delegationId,
         choom_name: targetChoom.name,
         response: responseForOrchestrator,
@@ -556,9 +591,13 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
         max_iterations: doneMaxIterations,
         incomplete,
         project_folder: workerProjectFolder,
+        verified_files: claimVerification?.verified ?? [],
+        missing_files: claimVerification?.missing ?? [],
         message: incomplete
           ? `${targetChoom.name} ran out of iterations (${doneIterations}/${doneMaxIterations}) and did not finish.${workerProjectFolder ? ` Check "${workerProjectFolder}" for partial work files.` : ''} You can continue by calling delegate_to_choom again with continue_delegation_id="${delegationId}".`
-          : `${targetChoom.name} completed the task in ${Math.round(durationMs / 1000)}s.${workerProjectFolder ? ` Read files in "${workerProjectFolder}" for full details.` : ''}`,
+          : (claimVerification && claimVerification.missing.length > 0)
+            ? `${targetChoom.name} reported completing the task in ${Math.round(durationMs / 1000)}s, BUT verification found ${claimVerification.missing.length} claimed file(s) that don't exist on disk: ${claimVerification.missing.join(', ')}. Treat the report as partial — re-delegate or tell the user what's actually present.`
+            : `${targetChoom.name} completed the task in ${Math.round(durationMs / 1000)}s.${workerProjectFolder ? ` Read files in "${workerProjectFolder}" for full details.` : ''}`,
       };
 
       return this.success(toolCall, resultPayload);
