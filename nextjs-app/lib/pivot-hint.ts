@@ -42,6 +42,16 @@ export function buildPivotHint(opts: BuildPivotHintOpts): string | null {
     return null;
   }
 
+  // Don't hint when the error already contains explicit "do this instead"
+  // guidance. Adding a list of sibling tools after a self-instructive error
+  // (e.g. "write to choom_commons/ (e.g. choom_commons/for_eve/...)") buries
+  // the actionable fix in noise. The model needs to follow the inline
+  // instruction, not switch tools.
+  const errLower = (errorMessage || '').toLowerCase();
+  const hasInlineGuidance =
+    /\bwrite to\b|\bsave to\b|\bsave it to\b|\bput it in\b|\binstead of\b|\bshould be\b|\bswitch to\b|\bcorrect path\b|\byour folder is\b|\bvalid (?:path|name|value)s? (?:are|is)\b|\bsupported (?:value|format)s? (?:are|is)\b|\(e\.g\.|\bi\.e\.\b/.test(errLower);
+  if (hasInlineGuidance) return null;
+
   const skill = registry.getSkillForTool(failedTool);
   if (!skill) return null;
 
