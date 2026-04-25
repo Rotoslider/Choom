@@ -20,6 +20,7 @@ import { CompactionService } from '@/lib/compaction-service';
 import { getTimeContext, formatTimeContextForPrompt } from '@/lib/time-context';
 import { waitForGpu } from '@/lib/gpu-lock';
 import { isMultiStepRequest, createPlan, executePlan, summarizePlan } from '@/lib/planner-loop';
+import { attachPivotHintToError } from '@/lib/pivot-hint';
 import { TraceBuilder, writeTrace } from '@/lib/execution-trace';
 import { WatcherLoop } from '@/lib/watcher-loop';
 import type { LLMSettings, ToolCall, ToolResult, ToolDefinition, ImageGenSettings, WeatherSettings, SearchSettings, ImageSize, ImageAspect } from '@/lib/types';
@@ -5956,6 +5957,25 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
                   console.log(`   🛑 ${MAX_CONSECUTIVE_FAILURES} consecutive tool failures — aborting loop`);
                 }
+              }
+
+              // Tool-level pivot: when the tool failed and the error class
+              // is one where alternatives could help (path/timeout/other —
+              // NOT param/config/no_data which are handled differently),
+              // append a structured hint listing sibling tools in the same
+              // skill so the model has explicit alternatives instead of
+              // having to guess from the prompt's "try something different"
+              // policy.
+              if (result.error) {
+                const triedSet = new Set<string>(toolFailureCounts.keys());
+                triedSet.add(tc.name); // include the just-failed tool
+                attachPivotHintToError(result, {
+                  failedTool: tc.name,
+                  errorMessage: result.error,
+                  errorClass,
+                  registry: getSkillRegistry(),
+                  alreadyTried: triedSet,
+                });
               }
 
               // Record in execution trace
