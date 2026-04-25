@@ -68,4 +68,9 @@ TEMP_IMAGE_PATH = "/tmp/signal-bridge/images"
 
 # Logging
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
-LOG_FILE = os.getenv("LOG_FILE", "/var/log/signal-bridge/bridge.log")
+# Default to a project-relative path so the GUI log viewer can read it
+# without needing root access to /var/log. Override via $LOG_FILE if needed.
+_DEFAULT_LOG_FILE = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "data", "logs", "bridge.log")
+)
+LOG_FILE = os.getenv("LOG_FILE", _DEFAULT_LOG_FILE)

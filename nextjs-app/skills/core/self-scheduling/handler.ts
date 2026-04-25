@@ -26,6 +26,9 @@ interface QueueEntry {
   trigger_at: string; // ISO8601
   created_at: string;
   consumed: boolean;
+  status?: 'pending' | 'fired' | 'cancelled' | 'error';
+  fired_at?: string;
+  cancelled_at?: string;
 }
 
 function ensureQueueDir() {
@@ -116,19 +119,28 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
       trigger_at: triggerAt.toISOString(),
       created_at: new Date().toISOString(),
       consumed: false,
+      status: 'pending',
     };
 
     const all = readQueue(ctx.choomId);
     all.push(entry);
     writeQueue(ctx.choomId, all);
 
-    console.log(`   ⏰ Self-followup queued for ${choomName}: ${entry.id} at ${entry.trigger_at} — "${prompt.slice(0, 80)}"${clampNote}`);
+    const userTz = 'America/Denver';
+    const triggerLocal = triggerAt.toLocaleString('en-US', {
+      weekday: 'short', month: 'short', day: 'numeric',
+      hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
+      timeZone: userTz,
+    });
+
+    console.log(`   ⏰ Self-followup queued for ${choomName}: ${entry.id} at ${entry.trigger_at} (${triggerLocal}) — "${prompt.slice(0, 80)}"${clampNote}`);
     return this.success(toolCall, {
       success: true,
       id: entry.id,
       trigger_at: entry.trigger_at,
+      trigger_at_local: triggerLocal,
       delay_minutes: clamped,
-      message: `Queued self-followup ${entry.id} for ${entry.trigger_at}${clampNote}. It will fire as a one-shot heartbeat.`,
+      message: `Queued self-followup ${entry.id} for ${triggerLocal} (Donny's local time)${clampNote}. It will fire as a one-shot heartbeat. Sanity check: does that wall-clock time match the "morning/midday/evening" framing in your prompt?`,
     });
   }
 
@@ -137,11 +149,17 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
     if (pending.length === 0) {
       return this.success(toolCall, { success: true, followups: [], message: 'No pending self-followups.' });
     }
+    const userTz = 'America/Denver';
     return this.success(toolCall, {
       success: true,
       followups: pending.map(e => ({
         id: e.id,
         trigger_at: e.trigger_at,
+        trigger_at_local: new Date(e.trigger_at).toLocaleString('en-US', {
+          weekday: 'short', month: 'short', day: 'numeric',
+          hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
+          timeZone: userTz,
+        }),
         prompt: e.prompt.slice(0, 200),
         reason: e.reason,
       })),
@@ -158,6 +176,8 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
       return this.error(toolCall, `No pending self-followup with id "${id}". Call list_self_followups to see what's queued.`);
     }
     all[idx].consumed = true;
+    all[idx].status = 'cancelled';
+    all[idx].cancelled_at = new Date().toISOString();
     writeQueue(ctx.choomId, all);
     console.log(`   🗑️  Self-followup cancelled: ${id}`);
     return this.success(toolCall, { success: true, id, message: `Cancelled ${id}.` });

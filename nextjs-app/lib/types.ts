@@ -655,7 +655,7 @@ export interface UIState {
   activeLiveChoomId: string | null;
 }
 
-export type SettingsTab = 'llm' | 'audio' | 'image' | 'memory' | 'search' | 'weather' | 'appearance' | 'scheduled' | 'heartbeat' | 'vision' | 'projects' | 'avatar' | 'followups';
+export type SettingsTab = 'llm' | 'audio' | 'image' | 'memory' | 'search' | 'weather' | 'appearance' | 'scheduled' | 'heartbeat' | 'vision' | 'projects' | 'avatar' | 'followups' | 'bridgelog';
 
 // ============================================================================
 // Form Types

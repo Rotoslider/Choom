@@ -1025,13 +1025,13 @@ Be practical. Only work on things that can actually be accomplished with the too
             current_ids.add(task_id)
 
             if not task.get("enabled", False):
-                # Remove if disabled
-                try:
-                    self.scheduler.get_job(task_id)
+                # Remove only if it's actually scheduled — get_job returns None
+                # (does not raise) when missing, so we have to check explicitly.
+                # Without this guard the reload loop spammed a WARNING +
+                # INFO every minute for every disabled heartbeat.
+                if self.scheduler.get_job(task_id) is not None:
                     self.remove_task(task_id)
                     logger.info(f"Disabled custom heartbeat: {task_id}")
-                except Exception:
-                    pass
                 continue
 
             choom_name = task.get("choom_name", "")
@@ -1344,7 +1344,7 @@ Be practical. Only work on things that can actually be accomplished with the too
     def _execute_custom_heartbeat(self, task_id: str, choom_name: str, prompt: str, respect_quiet: bool):
         """Execute a single custom heartbeat"""
         if respect_quiet and is_quiet_period():
-            logger.debug(f"Custom heartbeat {task_id} suppressed (quiet period)")
+            logger.warning(f"Custom heartbeat {task_id} suppressed (quiet period)")
             return
 
         # Re-read config to get the latest prompt and choom_name
@@ -1529,6 +1529,7 @@ Be practical. Only work on things that can actually be accomplished with the too
                 except Exception:
                     logger.warning(f"self_followup: bad trigger_at on {entry.get('id')}, marking consumed")
                     entry["consumed"] = True
+                    entry["status"] = "error"
                     changed = True
                     continue
 
@@ -1555,13 +1556,14 @@ Be practical. Only work on things that can actually be accomplished with the too
                         task_id=task_id,
                         choom_name=choom_name,
                         prompt=prompt,
-                        respect_quiet=True,
+                        respect_quiet=False,
                     )
                 except Exception as exec_err:
                     logger.error(f"self_followup fire failed for {entry.get('id')}: {exec_err}")
 
                 entry["consumed"] = True
                 entry["fired_at"] = now.isoformat()
+                entry["status"] = "fired"
                 changed = True
 
             if changed:

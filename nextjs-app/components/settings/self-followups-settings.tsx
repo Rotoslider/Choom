@@ -1,8 +1,10 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { Clock, Trash2, CheckCircle2, RefreshCw } from 'lucide-react';
+import { Clock, Trash2, CheckCircle2, RefreshCw, XCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+
+type FollowupStatus = 'pending' | 'fired' | 'cancelled' | 'error';
 
 interface QueueEntry {
   id: string;
@@ -14,11 +16,14 @@ interface QueueEntry {
   created_at: string;
   consumed: boolean;
   fired_at?: string;
+  cancelled_at?: string;
+  status?: FollowupStatus;
 }
 
 export function SelfFollowupsSettings() {
   const [pending, setPending] = useState<QueueEntry[]>([]);
   const [fired, setFired] = useState<QueueEntry[]>([]);
+  const [cancelled, setCancelled] = useState<QueueEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -30,6 +35,7 @@ export function SelfFollowupsSettings() {
         const data = await res.json();
         setPending(data.pending || []);
         setFired(data.fired || []);
+        setCancelled(data.cancelled || []);
       }
     } catch (err) {
       console.error('Failed to fetch followups:', err);
@@ -171,7 +177,39 @@ export function SelfFollowupsSettings() {
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="font-medium">{e.choom_name}</span>
                   <span className="text-muted-foreground">
-                    {formatTime(e.fired_at || e.trigger_at)}
+                    fired {formatTime(e.fired_at || e.trigger_at)}
+                  </span>
+                </div>
+                <p className="mt-0.5 text-muted-foreground break-words line-clamp-2">
+                  {e.prompt}
+                </p>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section>
+        <h4 className="text-sm font-medium mb-2 text-muted-foreground flex items-center gap-2">
+          <XCircle className="h-4 w-4" />
+          Recently Cancelled ({cancelled.length})
+        </h4>
+        {cancelled.length === 0 ? (
+          <p className="text-sm text-muted-foreground italic">Nothing cancelled.</p>
+        ) : (
+          <ul className="space-y-1.5">
+            {cancelled.map((e) => (
+              <li
+                key={e.id}
+                className="text-xs p-2 border rounded bg-muted/30"
+              >
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-medium">{e.choom_name}</span>
+                  <span className="text-muted-foreground">
+                    {e.status === 'error' ? 'errored' : 'cancelled'}
+                    {e.cancelled_at ? ` ${formatTime(e.cancelled_at)}` : ''}
+                    {' · was scheduled for '}
+                    {formatTime(e.trigger_at)}
                   </span>
                 </div>
                 <p className="mt-0.5 text-muted-foreground break-words line-clamp-2">

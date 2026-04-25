@@ -27,6 +27,12 @@ dependencies: []
 - `prompt` (required): what to tell future-you when the followup fires. Write it as a message TO yourself, third-person is fine. Example: "Ask Donny how the house work went yesterday — he mentioned finishing around 6pm and was worried about the heat."
 - `reason` (optional): one-line log note for the Doctor. Example: "checking on yesterday's house project".
 
+## TIME (CRITICAL — read this before computing delay_minutes)
+- All scheduling is **Donny's local time (Mountain Time)**, NOT UTC. The current time at the top of your context is already in his local timezone — work from that.
+- When you label a prompt with "morning"/"midday"/"evening", that label must match Donny's wall clock when the followup fires, not UTC. Example: "evening reflection" should fire ~18:00–22:00 his time, not 18:00 UTC (which is noon his time).
+- `delay_minutes` is just minutes-from-now. To target "tomorrow 8am" when it's currently 9pm, that's ~11 hours = 660 minutes. Don't overthink the math; convert from his current local time, not UTC.
+- The tool response includes `trigger_at_local` — read it back. If it says "Sat, Apr 25, 5:08 AM MDT" but your prompt says "evening reflection", you got the math wrong; cancel and re-queue.
+
 ## Limits (safety contract)
 - **Concurrent pending cap: 100 per Choom.** This is a hard ceiling on how many UN-FIRED followups you can have queued at once — it is NOT a daily or per-request quota. Once a followup fires (or you cancel it with `cancel_self_followup`), its slot frees up immediately and you can schedule another. So 3/day × 30 days = 90 pending is fine; you'd still have room for 10 more ad-hoc followups on top of the schedule.
 - Each Choom has its own independent counter. Eve's 100 does not affect Genesis's 100.

@@ -723,9 +723,15 @@ Chooms can queue their own future ticks via the `self-scheduling` skill. A queue
 
 The queue is a file-based JSONL at `data/self_followups/{choomId}.jsonl`. The Signal bridge scheduler polls it every 60s and fires due entries through the existing custom-heartbeat delivery path. Stripped from the tool list during delegation, so a delegated Choom cannot queue zombie ticks detached from its orchestrator.
 
+**Local-time framing.** All scheduling is in Donny's local time (`America/Denver`). The tool response includes `trigger_at_local` ("Sat, Apr 25, 5:08 AM MDT") alongside the ISO `trigger_at` so the LLM can sanity-check that "morning"/"midday"/"evening" framing in its prompt actually matches the wall clock when the followup fires. The SKILL.md walks the LLM through the conversion explicitly.
+
+**Quiet hours.** Self-followups bypass the global heartbeat quiet window — they are deliberate self-prompts the Choom queued, not random ticks. They do not auto-Signal; if a Choom wants to ping Donny at 3 AM it must explicitly call `send_notification` inside the followup. If the global heartbeat suppression ever does fire on a self-followup (e.g., from a code path other than `_check_self_followups`), the scheduler now logs it at WARNING so it shows up in the Bridge Log viewer.
+
+**Status tracking.** Each entry has an explicit `status` field: `pending` → `fired` (heartbeat actually delivered, with `fired_at`), `cancelled` (with `cancelled_at`), or `error` (bad timestamp). Cancelled entries no longer leak into the "Recently Fired" list.
+
 **Orchestrator pattern** (Aloy-style): delegate now, `schedule_self_followup` 2 hours later with a prompt like "Check if Genesis dropped `choom_commons/for_aloy/report.md` and summarize."
 
-**Monitoring.** Settings → **Followups** tab lists every pending and recently-fired followup across all Chooms: Choom name, human-readable trigger time ("in 35 min", "in 2 hrs"), the prompt, optional reason, and entry id. Auto-refreshes every 30s. Trash icon on each pending row cancels the entry (same effect as calling `cancel_self_followup`, marks it consumed so the scheduler skips it). Fired entries show what the Choom told itself and when.
+**Monitoring.** Settings → **Followups** lists every pending, recently-fired, and recently-cancelled followup across all Chooms: Choom name, human-readable trigger time ("in 35 min", "in 2 hrs"), the prompt, optional reason, and entry id. Auto-refreshes every 30s. Trash icon on each pending row cancels the entry (same effect as calling `cancel_self_followup`). Fired entries show when they actually ran; cancelled entries show when they were cancelled and what they would have run.
 
 ### Plan Mode + Delegation
 
@@ -1004,8 +1010,18 @@ A Python daemon that connects Chooms to Signal messaging via `signal-cli`.
 - **Fuzzy matching**: Voice transcription variants map to correct Choom names (e.g. "alloy" → "Aloy", "lisa" → "Lissa"). All Chooms are registered with common speech-to-text variants
 - **Quiet hours**: Heartbeat and system alert messages suppressed during configured quiet period (notifications from Chooms are always delivered)
 - **Heartbeat deferral**: Per-Choom user activity tracking — each incoming message records a timestamp per Choom, and heartbeats defer if the user was active with that specific Choom within a 2-minute window, preventing concurrent responses to the same conversation
-- **Lock file**: `/tmp/signal-bridge.lock` prevents duplicate instances
+- **Lock file**: `/tmp/signal-bridge.lock` prevents duplicate instances. Restart the bridge with `sudo systemctl restart signal-bridge` — never launch `python bridge.py` manually while the systemd service is enabled, or systemd's `Restart=always` policy will fight your manual instance for the lock and the log will fill with `ERROR - Another instance of signal-bridge is already running!` every ~10s
 - **Emoji stripping**: Emojis are removed from text before TTS synthesis
+
+### Bridge Log Viewer
+
+Settings → **Bridge Log** tails the live scheduler/bridge log inside the GUI — no terminal needed.
+
+- File: `nextjs-app/data/logs/bridge.log` (rotating, 5 MB × 3 backups). Same file whether the bridge runs via systemd or manually; configure with `$LOG_FILE`.
+- Live tail with 5-second auto-refresh (pauseable). Last 512 KB (up to 2000 lines) of the file is read on each fetch.
+- Level filter: `ALL` / `DEBUG` / `INFO` / `WARNING` / `ERROR` (cumulative — `WARNING` shows warnings + errors, etc.). Lines are color-coded: errors red, warnings amber, info default, debug muted.
+- Free-text search box filters by substring (case-insensitive), great for `self_followup`, a Choom name, or a specific task id.
+- Sticky-to-bottom scroll: stays pinned to newest as new lines arrive; scroll up and auto-scroll pauses so you can read.
 
 ### Reminders
 
@@ -1366,8 +1382,11 @@ SQLite via Prisma ORM. (dev.db)
 - `GET /api/logs` - Activity logs (filterable by choomId, chatId, category, level)
 - `POST /api/logs` - Store log entries (single or batch)
 - `DELETE /api/logs` - Delete logs by chatId, choomId, all, or prune old entries. Chat deletion cascades to activity logs.
+- `GET /api/bridge-log?limit=&level=&q=` - Tail the Signal bridge log file (`data/logs/bridge.log`); 512 KB / 2000-line cap, level/search filters
 - `GET /api/reminders` - List pending reminders
 - `DELETE /api/reminders?id=xxx` - Delete a reminder
+- `GET /api/self-followups` - List pending / fired / cancelled self-followups across all Chooms (powers the Followups settings panel)
+- `DELETE /api/self-followups?id=&choom_id=` - Cancel a pending followup
 
 ### Projects
 - `GET /api/projects` - List all workspace projects with metadata
