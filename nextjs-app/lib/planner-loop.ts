@@ -161,24 +161,33 @@ Respond with ONLY a JSON object in this format (no markdown, no backticks):
     {
       "id": "step_1",
       "type": "tool",
-      "description": "Human-readable description of what this step does",
-      "skillName": "skill-name",
-      "toolName": "tool_name",
-      "args": { "param": "value" },
+      "description": "Generate an image of a sunset",
+      "skillName": "image-generation",
+      "toolName": "generate_image",
+      "args": { "prompt": "a golden sunset over mountains" },
       "dependsOn": [],
-      "expectedOutcome": "What success looks like for this step"
+      "expectedOutcome": "Image generated with imageId in result"
     },
     {
       "id": "step_2",
-      "type": "delegate",
-      "description": "Delegate research to Genesis",
-      "choomName": "Genesis",
-      "task": "Detailed task for the target Choom including context from {{step_1.result.field}}",
+      "type": "tool",
+      "description": "Save the generated image to workspace",
+      "skillName": "image-generation",
+      "toolName": "save_generated_image",
+      "args": { "image_id": "{{step_1.result.imageId}}", "save_path": "my_project/sunset.png" },
       "dependsOn": ["step_1"],
-      "expectedOutcome": "Genesis returns research findings"
+      "expectedOutcome": "Image saved to workspace"
     }
   ]
 }
+
+CRITICAL — passing data between steps:
+- When step B needs a value produced by step A, use {{step_A.result.fieldName}} in args
+- ALWAYS add that step to dependsOn so it runs first
+- generate_image returns: { imageId, message } — use {{step_N.result.imageId}} to pass the ID
+- search_web returns: { results, formatted } — use {{step_N.result.formatted}} for the text
+- workspace_read_file returns: { content } — use {{step_N.result.content}} for file contents
+- If a step needs the FULL result, use {{step_N.result}}
 
 Rules:
 - Each step is either type "tool" (calls a tool directly) or type "delegate" (sends task to another Choom)
@@ -186,7 +195,6 @@ Rules:
 - For delegate steps, specify choomName and task (not toolName/args) — the target Choom does its OWN research/work, so delegate steps should NOT depend on your web_search steps
 - ONLY use dependsOn when a step truly needs DATA from a previous step's result (e.g. writing a file that uses {{step_1.result.field}}). If a step can run independently, leave dependsOn empty
 - Delegate steps are independent by default — the target Choom has its own tools and does its own searches. Do NOT chain delegate steps after web_search steps unless the delegate literally needs a specific result value
-- Use {{step_N.result.field}} syntax in args/task to reference previous step outputs
 - Limit web_search to 2-3 calls max per plan to avoid rate limiting. Prefer delegating research to other Chooms
 - If the request is simple (1-2 steps), respond with: {"goal": null}
 - **Prefer 2-4 steps. Maximum 10.** Plans with 6+ steps are rare and only justified when each step is independently verifiable — bigger plans usually mean over-decomposition. Open-ended creative requests ("surprise me") are NOT a license for 10 steps; pick a single creative thread and execute it tightly.
@@ -279,7 +287,13 @@ Rules:
         if (!step.toolName || !String(step.toolName).trim()) {
           reason = 'tool step has empty toolName';
         } else if (!registry.getSkillForTool(step.toolName)) {
-          reason = `unknown tool "${step.toolName}"`;
+          const resolved = registry.resolveToolName(step.toolName);
+          if (resolved) {
+            console.log(`[Planner] Fuzzy-resolved step ${step.id}: "${step.toolName}" → "${resolved}"`);
+            step.toolName = resolved;
+          } else {
+            reason = `unknown tool "${step.toolName}"`;
+          }
         }
       }
 
@@ -329,6 +343,18 @@ Rules:
  * Resolve {{step_N.result.field}} template variables in step arguments
  * using results from previous steps.
  */
+function resolveFieldFromResult(resultObj: Record<string, unknown>, field: string): unknown {
+  // Exact match first
+  if (resultObj[field] !== undefined) return resultObj[field];
+  // snake_case → camelCase: image_id → imageId
+  const camel = field.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+  if (camel !== field && resultObj[camel] !== undefined) return resultObj[camel];
+  // camelCase → snake_case: imageId → image_id
+  const snake = field.replace(/[A-Z]/g, l => `_${l.toLowerCase()}`);
+  if (snake !== field && resultObj[snake] !== undefined) return resultObj[snake];
+  return undefined;
+}
+
 function resolveTemplateVars(
   args: Record<string, unknown>,
   completedSteps: Map<string, ToolResult>
@@ -344,7 +370,7 @@ function resolveTemplateVars(
           return `[unresolved: ${stepId}.${field}]`;
         }
         const resultObj = stepResult.result as Record<string, unknown>;
-        const val = resultObj[field];
+        const val = resolveFieldFromResult(resultObj, field);
         return val !== undefined ? String(val) : `[unresolved: ${stepId}.${field}]`;
       });
       // Handle {{step_N.result}} — entire result (no field name)
@@ -374,7 +400,7 @@ function resolveTemplateVars(
           return `[unresolved: prev.${field}]`;
         }
         const resultObj = lastResult.result as Record<string, unknown>;
-        const val = resultObj[field];
+        const val = resolveFieldFromResult(resultObj, field);
         return val !== undefined ? String(val) : `[unresolved: prev.${field}]`;
       });
       // Handle {{prev.result}} — entire result of preceding step
@@ -393,6 +419,12 @@ function resolveTemplateVars(
         }
         return String(r);
       });
+      // Log any unresolved template vars
+      const resolvedStr = resolved[key] as string;
+      const unresolved = resolvedStr.match(/\[unresolved: [^\]]+\]/g);
+      if (unresolved) {
+        console.warn(`[Planner] Template var unresolved in "${key}": ${unresolved.join(', ')}`);
+      }
     } else {
       resolved[key] = value;
     }
@@ -519,11 +551,24 @@ Respond with ONLY a JSON object (no markdown):
     };
   }
 
-  const altToolName = String(alt.toolName || '').trim();
+  let altToolName = String(alt.toolName || '').trim();
   if (!altToolName) return null;
   if (!registry.getSkillForTool(altToolName)) {
-    console.log(`[Planner] Pivot for ${step.id}: rejected — unknown tool "${altToolName}"`);
-    return null;
+    const resolved = registry.resolveToolName(altToolName);
+    if (!resolved) {
+      console.log(`[Planner] Pivot for ${step.id}: rejected — unknown tool "${altToolName}"`);
+      return null;
+    }
+    // Only accept if resolved tool is in the same skill as the original
+    // (prevents wild jumps like workspace_write_file → list_documents)
+    const origSkill = registry.getSkillForTool(step.toolName);
+    const altSkill = registry.getSkillForTool(resolved);
+    if (origSkill && altSkill && origSkill.metadata.name !== altSkill.metadata.name) {
+      console.log(`[Planner] Pivot for ${step.id}: rejected — "${altToolName}" resolved to "${resolved}" but that's in skill "${altSkill.metadata.name}", not "${origSkill.metadata.name}"`);
+      return null;
+    }
+    console.log(`[Planner] Pivot fuzzy-resolved for ${step.id}: "${altToolName}" → "${resolved}"`);
+    altToolName = resolved;
   }
   // Reject if the alternative is byte-identical to the original (no real pivot)
   const altArgs = (alt.args as Record<string, unknown>) || {};
@@ -668,7 +713,7 @@ Format:
     const type = (raw.type as string) === 'delegate' ? 'delegate' : 'tool';
     const description = String(raw.description || `Revised step ${i + 1}`).slice(0, 120);
     const skillName = String(raw.skillName || '');
-    const toolName = String(raw.toolName || '').trim();
+    let toolName = String(raw.toolName || '').trim();
     const args = (raw.args as Record<string, unknown>) || {};
     const dependsOn = Array.isArray(raw.dependsOn) ? (raw.dependsOn as string[]) : [];
     const expectedOutcome = String(raw.expectedOutcome || '').slice(0, 120);
@@ -700,8 +745,14 @@ Format:
         return null;
       }
       if (!registry.getSkillForTool(toolName)) {
-        console.warn(`[Planner] Re-plan rejected: ${id} unknown tool "${toolName}"`);
-        return null;
+        const resolved = registry.resolveToolName(toolName);
+        if (resolved) {
+          console.log(`[Planner] Re-plan fuzzy-resolved ${id}: "${toolName}" → "${resolved}"`);
+          toolName = resolved;
+        } else {
+          console.warn(`[Planner] Re-plan rejected: ${id} unknown tool "${toolName}"`);
+          return null;
+        }
       }
     }
 
@@ -776,6 +827,7 @@ async function executeStep(
       name: step.toolName,
       arguments: resolvedArgs,
     };
+    console.log(`[Planner] Step ${step.id}: ${step.toolName}(${JSON.stringify(resolvedArgs).slice(0, 200)})`);
   }
 
   // Execute
@@ -791,6 +843,14 @@ async function executeStep(
       error: `Execution error: ${err instanceof Error ? err.message : 'Unknown'}`,
     };
     step.result = result;
+  }
+
+  // Log step outcome
+  if (result.error) {
+    console.log(`[Planner] Step ${step.id} (${step.toolName}) error: ${result.error}`);
+  } else if (result.result && typeof result.result === 'object' && 'success' in (result.result as Record<string, unknown>) && !(result.result as Record<string, unknown>).success) {
+    const msg = (result.result as Record<string, unknown>).message || (result.result as Record<string, unknown>).error || JSON.stringify(result.result).slice(0, 200);
+    console.log(`[Planner] Step ${step.id} (${step.toolName}) returned success=false: ${msg}`);
   }
 
   // Evaluate with watcher
@@ -1000,6 +1060,7 @@ export async function executePlan(
         case 'skip': {
           step.status = 'skipped';
           failed++;
+          console.log(`[Planner] Step ${step.id} skipped: ${decision.reason}`);
           send({ type: 'plan_step_update', stepId: step.id, status: 'skipped', description: decision.reason });
           break;
         }
