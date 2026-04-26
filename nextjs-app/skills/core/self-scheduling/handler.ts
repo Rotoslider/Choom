@@ -3,6 +3,17 @@ import type { ToolCall, ToolResult } from '@/lib/types';
 import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
+import {
+  QUEUE_ROOT,
+  type Bucket,
+  type QueueEntry,
+  bucketDir,
+  entryPath,
+  atomicWriteJson,
+  atomicMove,
+  listEntries,
+  migrateLegacyJsonl,
+} from '@/lib/self-followup-store';
 
 const TOOL_NAMES = new Set([
   'schedule_self_followup',
@@ -10,56 +21,10 @@ const TOOL_NAMES = new Set([
   'cancel_self_followup',
 ]);
 
-// Queue file (one JSONL per Choom). The bridge scheduler polls these.
-const QUEUE_DIR = path.resolve(process.cwd(), 'data', 'self_followups');
 const MIN_DELAY_MIN = 5;
 const MAX_DELAY_MIN = 30 * 24 * 60; // 30 days
 const MAX_PROMPT_CHARS = 1000;
 const MAX_PENDING_PER_CHOOM = 100;
-
-interface QueueEntry {
-  id: string;
-  choom_id: string;
-  choom_name: string;
-  prompt: string;
-  reason: string;
-  trigger_at: string; // ISO8601
-  created_at: string;
-  consumed: boolean;
-  status?: 'pending' | 'fired' | 'cancelled' | 'error';
-  fired_at?: string;
-  cancelled_at?: string;
-}
-
-function ensureQueueDir() {
-  if (!fs.existsSync(QUEUE_DIR)) {
-    fs.mkdirSync(QUEUE_DIR, { recursive: true });
-  }
-}
-
-function queueFileFor(choomId: string): string {
-  const safe = choomId.replace(/[^a-zA-Z0-9_-]/g, '_');
-  return path.join(QUEUE_DIR, `${safe}.jsonl`);
-}
-
-function readQueue(choomId: string): QueueEntry[] {
-  const file = queueFileFor(choomId);
-  if (!fs.existsSync(file)) return [];
-  const lines = fs.readFileSync(file, 'utf-8').split('\n').filter(Boolean);
-  const out: QueueEntry[] = [];
-  for (const line of lines) {
-    try {
-      out.push(JSON.parse(line) as QueueEntry);
-    } catch { /* skip malformed */ }
-  }
-  return out;
-}
-
-function writeQueue(choomId: string, entries: QueueEntry[]): void {
-  ensureQueueDir();
-  const file = queueFileFor(choomId);
-  fs.writeFileSync(file, entries.map(e => JSON.stringify(e)).join('\n') + (entries.length ? '\n' : ''));
-}
 
 export default class SelfSchedulingHandler extends BaseSkillHandler {
   canHandle(toolName: string): boolean {
@@ -67,6 +32,7 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
   }
 
   async execute(toolCall: ToolCall, ctx: SkillHandlerContext): Promise<ToolResult> {
+    migrateLegacyJsonl();
     switch (toolCall.name) {
       case 'schedule_self_followup':
         return this.scheduleFollowup(toolCall, ctx);
@@ -99,13 +65,15 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
     const clamped = Math.max(MIN_DELAY_MIN, Math.min(MAX_DELAY_MIN, delay));
     const clampNote = clamped !== delay ? ` (clamped from ${delay} to ${clamped})` : '';
 
-    // Enforce per-Choom queue cap
-    const existing = readQueue(ctx.choomId).filter(e => !e.consumed);
-    if (existing.length >= MAX_PENDING_PER_CHOOM) {
-      const listStr = existing.map(e => `  - ${e.id} at ${e.trigger_at} — "${e.prompt.slice(0, 60)}"`).join('\n');
+    // Per-Choom cap: count files currently in pending/
+    const pendingCount = listEntries(ctx.choomId, 'pending').length;
+    if (pendingCount >= MAX_PENDING_PER_CHOOM) {
+      const sample = listEntries(ctx.choomId, 'pending')
+        .slice(0, 10)
+        .map(e => `  - ${e.id} at ${e.trigger_at} — "${e.prompt.slice(0, 60)}"`).join('\n');
       return this.error(
         toolCall,
-        `You already have ${existing.length} pending self-followups (max ${MAX_PENDING_PER_CHOOM}). Cancel one first with cancel_self_followup, or wait until one fires:\n${listStr}`
+        `You already have ${pendingCount} pending self-followups (max ${MAX_PENDING_PER_CHOOM}). Cancel one first with cancel_self_followup, or wait until one fires:\n${sample}`
       );
     }
 
@@ -122,9 +90,7 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
       status: 'pending',
     };
 
-    const all = readQueue(ctx.choomId);
-    all.push(entry);
-    writeQueue(ctx.choomId, all);
+    atomicWriteJson(entryPath(ctx.choomId, 'pending', entry.id), entry);
 
     const userTz = 'America/Denver';
     const triggerLocal = triggerAt.toLocaleString('en-US', {
@@ -145,7 +111,7 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
   }
 
   private async listFollowups(toolCall: ToolCall, ctx: SkillHandlerContext): Promise<ToolResult> {
-    const pending = readQueue(ctx.choomId).filter(e => !e.consumed);
+    const pending = listEntries(ctx.choomId, 'pending');
     if (pending.length === 0) {
       return this.success(toolCall, { success: true, followups: [], message: 'No pending self-followups.' });
     }
@@ -170,16 +136,42 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
     const id = (toolCall.arguments.id as string || '').trim();
     if (!id) return this.error(toolCall, 'id is required. Use list_self_followups to see your pending ids.');
 
-    const all = readQueue(ctx.choomId);
-    const idx = all.findIndex(e => e.id === id && !e.consumed);
-    if (idx === -1) {
+    const src = entryPath(ctx.choomId, 'pending', id);
+    const dst = entryPath(ctx.choomId, 'cancelled', id);
+
+    if (!fs.existsSync(src)) {
       return this.error(toolCall, `No pending self-followup with id "${id}". Call list_self_followups to see what's queued.`);
     }
-    all[idx].consumed = true;
-    all[idx].status = 'cancelled';
-    all[idx].cancelled_at = new Date().toISOString();
-    writeQueue(ctx.choomId, all);
+
+    // Atomic claim: rename out of pending/ first so the scheduler can't fire it.
+    try {
+      fs.mkdirSync(bucketDir(ctx.choomId, 'cancelled'), { recursive: true });
+      fs.renameSync(src, dst);
+    } catch (err: unknown) {
+      const code = (err as NodeJS.ErrnoException)?.code;
+      if (code === 'ENOENT') {
+        return this.error(toolCall, `Self-followup "${id}" already fired or was cancelled.`);
+      }
+      throw err;
+    }
+
+    // Now update metadata in the cancelled bucket (only Node touches cancelled/, so this is safe).
+    try {
+      const raw = fs.readFileSync(dst, 'utf-8');
+      const entry = JSON.parse(raw) as QueueEntry;
+      entry.consumed = true;
+      entry.status = 'cancelled';
+      entry.cancelled_at = new Date().toISOString();
+      atomicWriteJson(dst, entry);
+    } catch {
+      // Metadata update failed but the file is already in cancelled/ — that's still correct status.
+    }
+
     console.log(`   🗑️  Self-followup cancelled: ${id}`);
     return this.success(toolCall, { success: true, id, message: `Cancelled ${id}.` });
   }
 }
+
+// Re-export root for any external consumer that previously imported it from here.
+export { QUEUE_ROOT };
+export type { Bucket };
