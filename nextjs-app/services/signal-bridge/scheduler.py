@@ -427,10 +427,35 @@ class ScheduledTaskManager:
                     except Exception:
                         pass
 
+                    # Split workspace file_paths: images go inline (Signal renders
+                    # them well), non-images get deferred to the pending store so
+                    # the owner can pull them on demand instead of getting every
+                    # markdown/PDF/code file pushed to their phone.
+                    image_files, deferred_files = self._split_files_for_delivery(file_paths)
+
+                    final_message = message or ""
+                    if deferred_files:
+                        try:
+                            from pending_files import add_batch
+                            label = (message[:60] if message else "").strip()
+                            add_batch(choom_name, deferred_files, label=label)
+                            n = len(deferred_files)
+                            noun = "file" if n == 1 else "files"
+                            hint = (
+                                f"\n\n📎 {n} {noun} ready — reply "
+                                f"\"show me the files\" to receive."
+                            )
+                            final_message = (final_message + hint) if final_message else hint.lstrip()
+                        except Exception as e:
+                            # If queueing fails, fall back to pushing them so
+                            # the user doesn't lose access entirely.
+                            logger.error(f"pending_files queue failed, pushing inline: {e}")
+                            image_files = list(file_paths)
+
                     # Send text + audio first
-                    if message:
+                    if final_message:
                         self.send_message_to_owner(
-                            message,
+                            final_message,
                             include_audio=include_audio,
                             choom_name=choom_name
                         )
@@ -439,9 +464,9 @@ class ScheduledTaskManager:
                     if images:
                         self._send_notification_images(images, choom_name)
 
-                    # Send attached workspace files via Signal
-                    if file_paths:
-                        self._send_notification_files(file_paths, choom_name)
+                    # Send image file_paths inline (deferred files are queued, not sent)
+                    if image_files:
+                        self._send_notification_files(image_files, choom_name)
 
                     delivered_ids.append(notif["id"])
                     logger.info(f"Delivered notification {notif['id']}: {message[:50]}... (images: {len(images)}, files: {len(file_paths)})")
@@ -506,6 +531,24 @@ class ScheduledTaskManager:
 
             except Exception as e:
                 logger.error(f"Failed to send notification image {i}: {e}")
+
+    # Image extensions that we keep on the inline-push path (Signal renders
+     # these as thumbnails). Everything else is deferred to pending_files.
+    _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
+
+    def _split_files_for_delivery(self, file_paths: list):
+        """Partition workspace file paths into (image_files, deferred_files).
+        Images get pushed inline; everything else is queued for pull-on-demand."""
+        images, deferred = [], []
+        for fp in file_paths or []:
+            if not isinstance(fp, str) or not fp.strip():
+                continue
+            ext = os.path.splitext(fp)[1].lower()
+            if ext in self._IMAGE_EXTS:
+                images.append(fp)
+            else:
+                deferred.append(fp)
+        return images, deferred
 
     def _send_notification_files(self, file_paths: list, choom_name: str = None):
         """Send workspace file attachments via Signal.
