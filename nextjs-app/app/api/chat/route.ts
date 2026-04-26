@@ -4123,7 +4123,11 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
     const mentionsReview = /\b(review|analyze|look at|check|examine|describe|inspect|see|show)\b/.test(msgLower);
     const mentionsList = /\b(list|what'?s in|contents?|show me|what do i have|what files|what'?s there|empty|anything in)\b/.test(msgLower);
 
-    if (mentionsWorkspace && (mentionsImages || mentionsReview || mentionsList)) {
+    // Skip in noTools mode: scheduler briefings dump yesterday's conversation history
+    // into the prompt, which contains false-positive triggers ("image", "files", "see")
+    // that would inject an analyze_image directive Genesis would dutifully follow,
+    // overwriting the actual briefing instructions.
+    if (!noTools && mentionsWorkspace && (mentionsImages || mentionsReview || mentionsList)) {
       try {
         const imageExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'];
         const ws = new WorkspaceService(WORKSPACE_ROOT, WORKSPACE_MAX_FILE_SIZE_KB, WORKSPACE_ALLOWED_EXTENSIONS);
@@ -4513,7 +4517,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           let planExecuted = false;
           let planFullySucceeded = false;
           let planHadDelegations = false;
-          if (skillDispatch && !isDelegation && isMultiStepRequest(message)) {
+          if (skillDispatch && !isDelegation && !noTools && isMultiStepRequest(message)) {
             traceBuilder.setPlanMode();
             try {
               console.log(`   📋 Multi-step request detected — creating plan...`);
@@ -4625,7 +4629,9 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           // This is the biggest reliability win for local models that tend to describe actions.
           const msgLower = message.toLowerCase();
           const strongToolIntent = /\b(what(?:'?s| is) the weather|weather (?:like|today|tomorrow|forecast)|search (?:for|the web)|look up|find (?:me|out)|generate (?:an? |some )?(?:image|picture|photo|selfie|portrait)|take a (?:selfie|photo|picture)|create (?:a |an )?(?:image|picture)|make (?:me |an? )?(?:image|picture|selfie)|(?:please |can you |you should )remember (?:that|this|my|i |the |for )|(?<!i )(?<!i'll )remember (?:that |this |my |i |the |for )|(?:don'?t |never )forget (?:that|this|my|i )|(?:save|store|note|keep) (?:this|that|my|the |it )(?:in |to |as )?(?:memory|mind)?|use (?:the )?remember(?: tool)?|remind me|set (?:a )?reminder|send (?:a )?(?:notification|message|alert)|check (?:the |my )?(?:calendar|schedule|tasks|email|inbox)|(?:any |do i have (?:any )?|what )(?:appointments?|meetings?|events?)|(?:am i |are we )(?:free|busy|available)|what(?:'?s| is) on (?:my )?(?:calendar|schedule|for )?(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this week|next week)|(?:what(?:'?s| is| do i have) )(?:scheduled|planned|coming up)|when (?:is|was|did) (?:my |the )?(?:next|last) |when (?:is|was) the last time i |when did i (?:last )?(?:go|get|have|see|do|visit|fill|take)|write (?:a |an )?(?:file|document|report)|read (?:the |my |this )?(?:file|document|pdf|report)|(?:look|take a look|glance) at (?:the |this |that )?(?:file|document|pdf|report)|open (?:the |this |that )?(?:pdf|report|document)|review (?:the |this |that )?(?:file|document|pdf|report)|list (?:my |the )?(?:files|projects|tasks)|download|scrape|analyze (?:this|the|that) (?:image|photo|picture)|turn (?:on|off) (?:the )?|(?:open|close) (?:the )?|(?:lights?|switch|fan|heater|thermostat) (?:on|off)|delegate|get (?:the )?(?:weather|forecast)|search (?:youtube|email|gmail|contacts)|draft (?:an? )?email|compose (?:an? )?email|^habit\b|habit (?:stats|summary|report|breakdown)|how (?:often|many times) (?:do|did|have) i )\b/i.test(msgLower);
-          let forceToolCall = strongToolIntent; // Force tool_choice:'required' on first iteration if intent is strong
+          // In noTools mode (heartbeat briefings), tools are stripped — never force tool_choice='required'.
+          // Without this guard the model is forced to call tools that don't exist and the loop loses the briefing.
+          let forceToolCall = strongToolIntent && activeTools.length > 0; // Force tool_choice:'required' on first iteration if intent is strong
           const executedToolCache = new Map<string, unknown>(); // Dedup: normalizedKey → result
           const dedupHitCounts = new Map<string, number>(); // How many times each dedup key was hit
           let loopBreakRequested = false; // Set when a tight repeat-call loop is detected
@@ -4659,11 +4665,11 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           } else if (/\b(?:habit (?:stats|summary|report|breakdown)|how (?:often|many times) (?:do|did|have) i )\b/i.test(msgLower)) {
             intentToolHint = 'habit_stats';
           }
-          if (strongToolIntent) {
+          if (strongToolIntent && activeTools.length > 0) {
             traceBuilder.setForceToolCall();
             console.log(`   ⚡ ${choomTag} Strong tool intent detected — using tool_choice='required' on first iteration${intentToolHint ? ` (hint: ${intentToolHint})` : ''}`);
           }
-          if (intentToolHint) {
+          if (intentToolHint && activeTools.length > 0) {
             currentMessages.push({
               role: 'system',
               content: `[Tool guidance] The user's request maps to the "${intentToolHint}" tool. Call that tool directly — do NOT use other tools for this request.`,
@@ -5603,6 +5609,12 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
 
             // Still no tool calls after extraction — check if we should nudge or stop
             if (toolCalls.length === 0) {
+              // noTools mode: tools were stripped (e.g. scheduler briefings with pre-fetched data).
+              // The model produced text — that IS the final response. Don't nudge it to call tools
+              // that don't exist; that just burns iterations and drops the briefing.
+              if (noTools || activeTools.length === 0) {
+                break;
+              }
               // If tools were already called this request, check if model intends more work.
               // Models often narrate their next step ("Now let me update the file...")
               // before the loop breaks — losing the write-back, notification, etc.
