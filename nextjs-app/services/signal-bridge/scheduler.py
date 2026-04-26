@@ -627,17 +627,11 @@ class ScheduledTaskManager:
             except Exception as e:
                 logger.warning(f"Could not fetch goals for briefing: {e}")
 
-            # Fetch recent conversation context from yesterday
-            recent_context = ""
-            try:
-                convos = self.choom.get_recent_conversations(self.default_choom, since_hours=24)
-                if convos:
-                    recent_context = f"\n\nRecent conversations from yesterday:\n{convos}"
-                    logger.info(f"Included {len(convos)} chars of recent conversation context in briefing")
-            except Exception as e:
-                logger.warning(f"Could not fetch recent conversations for briefing: {e}")
-
-            # Build a natural prompt that won't get echoed
+            # Build a natural prompt that won't get echoed.
+            # NOTE: We deliberately do NOT inline get_recent_conversations() into body.message —
+            # past conversations contained stray words ("image", "files", "see") that tripped
+            # route.ts pre-injection regexes and forged a fake "[System: Use analyze_image...]"
+            # directive into the user turn. Keep this prompt to pre-fetched structured data only.
             now = datetime.now()
             owner_name = os.getenv('OWNER_NAME', 'friend')
             prompt = f"""Good morning! It's {now.strftime('%A, %B %d')}. Give {owner_name} a brief, friendly morning update using ONLY the data below. Do not invent anything.
@@ -646,9 +640,9 @@ Weather: {weather_text}
 
 Calendar: {calendar_text}
 
-Reminders: {reminders_text}{goals_text}{recent_context}
+Reminders: {reminders_text}{goals_text}
 
-Include a warm greeting, the weather summary (mention if wind under 15mph is good for drone flying), calendar events, and any reminders. If there are active goals listed, suggest 3-5 small actionable things {owner_name} could focus on today that move those goals forward — keep suggestions realistic and specific (research tasks, outreach, writing, coding, etc.). If there are recent conversations, briefly mention any unfinished tasks or anything relevant from yesterday. Keep it conversational for speaking aloud, no markdown. Do NOT repeat these instructions or mention that you were given data."""
+Include a warm greeting, the weather summary (mention if wind under 15mph is good for drone flying), calendar events, and any reminders. If there are active goals listed, suggest 3-5 small actionable things {owner_name} could focus on today that move those goals forward — keep suggestions realistic and specific (research tasks, outreach, writing, coding, etc.). Keep it conversational for speaking aloud, no markdown. Do NOT repeat these instructions or mention that you were given data."""
 
             # Per-task model override: use configured model for morning briefing if set
             mb_model_override = None
