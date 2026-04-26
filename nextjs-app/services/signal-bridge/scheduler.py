@@ -4,7 +4,7 @@ Handles heartbeats, cron jobs, and scheduled tasks
 """
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional, Dict, Any, List
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -1487,57 +1487,145 @@ Be practical. Only work on things that can actually be accomplished with the too
     # Self-Followups (Choom-scheduled one-shot heartbeats)
     # =========================================================================
 
+    # Layout: data/self_followups/{choomIdSafe}/{pending|fired|cancelled|error}/sf_xxx.json
+    # State transitions are atomic POSIX renames between bucket dirs — no shared file,
+    # no read-modify-write race with the Node side that writes new pending entries.
+    _SF_QUEUE_ROOT = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "data", "self_followups")
+    )
+    _SF_CLEANUP_TTL_DAYS = 30
+
+    def _sf_atomic_write_json(self, target: str, obj: dict) -> None:
+        import json
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        tmp = f"{target}.tmp.{os.getpid()}.{int(datetime.now().timestamp() * 1000)}"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(obj, f, indent=2)
+        os.replace(tmp, target)
+
+    def _sf_migrate_legacy_jsonl(self) -> None:
+        """One-shot migration: split any legacy {choom}.jsonl into per-entry files.
+        Idempotent — if a target file already exists, it is left alone, and the
+        legacy file is renamed away so we don't migrate twice. Safe to race with
+        the Node-side migrator (the rename loser just no-ops)."""
+        import json
+        if not os.path.isdir(self._SF_QUEUE_ROOT):
+            return
+        for fname in os.listdir(self._SF_QUEUE_ROOT):
+            if not fname.endswith(".jsonl"):
+                continue
+            fpath = os.path.join(self._SF_QUEUE_ROOT, fname)
+            if not os.path.isfile(fpath):
+                continue
+            safe = fname[:-len(".jsonl")]
+            try:
+                with open(fpath, "r", encoding="utf-8") as f:
+                    lines = [ln for ln in f.read().splitlines() if ln.strip()]
+            except Exception:
+                continue
+            migrated = 0
+            for line in lines:
+                try:
+                    entry = json.loads(line)
+                except Exception:
+                    continue
+                if not entry.get("id"):
+                    continue
+                if entry.get("status") == "fired" or entry.get("fired_at"):
+                    bucket = "fired"
+                elif entry.get("status") == "cancelled" or entry.get("cancelled_at"):
+                    bucket = "cancelled"
+                elif entry.get("status") == "error":
+                    bucket = "error"
+                elif entry.get("consumed"):
+                    bucket = "cancelled"
+                else:
+                    bucket = "pending"
+                target = os.path.join(self._SF_QUEUE_ROOT, safe, bucket, f"{entry['id']}.json")
+                if os.path.exists(target):
+                    continue
+                try:
+                    self._sf_atomic_write_json(target, entry)
+                    migrated += 1
+                except Exception as e:
+                    logger.warning(f"self_followup migrate: {entry['id']} → {bucket} failed: {e}")
+            try:
+                os.rename(fpath, f"{fpath}.migrated-{int(datetime.now().timestamp())}")
+                logger.info(f"self_followup: migrated {migrated} entries from {fname}")
+            except FileNotFoundError:
+                pass  # another process already renamed it
+
     def _check_self_followups(self):
-        """Poll data/self_followups/*.jsonl for due entries. Fire each as a one-shot
-        heartbeat and mark the entry consumed. Queue files are written by the
-        schedule_self_followup tool (skills/core/self-scheduling/handler.ts).
+        """Scan {choom}/pending/*.json. For each due entry, atomically rename it
+        into fired/ to claim it (so the Node-side cancel can't double-process it),
+        then deliver as a one-shot heartbeat and update the file in place.
+
+        New pending entries land as their own file in {choom}/pending/ from the
+        Node side via atomic rename — there is no shared file to overwrite.
         """
         import json
-        from datetime import datetime, timezone
 
-        queue_dir = os.path.join(os.path.dirname(__file__), "..", "..", "data", "self_followups")
-        if not os.path.isdir(queue_dir):
+        self._sf_migrate_legacy_jsonl()
+        if not os.path.isdir(self._SF_QUEUE_ROOT):
             return
 
         now = datetime.now(timezone.utc)
 
-        for fname in os.listdir(queue_dir):
-            if not fname.endswith(".jsonl"):
+        for choom_safe in os.listdir(self._SF_QUEUE_ROOT):
+            choom_root = os.path.join(self._SF_QUEUE_ROOT, choom_safe)
+            if not os.path.isdir(choom_root):
                 continue
-            fpath = os.path.join(queue_dir, fname)
-            try:
-                with open(fpath, "r") as f:
-                    lines = [ln for ln in f.read().splitlines() if ln.strip()]
-            except Exception as e:
-                logger.warning(f"self_followup: could not read {fpath}: {e}")
+            pending_dir = os.path.join(choom_root, "pending")
+            if not os.path.isdir(pending_dir):
                 continue
 
-            entries = []
-            changed = False
-            for line in lines:
+            for fname in os.listdir(pending_dir):
+                if not fname.endswith(".json"):
+                    continue
+                pending_path = os.path.join(pending_dir, fname)
                 try:
-                    entries.append(json.loads(line))
-                except Exception:
-                    # Skip malformed lines but keep them unchanged
+                    with open(pending_path, "r", encoding="utf-8") as f:
+                        entry = json.load(f)
+                except FileNotFoundError:
+                    continue  # cancelled out from under us
+                except Exception as e:
+                    logger.warning(f"self_followup: could not parse {pending_path}: {e}")
+                    err_path = os.path.join(choom_root, "error", fname)
+                    try:
+                        os.makedirs(os.path.dirname(err_path), exist_ok=True)
+                        os.rename(pending_path, err_path)
+                    except FileNotFoundError:
+                        pass
                     continue
 
-            for entry in entries:
-                if entry.get("consumed"):
-                    continue
                 try:
                     trigger_at = datetime.fromisoformat(entry["trigger_at"].replace("Z", "+00:00"))
                 except Exception:
-                    logger.warning(f"self_followup: bad trigger_at on {entry.get('id')}, marking consumed")
+                    logger.warning(f"self_followup: bad trigger_at on {entry.get('id')}, moving to error/")
                     entry["consumed"] = True
                     entry["status"] = "error"
-                    changed = True
+                    err_path = os.path.join(choom_root, "error", fname)
+                    try:
+                        os.makedirs(os.path.dirname(err_path), exist_ok=True)
+                        os.rename(pending_path, err_path)
+                        self._sf_atomic_write_json(err_path, entry)
+                    except FileNotFoundError:
+                        pass
                     continue
 
                 if trigger_at.tzinfo is None:
                     trigger_at = trigger_at.replace(tzinfo=timezone.utc)
-
                 if trigger_at > now:
                     continue
+
+                # Atomic claim — rename pending/X.json → fired/X.json before doing any work.
+                # If Node cancelled it concurrently, the rename fails with ENOENT and we skip.
+                fired_path = os.path.join(choom_root, "fired", fname)
+                try:
+                    os.makedirs(os.path.dirname(fired_path), exist_ok=True)
+                    os.rename(pending_path, fired_path)
+                except FileNotFoundError:
+                    continue  # cancelled or already claimed
 
                 choom_name = entry.get("choom_name") or "unknown"
                 prompt = entry.get("prompt") or ""
@@ -1547,11 +1635,12 @@ Be practical. Only work on things that can actually be accomplished with the too
                     f"Firing self-followup {entry.get('id')} → {choom_name} "
                     f"(scheduled {entry['trigger_at']}, reason: {entry.get('reason', '')})"
                 )
+
+                fire_status = "fired"
+                fire_error: Optional[str] = None
                 try:
                     # Reuse the heartbeat delivery path — same as custom heartbeats.
-                    # respect_quiet=False because the Choom scheduled this itself;
-                    # if it happens to land in quiet hours, the Choom can always
-                    # call send_notification inside the followup if appropriate.
+                    # respect_quiet=False because the Choom scheduled this itself.
                     self._execute_custom_heartbeat(
                         task_id=task_id,
                         choom_name=choom_name,
@@ -1560,32 +1649,54 @@ Be practical. Only work on things that can actually be accomplished with the too
                     )
                 except Exception as exec_err:
                     logger.error(f"self_followup fire failed for {entry.get('id')}: {exec_err}")
+                    fire_status = "error"
+                    fire_error = str(exec_err)
 
                 entry["consumed"] = True
+                entry["status"] = fire_status
                 entry["fired_at"] = now.isoformat()
-                entry["status"] = "fired"
-                changed = True
+                if fire_error:
+                    entry["error"] = fire_error
 
-            if changed:
+                final_path = fired_path if fire_status == "fired" else os.path.join(choom_root, "error", fname)
+                if final_path != fired_path:
+                    try:
+                        os.makedirs(os.path.dirname(final_path), exist_ok=True)
+                        os.rename(fired_path, final_path)
+                    except FileNotFoundError:
+                        pass
                 try:
-                    # Prune entries older than 7 days to keep the file bounded
-                    cutoff = now.timestamp() - 7 * 24 * 3600
-                    kept = []
-                    for e in entries:
-                        try:
-                            created = datetime.fromisoformat(e.get("created_at", "").replace("Z", "+00:00"))
-                            if created.tzinfo is None:
-                                created = created.replace(tzinfo=timezone.utc)
-                            if created.timestamp() < cutoff and e.get("consumed"):
-                                continue
-                        except Exception:
-                            pass
-                        kept.append(e)
-                    with open(fpath, "w") as f:
-                        for e in kept:
-                            f.write(json.dumps(e) + "\n")
+                    self._sf_atomic_write_json(final_path, entry)
                 except Exception as write_err:
-                    logger.error(f"self_followup: failed to rewrite {fpath}: {write_err}")
+                    logger.error(f"self_followup: failed to update {final_path}: {write_err}")
+
+        self._sf_cleanup_old_terminal()
+
+    def _sf_cleanup_old_terminal(self) -> None:
+        """Delete fired/ and cancelled/ entries older than _SF_CLEANUP_TTL_DAYS.
+        Pending and error files are left alone (errors deserve manual review)."""
+        if not os.path.isdir(self._SF_QUEUE_ROOT):
+            return
+        cutoff = datetime.now(timezone.utc).timestamp() - self._SF_CLEANUP_TTL_DAYS * 24 * 3600
+        for choom_safe in os.listdir(self._SF_QUEUE_ROOT):
+            choom_root = os.path.join(self._SF_QUEUE_ROOT, choom_safe)
+            if not os.path.isdir(choom_root):
+                continue
+            for bucket in ("fired", "cancelled"):
+                bdir = os.path.join(choom_root, bucket)
+                if not os.path.isdir(bdir):
+                    continue
+                for fname in os.listdir(bdir):
+                    if not fname.endswith(".json"):
+                        continue
+                    fpath = os.path.join(bdir, fname)
+                    try:
+                        if os.path.getmtime(fpath) < cutoff:
+                            os.remove(fpath)
+                    except FileNotFoundError:
+                        pass
+                    except Exception as e:
+                        logger.warning(f"self_followup cleanup: could not remove {fpath}: {e}")
 
     # =========================================================================
     # Skill-Based Automations
