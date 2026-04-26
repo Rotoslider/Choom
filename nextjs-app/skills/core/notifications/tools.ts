@@ -24,7 +24,7 @@ export const tools: ToolDefinition[] = [
         file_paths: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Array of workspace file paths to attach (images, PDFs, documents, etc.). Paths are relative to workspace root (e.g., ["my_project/report.pdf", "my_project/photo.png"]). If you pass any image file here, auto-attach is skipped — use this to send exactly the images you mean.',
+          description: 'Array of workspace file paths to attach (images, PDFs, markdown, source code, etc.) — relative to workspace root, e.g. ["mars_project/spec.md","mars_project/photo.png"]. ALWAYS use this for workspace files instead of pasting local paths into the message text (those links do not open on a phone). Image files (.jpg/.jpeg/.png/.gif/.webp/.bmp) push inline; other files queue for pull-on-demand and the user reads them when they reply "show me the files". If you pass any image file here, auto-attach of recent generated images is skipped.',
         },
         skip_auto_attach: {
           type: 'boolean',

@@ -21,8 +21,14 @@ When sending notifications about generated images, include the `image_ids` param
 Example: After generating images, call `send_notification` with `image_ids: ["cmlzfwg8y...", "cmlzfwvad..."]` to deliver them via Signal.
 
 ## File Attachments
-To send workspace files (PDFs, images, documents, spreadsheets, etc.) via Signal, include the `file_paths` parameter with relative workspace paths. Signal supports any file type — images display inline, other files appear as downloadable attachments.
+To send workspace files via Signal, **always use the `file_paths` parameter** — never paste markdown links to local paths in the `message` text. Local-path links don't open from a phone; the bridge handles delivery for you.
 
-Example: `send_notification` with `message: "Here's the report"` and `file_paths: ["my_project/report.pdf", "my_project/chart.png"]`
+Example: `send_notification` with `message: "Wrote the spec"` and `file_paths: ["mars_project/spec.md", "mars_project/timeline.md"]`
 
-You can combine `image_ids` (for generated images) and `file_paths` (for workspace files) in the same notification. Use `file_paths` when you have a file on disk that the user needs on their phone.
+Delivery rules (handled by the Signal bridge):
+- **Images** (`.jpg .jpeg .png .gif .webp .bmp`) — pushed inline, the user sees them immediately.
+- **Everything else** (`.md .txt .pdf .csv .json` source code, etc.) — queued for pull-on-demand. The user gets a hint like `📎 2 files ready — reply "show me the files" to receive.` and can request them when they're ready to read on a real screen.
+
+Don't worry about which bucket each path falls into — just pass the paths. The bridge sorts it out so the user isn't spammed with markdown attachments while still getting your generated images right away.
+
+You can combine `image_ids` (for generated images) and `file_paths` (for workspace files) in the same notification.

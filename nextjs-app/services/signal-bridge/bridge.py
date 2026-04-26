@@ -155,6 +155,15 @@ class SignalBridge:
                 logger.warning(f"Message from unknown number: {source}")
                 return
 
+            # Pull-on-demand file delivery: if the whole message is a "show files"
+            # trigger, drain the pending_files queue and return early — no Choom
+            # routing, no TTS, no nudges. Only triggers on a strict whole-message
+            # match so it can't collide with normal chat ("Eve, show me the files"
+            # still routes to Eve as usual).
+            if message_text and not is_voice and not attachments and self._is_show_files_trigger(message_text):
+                self._handle_show_files_trigger(source)
+                return
+
             # Send typing indicator
             self.signal.send_typing_indicator(source)
 
@@ -311,6 +320,80 @@ class SignalBridge:
 
         except Exception as e:
             logger.debug(f"Deferred reward check: {e}")
+
+    # Whole-message regex: must be the entire message (after trim) so it can't
+    # accidentally fire mid-conversation. Optional trailing punctuation/emoji
+    # is tolerated so "show me the files!" or "files please" still works.
+    _SHOW_FILES_RE = re.compile(
+        r'^\s*(?:show\s+(?:me\s+)?(?:the\s+)?files?'
+        r'|send\s+(?:me\s+)?(?:the\s+)?files?'
+        r'|gimme\s+(?:the\s+)?files?'
+        r'|files?(?:\s+please|\s+pls)?)\s*[.!?]*\s*$',
+        re.IGNORECASE,
+    )
+
+    def _is_show_files_trigger(self, text: str) -> bool:
+        if not text:
+            return False
+        return bool(self._SHOW_FILES_RE.match(text.strip()))
+
+    def _handle_show_files_trigger(self, source: str):
+        """Drain the pending_files queue and send each batch as Signal attachments."""
+        try:
+            from pending_files import drain_all
+            batches = drain_all()
+        except Exception as e:
+            logger.error(f"show-files trigger: failed to read queue: {e}")
+            self.signal.send_message(source, "Couldn't read the file queue — check bridge logs.")
+            return
+
+        if not batches:
+            self.signal.send_message(source, "No files in the queue right now.")
+            return
+
+        total_files = sum(len(b.get("file_paths", [])) for b in batches)
+        noun = "file" if total_files == 1 else "files"
+        self.signal.send_message(source, f"Sending {total_files} {noun}…")
+
+        sent = 0
+        skipped = []
+        for batch in batches:
+            choom = batch.get("choom_name") or ""
+            label = batch.get("label") or ""
+            paths = batch.get("file_paths") or []
+
+            # Per-batch caption so the user knows which Choom queued these
+            caption_bits = []
+            if choom:
+                caption_bits.append(f"[{choom}]")
+            if label:
+                caption_bits.append(label[:80])
+            caption = " ".join(caption_bits)
+
+            for fp in paths:
+                if not isinstance(fp, str) or not os.path.exists(fp):
+                    skipped.append(os.path.basename(fp) if isinstance(fp, str) else "?")
+                    continue
+                try:
+                    time.sleep(1)  # signal-cli does better with small gaps between sends
+                    self.signal.send_message(
+                        source,
+                        caption if (caption and sent == 0) else "",
+                        attachments=[fp],
+                    )
+                    sent += 1
+                    caption = ""  # only attach caption to the first file in the batch
+                except Exception as e:
+                    logger.error(f"show-files: failed to send {fp}: {e}")
+                    skipped.append(os.path.basename(fp))
+
+        if skipped:
+            self.signal.send_message(
+                source,
+                f"Done — sent {sent}, skipped {len(skipped)} (missing): {', '.join(skipped[:5])}"
+                + (" …" if len(skipped) > 5 else ""),
+            )
+        logger.info(f"show-files trigger: sent {sent} of {total_files} pending files")
 
     def _handle_voice_note(self, attachment: dict) -> Optional[str]:
         """
