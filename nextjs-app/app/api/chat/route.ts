@@ -3341,15 +3341,21 @@ async function executeToolCallViaSkills(
   }
 
   const registry = getSkillRegistry();
-  const skill = registry.getSkillForTool(toolCall.name);
+  let skill = registry.getSkillForTool(toolCall.name);
 
   if (!skill) {
-    return {
-      toolCallId: toolCall.id,
-      name: toolCall.name,
-      result: null,
-      error: `Unknown tool: ${toolCall.name}`,
-    };
+    const resolved = registry.resolveToolName(toolCall.name);
+    if (resolved) {
+      toolCall.name = resolved;
+      skill = registry.getSkillForTool(resolved)!;
+    } else {
+      return {
+        toolCallId: toolCall.id,
+        name: toolCall.name,
+        result: null,
+        error: `Unknown tool: ${toolCall.name}`,
+      };
+    }
   }
 
   // Normalize parameter names: LLMs sometimes send camelCase (imageId, savePath)
@@ -3362,8 +3368,12 @@ async function executeToolCallViaSkills(
     let changed = false;
     for (const [key, value] of Object.entries(toolCall.arguments)) {
       const snakeKey = key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
+      const hyphenKey = key.replace(/-/g, '_');
       if (snakeKey !== key && expectedProps.has(snakeKey) && toolCall.arguments[snakeKey] === undefined) {
         normalized[snakeKey] = value;
+        changed = true;
+      } else if (hyphenKey !== key && expectedProps.has(hyphenKey) && toolCall.arguments[hyphenKey] === undefined) {
+        normalized[hyphenKey] = value;
         changed = true;
       } else {
         normalized[key] = value;

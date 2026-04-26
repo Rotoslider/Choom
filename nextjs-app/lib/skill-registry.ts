@@ -275,6 +275,7 @@ export class SkillRegistry {
         this.toolIndex.set(toolName, metadata.name);
       }
     }
+    this.invalidateNormalizedIndex();
   }
 
   // ========================================================================
@@ -302,6 +303,7 @@ export class SkillRegistry {
         this.toolIndex.set(toolName, metadata.name);
       }
     }
+    this.invalidateNormalizedIndex();
   }
 
   // ========================================================================
@@ -494,6 +496,7 @@ export class SkillRegistry {
 
     // Reload
     this.skills.delete(skillName);
+    this.invalidateNormalizedIndex();
     await this.loadSkill(existing.metadata.path, existing.metadata.type);
   }
 
@@ -527,4 +530,145 @@ export class SkillRegistry {
     this.skills.delete(skillName);
     return true;
   }
+
+  // ========================================================================
+  // Fuzzy Tool Name Resolution
+  // ========================================================================
+
+  private normalizedIndex: Map<string, string> | null = null;
+
+  private buildNormalizedIndex(): Map<string, string> {
+    if (this.normalizedIndex) return this.normalizedIndex;
+    const idx = new Map<string, string>();
+    for (const [toolName] of this.toolIndex) {
+      const norm = toolName.replace(/[-_]/g, '').toLowerCase();
+      // Only store if unambiguous (first writer wins; collision → delete)
+      if (idx.has(norm)) {
+        idx.set(norm, ''); // empty = ambiguous
+      } else {
+        idx.set(norm, toolName);
+      }
+    }
+    this.normalizedIndex = idx;
+    return idx;
+  }
+
+  invalidateNormalizedIndex(): void {
+    this.normalizedIndex = null;
+  }
+
+  /**
+   * Resolve a tool name that may be misspelled, hyphenated, camelCased, etc.
+   * Returns the correct tool name or null if no confident match.
+   *
+   * Tiers (checked in order, first match wins):
+   *   0. Exact match (identity — fast path)
+   *   1. Deterministic transforms: hyphen↔underscore, camelCase→snake_case
+   *   2. Normalized comparison: strip all hyphens/underscores, lowercase
+   *   3. Levenshtein distance ≤ 30% of name length (min 1, max 5), unique winner
+   */
+  resolveToolName(name: string): string | null {
+    // Tier 0: exact
+    if (this.toolIndex.has(name)) return name;
+
+    // Tier 1: deterministic transforms
+    const candidates = new Set<string>();
+    candidates.add(name.replace(/-/g, '_'));                               // hyphen→underscore
+    candidates.add(name.replace(/_/g, '-'));                               // underscore→hyphen
+    candidates.add(name.replace(/[A-Z]/g, l => `_${l.toLowerCase()}`));   // camelCase→snake_case
+    candidates.add(name.replace(/[A-Z]/g, l => `-${l.toLowerCase()}`));   // camelCase→kebab-case
+    // Also try stripping common prefixes models sometimes prepend
+    for (const prefix of ['tool_', 'tools.', 'skill_', 'fn_']) {
+      if (name.startsWith(prefix)) {
+        candidates.add(name.slice(prefix.length));
+      }
+    }
+    for (const c of candidates) {
+      if (c !== name && this.toolIndex.has(c)) {
+        console.log(`   🔧 Fuzzy tool resolve (tier 1): "${name}" → "${c}"`);
+        return c;
+      }
+    }
+
+    // Tier 2: normalized (strip hyphens/underscores, lowercase)
+    const normIdx = this.buildNormalizedIndex();
+    const normName = name.replace(/[-_]/g, '').toLowerCase();
+    const t2match = normIdx.get(normName);
+    if (t2match) {
+      console.log(`   🔧 Fuzzy tool resolve (tier 2): "${name}" → "${t2match}"`);
+      return t2match;
+    }
+
+    // Tier 2b: skill-name-to-tool — models often use the skill directory name
+    // (e.g. "image-generation") instead of the actual tool name ("generate_image").
+    // When matched, pick the first tool (primary action) in the skill's definition.
+    const normForSkill = name.replace(/[-_]/g, '').toLowerCase();
+    for (const [, skill] of this.skills) {
+      if (!skill.metadata.enabled) continue;
+      const skillNorm = skill.metadata.name.replace(/[-_]/g, '').toLowerCase();
+      if (skillNorm === normForSkill && skill.toolDefinitions.length > 0) {
+        const bestTool = skill.toolDefinitions[0].name;
+        console.log(`   🔧 Fuzzy tool resolve (tier 2b, skill "${skill.metadata.name}"): "${name}" → "${bestTool}"`);
+        return bestTool;
+      }
+    }
+
+    // Tier 2c: word-reorder — models swap word order (web_search vs search_web)
+    const nameWords = name.toLowerCase().split(/[-_]/).filter(Boolean).sort().join('');
+    if (nameWords.length >= 4) {
+      for (const [toolName] of this.toolIndex) {
+        const toolWords = toolName.toLowerCase().split(/[-_]/).filter(Boolean).sort().join('');
+        if (toolWords === nameWords && toolName !== name) {
+          console.log(`   🔧 Fuzzy tool resolve (tier 2c, word reorder): "${name}" → "${toolName}"`);
+          return toolName;
+        }
+      }
+    }
+
+    // Tier 3: Levenshtein — only when name is at least 4 chars (avoid matching short garbage)
+    if (name.length >= 4) {
+      const maxDist = Math.min(5, Math.max(1, Math.floor(name.length * 0.3)));
+      let bestName: string | null = null;
+      let bestDist = maxDist + 1;
+      let ambiguous = false;
+
+      for (const [toolName] of this.toolIndex) {
+        // Skip if length difference alone exceeds maxDist
+        if (Math.abs(toolName.length - name.length) > maxDist) continue;
+        const d = levenshtein(name.toLowerCase(), toolName.toLowerCase());
+        if (d < bestDist) {
+          bestDist = d;
+          bestName = toolName;
+          ambiguous = false;
+        } else if (d === bestDist && toolName !== bestName) {
+          ambiguous = true;
+        }
+      }
+
+      if (bestName && bestDist <= maxDist && !ambiguous) {
+        console.log(`   🔧 Fuzzy tool resolve (tier 3, dist=${bestDist}): "${name}" → "${bestName}"`);
+        return bestName;
+      }
+    }
+
+    return null;
+  }
+}
+
+function levenshtein(a: string, b: string): number {
+  const la = a.length, lb = b.length;
+  if (la === 0) return lb;
+  if (lb === 0) return la;
+
+  let prev = Array.from({ length: lb + 1 }, (_, i) => i);
+  for (let i = 1; i <= la; i++) {
+    const curr = [i];
+    for (let j = 1; j <= lb; j++) {
+      curr[j] = a[i - 1] === b[j - 1]
+        ? prev[j - 1]
+        : 1 + Math.min(prev[j - 1], prev[j], curr[j - 1]);
+    }
+    prev = curr;
+  }
+  return prev[lb];
 }
