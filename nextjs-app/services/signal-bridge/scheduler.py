@@ -1652,6 +1652,21 @@ Be practical. Only work on things that can actually be accomplished with the too
                     f"(scheduled {entry['trigger_at']}, reason: {entry.get('reason', '')})"
                 )
 
+                # Prepend situational awareness so the Choom has grounding
+                # context when waking up (time, environment, sibling messages).
+                choom_lower = choom_name.lower().replace(" ", "_")
+                now_str = now.strftime("%A, %B %d %Y at %I:%M %p")
+                awareness = (
+                    f"[You are waking up — it is {now_str}. "
+                    f"Before starting your task, quickly ground yourself: "
+                    f"call get_weather for current conditions, "
+                    f"ha_get_home_status for Donny's location and home state, "
+                    f"and workspace_list_files on choom_commons/for_{choom_lower}/ "
+                    f"to check for new sibling messages. "
+                    f"Use this context to inform your task, then proceed.]\n\n"
+                )
+                prompt = awareness + prompt
+
                 fire_status = "fired"
                 fire_error: Optional[str] = None
                 try:
