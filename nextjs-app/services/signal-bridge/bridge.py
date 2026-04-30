@@ -306,15 +306,11 @@ class SignalBridge:
 
             action_id = last_hb["action_id"]
 
-            from heartbeat_ucb1 import HeartbeatUCB1
-            ucb1 = HeartbeatUCB1(choom_name)
-            ucb1.record_user_response(action_id)
-
             # Clear to prevent double-counting
             del self.scheduler._last_heartbeat[choom_name.lower()]
 
             logger.info(
-                f"Presence deferred reward: user responded to {choom_name}/{action_id} "
+                f"Heartbeat engagement: user responded to {choom_name} "
                 f"heartbeat ({elapsed:.0f}s later)"
             )
 
