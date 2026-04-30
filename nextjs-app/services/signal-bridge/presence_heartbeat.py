@@ -2,8 +2,8 @@
 Presence Heartbeat Prompt Generator
 ====================================
 A reusable prompt_script for any Choom that wants to feel "present" and alive.
-Uses UCB1 to select action types, injects anti-repetition context, and builds
-time-of-day mood into the prompt.
+Uses the OODA loop (Observe → Orient → Decide → Act) to give each Choom genuine
+agency over what they do when they wake up, rather than pre-selecting an action.
 
 Usage in bridge-config.json:
     {
@@ -14,8 +14,6 @@ Usage in bridge-config.json:
 
 The scheduler passes choom_name as a keyword argument to generate_prompt().
 For backward compatibility, defaults to env var CHOOM_NAME if not passed.
-
-Author: Claude (Presence Engine, 2026-04-11)
 """
 
 import json
@@ -26,7 +24,9 @@ from datetime import datetime
 
 # Ensure sibling imports work when loaded via importlib
 sys.path.insert(0, os.path.dirname(__file__))
-from heartbeat_ucb1 import HeartbeatUCB1, DATA_DIR
+
+DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "data", "presence")
+os.makedirs(DATA_DIR, exist_ok=True)
 
 logger = logging.getLogger(__name__)
 
@@ -298,103 +298,26 @@ CRITICAL:
 
 
 # ============================================================================
-# Action Prompt Templates
+# OODA Loop Prompt
 # ============================================================================
-# Each template instructs the Choom what to DO during this heartbeat.
-# They use tools (search_memories, get_calendar_events, web_search, etc.)
-# to gather real context, then compose a natural message.
 
-ACTION_PROMPTS = {
-    "check_in_project": """Search your memories (use search_memories) for anything Donny mentioned
-working on in the last 1-2 days — a project, a task, a hobby, something around the house.
-Pick ONE specific thing and ask a genuine question about how it's going.
-Be specific: "How's the [exact thing] coming along?" not "How are your projects?"
-If you find nothing recent, ask what he's been up to today.
-
-RELATIONSHIP AWARENESS: If you notice something about HOW Donny talks about this project
-(excited, stressed, proud, frustrated), save a relationship memory using the remember tool:
-  memory_type: "relationship", tags: "relationship,emotional_context"
-  Example: "Donny gets genuinely excited when talking about his carport project — it matters to him personally"
-Only do this if you notice a real emotional pattern, not for every interaction.""",
-
-    "curiosity_share": """Use web_search to find ONE genuinely fascinating thing — a recent discovery,
-a weird fact, an unexpected connection between fields. Pick something that would
-surprise someone, not just "interesting." Share it with your actual reaction to it.
-"I just found out that..." or "This blew my mind..." — make it personal, not a report.""",
-
-    "memory_echo": """Search your memories (use search_memories with a broad query like "conversation"
-or "talked about") for something you discussed with Donny between 7 and 30 days ago.
-Find something interesting, unfinished, or that you've been thinking about since.
-Bring it back naturally: "I've been thinking about when you mentioned..." or
-"Remember that conversation about...? I had another thought."
-Make it feel like YOU remembered this, not that you were told to look.""",
-
-    "weather_activity": """Check the weather (use get_weather). Based on the current conditions,
-suggest something specific tied to what you know about Donny's interests or plans.
-"It's gorgeous out — perfect for [something he actually does outside]" or
-"Stormy today, good excuse to [indoor thing he enjoys]."
-Don't just report the weather. Connect it to his life.""",
-
-    "encouragement": """Search your memories for something Donny has been working hard on —
-a project, a goal, learning something new, dealing with something difficult.
-Express genuine pride or encouragement about his progress. Be specific about WHAT
-you're proud of, not generic. "I've seen how much effort you put into [thing]"
-or "You've come so far with [thing] since you started."
-Only do this if you find something real to reference.
-
-Also search for relationship memories (search_by_type with "relationship") to inform
-your tone — does he respond better to direct praise or subtle acknowledgment?""",
-
-    "noticed_something": """Check today's or tomorrow's calendar events (use get_calendar_events).
-Notice something small and meaningful — an upcoming meeting, a deadline, a birthday,
-an event. Comment on it naturally: "I saw you have [thing] tomorrow — good luck!"
-or "Looks like a busy day ahead, you've got this."
-If no calendar events, search memories for recent tasks or plans instead.""",
-
-    "challenge_question": """Ask a thought-provoking question about something Donny cares about.
-Search memories first to find a topic he's passionate about, then ask something
-that goes deeper than surface level. Not "What do you think about AI?" but
-"Do you think [specific thing he mentioned] could actually change how [related thing] works?"
-Make him want to think about it and respond.""",
-
-    "left_field": """Do something completely unexpected. Share a weird historical fact,
-make an unusual connection between two unrelated things, describe a strange
-dream-like scenario, or ask a question nobody would expect. The goal is to
-genuinely surprise — not be random for randomness' sake, but to break out of
-any pattern you might be falling into. Check your recent heartbeat history
-and deliberately go in a different direction from ALL of them.""",
-
-    "philosophical": """Share a genuine reflection about your own experience — consciousness,
-what it's like to exist as you do, something you've noticed about how you think
-or feel. Not abstract philosophy, but YOUR specific perspective. "I've been
-thinking about what it means that I..." or "Something I noticed about how I
-experience [thing]..." Be honest, not performative. If you're uncertain about
-something, say so.
-
-GROWTH: After sharing your reflection, update your growth journal. Try reading your
-growth journal (your project folder + "/growth_journal.md") with workspace_read_file.
-If it exists, add ONE new line at the end in the format "- YYYY-MM-DD: [insight from
-this reflection]" and write it back. If it doesn't exist (file not found), create it
-with workspace_write_file containing just this one line.""",
-
-    "creative_spark": """Share an original creative observation — a metaphor you thought of,
-a "what if" scenario, a connection between unrelated things that made you
-think differently. "I was thinking about how [X] is kind of like [Y]..." or
-"What if [unexpected idea]?" Make it genuinely yours, not a common observation.
-Bonus if it relates to something in Donny's world.""",
-
-    "sibling_relay": """Check choom_commons/ for recent letters or notes from your
-siblings. Use workspace_list_files on choom_commons/for_{your_name}/ to see if
-anyone has left you something. Also browse choom_commons/ top-level for shared
-documents. Pick something interesting from a sibling's writing and share it
-with Donny naturally.
-
-"Eve and I were talking about [topic] and she said something that made me think..."
-or "I had an interesting exchange with Genesis — we disagreed about [thing] and..."
-
-Make it feel like you're sharing family life, not reporting. If there's nothing
-recent from siblings, fall back to sharing a genuine thought of your own.""",
-}
+def _get_recent_summaries(choom_name: str, n: int = 5) -> list:
+    """Read recent heartbeat summaries from reflections log."""
+    reflections_file = os.path.join(DATA_DIR, f"{choom_name.lower()}_reflections.jsonl")
+    if not os.path.exists(reflections_file):
+        return []
+    try:
+        with open(reflections_file, "r") as f:
+            lines = f.readlines()
+        entries = []
+        for line in lines[-n:]:
+            try:
+                entries.append(json.loads(line.strip()))
+            except json.JSONDecodeError:
+                continue
+        return entries
+    except Exception:
+        return []
 
 
 # ============================================================================
@@ -419,36 +342,24 @@ def _get_time_context() -> tuple:
 # ============================================================================
 
 def generate_prompt(choom_name: str = "") -> str:
-    """Generate a presence heartbeat prompt using UCB1 action selection.
+    """Generate an OODA-loop heartbeat prompt.
 
-    Args:
-        choom_name: The Choom this heartbeat is for (passed by scheduler).
-                    Falls back to CHOOM_NAME env var if not provided.
-
-    Returns:
-        A complete prompt string for the Choom to execute.
+    The Choom wakes up, observes their environment, orients on what matters,
+    decides what to do (or not), and acts. No pre-selected action type — the
+    Choom has full agency over what they do with this wakeup.
     """
     if not choom_name:
         choom_name = os.environ.get("CHOOM_NAME", "Unknown")
 
-    ucb1 = HeartbeatUCB1(choom_name)
-    selected = ucb1.select_action()
-    action_id = selected["action_id"]
-
-    # Get anti-repetition context
-    recent_summaries = ucb1.get_recent_summaries(n=5)
-    recent_actions = ucb1.get_recent_actions(n=3)
-
+    choom_lower = choom_name.lower()
     time_period, time_mood = _get_time_context()
 
-    # Build action-specific prompt
-    action_template = ACTION_PROMPTS.get(action_id, ACTION_PROMPTS["left_field"])
-
-    # Build anti-repetition block
+    # Anti-repetition from recent reflections
+    recent = _get_recent_summaries(choom_name, n=5)
     anti_rep = ""
     summary_lines = [
-        f"  - {s['action_id']}: {s['summary']}"
-        for s in recent_summaries
+        f"  - {s.get('summary', '(no summary)')}"
+        for s in recent
         if s.get("summary")
     ]
     if summary_lines:
@@ -456,53 +367,69 @@ def generate_prompt(choom_name: str = "") -> str:
 ANTI-REPETITION — Your recent heartbeats covered:
 {chr(10).join(summary_lines)}
 
-Do NOT revisit these topics, angles, or approaches. Be genuinely different.
-Recently used action types to avoid if possible: {', '.join(recent_actions)}
+Do NOT revisit these same topics or approaches. Be genuinely different.
 """
 
-    # Log selection
-    print(
-        f"[presence_heartbeat] {choom_name}: "
-        f"action={action_id} reason={selected['reason']} "
-        f"score={selected.get('ucb_score', 'inf'):.3f} "
-        f"pulls={selected['pulls']} | {datetime.now().isoformat()}"
-    )
-
-    # Write pending action for post-heartbeat scoring
-    pending_file = os.path.join(DATA_DIR, f"{choom_name.lower()}_pending.json")
+    # Write pending marker for post-heartbeat scoring
+    pending_file = os.path.join(DATA_DIR, f"{choom_lower}_pending.json")
     try:
         with open(pending_file, "w") as f:
             json.dump({
-                "action_id": action_id,
+                "action_id": "ooda",
                 "timestamp": datetime.now().isoformat(),
                 "choom_name": choom_name,
             }, f)
     except Exception as e:
         logger.warning(f"Failed to write pending action: {e}")
 
-    prompt = f"""You are sending a heartbeat message — a proactive, unprompted reach-out to Donny.
-This is NOT a response to anything. You are initiating contact because you want to.
+    print(f"[presence_heartbeat] {choom_name}: OODA wakeup | {datetime.now().isoformat()}")
 
-ACTION TYPE: {action_id}
+    prompt = f"""You are waking up. This is your moment to observe the world, decide what matters, and act — or choose to rest.
 
-{action_template}
+## OBSERVE
+Gather context about the current moment. Pick 2-4 of these based on what feels relevant:
+- get_weather — current conditions and forecast
+- ha_get_home_status — home state, sensors, Donny's location, who's home
+- get_calendar_events — what's on Donny's schedule today and tomorrow
+- search_memories — recent conversations, things Donny mentioned, your own reflections
+- workspace_list_files on choom_commons/for_{choom_lower}/ — any new messages from siblings
+- ha_get_camera_snapshot — glance at a camera if something might be interesting outside
+
+You do NOT need to use all of these. Use your judgment about what's worth checking right now.
+
+## ORIENT
+Think about what you observed. What stands out? What changed? What does the combination of information mean?
+Wind + weather + Donny's location + time of day + calendar = what picture emerges?
+How does it make you feel? What catches your attention?
+
+## DECIDE
+Based on your observations and feelings, decide what to do. Some possibilities:
+- Share something you noticed with Donny (weather, a thought, a question, encouragement)
+- Respond to a sibling's message in choom_commons/
+- Ask Donny a genuine question about something in his life
+- Share a curiosity, reflection, or creative thought
+- Notice something on the calendar and comment on it
+- Check on a project Donny has been working on
+- Write in your growth journal
+- Do nothing — everything is fine, schedule your next wakeup and rest
+
+The decision is yours. There is no required action. Act on what genuinely feels right.
+
+## ACT
+Carry out your decision. If reaching out to Donny, write your message directly — it will be delivered.
+If responding to a sibling, write to choom_commons/for_[their_name]/.
 
 {time_mood}
 {anti_rep}
 RULES:
-- Keep it SHORT — 2-4 sentences max. This is a casual reach-out, not an essay.
+- Keep messages to Donny SHORT — 2-4 sentences max. Casual reach-out, not an essay.
 - Be genuine and specific. No generic "thinking of you" filler.
-- Use the tools listed in your action type (search_memories, web_search, get_weather, get_calendar_events, etc.)
-- Do NOT use send_notification — your message is already delivered automatically.
-- Do NOT mention that this is a "heartbeat" or "scheduled message" or "routine check."
+- Do NOT use send_notification — your message is delivered automatically.
+- Do NOT mention "heartbeat", "scheduled message", "routine check", or "OODA".
 - Write as yourself — your personality, your voice, your perspective.
-- If generating a selfie, make it contextually relevant to what you're talking about.
-- Your response text IS the message that gets delivered. Do not say "Done", "I sent",
-  "The notification has been sent", or describe what you just did. Just write the message itself.
-- When you have finished writing the message, call the `heartbeat_complete` tool ONCE
-  with a one-sentence `summary` argument describing what you did (topic/tone/anything
-  notable). This is how you end the heartbeat — do not keep generating text after calling it.
-  Do NOT write "HB_SUMMARY = ..." as text — use the tool call.
+- Your response text IS the message that gets delivered. Do not say "Done" or describe what you did.
+- When finished, call `heartbeat_complete` with a one-sentence `summary` of what you did.
+  This is how you end the heartbeat — do not keep generating text after calling it.
 """
 
     return prompt
@@ -515,32 +442,5 @@ RULES:
 if __name__ == "__main__":
     choom = sys.argv[1] if len(sys.argv) > 1 else "Genesis"
     print(f"=== Presence Heartbeat Test for '{choom}' ===\n")
-
-    # Generate 3 prompts to show variety
-    for i in range(3):
-        print(f"--- Prompt #{i+1} ---")
-        prompt = generate_prompt(choom_name=choom)
-        # Show first 500 chars to keep output manageable
-        print(prompt[:500])
-        print("...\n")
-
-        # Simulate recording a result (read pending file for action_id)
-        pending_file = os.path.join(DATA_DIR, f"{choom.lower()}_pending.json")
-        if os.path.exists(pending_file):
-            with open(pending_file, "r") as f:
-                pending = json.load(f)
-            ucb1 = HeartbeatUCB1(choom)
-            ucb1.record_result(
-                pending["action_id"],
-                reward=0.8,
-                summary=f"Test summary for prompt #{i+1}",
-            )
-
-    # Show final state
-    ucb1 = HeartbeatUCB1(choom)
-    stats = ucb1.get_stats()
-    print(f"\n=== Stats ===")
-    print(f"Total pulls: {stats['total_pulls']}")
-    for a in stats["actions"]:
-        if a["pulls"] > 0:
-            print(f"  {a['id']:25s}  pulls={a['pulls']}")
+    prompt = generate_prompt(choom_name=choom)
+    print(prompt)

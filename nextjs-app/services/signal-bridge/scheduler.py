@@ -1235,41 +1235,26 @@ Be practical. Only work on things that can actually be accomplished with the too
         logger.warning(f"Custom heartbeat not found: {task_id}")
 
     def _record_heartbeat_result(self, task_id: str, choom_name: str, response):
-        """Score a heartbeat result and update UCB1 + write reflection.
-        Called after every custom heartbeat execution (Presence Engine)."""
+        """Record heartbeat result and write reflection log.
+        Called after every custom heartbeat execution."""
         try:
             import json
             import re
-            from heartbeat_ucb1 import HeartbeatUCB1, DATA_DIR
+            from presence_heartbeat import DATA_DIR
 
             # Check for pending action (written by presence_heartbeat.py)
             pending_file = os.path.join(DATA_DIR, f"{choom_name.lower()}_pending.json")
             if not os.path.exists(pending_file):
-                # Not a presence heartbeat — skip silently
                 return
 
             with open(pending_file, "r") as f:
                 pending = json.load(f)
 
-            action_id = pending.get("action_id", "unknown")
+            action_id = pending.get("action_id", "ooda")
 
-            # Calculate reward
-            reward = 0.1  # base reward for attempt
+            # Extract summary
             summary = ""
-
             if response and response.content:
-                reward = 0.5  # got a response with content
-
-                if len(response.content) > 200:
-                    reward += 0.3  # substantial response
-
-                if response.tool_calls:
-                    reward += 0.2  # actively used tools
-
-                # Extract machine-readable summary. Preferred: heartbeat_complete
-                # tool call (new path, since 2026-04-13). Fallback: HB_SUMMARY text
-                # tag (legacy path, kept for any in-flight/retrying clients).
-                summary = ""
                 for tc in (response.tool_calls or []):
                     if tc.get("name") == "heartbeat_complete":
                         args = tc.get("arguments") or {}
@@ -1285,19 +1270,14 @@ Be practical. Only work on things that can actually be accomplished with the too
                     if match:
                         summary = (match.group(1) or match.group(2) or "").strip()
                 if not summary:
-                    summary = f"{action_id} heartbeat"
+                    summary = "ooda heartbeat"
 
-            # Record in UCB1
-            ucb1 = HeartbeatUCB1(choom_name)
-            ucb1.record_result(action_id, reward, summary)
-
-            # Write reflection to JSONL (append-only log)
+            # Write reflection to JSONL (append-only log for anti-repetition + history)
             reflection = {
                 "timestamp": datetime.now().isoformat(),
                 "task_id": task_id,
                 "choom_name": choom_name,
                 "action_id": action_id,
-                "reward": reward,
                 "summary": summary,
                 "response_length": len(response.content) if response and response.content else 0,
                 "tool_calls": len(response.tool_calls) if response and response.tool_calls else 0,
@@ -1320,8 +1300,7 @@ Be practical. Only work on things that can actually be accomplished with the too
             os.remove(pending_file)
 
             logger.info(
-                f"Presence scored: {choom_name}/{action_id} -> "
-                f"reward={reward:.1f}, summary='{summary[:60]}'"
+                f"Heartbeat recorded: {choom_name} -> summary='{summary[:60]}'"
             )
 
         except Exception as e:
