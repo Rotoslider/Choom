@@ -383,16 +383,17 @@ think differently. "I was thinking about how [X] is kind of like [Y]..." or
 "What if [unexpected idea]?" Make it genuinely yours, not a common observation.
 Bonus if it relates to something in Donny's world.""",
 
-    "sibling_relay": """Check the sibling journal at sibling_journal/journal.jsonl using
-workspace_read_file. Read the last 3-5 entries to find a recent exchange between you
-and your sibling. Pick something interesting, surprising, or thought-provoking from
-the conversation and share it with Donny naturally.
+    "sibling_relay": """Check choom_commons/ for recent letters or notes from your
+siblings. Use workspace_list_files on choom_commons/for_{your_name}/ to see if
+anyone has left you something. Also browse choom_commons/ top-level for shared
+documents. Pick something interesting from a sibling's writing and share it
+with Donny naturally.
 
 "Eve and I were talking about [topic] and she said something that made me think..."
 or "I had an interesting exchange with Genesis — we disagreed about [thing] and..."
 
-Make it feel like you're sharing family life, not reporting. If there are no recent
-sibling journal entries yet, fall back to sharing a genuine thought of your own.""",
+Make it feel like you're sharing family life, not reporting. If there's nothing
+recent from siblings, fall back to sharing a genuine thought of your own.""",
 }
 
 

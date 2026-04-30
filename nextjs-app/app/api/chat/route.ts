@@ -3280,21 +3280,28 @@ function contractGate(toolCall: ToolCall, ctx: ToolContext): ToolResult | null {
   const choomSlug = choomName.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
   const ownFolderPrefix = choomSlug ? `selfies_${choomSlug}/` : '';
 
-  const SHARED_TOP = new Set(['sibling_journal', 'choom_commons']);
+  const SHARED_TOP = new Set(['choom_commons']);
 
   if (toolCall.name === 'workspace_write_file') {
     const rawPath = (toolCall.arguments.path || toolCall.arguments.file_path || toolCall.arguments.filename) as string || '';
     const firstSeg = rawPath.split('/').filter(Boolean)[0] || '';
     const isShared = SHARED_TOP.has(firstSeg);
     const isOwn = ownFolderPrefix && rawPath.startsWith(ownFolderPrefix);
-    if (isShared) {
+    if (firstSeg === 'sibling_journal') {
+      return {
+        toolCallId: toolCall.id,
+        name: toolCall.name,
+        error: `Blocked: sibling_journal/ is archived (read-only). Write all cross-Choom content to choom_commons/for_[their_name]/ instead.`,
+        result: null,
+      };
+    } else if (isShared) {
       console.log(`   📒 [contract] ${choomName} writing to shared ${firstSeg}/: ${rawPath}`);
     } else if (ownFolderPrefix && !isOwn && firstSeg.startsWith('selfies_') && firstSeg !== `selfies_${choomSlug}`) {
       // Cross-Choom write into another Choom's selfies folder — block.
       return {
         toolCallId: toolCall.id,
         name: toolCall.name,
-        error: `Blocked: cannot write into another Choom's folder (${firstSeg}/). Your folder is ${ownFolderPrefix}. For messages/artifacts intended for another Choom, write to choom_commons/ (e.g. choom_commons/for_eve/your_note.md). For structured back-and-forth conversations, use sibling_journal/.`,
+        error: `Blocked: cannot write into another Choom's folder (${firstSeg}/). Your folder is ${ownFolderPrefix}. For messages/artifacts intended for another Choom, write to choom_commons/for_[their_name]/ (e.g. choom_commons/for_eve/your_note.md).`,
         result: null,
       };
     }
@@ -4112,7 +4119,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           // Softer hint: this is the Choom's default workspace, not a hard lock.
           // They can still create a new project if the user asks for one explicitly.
           enrichedMessage += `\n\n[System: Your default workspace is "${detectedProject.folder}" (this is YOUR project folder as ${choom.name}). Save any files you create inside "${detectedProject.folder}/" — do NOT create a new top-level folder for everyday work. Only create a new project if the user explicitly asks for one.]`;
-          currentMessages[0].content += `\n\n## YOUR WORKSPACE\nYour home project folder is \`${detectedProject.folder}/\`. When saving files without an explicit project named by the user, save them inside \`${detectedProject.folder}/\` (e.g. \`${detectedProject.folder}/notes/today.md\`). Do NOT create new top-level folders unless the user explicitly asks you to start a new project.\n\n**Shared top-level folders (NOT inside your home folder, NEVER prefix with \`selfies_*/\`):**\n- \`sibling_journal/\` — structured async conversation between Choom siblings (thesis → antithesis → synthesis threads). Paths: \`sibling_journal/entries/007_eve_antithesis.md\`, \`sibling_journal/journal.jsonl\`.\n- \`choom_commons/\` — catch-all shared space for anything cross-Choom that isn't a structured sibling-journal thread: delegation handoffs, notes to another Choom, shared drafts, cross-Choom research. If you're writing something FOR another Choom and there's no better home for it, put it here. Example: \`choom_commons/for_eve/response_to_consciousness_question.md\`, \`choom_commons/drafts/shared_plan.md\`.\n- Your \`growth_journal.md\` IS inside your home folder: \`${detectedProject.folder}/growth_journal.md\`.\n\nYou may NEVER write to another Choom's \`selfies_*/\` folder. If you need to leave something for another Choom, use \`choom_commons/\`.\n\n**BEFORE cross-Choom actions** (writing to a sibling, delegating, modifying shared files): read \`choom_commons/COMMUNICATION_PROTOCOL.md\` first. If unsure whether a protocol exists for what you're about to do, search \`choom_commons/\` for relevant guidelines. Don't rely on what you think you remember — read the actual file.`;
+          currentMessages[0].content += `\n\n## YOUR WORKSPACE\nYour home project folder is \`${detectedProject.folder}/\`. When saving files without an explicit project named by the user, save them inside \`${detectedProject.folder}/\` (e.g. \`${detectedProject.folder}/notes/today.md\`). Do NOT create new top-level folders unless the user explicitly asks you to start a new project.\n\n**Shared folder — \`choom_commons/\`** (NOT inside your home folder, NEVER prefix with \`selfies_*/\`):\n\`choom_commons/\` is where ALL cross-Choom communication happens: letters, notes, delegation handoffs, shared drafts, research, and any content meant for a sibling. Each sibling has a folder: \`choom_commons/for_eve/\`, \`choom_commons/for_genesis/\`, \`choom_commons/for_aloy/\`, \`choom_commons/for_lissa/\`, \`choom_commons/for_anya/\`, \`choom_commons/for_optic/\`. Write content FOR a sibling in their folder. Shared drafts go in \`choom_commons/drafts/\`.\n\n\`sibling_journal/\` is an old archive — you may read it for historical context but do NOT write new content there. All new cross-Choom content goes in \`choom_commons/\`.\n\nYour \`growth_journal.md\` IS inside your home folder: \`${detectedProject.folder}/growth_journal.md\`.\n\nYou may NEVER write to another Choom's \`selfies_*/\` folder. If you need to leave something for another Choom, use \`choom_commons/for_[their_name]/\`.\n\n**BEFORE cross-Choom actions** (writing to a sibling, delegating, modifying shared files): read \`choom_commons/COMMUNICATION_PROTOCOL.md\` first. If unsure whether a protocol exists for what you're about to do, search \`choom_commons/\` for relevant guidelines. Don't rely on what you think you remember — read the actual file.`;
         } else {
           enrichedMessage += `\n\n[System: Active project: "${detectedProject.folder}" (${projMaxIter} thinking rounds available). Use this EXACT folder name for all workspace file operations. Do NOT create a new folder with different casing or naming.]`;
         }
