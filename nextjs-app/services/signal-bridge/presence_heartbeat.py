@@ -265,10 +265,11 @@ angles, and built on each other's ideas. Now synthesize:
    most important thing you learned.
 
 Also: Update your growth journal after writing your entry.
-  Use workspace_read_file to read "selfies_{choom_name.lower()}/growth_journal.md"
-  (create it if it doesn't exist). Add ONE new line at the end:
+  Try workspace_read_file on "selfies_{choom_name.lower()}/growth_journal.md".
+  If it exists, append ONE new line at the end. If it doesn't exist (file not found),
+  create it with workspace_write_file containing just this one line:
   "- {datetime.now().strftime('%Y-%m-%d')}: [what you learned from this exchange with {sibling}]"
-  Then write the updated file back with workspace_write_file."""
+  Then write the file back."""
 
     # Common instructions for all turn types
     prompt = f"""You're having an asynchronous conversation with {sibling} in a shared journal.
@@ -370,10 +371,11 @@ thinking about what it means that I..." or "Something I noticed about how I
 experience [thing]..." Be honest, not performative. If you're uncertain about
 something, say so.
 
-GROWTH: After sharing your reflection, update your growth journal. Use workspace_read_file
-to read your growth journal (your project folder + "/growth_journal.md"), add ONE new line
-at the end in the format "- YYYY-MM-DD: [insight from this reflection]", then write it back.
-If the file doesn't exist, create it with just this one line.""",
+GROWTH: After sharing your reflection, update your growth journal. Try reading your
+growth journal (your project folder + "/growth_journal.md") with workspace_read_file.
+If it exists, add ONE new line at the end in the format "- YYYY-MM-DD: [insight from
+this reflection]" and write it back. If it doesn't exist (file not found), create it
+with workspace_write_file containing just this one line.""",
 
     "creative_spark": """Share an original creative observation — a metaphor you thought of,
 a "what if" scenario, a connection between unrelated things that made you

@@ -41,8 +41,14 @@ export default class WebSearchHandler extends BaseSkillHandler {
 
   private async handleWebSearch(toolCall: ToolCall, ctx: SkillHandlerContext): Promise<ToolResult> {
     try {
+      const runtimeDefaults: SearchSettings = {
+        ...defaultSearchSettings,
+        braveApiKey: defaultSearchSettings.braveApiKey || process.env.BRAVE_API_KEY || '',
+        searxngEndpoint: defaultSearchSettings.searxngEndpoint || process.env.SEARXNG_ENDPOINT || '',
+        serpApiKey: defaultSearchSettings.serpApiKey || process.env.SERP_API_KEY || '',
+      };
       const searchSettings: SearchSettings = smartMerge(
-        defaultSearchSettings,
+        runtimeDefaults,
         ctx.settings?.search as Partial<SearchSettings> | undefined,
       );
 

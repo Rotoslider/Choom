@@ -281,14 +281,26 @@ export async function executeMemoryTool(
         companionId
       );
 
-    case 'update_memory':
-      return client.update(args.memory_id as string, {
+    case 'update_memory': {
+      const memoryId = args.memory_id as string;
+      if (!memoryId || memoryId.trim().length === 0) {
+        return { success: false, reason: 'memory_id is required. Call search_memories or get_recent_memories first to find the ID of the memory you want to update.' };
+      }
+      const result = await client.update(memoryId, {
         title: args.title as string,
         content: args.content as string,
         tags: args.tags as string,
         importance: args.importance != null ? Math.round(args.importance as number) : undefined,
         memory_type: args.memory_type as MemoryType,
       });
+      if (result && typeof result === 'object' && 'success' in result && !(result as { success: boolean }).success) {
+        const reason = (result as { reason?: string }).reason || '';
+        if (reason.toLowerCase().includes('not found')) {
+          return { success: false, reason: `Memory "${memoryId}" not found. This ID may be incorrect — call search_memories to find valid IDs, or use remember to create a new memory instead.` };
+        }
+      }
+      return result;
+    }
 
     case 'delete_memory':
       return client.delete(args.memory_id as string);

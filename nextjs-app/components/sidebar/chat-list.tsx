@@ -72,7 +72,7 @@ export function ChatList({
       </div>
 
       <ScrollArea className="flex-1">
-        <div className="p-2 space-y-1">
+        <div className="p-2 space-y-1 overflow-hidden">
           {chats.length === 0 ? (
             <div className="px-3 py-6 text-center">
               <MessageSquare className="h-8 w-8 mx-auto text-muted-foreground/50 mb-2" />
@@ -94,51 +94,53 @@ export function ChatList({
               <div
                 key={chat.id}
                 className={cn(
-                  'group relative flex items-center gap-2 px-3 py-2 rounded-lg transition-all duration-200',
+                  'group grid grid-cols-[1fr_auto] items-center gap-1 px-3 py-2 rounded-lg transition-all duration-200',
                   'hover:bg-muted/50 cursor-pointer',
                   selectedId === chat.id &&
                     'bg-primary/10 border border-primary/30'
                 )}
                 onClick={() => editingId !== chat.id && onSelect(chat.id)}
               >
-                <MessageSquare className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
-                <div className="min-w-0" style={{ maxWidth: 'calc(100% - 3.5rem)' }}>
-                  {editingId === chat.id ? (
-                    <Input
-                      value={editTitle}
-                      onChange={(e) => setEditTitle(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') handleSaveRename(chat.id);
-                        if (e.key === 'Escape') handleCancelRename();
-                      }}
-                      onBlur={() => handleSaveRename(chat.id)}
-                      className="h-6 text-sm px-1"
-                      autoFocus
-                      onClick={(e) => e.stopPropagation()}
-                    />
-                  ) : (
-                    <p
-                      className={cn(
-                        'text-sm font-medium line-clamp-2',
-                        selectedId === chat.id && 'text-primary'
-                      )}
-                      title={chat.title || 'New Chat'}
-                    >
-                      {chat.title || 'New Chat'}
+                <div className="flex items-center gap-2 overflow-hidden">
+                  <MessageSquare className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+                  <div className="overflow-hidden">
+                    {editingId === chat.id ? (
+                      <Input
+                        value={editTitle}
+                        onChange={(e) => setEditTitle(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') handleSaveRename(chat.id);
+                          if (e.key === 'Escape') handleCancelRename();
+                        }}
+                        onBlur={() => handleSaveRename(chat.id)}
+                        className="h-6 text-sm px-1"
+                        autoFocus
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                    ) : (
+                      <p
+                        className={cn(
+                          'text-sm font-medium truncate',
+                          selectedId === chat.id && 'text-primary'
+                        )}
+                        title={chat.title || 'New Chat'}
+                      >
+                        {chat.title || 'New Chat'}
+                      </p>
+                    )}
+                    <p className="text-xs text-muted-foreground truncate">
+                      {formatRelativeTime(chat.updatedAt)}
                     </p>
-                  )}
-                  <p className="text-xs text-muted-foreground truncate">
-                    {formatRelativeTime(chat.updatedAt)}
-                  </p>
+                  </div>
                 </div>
 
-                {/* Dropdown menu for actions - always visible */}
+                {/* Dropdown menu - in grid auto column so it can never be pushed off */}
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-6 w-6 flex-shrink-0"
+                      className="h-6 w-6"
                       onClick={(e) => e.stopPropagation()}
                     >
                       <MoreHorizontal className="h-4 w-4" />
