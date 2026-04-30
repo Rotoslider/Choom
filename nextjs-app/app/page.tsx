@@ -514,6 +514,51 @@ export default function Home() {
     [chooms, currentChoomId, setChooms, setCurrentChoomData]
   );
 
+  // Handle deleting choom
+  const handleDeleteChoom = useCallback(
+    async (id: string) => {
+      const choomToDelete = chooms.find((c) => c.id === id);
+      if (!choomToDelete) return;
+
+      try {
+        const res = await fetch(`/api/chooms/${id}`, {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ confirmName: choomToDelete.name }),
+        });
+
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.error || 'Failed to delete choom');
+        }
+
+        const remaining = chooms.filter((c) => c.id !== id);
+        setChooms(remaining);
+
+        if (currentChoomId === id) {
+          if (remaining.length > 0) {
+            setCurrentChoom(remaining[0].id);
+            setCurrentChoomData(remaining[0]);
+          } else {
+            setCurrentChoom(null);
+            setCurrentChoomData(null);
+          }
+          setCurrentChat(null);
+          setCurrentChatData(null);
+          setChats([]);
+          setMessages([]);
+        }
+
+        setChoomEditOpen(false);
+        setEditingChoom(null);
+      } catch (error) {
+        console.error('Failed to delete choom:', error);
+        throw error;
+      }
+    },
+    [chooms, currentChoomId, setChooms, setCurrentChoom, setCurrentChoomData, setCurrentChat, setCurrentChatData, setChats, setMessages]
+  );
+
   // Handle sending message
   const handleSendMessage = useCallback(
     async (content: string) => {
@@ -939,6 +984,7 @@ export default function Home() {
         open={choomEditOpen}
         onOpenChange={setChoomEditOpen}
         onSave={handleSaveChoom}
+        onDelete={handleDeleteChoom}
       />
 
       {/* Image Gallery */}

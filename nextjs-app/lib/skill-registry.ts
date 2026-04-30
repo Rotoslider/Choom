@@ -625,6 +625,25 @@ export class SkillRegistry {
       }
     }
 
+    // Tier 2d: suffix/substring — models drop namespace prefixes
+    // e.g. "write_file" → "workspace_write_file", "search" → "web_search"
+    if (name.length >= 6) {
+      const normInput = name.toLowerCase().replace(/[-_]/g, '');
+      let suffixMatch: string | null = null;
+      let suffixAmbiguous = false;
+      for (const [toolName] of this.toolIndex) {
+        const normTool = toolName.toLowerCase().replace(/[-_]/g, '');
+        if (normTool.endsWith(normInput) && normTool !== normInput) {
+          if (suffixMatch) { suffixAmbiguous = true; break; }
+          suffixMatch = toolName;
+        }
+      }
+      if (suffixMatch && !suffixAmbiguous) {
+        console.log(`   🔧 Fuzzy tool resolve (tier 2d, suffix): "${name}" → "${suffixMatch}"`);
+        return suffixMatch;
+      }
+    }
+
     // Tier 3: Levenshtein — only when name is at least 4 chars (avoid matching short garbage)
     if (name.length >= 4) {
       const maxDist = Math.min(5, Math.max(1, Math.floor(name.length * 0.3)));

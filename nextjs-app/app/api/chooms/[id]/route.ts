@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { readFileSync, writeFileSync } from 'fs';
+import path from 'path';
 import prisma from '@/lib/db';
 
 // GET /api/chooms/[id] - Get a single choom
@@ -95,18 +97,66 @@ export async function PUT(
   }
 }
 
-// DELETE /api/chooms/[id] - Delete a choom
+// DELETE /api/chooms/[id] - Delete a choom and all associated data
 export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const { id } = await params;
-    await prisma.choom.delete({
-      where: { id },
-    });
+    const body = await request.json().catch(() => ({}));
+    const { confirmName } = body as { confirmName?: string };
 
-    return NextResponse.json({ success: true });
+    const choom = await prisma.choom.findUnique({ where: { id } });
+    if (!choom) {
+      return NextResponse.json({ error: 'Choom not found' }, { status: 404 });
+    }
+
+    if (!confirmName || confirmName !== choom.name) {
+      return NextResponse.json(
+        { error: 'Confirmation name does not match. Deletion aborted.' },
+        { status: 400 }
+      );
+    }
+
+    const cleaned: Record<string, number> = {};
+
+    // Clean up non-cascading tables
+    const activityResult = await prisma.activityLog.deleteMany({ where: { choomId: id } });
+    cleaned.activityLogs = activityResult.count;
+
+    const notifResult = await prisma.notification.deleteMany({ where: { choomId: id } });
+    cleaned.notifications = notifResult.count;
+
+    const habitResult = await prisma.habitEntry.deleteMany({ where: { choomId: id } });
+    cleaned.habitEntries = habitResult.count;
+
+    const tokenResult = await prisma.tokenUsage.deleteMany({ where: { choomId: id } });
+    cleaned.tokenUsage = tokenResult.count;
+
+    // Delete the Choom (cascades Chat, Message, GeneratedImage)
+    await prisma.choom.delete({ where: { id } });
+
+    // Clean up heartbeat entries in bridge-config.json
+    try {
+      const configPath = path.join(process.cwd(), 'services', 'signal-bridge', 'bridge-config.json');
+      const config = JSON.parse(readFileSync(configPath, 'utf-8'));
+      if (config.heartbeat?.custom_tasks) {
+        const before = config.heartbeat.custom_tasks.length;
+        config.heartbeat.custom_tasks = config.heartbeat.custom_tasks.filter(
+          (t: { choom_name?: string }) =>
+            t.choom_name?.toLowerCase() !== choom.name.toLowerCase()
+        );
+        cleaned.heartbeats = before - config.heartbeat.custom_tasks.length;
+        if (cleaned.heartbeats > 0) {
+          writeFileSync(configPath, JSON.stringify(config, null, 2));
+        }
+      }
+    } catch (e) {
+      console.warn('Could not clean bridge-config heartbeats:', e);
+    }
+
+    return NextResponse.json({ success: true, cleaned });
   } catch (error) {
     console.error('Failed to delete choom:', error);
     return NextResponse.json(

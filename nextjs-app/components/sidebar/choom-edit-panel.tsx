@@ -40,6 +40,7 @@ interface ChoomEditPanelProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSave: (choom: Partial<Choom>) => Promise<void>;
+  onDelete?: (id: string) => Promise<void>;
 }
 
 interface ModelOption {
@@ -532,7 +533,7 @@ function ImageModeSettingsEditor({
   );
 }
 
-export function ChoomEditPanel({ choom, open, onOpenChange, onSave }: ChoomEditPanelProps) {
+export function ChoomEditPanel({ choom, open, onOpenChange, onSave, onDelete }: ChoomEditPanelProps) {
   // Get settings for endpoints
   const { settings } = useAppStore();
 
@@ -568,6 +569,17 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave }: ChoomEditP
   const [schedulers, setSchedulers] = useState<SchedulerOption[]>([]);
   const [isLoadingOptions, setIsLoadingOptions] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+
+  // Delete confirmation state
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleteConfirmName, setDeleteConfirmName] = useState('');
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  // Reset delete state when choom changes or dialog closes
+  useEffect(() => {
+    setShowDeleteConfirm(false);
+    setDeleteConfirmName('');
+  }, [choom?.id, open]);
 
   // Load initial data when choom changes
   useEffect(() => {
@@ -768,6 +780,21 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave }: ChoomEditP
       console.error('Failed to save choom:', error);
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!choom || !onDelete || deleteConfirmName !== choom.name) return;
+    setIsDeleting(true);
+    try {
+      await onDelete(choom.id);
+      setShowDeleteConfirm(false);
+      setDeleteConfirmName('');
+      onOpenChange(false);
+    } catch (error) {
+      console.error('Failed to delete choom:', error);
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -1295,16 +1322,78 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave }: ChoomEditP
         </Tabs>
 
         {/* Footer */}
-        <div className="flex items-center justify-end gap-2 p-4 border-t">
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>
-            <X className="h-4 w-4 mr-2" />
-            Cancel
-          </Button>
-          <Button onClick={handleSave} disabled={isSaving}>
-            <Save className="h-4 w-4 mr-2" />
-            {isSaving ? 'Saving...' : 'Save'}
-          </Button>
+        <div className="flex items-center justify-between p-4 border-t">
+          <div>
+            {onDelete && !showDeleteConfirm && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowDeleteConfirm(true)}
+                className="text-red-400 hover:text-red-300 hover:bg-red-950/30"
+              >
+                <Trash2 className="h-4 w-4 mr-2" />
+                Delete Choom
+              </Button>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" onClick={() => { setShowDeleteConfirm(false); setDeleteConfirmName(''); onOpenChange(false); }}>
+              <X className="h-4 w-4 mr-2" />
+              Cancel
+            </Button>
+            <Button onClick={handleSave} disabled={isSaving}>
+              <Save className="h-4 w-4 mr-2" />
+              {isSaving ? 'Saving...' : 'Save'}
+            </Button>
+          </div>
         </div>
+
+        {/* Delete confirmation */}
+        {showDeleteConfirm && (
+          <div className="border-t border-red-900/50 bg-red-950/20 p-4 space-y-3">
+            <div className="flex items-start gap-2">
+              <AlertCircle className="h-5 w-5 text-red-400 flex-shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <p className="text-sm font-medium text-red-400">
+                  Permanently delete {choom.name}?
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  This will remove all chats, messages, images, activity logs, notifications, habit entries, token usage records, and heartbeat schedules for this Choom. This cannot be undone.
+                </p>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <label className="text-xs text-muted-foreground">
+                Type <span className="font-mono font-bold text-red-400">{choom.name}</span> to confirm:
+              </label>
+              <Input
+                value={deleteConfirmName}
+                onChange={(e) => setDeleteConfirmName(e.target.value)}
+                placeholder={choom.name}
+                className="h-8 text-sm border-red-900/50 focus:border-red-500"
+                autoComplete="off"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={handleDelete}
+                disabled={deleteConfirmName !== choom.name || isDeleting}
+              >
+                <Trash2 className="h-4 w-4 mr-2" />
+                {isDeleting ? 'Deleting...' : 'Delete permanently'}
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => { setShowDeleteConfirm(false); setDeleteConfirmName(''); }}
+              >
+                Nevermind
+              </Button>
+            </div>
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   );

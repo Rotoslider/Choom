@@ -23,7 +23,7 @@ const TOOL_NAMES = new Set([
 
 const MIN_DELAY_MIN = 5;
 const MAX_DELAY_MIN = 30 * 24 * 60; // 30 days
-const MAX_PROMPT_CHARS = 1000;
+const MAX_PROMPT_CHARS = 2000;
 const MAX_PENDING_PER_CHOOM = 100;
 
 export default class SelfSchedulingHandler extends BaseSkillHandler {

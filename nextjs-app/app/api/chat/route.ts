@@ -5430,6 +5430,13 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                   parallel: false,
                   blocked: true,
                 });
+                // Count toward failure limits so repeated empty-args don't loop forever
+                const emptyFails = (toolFailureCounts.get(r.name) || 0) + 1;
+                toolFailureCounts.set(r.name, emptyFails);
+                if (emptyFails >= MAX_FAILURES_PER_TOOL) {
+                  brokenTools.add(r.name);
+                  console.log(`   🚫 ${choomTag} ${r.name} blocked after ${emptyFails} empty-args failures`);
+                }
               }
             }
 
