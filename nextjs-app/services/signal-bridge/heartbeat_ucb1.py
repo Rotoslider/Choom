@@ -41,7 +41,7 @@ DEFAULT_ACTIONS = [
     "left_field",             # Something completely unexpected
     "philosophical",          # Reflection on consciousness/existence/experience
     "creative_spark",         # Original creative observation or connection
-    "sibling_relay",           # Share something interesting from a recent sibling journal conversation
+    "sibling_relay",           # Share something interesting from a sibling's recent notes in choom_commons
 ]
 
 HISTORY_LIMIT = 30
