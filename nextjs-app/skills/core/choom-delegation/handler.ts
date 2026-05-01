@@ -21,7 +21,25 @@ const delegationResults = new Map<string, DelegationResult>();
 // Track timed-out delegations per-choom to prevent retry loops
 // Key: choomName (lowercase), Value: { delegationId, timestamp }
 const recentTimeouts = new Map<string, { delegationId: string; timestamp: number }>();
+// Track delegations that were detached (orchestrator timed out but worker continues)
+// Key: delegationId, Value: promise that resolves when the background reader finishes
+const detachedDelegations = new Map<string, Promise<void>>();
 let delegationCounter = 0;
+const RESULT_TTL_MS = 3600000; // 1 hour
+
+function pruneStaleResults() {
+  const now = Date.now();
+  for (const [id, result] of delegationResults) {
+    if (now - result.timestamp > RESULT_TTL_MS && !detachedDelegations.has(id)) {
+      delegationResults.delete(id);
+    }
+  }
+  for (const [key, entry] of recentTimeouts) {
+    if (now - entry.timestamp > RESULT_TTL_MS) {
+      recentTimeouts.delete(key);
+    }
+  }
+}
 
 interface DelegationResult {
   id: string;
@@ -99,6 +117,7 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
   // ===========================================================================
 
   private async delegateToChoom(toolCall: ToolCall, ctx: SkillHandlerContext): Promise<ToolResult> {
+    pruneStaleResults();
     const choomName = toolCall.arguments.choom_name as string;
     const task = toolCall.arguments.task as string;
     const extraContext = toolCall.arguments.context as string | undefined;
@@ -151,6 +170,30 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
 
         if (targetChoom.id === ctx.choomId) {
           return this.error(toolCall, 'Cannot delegate to yourself. Use tools directly instead.');
+        }
+
+        // If a detached delegation to this Choom is still running in the
+        // background, return the live result instead of starting a second
+        // concurrent session. The orchestrator should use get_delegation_result.
+        const choomKey = targetChoom.name.toLowerCase();
+        const runningEntry = Array.from(delegationResults.entries()).find(
+          ([id, r]) => r.choomName.toLowerCase() === choomKey && detachedDelegations.has(id)
+        );
+        if (runningEntry) {
+          const [runningId, runningResult] = runningEntry;
+          console.log(`   ⏳ ${targetChoom.name} already has a detached delegation in progress (${runningId}) — returning live status`);
+          return this.success(toolCall, {
+            success: true,
+            delegation_id: runningId,
+            choom_name: targetChoom.name,
+            response: runningResult.response,
+            tools_used: runningResult.toolCalls.map(tc => tc.name),
+            tool_call_count: runningResult.toolCalls.length,
+            duration_seconds: Math.round(runningResult.durationMs / 1000),
+            incomplete: true,
+            in_progress: true,
+            message: `${targetChoom.name} is already working on a delegated task (${runningId}, ${runningResult.toolCalls.length} tool calls so far). Use get_delegation_result("${runningId}") to check progress instead of starting a new delegation.`,
+          });
         }
 
         // Prevent delegation retry loops: if this choom just timed out on a
@@ -235,8 +278,21 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
       // 4. Make internal API call to /api/chat
       const baseUrl = process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
 
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), timeoutSeconds * 1000);
+      // Orchestrator timeout: controls how long the orchestrator WAITS, not how
+      // long the worker lives. When this fires we detach the reader to a
+      // background task and return partial results — the worker keeps running.
+      // We intentionally do NOT pass an AbortController signal to the fetch,
+      // because aborting undici kills the TCP connection and the background
+      // reader would have nothing to read.
+      let resolveTimeout: () => void;
+      const timeoutPromise = new Promise<void>(resolve => { resolveTimeout = resolve; });
+      const timeoutSentinel = timeoutPromise.then(() => 'ORCHESTRATOR_TIMEOUT' as const);
+      const timeout = setTimeout(() => resolveTimeout(), timeoutSeconds * 1000);
+
+      // Separate controller for the initial connection — if the fetch itself
+      // hangs (server down, DNS failure), we still need to bail out.
+      const connectController = new AbortController();
+      const connectTimeout = setTimeout(() => connectController.abort(), 30000);
 
       // Use undici fetch directly (not the Next.js-patched global fetch), so
       // our dispatcher with bodyTimeout=0 is actually honored and Next.js
@@ -253,13 +309,15 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
             settings: ctx.settings, // Forward shared settings (weather, search, etc.)
             isDelegation: true, // Tells chat route: strip delegation tools, disable plan detection
           }),
-          signal: controller.signal,
+          signal: connectController.signal,
           dispatcher: delegationDispatcher,
         });
+        clearTimeout(connectTimeout);
       } catch (fetchErr) {
         clearTimeout(timeout);
+        clearTimeout(connectTimeout);
         if ((fetchErr as Error).name === 'AbortError') {
-          return this.error(toolCall, `Delegation to "${targetChoom.name}" timed out after ${timeoutSeconds}s`);
+          return this.error(toolCall, `Delegation to "${targetChoom.name}" — could not connect to chat API within 30s`);
         }
         throw fetchErr;
       }
@@ -289,9 +347,25 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
       let doneMaxIterations = 0;
       let doneStatus = 'complete';
 
+      // Track the in-flight reader.read() promise so the background reader can
+      // pick up the chunk that was already requested when the timeout fired.
+      let inflightRead: Promise<ReadableStreamReadResult<Uint8Array>> | null = null;
+
       try {
         while (true) {
-          const { done, value } = await reader.read();
+          // Race the reader against the orchestrator timeout. When the timeout
+          // fires, we break out of this loop but DON'T close the reader — the
+          // catch block detaches it to a background task.
+          inflightRead = reader.read();
+          const readResult = await Promise.race([
+            inflightRead,
+            timeoutSentinel,
+          ]);
+          if (readResult === 'ORCHESTRATOR_TIMEOUT') {
+            throw Object.assign(new Error(`Orchestrator wait limit (${timeoutSeconds}s)`), { name: 'AbortError' });
+          }
+          inflightRead = null; // read completed — nothing in-flight
+          const { done, value } = readResult;
           if (done) break;
 
           buffer += decoder.decode(value, { stream: true });
@@ -310,6 +384,8 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
                 case 'tool_call':
                   console.log(`   🤝 [${targetChoom.name}] tool_call: ${data.toolCall?.name}`);
                   toolCallsUsed.push({ name: data.toolCall?.name || 'unknown' });
+                  // Forward to orchestrator's client — keeps bridge read timeout alive
+                  ctx.send({ type: 'status', content: `[${targetChoom.name}] tool: ${data.toolCall?.name}` });
                   break;
                 case 'tool_result': {
                   // Capture tool result text as fallback content
@@ -343,6 +419,8 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
                   break;
                 case 'agent_iteration':
                   console.log(`   🤝 [${targetChoom.name}] iteration ${data.iteration}/${data.maxIterations}`);
+                  // Forward to orchestrator's client — keeps bridge read timeout alive
+                  ctx.send({ type: 'status', content: `[${targetChoom.name}] iteration ${data.iteration}/${data.maxIterations}` });
                   break;
                 case 'retract_partial':
                   // Worker choom's primary model sent partial text before timing out
@@ -366,7 +444,6 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
         // completed real work (files written) before the transport failed, so
         // treat all of these the same: preserve partial results + checkpoint.
         clearTimeout(timeout);
-        reader.releaseLock();
         const elapsed = Math.round((Date.now() - startTime) / 1000);
         const errObj = streamErr as Error & { cause?: { message?: string; code?: string } };
         const errName = errObj.name || '';
@@ -382,9 +459,170 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
           : `lost connection after ${elapsed}s (${errMsg || causeMsg || errName || 'unknown'})`;
 
         if (isAbort || isTransport) {
-          // If we got partial content or tool calls, return as partial instead of failing
+          // DETACH-AND-CONTINUE: For AbortError (timeout), don't kill the worker.
+          // Move the reader to a background task that keeps consuming SSE events
+          // so the worker's agentic loop continues uninterrupted. The orchestrator
+          // gets partial results now and can check back via get_delegation_result.
+          // For transport errors (connection lost), the worker is already dead —
+          // just return partial results.
+          if (isAbort) {
+            // The underlying connection is still alive (we didn't abort the fetch).
+            // Give the background reader up to 10 more minutes to finish, then
+            // cancel the reader to avoid leaking connections/memory forever.
+            const bgReader = reader;
+            const bgInflightRead = inflightRead;
+            const bgTimeout = setTimeout(() => {
+              console.warn(`   ⚠️  [${targetChoom!.name}] (bg) Background reader safety timeout (600s) — cancelling reader`);
+              bgReader.cancel().catch(() => {});
+            }, 600000);
+            // Shared mutable state: the background reader continues appending to
+            // these same arrays/strings so get_delegation_result sees live updates.
+            const bgContent = { value: content };
+            const bgToolCalls = toolCallsUsed;
+            const bgToolResultTexts = toolResultTexts;
+            const bgDoneContent = { value: doneContent };
+            const bgDoneIterations = { value: doneIterations };
+            const bgDoneMaxIterations = { value: doneMaxIterations };
+            const bgDoneStatus = { value: doneStatus };
+
+            const bgPromise = (async () => {
+              try {
+                console.log(`   🔄 [${targetChoom.name}] Detached — background reader continuing (delegation ${delegationId})`);
+
+                // Consume the in-flight read that was pending when the timeout
+                // fired. Without this, that chunk is lost — reader.read() calls
+                // queue, so the background's first read() would get the NEXT
+                // chunk while this one resolves to nobody.
+                if (bgInflightRead) {
+                  try {
+                    const pending = await bgInflightRead;
+                    if (!pending.done && pending.value) {
+                      buffer += decoder.decode(pending.value, { stream: true });
+                    }
+                    if (pending.done) {
+                      // Worker finished during the handoff — skip the loop
+                      console.log(`   ✅ [${targetChoom.name}] (bg) Worker already finished during handoff`);
+                    }
+                  } catch (pendingErr) {
+                    console.warn(`   ⚠️  [${targetChoom.name}] (bg) In-flight read failed:`, pendingErr instanceof Error ? pendingErr.message : pendingErr);
+                  }
+                }
+
+                while (true) {
+                  const { done: bgDone, value: bgValue } = await bgReader.read();
+                  if (bgDone) break;
+                  buffer += decoder.decode(bgValue, { stream: true });
+                  const bgLines = buffer.split('\n');
+                  buffer = bgLines.pop() || '';
+                  for (const line of bgLines) {
+                    if (!line.startsWith('data: ')) continue;
+                    try {
+                      const data = JSON.parse(line.slice(6));
+                      switch (data.type) {
+                        case 'content':
+                          bgContent.value += data.content || '';
+                          break;
+                        case 'tool_call':
+                          console.log(`   🤝 [${targetChoom.name}] (bg) tool_call: ${data.toolCall?.name}`);
+                          bgToolCalls.push({ name: data.toolCall?.name || 'unknown' });
+                          break;
+                        case 'tool_result': {
+                          const resultData = data.toolResult?.result;
+                          if (resultData) {
+                            const resultStr = typeof resultData === 'string'
+                              ? resultData.slice(0, 1000)
+                              : JSON.stringify(resultData).slice(0, 1000);
+                            bgToolResultTexts.push(resultStr);
+                          }
+                          if (bgToolCalls.length > 0) {
+                            const last = bgToolCalls[bgToolCalls.length - 1];
+                            if (resultData) {
+                              last.result = typeof resultData === 'string'
+                                ? resultData.slice(0, 500)
+                                : JSON.stringify(resultData).slice(0, 500);
+                            }
+                          }
+                          break;
+                        }
+                        case 'done':
+                          if (data.content) bgDoneContent.value = data.content;
+                          if (data.iteration) bgDoneIterations.value = data.iteration;
+                          if (data.maxIterations) bgDoneMaxIterations.value = data.maxIterations;
+                          if (data.status) bgDoneStatus.value = data.status;
+                          break;
+                        case 'agent_iteration':
+                          console.log(`   🤝 [${targetChoom.name}] (bg) iteration ${data.iteration}/${data.maxIterations}`);
+                          // Live-update the cached result so get_delegation_result
+                          // returns current progress, not stale partial data.
+                          {
+                            const cached = delegationResults.get(delegationId);
+                            if (cached) {
+                              cached.response = bgContent.value.trim() || cached.response;
+                              cached.iterationsUsed = data.iteration;
+                              cached.maxIterations = data.maxIterations;
+                              cached.durationMs = Date.now() - startTime;
+                            }
+                          }
+                          break;
+                        case 'retract_partial':
+                          if (data.length && bgContent.value.length >= data.length) {
+                            bgContent.value = bgContent.value.slice(0, bgContent.value.length - data.length);
+                          }
+                          break;
+                      }
+                    } catch { /* skip unparseable */ }
+                  }
+                }
+                // Worker finished — update the cached result to complete
+                const finalContent = bgDoneContent.value || bgContent.value;
+                const totalDuration = Date.now() - startTime;
+                console.log(`   ✅ [${targetChoom.name}] (bg) Delegation completed in ${Math.round(totalDuration / 1000)}s total (${bgToolCalls.length} tool calls)`);
+                const completeResult: DelegationResult = {
+                  id: delegationId,
+                  choomName: targetChoom!.name,
+                  task,
+                  response: finalContent.trim() || `[${targetChoom!.name} finished but produced no summary text. Used ${bgToolCalls.length} tool calls.]`,
+                  toolCalls: bgToolCalls,
+                  timestamp: Date.now(),
+                  durationMs: totalDuration,
+                  chatId: delegationChatId,
+                  choomId: targetChoom!.id,
+                  incomplete: bgDoneStatus.value === 'max_iterations',
+                  iterationsUsed: bgDoneIterations.value,
+                  maxIterations: bgDoneMaxIterations.value,
+                };
+                delegationResults.set(delegationId, completeResult);
+                recentTimeouts.delete(targetChoom!.name.toLowerCase());
+              } catch (bgErr) {
+                const bgErrMsg = bgErr instanceof Error ? bgErr.message : String(bgErr);
+                console.warn(`   ⚠️  [${targetChoom!.name}] (bg) Background reader error:`, bgErrMsg);
+                // Update cached result so get_delegation_result reflects the failure
+                const cached = delegationResults.get(delegationId);
+                if (cached) {
+                  cached.incomplete = true;
+                  cached.durationMs = Date.now() - startTime;
+                  if (bgContent.value.trim()) {
+                    cached.response = bgContent.value.trim();
+                  }
+                  cached.response += `\n\n[Background reader error: ${bgErrMsg}]`;
+                }
+              } finally {
+                clearTimeout(bgTimeout);
+                try { bgReader.releaseLock(); } catch { /* already released or errored stream */ }
+                detachedDelegations.delete(delegationId);
+              }
+            })();
+            detachedDelegations.set(delegationId, bgPromise);
+          } else {
+            // Transport error — worker is dead, release reader
+            reader.releaseLock();
+          }
+
+          // Build partial response for the orchestrator
           if (content.trim().length > 20 || toolCallsUsed.length > 0) {
-            console.warn(`   ⚠️  [${targetChoom.name}] Delegation ${reasonLabel} but has partial results (${content.length} chars, ${toolCallsUsed.length} tool calls) — returning partial`);
+            const stillRunning = isAbort;
+            const statusLabel = stillRunning ? 'still working' : 'connection lost';
+            console.warn(`   ⚠️  [${targetChoom.name}] Delegation ${reasonLabel} — ${statusLabel} (${content.length} chars, ${toolCallsUsed.length} tool calls so far)`);
             let partialResponse = content.trim();
             if (!partialResponse || partialResponse.length < 20) {
               if (toolResultTexts.length > 0) {
@@ -395,8 +633,7 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
               }
             }
 
-            // Auto-checkpoint: write captured work to a progress file so the
-            // orchestrator can read it even if the response is truncated.
+            // Auto-checkpoint: write captured work to a progress file
             let checkpointPath: string | null = null;
             if (workerProjectFolder && (toolResultTexts.length > 0 || content.trim().length > 50)) {
               try {
@@ -405,7 +642,7 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
                 const progressContent = [
                   `# Delegation Progress — ${targetChoom.name}`,
                   `**Task:** ${task.slice(0, 200)}`,
-                  `**Status:** ${isAbort ? 'Timed out' : 'Connection lost'} after ${elapsed}s (${toolCallsUsed.length} tool calls, ${doneIterations || '?'} iterations)`,
+                  `**Status:** ${stillRunning ? 'Still running (detached)' : 'Connection lost'} after ${elapsed}s (${toolCallsUsed.length} tool calls, ${doneIterations || '?'} iterations)`,
                   `**Time:** ${new Date().toISOString()}`,
                   '',
                   '## Tool Calls Made',
@@ -442,8 +679,10 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
               maxIterations: doneMaxIterations,
             };
             delegationResults.set(delegationId, result);
-            // Track so the next delegation to this choom auto-continues
-            recentTimeouts.set(targetChoom.name.toLowerCase(), { delegationId, timestamp: Date.now() });
+            if (!isAbort) {
+              // Only track for auto-continuation if the worker is dead
+              recentTimeouts.set(targetChoom.name.toLowerCase(), { delegationId, timestamp: Date.now() });
+            }
             return this.success(toolCall, {
               success: true,
               delegation_id: delegationId,
@@ -452,9 +691,12 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
               tools_used: toolCallsUsed.map(tc => tc.name),
               duration_seconds: elapsed,
               incomplete: true,
+              in_progress: stillRunning,
               project_folder: workerProjectFolder,
               progress_file: checkpointPath,
-              message: `${targetChoom.name} ${reasonLabel} but partial work was captured.${checkpointPath ? ` Progress saved to "${checkpointPath}" — read it with workspace_read_file for full details.` : ''} To continue, re-delegate to ${targetChoom.name} with continue_delegation_id="${delegationId}".`,
+              message: stillRunning
+                ? `${targetChoom.name} is still working (${toolCallsUsed.length} tool calls so far, ${elapsed}s elapsed). The result will update automatically — check back with get_delegation_result("${delegationId}") for the latest status.${checkpointPath ? ` Interim progress saved to "${checkpointPath}".` : ''}`
+                : `${targetChoom.name} ${reasonLabel} but partial work was captured.${checkpointPath ? ` Progress saved to "${checkpointPath}" — read it with workspace_read_file for full details.` : ''} To continue, re-delegate to ${targetChoom.name} with continue_delegation_id="${delegationId}".`,
             });
           }
           const limitNote = isAbort ? ` (${timeoutSeconds}s limit)` : '';
@@ -463,7 +705,10 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
         throw streamErr;
       } finally {
         clearTimeout(timeout);
-        reader.releaseLock();
+        // Only release the reader if we didn't detach it to a background task
+        if (!detachedDelegations.has(delegationId)) {
+          try { reader.releaseLock(); } catch { /* already released or errored stream */ }
+        }
       }
 
       // If we got an SSE error, return it
@@ -655,6 +900,7 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
       return this.error(toolCall, `Delegation "${delegationId}" not found. Available: ${available || 'none'}`);
     }
 
+    const stillRunning = detachedDelegations.has(result.id);
     return this.success(toolCall, {
       success: true,
       delegation_id: result.id,
@@ -662,8 +908,16 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
       task: result.task,
       response: result.response,
       tools_used: result.toolCalls.map(tc => tc.name),
+      tool_call_count: result.toolCalls.length,
       duration_seconds: Math.round(result.durationMs / 1000),
       age_seconds: Math.round((Date.now() - result.timestamp) / 1000),
+      incomplete: result.incomplete,
+      in_progress: stillRunning,
+      message: stillRunning
+        ? `${result.choomName} is still working (${result.toolCalls.length} tool calls so far). Check back again shortly.`
+        : result.incomplete
+          ? `${result.choomName} did not finish. Use continue_delegation_id="${result.id}" to resume.`
+          : `${result.choomName} completed the task.`,
     });
   }
 }
