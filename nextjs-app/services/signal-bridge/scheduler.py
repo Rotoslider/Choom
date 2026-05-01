@@ -5,6 +5,7 @@ Handles heartbeats, cron jobs, and scheduled tasks
 import logging
 import os
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from typing import Callable, Optional, Dict, Any, List
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -1654,8 +1655,10 @@ Be practical. Only work on things that can actually be accomplished with the too
 
                 # Prepend situational awareness so the Choom has grounding
                 # context when waking up (time, environment, sibling messages).
+                # `now` is UTC (for trigger comparison) — convert to local for display.
                 choom_lower = choom_name.lower().replace(" ", "_")
-                now_str = now.strftime("%A, %B %d %Y at %I:%M %p")
+                local_now = now.astimezone(ZoneInfo("America/Denver"))
+                now_str = local_now.strftime("%A, %B %d %Y at %I:%M %p")
                 awareness = (
                     f"[You are waking up — it is {now_str}. "
                     f"Before starting your task, quickly ground yourself: "
