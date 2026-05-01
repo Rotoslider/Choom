@@ -23,21 +23,35 @@ from urllib.error import HTTPError, URLError
 ENDPOINT = "https://integrate.api.nvidia.com/v1"
 
 MODELS = [
-    "nvidia/llama-3.1-nemotron-ultra-253b-v1",
+    # GLM family (thinking models — tool calling confirmed)
+    "z-ai/glm4.7",
+    "z-ai/glm5",
+    "z-ai/glm-5.1",
+    # Mistral family
     "mistralai/mistral-large-3-675b-instruct-2512",
-    "deepseek-ai/deepseek-v3.2",
+    "mistralai/mistral-nemotron",
+    "mistralai/mistral-medium-3.5-128b",
+    "mistralai/mistral-small-4-119b-2603",
+    # DeepSeek family
+    "deepseek-ai/deepseek-v4-pro",
+    "deepseek-ai/deepseek-v4-flash",
     "deepseek-ai/deepseek-v3.1-terminus",
-    "deepseek-ai/deepseek-v3.1",
-    "moonshotai/kimi-k2.5",
-    "moonshotai/kimi-k2-instruct",
+    # Qwen family
     "qwen/qwen3.5-397b-a17b",
     "qwen/qwen3.5-122b-a10b",
     "qwen/qwen3-coder-480b-a35b-instruct",
-    "stepfun-ai/step-3.5-flash",
-    "z-ai/glm4.7",
-    "z-ai/glm5",
+    "qwen/qwen3-next-80b-a3b-instruct",
+    # Moonshot Kimi
+    "moonshotai/kimi-k2-instruct",
+    "moonshotai/kimi-k2.6",
+    # NVIDIA Nemotron
+    "nvidia/nemotron-3-super-120b-a12b",
+    "nvidia/llama-3.3-nemotron-super-49b-v1.5",
+    # Meta Llama
     "meta/llama-3.1-405b-instruct",
-    "mistralai/mistral-nemotron",
+    "meta/llama-3.3-70b-instruct",
+    # Other
+    "stepfun-ai/step-3.5-flash",
     "minimaxai/minimax-m2.5",
 ]
 

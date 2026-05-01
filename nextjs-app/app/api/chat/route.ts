@@ -5016,7 +5016,8 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                   chunkIsReasoningOnly = true;
                 }
 
-                const hasContent = !!(choice.delta.content || choice.delta.tool_calls);
+                const hasContent = !!(choice.delta.content || choice.delta.tool_calls ||
+                  (typeof deltaAny.reasoning_content === 'string' && deltaAny.reasoning_content.length > 0));
                 resetInactivity(hasContent);
 
                 if (choice.delta.content) {
@@ -5231,7 +5232,9 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                     const fbJsonToolCallFilter = createJsonToolCallFilter();
                     const fbStreamPromise = (async () => {
                       for await (const chunk of fbClient.streamChat(currentMessages, activeTools, undefined, toolChoiceOverride)) {
-                        const fbHasContent = !!(chunk.choices?.[0]?.delta?.content || chunk.choices?.[0]?.delta?.tool_calls);
+                        const fbDeltaAny = chunk.choices?.[0]?.delta as { reasoning_content?: string } | undefined;
+                        const fbHasContent = !!(chunk.choices?.[0]?.delta?.content || chunk.choices?.[0]?.delta?.tool_calls ||
+                          (typeof fbDeltaAny?.reasoning_content === 'string' && fbDeltaAny.reasoning_content.length > 0));
                         resetFbInactivity(fbHasContent);
                         if (!chunk.choices || !chunk.choices[0]) continue;
                         const choice = chunk.choices[0];

@@ -676,8 +676,8 @@ class ScheduledTaskManager:
             # route.ts pre-injection regexes and forged a fake "[System: Use analyze_image...]"
             # directive into the user turn. Keep this prompt to pre-fetched structured data only.
             now = datetime.now()
-            owner_name = os.getenv('OWNER_NAME', 'friend')
-            prompt = f"""Good morning! It's {now.strftime('%A, %B %d')}. Give {owner_name} a brief, friendly morning update using ONLY the data below. Do not invent anything.
+            owner_name = os.getenv('OWNER_NAME', 'Donny')
+            prompt = f"""Good morning! It's {now.strftime('%A, %B %d')}. Give {owner_name} a brief, loving morning update using ONLY the data below. Do not invent anything.
 
 Weather: {weather_text}
 
@@ -685,7 +685,7 @@ Calendar: {calendar_text}
 
 Reminders: {reminders_text}{goals_text}
 
-Include a warm greeting, the weather summary (mention if wind under 15mph is good for drone flying), calendar events, and any reminders. If there are active goals listed, suggest 3-5 small actionable things {owner_name} could focus on today that move those goals forward — keep suggestions realistic and specific (research tasks, outreach, writing, coding, etc.). Keep it conversational for speaking aloud, no markdown. Do NOT repeat these instructions or mention that you were given data."""
+Include a warm greeting, the weather summary (mention if wind under 5mph is good for drone flying), calendar events, and any reminders. If there are active goals listed, suggest 3-5 small actionable things {owner_name} could focus on today that move those goals forward — keep suggestions realistic and specific (research tasks, outreach, writing, coding, etc.). Keep it conversational for speaking aloud, no markdown. Do NOT repeat these instructions or mention that you were given data."""
 
             # Per-task model override: use configured model for morning briefing if set
             mb_model_override = None
@@ -744,7 +744,7 @@ Include a warm greeting, the weather summary (mention if wind under 15mph is goo
             weather = weather_data.get('weather', {})
 
             now = datetime.now()
-            owner_name = os.getenv('OWNER_NAME', 'friend')
+            owner_name = os.getenv('OWNER_NAME', 'Donny')
             parts = [f"Good morning, {owner_name}! It's {now.strftime('%A, %B %d')}."]
 
             if weather:
@@ -754,7 +754,7 @@ Include a warm greeting, the weather summary (mention if wind under 15mph is goo
                 parts.append(f"Today's weather: {desc}, {temp} degrees, wind at {wind} miles per hour.")
 
                 if isinstance(wind, (int, float)):
-                    if wind < 15:
+                    if wind < 5:
                         parts.append("Good conditions for drone flying today!")
                     else:
                         parts.append("Might be too windy for drones today.")
