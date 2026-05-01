@@ -199,7 +199,6 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
         // Prevent delegation retry loops: if this choom just timed out on a
         // delegation (within last 10 min), force continuation instead of fresh start.
         // This prevents Aloy → Anya timeout → Aloy re-delegates → Anya timeout → loop.
-        const choomKey = targetChoom.name.toLowerCase();
         const recentTimeout = recentTimeouts.get(choomKey);
         if (recentTimeout && (Date.now() - recentTimeout.timestamp) < 600000) {
           console.log(`   🔄 ${targetChoom.name} timed out recently (${recentTimeout.delegationId}) — auto-converting to continuation`);
