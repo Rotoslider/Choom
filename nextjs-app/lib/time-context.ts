@@ -1,6 +1,6 @@
 import type { TimeContext } from './types';
 
-export function getTimeContext(timezone: string = 'America/New_York'): TimeContext {
+export function getTimeContext(timezone: string = 'America/Denver'): TimeContext {
   const now = new Date();
 
   // Get localized date/time
