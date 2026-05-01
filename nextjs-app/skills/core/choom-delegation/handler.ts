@@ -290,8 +290,11 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
 
       // Separate controller for the initial connection — if the fetch itself
       // hangs (server down, DNS failure), we still need to bail out.
+      // 120s is generous because the chat route does significant pre-work
+      // before sending the first SSE byte (settings resolution, weather/HA
+      // injection, workspace listing, model profile lookup, etc.).
       const connectController = new AbortController();
-      const connectTimeout = setTimeout(() => connectController.abort(), 30000);
+      const connectTimeout = setTimeout(() => connectController.abort(), 120000);
 
       // Use undici fetch directly (not the Next.js-patched global fetch), so
       // our dispatcher with bodyTimeout=0 is actually honored and Next.js
@@ -316,7 +319,7 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
         clearTimeout(timeout);
         clearTimeout(connectTimeout);
         if ((fetchErr as Error).name === 'AbortError') {
-          return this.error(toolCall, `Delegation to "${targetChoom.name}" — could not connect to chat API within 30s`);
+          return this.error(toolCall, `Delegation to "${targetChoom.name}" — could not connect to chat API within 120s`);
         }
         throw fetchErr;
       }
