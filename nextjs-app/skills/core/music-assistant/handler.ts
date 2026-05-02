@@ -44,25 +44,44 @@ async function maCommand(command: string, args: Record<string, unknown> = {}): P
   return data;
 }
 
+function playerResult(p: Record<string, unknown>) {
+  return { player_id: p.player_id as string, name: (p.display_name || p.name) as string, queue_id: p.player_id as string };
+}
+
+function matchesPlayer(p: Record<string, unknown>, query: string): boolean {
+  const lower = query.toLowerCase();
+  const fields = [p.player_id, p.name, p.display_name].filter(Boolean).map(f => (f as string).toLowerCase());
+
+  // Exact ID or substring match on any name field
+  if (fields.some(f => f === lower || f.includes(lower))) return true;
+
+  // Word-level match: all query words appear somewhere across fields
+  const queryWords = lower.split(/\s+/).filter(w => w.length > 1);
+  const allText = fields.join(' ');
+  if (queryWords.length > 0 && queryWords.every(w => allText.includes(w))) return true;
+
+  return false;
+}
+
 async function resolvePlayer(nameOrId?: string): Promise<{ player_id: string; name: string; queue_id: string }> {
   const players = await maCommand('players/all') as Array<Record<string, unknown>>;
   if (!players || players.length === 0) throw new Error('No music players available');
 
   if (!nameOrId) {
     const p = players.find(p => p.available) || players[0];
-    return { player_id: p.player_id as string, name: p.name as string, queue_id: p.player_id as string };
+    return playerResult(p);
   }
 
-  const lower = nameOrId.toLowerCase();
-  const match = players.find(p =>
-    (p.player_id as string).toLowerCase() === lower ||
-    (p.name as string).toLowerCase().includes(lower)
-  );
-  if (!match) {
-    const names = players.map(p => `${p.name} (${p.player_id})`).join(', ');
-    throw new Error(`Player "${nameOrId}" not found. Available: ${names}`);
+  const match = players.find(p => matchesPlayer(p, nameOrId));
+  if (match) return playerResult(match);
+
+  // Single player available — use it rather than failing on a friendly name mismatch
+  if (players.length === 1) {
+    return playerResult(players[0]);
   }
-  return { player_id: match.player_id as string, name: match.name as string, queue_id: match.player_id as string };
+
+  const names = players.map(p => `${p.display_name || p.name} (${p.player_id})`).join(', ');
+  throw new Error(`Player "${nameOrId}" not found. Available: ${names}`);
 }
 
 export default class MusicAssistantHandler extends BaseSkillHandler {
@@ -220,12 +239,14 @@ export default class MusicAssistantHandler extends BaseSkillHandler {
     const playerArg = toolCall.arguments.player as string | undefined;
     const players = await maCommand('players/all') as Array<Record<string, unknown>>;
 
-    const targets = playerArg
-      ? players.filter(p =>
-          (p.player_id as string).toLowerCase() === playerArg.toLowerCase() ||
-          (p.name as string).toLowerCase().includes(playerArg.toLowerCase())
-        )
+    let targets = playerArg
+      ? players.filter(p => matchesPlayer(p, playerArg))
       : players.filter(p => p.available);
+
+    // Single player fallback for friendly name mismatches
+    if (targets.length === 0 && playerArg && players.length === 1) {
+      targets = [players[0]];
+    }
 
     if (targets.length === 0) {
       return this.error(toolCall, playerArg ? `Player "${playerArg}" not found.` : 'No players available.');
@@ -263,7 +284,7 @@ export default class MusicAssistantHandler extends BaseSkillHandler {
     const players = await maCommand('players/all') as Array<Record<string, unknown>>;
 
     const list = players.map(p => ({
-      name: p.name,
+      name: p.display_name || p.name,
       player_id: p.player_id,
       available: p.available,
       state: p.playback_state,
