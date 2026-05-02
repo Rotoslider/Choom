@@ -900,8 +900,26 @@ function extractToolCallFromText(
   availableToolNames: Set<string>,
 ): { id: string; name: string; arguments: Record<string, unknown> } | null {
   const lower = llmText.toLowerCase();
+  const trimmed = llmText.trim();
 
-  // First try: look for JSON tool call blocks in the text (some models emit these inline)
+  // First try: raw tool call syntax — model emits "tool_name{json}" or "tool_name {json}" as text
+  // Common with Mistral Large 3 and other models that echo tool call format without using structured calls
+  const rawCallMatch = trimmed.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\s*(\{[\s\S]*\})\s*$/);
+  if (rawCallMatch) {
+    const toolName = rawCallMatch[1];
+    if (availableToolNames.has(toolName)) {
+      try {
+        const args = JSON.parse(rawCallMatch[2]);
+        return {
+          id: `extracted_${Date.now()}`,
+          name: toolName,
+          arguments: args,
+        };
+      } catch { /* JSON parse failed, continue to other patterns */ }
+    }
+  }
+
+  // Second try: look for JSON tool call blocks in the text (some models emit these inline)
   // Matches patterns like: {"name": "generate_image", "arguments": {...}}
   // or ```json\n{"name": "tool", ...}\n```
   const jsonBlockMatch = llmText.match(/```(?:json)?\s*\n?\s*(\{[\s\S]*?"name"\s*:\s*"(\w+)"[\s\S]*?\})\s*\n?\s*```/);
@@ -4033,6 +4051,42 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
       ...compactedHistory,
     ];
 
+    // Heartbeat→chat transition: when a non-heartbeat user message arrives in a
+    // chat that started with a heartbeat prompt, inject a transition marker.
+    // Without this, the model sees the heartbeat prompt in history and continues
+    // heartbeat behavior (sibling files, heartbeat_complete, curiosity cabinet
+    // steps, surprise tasks) instead of responding conversationally.
+    // All messages are preserved for context.
+    if (!isHeartbeat && compactedHistory.length >= 2) {
+      const firstUser = compactedHistory.find(m => m.role === 'user');
+      if (firstUser?.content) {
+        const fc = firstUser.content;
+        const isHeartbeatPrompt =
+          // OODA presence heartbeat
+          (fc.includes('You are waking up') && fc.includes('## OBSERVE')) ||
+          // Curiosity cabinet
+          fc.includes('You are performing an autonomous') ||
+          // Surprise me
+          (fc.startsWith('Surprise me') && fc.includes('surprise_log')) ||
+          // Generic: scheduled prompt with heartbeat_complete instruction
+          fc.includes('call `heartbeat_complete`') ||
+          fc.includes('call heartbeat_complete');
+
+        if (isHeartbeatPrompt) {
+          const firstAssistantIdx = currentMessages.findIndex(
+            (m, i) => i > 0 && m.role === 'assistant',
+          );
+          if (firstAssistantIdx > 0) {
+            currentMessages.splice(firstAssistantIdx + 1, 0, {
+              role: 'user' as 'user' | 'assistant',
+              content: '[System] The scheduled task above is complete. The user is now chatting with you directly. Respond conversationally — do NOT continue the task instructions from the first message (no sibling journal, no heartbeat_complete, no curiosity cabinet steps, no surprise tasks, no environment scanning). Just talk to them naturally.',
+            });
+            console.log(`   🔄 Heartbeat→chat transition marker injected after heartbeat response`);
+          }
+        }
+      }
+    }
+
     // Pre-detect project from user message or recent chat history (FIRST, before image injection)
     // Used for: (1) injecting exact folder name so LLM doesn't create duplicates,
     //           (2) applying per-project iteration limits (e.g. 100 instead of 25)
@@ -5136,6 +5190,17 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               await Promise.race([streamPromise, inactivityPromise, wallClockPromise]);
               // Stream succeeded — clean up timers to prevent leaks
               clearTimeout(inactivityTimer);
+              // Empty response guard: model returned 200 OK but streamed 0 content
+              // and no tool calls. Treat this the same as a timeout so the fallback
+              // chain gets a chance. Without this, an empty response silently breaks
+              // out of the loop with no output.
+              const hasToolCalls = toolCallsAccumulator.size > 0 ||
+                toolCallXmlFilter.getCaptured().length > 0 ||
+                jsonToolCallFilter.getCaptured().length > 0 ||
+                gemmaToolCallFilter.getCaptured().length > 0;
+              if (!iterationContent.trim() && !hasToolCalls && fallbackAttempt < fallbackConfigs.length) {
+                throw new Error('Empty response from model (0 characters, no tool calls)');
+              }
             } catch (timeoutError) {
               const errMsg = timeoutError instanceof Error ? timeoutError.message : String(timeoutError);
               console.warn(`   ⚠️  LLM response error on iteration ${iteration}: ${errMsg}`);
@@ -5386,9 +5451,12 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               }
             }
 
-            // Drop tool calls with empty/invalid names — weak models sometimes emit these,
-            // causing 400 errors from the API on the next iteration
+            // Trim and validate tool call names — models sometimes emit trailing whitespace
+            // which would fail the regex and cause 400 errors from the API on the next iteration
             if (toolCalls.length > 0) {
+              for (const tc of toolCalls) {
+                if (tc.name) tc.name = tc.name.trim();
+              }
               const validToolCalls = toolCalls.filter(tc => {
                 if (!tc.name || !/^[a-zA-Z0-9_-]+$/.test(tc.name)) {
                   console.warn(`   ⚠️  Dropping tool call with invalid name: "${tc.name || '(empty)'}"`);
@@ -5620,6 +5688,11 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               if (extracted) {
                 console.log(`   🧲 ${choomTag} Extracted tool call from text: ${extracted.name}(${JSON.stringify(extracted.arguments).slice(0, 80)})`);
                 toolCalls.push(extracted);
+                // Clear the raw tool-call text so it doesn't persist in conversation
+                // history. Without this, the model sees its own raw "tool_name{json}"
+                // text as a prior assistant message and mimics the pattern on the next
+                // turn — creating a self-reinforcing loop of broken responses.
+                iterationContent = '';
               } else if (iterationContent.length > 0) {
                 // Diagnostic: model produced text but no tool_call AND our extractor
                 // failed. Often means the model emitted tool calls in a format we

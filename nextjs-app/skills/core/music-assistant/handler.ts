@@ -221,10 +221,10 @@ export default class MusicAssistantHandler extends BaseSkillHandler {
     const players = await maCommand('players/all') as Array<Record<string, unknown>>;
 
     const targets = playerArg
-      ? [players.find(p =>
+      ? players.filter(p =>
           (p.player_id as string).toLowerCase() === playerArg.toLowerCase() ||
           (p.name as string).toLowerCase().includes(playerArg.toLowerCase())
-        )].filter(Boolean)
+        )
       : players.filter(p => p.available);
 
     if (targets.length === 0) {
@@ -239,13 +239,11 @@ export default class MusicAssistantHandler extends BaseSkillHandler {
         state: p.playback_state,
         volume: p.volume_level,
         muted: p.volume_muted,
-        ...(media ? {
-          track: media.title || null,
-          artist: media.artist || null,
-          album: media.album || null,
-          duration: media.duration || null,
-          uri: media.uri || null,
-        } : { track: null }),
+        track: media?.title ?? null,
+        artist: media?.artist ?? null,
+        album: media?.album ?? null,
+        duration: media?.duration ?? null,
+        uri: media?.uri ?? null,
       };
     });
 

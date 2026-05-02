@@ -358,16 +358,17 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
           // Race the reader against the orchestrator timeout. When the timeout
           // fires, we break out of this loop but DON'T close the reader — the
           // catch block detaches it to a background task.
-          inflightRead = reader.read();
+          const pendingRead = reader.read() as Promise<ReadableStreamReadResult<Uint8Array>>;
+          inflightRead = pendingRead;
           const readResult = await Promise.race([
-            inflightRead,
+            pendingRead,
             timeoutSentinel,
           ]);
           if (readResult === 'ORCHESTRATOR_TIMEOUT') {
             throw Object.assign(new Error(`Orchestrator wait limit (${timeoutSeconds}s)`), { name: 'AbortError' });
           }
           inflightRead = null; // read completed — nothing in-flight
-          const { done, value } = readResult;
+          const { done, value } = readResult as ReadableStreamReadResult<Uint8Array>;
           if (done) break;
 
           buffer += decoder.decode(value, { stream: true });
