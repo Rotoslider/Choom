@@ -6058,8 +6058,14 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 // on HA, which the model can fix by running ha_list_services first.
                 const isHaShapeError = /^ha_call_service$/.test(tc.name)
                   && /HA API (?:400|422)\b/i.test(result.error);
+                // "Invented this domain" / "does not exist on this HA instance" — the LLM
+                // used a hallucinated domain or service name. The tool itself works fine;
+                // blocking it prevents the LLM from making the corrected call next iteration.
+                const isHaServiceDiscovery = /^ha_(?:call_service|get_state)$/.test(tc.name)
+                  && /invented this domain|does not exist on this Home Assistant|HA API 404: Entity not found/i.test(result.error);
                 const isParamError = /missing required parameter|is required|must provide|please provide/i.test(result.error)
-                  || isHaShapeError;
+                  || isHaShapeError
+                  || isHaServiceDiscovery;
                 const isGpuBusy = /GPU is busy|GPU is currently busy/i.test(result.error);
                 // "No data/history/results" is informational, not a tool failure — don't count
                 const isNoData = /no (?:history |data |results? )(?:data |found )?for /i.test(result.error);

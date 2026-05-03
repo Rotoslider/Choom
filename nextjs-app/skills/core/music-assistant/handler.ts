@@ -105,11 +105,19 @@ export default class MusicAssistantHandler extends BaseSkillHandler {
   }
 
   private async search(toolCall: ToolCall): Promise<ToolResult> {
-    const query = toolCall.arguments.query as string;
-    const typesStr = (toolCall.arguments.media_types as string) || 'artist,album,track,playlist,radio';
+    const query = ((toolCall.arguments.query as string) || '').trim();
+    const rawTypes = toolCall.arguments.media_types;
+    const typesArr = Array.isArray(rawTypes) ? rawTypes.map(String) : ((rawTypes as string) || 'artist,album,track,playlist,radio').split(',');
     const limit = (toolCall.arguments.limit as number) || 5;
 
-    const mediaTypes = typesStr.split(',').map(t => t.trim()).filter(Boolean);
+    const VALID_TYPES = new Set(['artist', 'album', 'track', 'playlist', 'radio']);
+    const mediaTypes = typesArr.map(t => t.trim().toLowerCase()).filter(t => VALID_TYPES.has(t));
+    if (mediaTypes.length === 0) mediaTypes.push('artist', 'album', 'track', 'playlist', 'radio');
+
+    // Empty query → browse library items instead of searching
+    if (!query) {
+      return this.browseLibrary(toolCall, mediaTypes, limit);
+    }
 
     const data = await maCommand('music/search', {
       search_query: query,
@@ -140,6 +148,47 @@ export default class MusicAssistantHandler extends BaseSkillHandler {
       message: totalResults > 0
         ? `Found ${totalResults} results for "${query}". Use the URI with music_play to play.`
         : `No results found for "${query}".`,
+    });
+  }
+
+  private async browseLibrary(toolCall: ToolCall, mediaTypes: string[], limit: number): Promise<ToolResult> {
+    const typeToCommand: Record<string, string> = {
+      artist: 'music/artists/library_items',
+      album: 'music/albums/library_items',
+      track: 'music/tracks/library_items',
+      playlist: 'music/playlists/library_items',
+      radio: 'music/radio/library_items',
+    };
+
+    const results: Record<string, Array<Record<string, string>>> = {};
+    let totalResults = 0;
+
+    for (const type of mediaTypes) {
+      const cmd = typeToCommand[type];
+      if (!cmd) continue;
+      try {
+        const items = await maCommand(cmd, { limit, offset: 0 }) as Array<Record<string, unknown>>;
+        if (!Array.isArray(items) || items.length === 0) continue;
+        results[type + 's'] = items.map(item => ({
+          name: (item.name as string) || '?',
+          uri: (item.uri as string) || '',
+          id: String(item.item_id || ''),
+          ...(item.artists ? { artist: (item.artists as Array<{ name: string }>).map(a => a.name).join(', ') } : {}),
+        }));
+        totalResults += items.length;
+      } catch {
+        // Some types may not have library items — skip silently
+      }
+    }
+
+    return this.success(toolCall, {
+      success: true,
+      query: '(browse library)',
+      total_results: totalResults,
+      results,
+      message: totalResults > 0
+        ? `Found ${totalResults} items in the library. Use the URI with music_play to play.`
+        : 'Library is empty or no items found for the requested types.',
     });
   }
 

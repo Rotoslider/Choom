@@ -3,17 +3,17 @@ import type { ToolDefinition } from '@/lib/types';
 export const tools: ToolDefinition[] = [
   {
     name: 'music_search',
-    description: 'Search for music in the library or streaming providers. Returns matching artists, albums, tracks, playlists, and radio stations.',
+    description: 'Search for music in the library. If query is empty, browses library items. Returns matching artists, albums, tracks, playlists, and radio stations with URIs for playback.',
     parameters: {
       type: 'object',
       properties: {
         query: {
           type: 'string',
-          description: 'Search query — artist name, song title, album name, genre, etc.',
+          description: 'Search query — artist name, song title, album name, etc. Leave empty to browse the library.',
         },
         media_types: {
           type: 'string',
-          description: 'Comma-separated types to search: artist,album,track,playlist,radio. Default: all types.',
+          description: 'Comma-separated types: artist,album,track,playlist,radio. Only these 5 values are valid. Default: all types.',
         },
         limit: {
           type: 'number',

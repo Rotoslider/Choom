@@ -449,7 +449,7 @@ export class SkillRegistry {
         [/\b(code|python|node|execute|run|sandbox|pip|npm)\b/i, ['code-execution']],
         [/\b(notify|notification|signal|alert)\b/i, ['notifications']],
         [/\b(remind|reminder|alarm)\b/i, ['reminders']],
-        [/\b(home assistant|smart home|lights?|switch|sensor|thermostat|heater|motion|door|window|fan|climate|turn on|turn off|brightness|hvac)\b/i, ['home-assistant']],
+        [/\b(home assistant|smart home|lights?|switch|sensor|thermostat|heater|motion|door|window|fan|climate|turn on|turn off|brightness|hvac|camera|snapshot|ptz|preset|driveway cam|garage cam)\b/i, ['home-assistant']],
         [/\b(email|gmail|inbox|send email|draft|compose)\b/i, ['google-gmail']],
         [/\b(contacts?|phone number|address book)\b/i, ['google-contacts']],
         [/\b(youtube|video|channel|playlist)\b/i, ['google-youtube']],

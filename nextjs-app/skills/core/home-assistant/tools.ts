@@ -34,7 +34,7 @@ export const tools: ToolDefinition[] = [
   },
   {
     name: 'ha_call_service',
-    description: 'Call any Home Assistant service. Works for device control (light, switch, climate, fan, cover), global services (notify.*, tts.speak, scene.turn_on, scene.create, automation.trigger, script.turn_on, homeassistant.*), and area/device-targeted calls. Only domain + service are required — use entity_id for single-entity control, target for area/device/multi-entity, or neither for global services. NOTE: for camera snapshots use ha_get_camera_snapshot, not camera.snapshot here.',
+    description: 'Call a Home Assistant service — NOT for cameras (use ha_get_camera_snapshot) or PTZ presets (use select.select_option). Works for device control (light, switch, climate, fan, cover), global services (notify.*, tts.speak, scene.turn_on, scene.create, automation.trigger, script.turn_on, homeassistant.*), and area/device-targeted calls. Only domain + service are required — use entity_id for single-entity control, target for area/device/multi-entity, or neither for global services.',
     parameters: {
       type: 'object',
       properties: {

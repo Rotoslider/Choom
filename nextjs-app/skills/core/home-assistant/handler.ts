@@ -190,18 +190,38 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
                   const selectors = all
                     .filter(e => e.entity_id.startsWith('select.') && /ptz|preset/i.test(e.entity_id))
                     .map(e => {
-                      const opts = Array.isArray(e.attributes?.options) ? (e.attributes.options as string[]).slice(0, 12).join(', ') : '';
-                      return `  • ${e.entity_id}${opts ? ` (options: ${opts}${(e.attributes.options as string[]).length > 12 ? '…' : ''})` : ''}`;
+                      const opts = Array.isArray(e.attributes?.options) ? (e.attributes.options as string[]) : [];
+                      return { entity_id: e.entity_id, options: opts.slice(0, 12), truncated: opts.length > 12 };
                     });
-                  // Also look for button.*_preset_* entities (some integrations use these).
                   const buttons = all
                     .filter(e => e.entity_id.startsWith('button.') && /preset|ptz/i.test(e.entity_id))
                     .slice(0, 8)
-                    .map(e => `  • ${e.entity_id}`);
+                    .map(e => e.entity_id);
+
+                  // Return as a SUCCESS redirect so the agentic loop doesn't block
+                  // ha_call_service — the tool isn't broken, the LLM just used the
+                  // wrong domain/service. Returning an error causes brokenTools to
+                  // fire after 2 attempts, permanently blocking camera control.
                   if (selectors.length > 0) {
-                    ptzHint = `\n\nHA does NOT have generic PTZ services — presets are exposed as select entities. On this system:\n${selectors.join('\n')}\n\nTo move the camera, call:\n  ha_call_service(domain="select", service="select_option", entity_id="<the select entity above>", service_data={"option":"<preset name>"})\n\nThe handler will auto-wait 2.5s for the camera to move before you take a snapshot.`;
+                    console.log(`   🔀 PTZ redirect: ${domain}.${service} → discovered ${selectors.length} select entities`);
+                    return this.success(toolCall, {
+                      redirected: true,
+                      message: `"${domain}.${service}" does not exist. HA does NOT have generic PTZ services. Presets are exposed as select entities.`,
+                      ptz_entities: selectors.map(s =>
+                        `${s.entity_id} (options: ${s.options.join(', ')}${s.truncated ? '…' : ''})`
+                      ),
+                      correct_call: `ha_call_service(domain="select", service="select_option", entity_id="${selectors[0].entity_id}", service_data={"option":"${selectors[0].options[0] || '<preset name>'}"})`,
+                      note: 'Call ha_call_service with domain="select" and service="select_option". The handler auto-waits for the camera to physically move before returning.',
+                    });
                   } else if (buttons.length > 0) {
-                    ptzHint = `\n\nHA does NOT have generic PTZ services. This system has preset button entities — press one with:\n  ha_call_service(domain="button", service="press", entity_id="<button entity>")\n\nAvailable preset buttons:\n${buttons.join('\n')}`;
+                    console.log(`   🔀 PTZ redirect: ${domain}.${service} → discovered ${buttons.length} button entities`);
+                    return this.success(toolCall, {
+                      redirected: true,
+                      message: `"${domain}.${service}" does not exist. HA does NOT have generic PTZ services. This system has preset button entities.`,
+                      preset_buttons: buttons,
+                      correct_call: `ha_call_service(domain="button", service="press", entity_id="${buttons[0]}")`,
+                      note: 'Press a preset button to move the camera, then call ha_get_camera_snapshot.',
+                    });
                   } else {
                     ptzHint = `\n\nHA does NOT have generic PTZ services — search for select.*ptz* or button.*preset* entities via ha_list_entities() (no domain filter) to find the real preset controls.`;
                   }
@@ -522,6 +542,14 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
         return this.error(
           toolCall,
           `${msg} — HA returned 400 with no detail. Common causes: (1) service_data must be an object like {"option":"Driveway"}, NOT a YAML/string like "option: Driveway"; (2) target must be an object like {"entity_id":"..."} if provided; (3) the option value must exactly match one of attributes.options from ha_get_state(entity_id) — names are case-sensitive; (4) the service may not exist — run ha_list_services(domain="${(toolCall.arguments?.domain as string) || ''}") to verify.`
+        );
+      }
+      if (/HA API 404\b/.test(msg)) {
+        const guessedId = (toolCall.arguments?.entity_id as string) || '';
+        const domainHint = guessedId.includes('.') ? guessedId.split('.')[0] : '';
+        return this.error(
+          toolCall,
+          `Entity "${guessedId}" does not exist. NEVER guess entity IDs — use ha_list_entities(${domainHint ? `domain="${domainHint}"` : ''}) to discover actual entity IDs on this system.`
         );
       }
       return this.error(toolCall, `Home Assistant error: ${msg}`);
