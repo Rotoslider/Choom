@@ -1,12 +1,14 @@
 ---
 name: knowledge-graph
 description: Search and query the ForgeRAG engineering knowledge graph. Ask questions about materials, welding, standards, formulas, reference tables, and specifications — get answers with page citations from ASM handbooks, ASME codes, NFPA, IEEE, and other engineering references.
-version: 1.1.0
+version: 1.2.0
 author: system
 tools:
   - ask_engineering_question
   - find_relevant_chunks
   - search_engineering_docs
+  - smart_search
+  - get_forgerag_status
   - query_knowledge_graph
   - explore_entity
   - list_knowledge_collections
@@ -15,7 +17,7 @@ dependencies: []
 
 # Engineering Knowledge Graph (ForgeRAG)
 
-Search engineering handbooks, standards, and specifications. The knowledge graph contains materials, processes, standards, equipment, formulas, reference tables, and their relationships extracted from ingested PDF documents — now with paragraph-level structural chunking, LLM-generated chunk summaries, and RRF hybrid retrieval (BGE-M3 dense + BM25 + cross-encoder reranker).
+Search engineering handbooks, standards, and specifications. The knowledge graph contains materials, processes, standards, equipment, formulas, reference tables, and their relationships extracted from ingested PDF documents — with paragraph-level structural chunking, LLM-generated chunk summaries, RRF hybrid retrieval (BGE-M3 dense + BM25 + cross-encoder reranker), fuzzy entity matching, OCR typo tolerance, community weighting, and a circuit breaker for reliability.
 
 ## When to Use
 
@@ -23,8 +25,10 @@ Search engineering handbooks, standards, and specifications. The knowledge graph
 |---|---|
 | `ask_engineering_question` | The user wants a synthesized answer with citations. Uses RRF hybrid + VLM reading of page images. Primary tool. |
 | `find_relevant_chunks` | You need precise evidence to quote (a specific paragraph, table, or equation). Returns raw chunk text + summary without the VLM synthesis step. Faster than ask_engineering_question. |
-| `search_engineering_docs` (mode="keyword") | Looking up a specific code, alloy designation, clause number, or standard (C12000, QW-451.1, NFPA 70, SEMI S2). |
+| `search_engineering_docs` (mode="keyword") | Looking up a specific code, alloy designation, clause number, or standard (C12000, QW-451.1, NFPA 70, SEMI S2). Supports `fuzzy: true` for OCR typo tolerance. |
 | `search_engineering_docs` (mode="visual") | Finding pages by visual similarity — charts, tables, diagrams, schematics. Uses Nemotron ColEmbed. |
+| `smart_search` | General-purpose entry point when unsure which mode is best. Auto-detects: codes/designations -> keyword, questions -> answer, else -> hybrid/RRF. |
+| `get_forgerag_status` | Check ForgeRAG capabilities, live stats (documents, pages, entities, communities), and service health before searching. |
 | `query_knowledge_graph` | How entities relate to each other — what standards govern a material, what materials are compatible with a process, which standards cross-reference. |
 | `explore_entity` | Everything connected to one specific entity (N-hop neighborhood). |
 | `list_knowledge_collections` | Discovery — what engineering databases are available. |
@@ -36,6 +40,9 @@ Search engineering handbooks, standards, and specifications. The knowledge graph
 - **"Find the tap drill table"** → `find_relevant_chunks` with chunk_type="table"
 - **"What formula is used for beam deflection?"** → `find_relevant_chunks` with chunk_type="equation", then `ask_engineering_question` if more context needed
 - **"Show me the torque chart"** → `search_engineering_docs` with mode="visual" (page images)
+- **"Tell me about Alloy 625"** → `smart_search` (auto-routes to the best strategy)
+- **"Find C1200O in scanned docs"** → `search_engineering_docs` with mode="keyword" and `fuzzy: true` (OCR typo tolerance)
+- **"What collections and entities are available?"** → `get_forgerag_status` (live stats and capabilities)
 
 ## Important
 

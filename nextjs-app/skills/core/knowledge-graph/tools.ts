@@ -99,12 +99,58 @@ export const tools: ToolDefinition[] = [
           type: 'string',
           description: 'Optional: limit to a specific collection.',
         },
+        fuzzy: {
+          type: 'boolean',
+          description:
+            'Enable fuzzy matching for OCR typo tolerance. Useful when searching scanned ' +
+            'documents where codes may have OCR errors (e.g., "C1200O" instead of "C12000").',
+        },
         limit: {
           type: 'number',
           description: 'Max results (default 10).',
         },
       },
       required: ['query'],
+    },
+  },
+  {
+    name: 'smart_search',
+    description:
+      'Auto-routing search that picks the best retrieval strategy based on query type. ' +
+      'Codes and designations (C12000, QW-451.1) route to keyword search; natural-language ' +
+      'questions route to VLM answer synthesis; everything else routes to hybrid/RRF. ' +
+      'Use this as a general-purpose entry point when you are unsure which search mode ' +
+      'is best — ForgeRAG will auto-detect and route accordingly.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description:
+            'The search query. Can be a code/designation, a natural-language question, ' +
+            'or a topic phrase — the router will pick the best strategy.',
+        },
+        mode: {
+          type: 'string',
+          description:
+            'Optional: override the auto-detected mode. Usually omit this and let the ' +
+            'router decide.',
+          enum: ['keyword', 'answer', 'hybrid'],
+        },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'get_forgerag_status',
+    description:
+      'Returns ForgeRAG capabilities, live stats (document count, page count, entity count, ' +
+      'community count), and service health. Use this to understand what engineering knowledge ' +
+      'is available before searching, or to check whether ForgeRAG is healthy and responsive.',
+    parameters: {
+      type: 'object',
+      properties: {},
+      required: [],
     },
   },
   {

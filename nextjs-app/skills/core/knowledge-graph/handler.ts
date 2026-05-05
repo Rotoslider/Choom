@@ -16,6 +16,8 @@ const FORGERAG_TOOLS = new Set([
   'query_knowledge_graph',
   'explore_entity',
   'list_knowledge_collections',
+  'smart_search',
+  'get_forgerag_status',
 ]);
 
 function getEndpoint(): string {

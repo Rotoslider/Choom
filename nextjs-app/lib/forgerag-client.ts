@@ -88,11 +88,12 @@ export class ForgeRAGClient {
 
   async searchKeyword(
     query: string,
-    options: { limit?: number; collection?: string } = {}
+    options: { limit?: number; collection?: string; fuzzy?: boolean } = {}
   ): Promise<ForgeResult> {
     return this.request('/search/keyword', 'POST', {
       query,
       limit: options.limit || 10,
+      ...(options.fuzzy !== undefined ? { fuzzy: options.fuzzy } : {}),
     });
   }
 
@@ -174,6 +175,43 @@ export class ForgeRAGClient {
     );
   }
 
+  // ---- Smart Search / Batch ----
+
+  /**
+   * Auto-routing search — ForgeRAG picks the best strategy (keyword, answer,
+   * or hybrid/RRF) based on query characteristics. Codes/designations route
+   * to keyword, questions route to answer, everything else to hybrid.
+   */
+  async smartSearch(
+    query: string,
+    options: { mode?: string; limit?: number } = {}
+  ): Promise<ForgeResult> {
+    return this.request('/skills/search', 'POST', {
+      query,
+      ...(options.mode ? { mode: options.mode } : {}),
+      ...(options.limit ? { limit: options.limit } : {}),
+    });
+  }
+
+  /**
+   * Parallel multi-query batch search.
+   */
+  async batchSearch(
+    queries: Array<{ query: string; mode?: string; limit?: number }>
+  ): Promise<ForgeResult> {
+    return this.request('/skills/batch', 'POST', { queries });
+  }
+
+  // ---- Manifest ----
+
+  /**
+   * Returns ForgeRAG capabilities, live stats (documents, pages, entities,
+   * communities), and health information.
+   */
+  async getManifest(): Promise<ForgeResult> {
+    return this.request('/skills/manifest');
+  }
+
   // ---- Documents ----
 
   async listDocuments(options: { collection?: string; limit?: number } = {}): Promise<ForgeResult> {
@@ -215,11 +253,25 @@ export async function executeForgeRAGTool(
         return client.searchKeyword(query, {
           limit: Number(args.limit) || 10,
           collection: args.collection ? String(args.collection) : undefined,
+          fuzzy: args.fuzzy === true ? true : undefined,
         });
       }
       return client.searchVisual(query, {
         limit: Number(args.limit) || 5,
       });
+    }
+
+    case 'smart_search': {
+      const query = String(args.query || '');
+      if (!query) return { success: false, reason: 'query is required' };
+      return client.smartSearch(query, {
+        mode: args.mode ? String(args.mode) : undefined,
+        limit: args.limit ? Number(args.limit) : undefined,
+      });
+    }
+
+    case 'get_forgerag_status': {
+      return client.getManifest();
     }
 
     case 'find_relevant_chunks': {
