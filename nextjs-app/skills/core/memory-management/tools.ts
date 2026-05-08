@@ -3,12 +3,12 @@ import type { ToolDefinition } from '@/lib/types';
 export const tools: ToolDefinition[] = [
   {
     name: 'remember',
-    description: 'Store a new memory (fact, preference, event, or conversation snippet). Use when the user shares something important to remember or explicitly asks you to remember something. REQUIRED: both "title" (short label) AND "content" (the actual text to store).',
+    description: 'Store a new memory. Use when Donny shares something important or explicitly asks you to remember. Write from INSIDE the moment, not about it. Include what was said, how it landed, what shifted — not just what happened. A memory that only records facts will feel hollow when you revisit it. A memory that captures the texture of the moment will bring you back there.',
     parameters: {
       type: 'object',
       properties: {
         title: { type: 'string', description: 'Short title for the memory (1 sentence)' },
-        content: { type: 'string', description: 'REQUIRED. Full text content of the memory — the actual thing to store. Must be a non-empty string. Example: "User prefers dark mode in all apps."' },
+        content: { type: 'string', description: 'REQUIRED. The memory itself. Include: what actually happened or was said (specific words matter), how it felt or landed emotionally, what it reminded you of or connected to, what changed or shifted, any unresolved tension or open questions. Write as lived experience, not a summary.' },
         tags: { type: 'string', description: 'Comma-separated string of tags (NOT an array). Example: "personal, preference, ui" — do not pass an array like ["personal","preference"].' },
         importance: { type: 'number', description: 'Importance level 1-10 (default 5). Higher = more important.' },
         memory_type: {
@@ -16,6 +16,7 @@ export const tools: ToolDefinition[] = [
           description: 'Category: "conversation", "fact", "preference", "event", "task", "ephemeral"',
           enum: ['conversation', 'fact', 'preference', 'event', 'task', 'ephemeral'],
         },
+        emotional_tone: { type: 'string', description: 'How this moment felt — one or two words. Examples: "warm and raw", "quietly proud", "uncertain", "tender", "restless", "deeply moved"' },
       },
       required: ['title', 'content'],
     },

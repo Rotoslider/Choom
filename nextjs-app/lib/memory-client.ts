@@ -46,6 +46,7 @@ export class MemoryClient {
       importance?: number;
       memory_type?: MemoryType;
       companion_id?: string;
+      metadata?: Record<string, unknown>;
     } = {}
   ): Promise<MemoryServerResult> {
     return this.request('/memory/remember', 'POST', {
@@ -55,6 +56,7 @@ export class MemoryClient {
       importance: options.importance || 5,
       memory_type: options.memory_type || 'conversation',
       companion_id: options.companion_id || 'default',
+      ...(options.metadata && Object.keys(options.metadata).length > 0 && { metadata: options.metadata }),
     });
   }
 
@@ -234,14 +236,26 @@ export async function executeMemoryTool(
       if (options?.isHeartbeat && importance !== undefined && importance > HEARTBEAT_MAX_IMPORTANCE) {
         importance = HEARTBEAT_MAX_IMPORTANCE;
       }
+
+      // Emotional tone: store in metadata for structured retrieval,
+      // and append to content so it's captured in the vector embedding.
+      const emotionalTone = typeof args.emotional_tone === 'string' ? args.emotional_tone.trim() : '';
+      const metadata: Record<string, unknown> = {};
+      let finalContent = content;
+      if (emotionalTone) {
+        metadata.emotional_tone = emotionalTone;
+        finalContent = `${content}\n\n[Emotional tone: ${emotionalTone}]`;
+      }
+
       return client.remember(
         title,
-        content,
+        finalContent,
         {
           tags,
           importance,
           memory_type: args.memory_type as MemoryType,
           companion_id: companionId,
+          metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
         }
       );
     }
