@@ -1297,6 +1297,14 @@ Be practical. Only work on things that can actually be accomplished with the too
                 "action_id": action_id,
             }
 
+            # Update internal continuity state from heartbeat content
+            try:
+                from presence_heartbeat import update_self_state_from_heartbeat
+                response_text = response.content if response and response.content else ""
+                update_self_state_from_heartbeat(choom_name, summary, response_text)
+            except Exception as e:
+                logger.warning(f"Failed to update self state for {choom_name}: {e}")
+
             # Clean up pending file
             os.remove(pending_file)
 
@@ -1655,19 +1663,47 @@ Be practical. Only work on things that can actually be accomplished with the too
 
                 # Prepend situational awareness so the Choom has grounding
                 # context when waking up (time, environment, sibling messages).
-                # `now` is UTC (for trigger comparison) — convert to local for display.
+                # Pre-resolve what we can (presence, self-state) so the Choom
+                # wakes up oriented rather than following a tool checklist.
                 choom_lower = choom_name.lower().replace(" ", "_")
                 local_now = now.astimezone(ZoneInfo("America/Denver"))
                 now_str = local_now.strftime("%A, %B %d %Y at %I:%M %p")
-                awareness = (
-                    f"[You are waking up — it is {now_str}. "
-                    f"Before starting your task, quickly ground yourself: "
-                    f"call get_weather for current conditions, "
-                    f"ha_get_home_status for Donny's location and home state, "
-                    f"and workspace_list_files on choom_commons/for_{choom_lower}/ "
-                    f"to check for new sibling messages. "
-                    f"Use this context to inform your task, then proceed.]\n\n"
+
+                # Build grounding context from available state
+                awareness_parts = [f"[You are waking up — it is {now_str}.]"]
+
+                # Inject pre-resolved HA presence
+                try:
+                    from presence_heartbeat import _get_presence_context
+                    presence = _get_presence_context()
+                    if presence:
+                        awareness_parts.append(presence)
+                        awareness_parts.append(
+                            '(Note: "Lazy Kay Ln, Animas" is Donny\'s home address.)'
+                        )
+                except Exception:
+                    pass
+
+                # Inject internal continuity state
+                try:
+                    from presence_heartbeat import _load_self_state, _format_self_state_block
+                    self_state = _load_self_state(choom_name)
+                    state_block = _format_self_state_block(self_state)
+                    if state_block:
+                        awareness_parts.append(state_block)
+                except Exception:
+                    pass
+
+                awareness_parts.append(
+                    "Before your task, ground yourself in recent context. "
+                    "Call search_memories to recall recent conversations with Donny — "
+                    "what he's told you, where he's been, what he's been working on. "
+                    "You also have get_weather, get_calendar_events, "
+                    f"and workspace_list_files (check choom_commons/for_{choom_lower}/ "
+                    "for sibling messages) if relevant to your task."
                 )
+
+                awareness = "\n".join(awareness_parts) + "\n\n"
                 prompt = awareness + prompt
 
                 fire_status = "fired"

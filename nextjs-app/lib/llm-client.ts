@@ -76,7 +76,8 @@ export class LLMClient {
     messages: ChatMessage[],
     tools?: ToolDefinition[],
     signal?: AbortSignal,
-    toolChoice?: 'auto' | 'required' | 'none'
+    toolChoice?: 'auto' | 'required' | 'none',
+    onConnected?: () => void,
   ): AsyncGenerator<ChatCompletionChunk, void, unknown> {
     const url = ensureEndpoint(this.endpoint, '/chat/completions');
 
@@ -132,6 +133,11 @@ export class LLMClient {
       const error = await response.text();
       throw new Error(`LLM request failed: ${response.status} - ${error}`);
     }
+
+    // Connection established — HTTP 200 received, server is alive and processing.
+    // Notify the caller so they can switch from aggressive connection timeout
+    // to generous prefill timeout.
+    onConnected?.();
 
     const reader = response.body?.getReader();
     if (!reader) {

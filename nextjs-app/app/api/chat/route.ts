@@ -4907,41 +4907,45 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             >();
             let finishReason = 'stop';
 
-            // Three-tier timeout system based on endpoint type:
+            // Three-phase timeout system based on endpoint type:
             //
-            // LOCAL (LM Studio, Ollama on LAN):
-            //   First-token: generous (large models need extended prefill on consumer GPUs)
-            //   Between-token: generous (can pause during complex tool-call generation)
+            // Phase 1 — CONNECTION (10s cloud, 30s local):
+            //   Did we get HTTP 200 back from the server? If the server is down
+            //   (ECONNREFUSED, DNS failure, HTTP 5xx), this fails within seconds.
+            //   If it hangs (queued, overloaded), we bail after the timeout.
             //
-            // CLOUD-INFERENCE (NVIDIA NIM, Together, Fireworks, etc.):
-            //   First-token: generous (these queue requests, prefill can take 60-120s)
-            //   Between-token: tight (once streaming starts, throughput is consistent)
+            // Phase 2 — PREFILL (120s):
+            //   Server is alive (HTTP 200 received). The model is processing our
+            //   prompt tokens before generating output. Large prompts on big models
+            //   can take 30-90s. We're patient here because we KNOW the server is working.
             //
-            // CLOUD-FAST (OpenAI, Anthropic):
-            //   First-token: tight (fast infrastructure, should start quickly)
-            //   Between-token: tight (consistent throughput)
+            // Phase 3 — BETWEEN-TOKEN (45s cloud, 120s local):
+            //   First content token arrived. Streaming is active. If the gap between
+            //   tokens exceeds this, something broke mid-stream.
             //
             const isLocal = !usingCloudProvider || isLocalEndpoint(llmSettings.endpoint);
             const endpointLower = (llmSettings.endpoint || '').toLowerCase();
             const isCloudInference = !isLocal && /nvidia|\.nvcf\.|together|fireworks|groq|replicate|deepinfra/.test(endpointLower);
-            // isCloudFast = !isLocal && !isCloudInference (OpenAI, Anthropic, etc.)
             const DEFAULT_TIMEOUT_MS = isDelegation ? 300000 : 180000;
             const timeoutMs = (choom.llmTimeoutSec ? choom.llmTimeoutSec * 1000 : DEFAULT_TIMEOUT_MS);
 
-            let FIRST_TOKEN_MS: number;
+            let CONNECTION_TIMEOUT_MS: number;
+            let PREFILL_TIMEOUT_MS: number;
             let BETWEEN_TOKEN_MS: number;
             if (isLocal) {
-              FIRST_TOKEN_MS = Math.max(120000, timeoutMs - 15000);
+              CONNECTION_TIMEOUT_MS = 30000;
+              PREFILL_TIMEOUT_MS = Math.max(120000, timeoutMs - 15000);
               BETWEEN_TOKEN_MS = Math.max(120000, Math.floor(timeoutMs * 0.75));
             } else if (isCloudInference) {
-              // Generous first-token for queuing, tight between-token
-              FIRST_TOKEN_MS = Math.max(120000, timeoutMs - 15000);
+              CONNECTION_TIMEOUT_MS = 15000;
+              PREFILL_TIMEOUT_MS = 120000;
               BETWEEN_TOKEN_MS = 45000;
             } else {
-              // Cloud-fast: tight everything
-              FIRST_TOKEN_MS = 30000;
+              CONNECTION_TIMEOUT_MS = 15000;
+              PREFILL_TIMEOUT_MS = 30000;
               BETWEEN_TOKEN_MS = 30000;
             }
+            let connectionEstablished = false;
             let firstTokenReceived = false;
             let lastChunkTime = Date.now();
             let chunkCount = 0;
@@ -4949,29 +4953,43 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             let rejectInactivity: (err: Error) => void;
             const inactivityPromise = new Promise<never>((_, reject) => {
               rejectInactivity = reject;
-              // Start with first-token timeout (covers prefill phase)
-              inactivityTimer = setTimeout(() => reject(new Error(`LLM response timeout (no first token for ${FIRST_TOKEN_MS / 1000}s)`)), FIRST_TOKEN_MS);
+              // Start with connection timeout — server alive?
+              inactivityTimer = setTimeout(() => reject(new Error(
+                `LLM connection timeout (no HTTP response in ${CONNECTION_TIMEOUT_MS / 1000}s)`
+              )), CONNECTION_TIMEOUT_MS);
             });
             inactivityPromise.catch(() => {}); // suppress unhandled rejection after race
+            const onConnected = () => {
+              if (connectionEstablished) return;
+              connectionEstablished = true;
+              clearTimeout(inactivityTimer);
+              console.log(`   🔗 ${choomTag} Connected — ${PREFILL_TIMEOUT_MS / 1000}s prefill timeout`);
+              inactivityTimer = setTimeout(() => rejectInactivity(new Error(
+                `LLM response timeout (connected but no content for ${PREFILL_TIMEOUT_MS / 1000}s)`
+              )), PREFILL_TIMEOUT_MS);
+            };
             const resetInactivity = (hasContent: boolean = false) => {
               clearTimeout(inactivityTimer);
               lastChunkTime = Date.now();
               chunkCount++;
-              // Only switch from first-token to between-token mode when actual
-              // content (text or tool_calls) arrives — not on empty SSE setup
-              // chunks. Otherwise the generous prefill timeout gets replaced
-              // too early, causing timeouts on large contexts (~28K+ tokens)
-              // where prefill legitimately takes 60-120s.
+              if (!connectionEstablished) {
+                connectionEstablished = true;
+                console.log(`   🔗 ${choomTag} Connected — ${PREFILL_TIMEOUT_MS / 1000}s prefill timeout`);
+              }
               if (!firstTokenReceived && hasContent) {
                 firstTokenReceived = true;
                 console.log(`   ⚡ ${choomTag} First content token — switching to ${BETWEEN_TOKEN_MS / 1000}s between-token timeout`);
               }
-              const currentTimeout = firstTokenReceived ? BETWEEN_TOKEN_MS : FIRST_TOKEN_MS;
-              inactivityTimer = setTimeout(() => rejectInactivity(new Error(
-                firstTokenReceived
-                  ? `LLM response timeout (no data for ${currentTimeout / 1000}s, last chunk ${Math.round((Date.now() - lastChunkTime) / 1000)}s ago, ${chunkCount} chunks received)`
-                  : `LLM response timeout (no first token for ${FIRST_TOKEN_MS / 1000}s)`
-              )), currentTimeout);
+              let currentTimeout: number;
+              let timeoutMsg: string;
+              if (firstTokenReceived) {
+                currentTimeout = BETWEEN_TOKEN_MS;
+                timeoutMsg = `LLM response timeout (no data for ${currentTimeout / 1000}s, last chunk ${Math.round((Date.now() - lastChunkTime) / 1000)}s ago, ${chunkCount} chunks received)`;
+              } else {
+                currentTimeout = PREFILL_TIMEOUT_MS;
+                timeoutMsg = `LLM response timeout (connected but no content for ${PREFILL_TIMEOUT_MS / 1000}s)`;
+              }
+              inactivityTimer = setTimeout(() => rejectInactivity(new Error(timeoutMsg)), currentTimeout);
             };
             const wallClockPromise = new Promise<never>((_, reject) => {
               setTimeout(() => reject(new Error('LLM response timeout')), timeoutMs);
@@ -5041,7 +5059,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 }
                 return false;
               };
-              for await (const chunk of llmClient.streamChat(currentMessages, activeTools, undefined, toolChoiceOverride)) {
+              for await (const chunk of llmClient.streamChat(currentMessages, activeTools, undefined, toolChoiceOverride, onConnected)) {
                 if (streamAbortedForRepetition) break;
                 if (!chunk.choices || !chunk.choices[0]) {
                   // Final usage-only chunks have no choices; capture below.
@@ -5258,54 +5276,78 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                     toolCallsAccumulator = new Map();
                     finishReason = 'stop';
 
-                    // Fallback timeout: same three-tier approach as primary.
+                    // Fallback timeout: same three-phase approach as primary.
                     const fbIsLocal = !fb.providerId || isLocalEndpoint(fbSettings.endpoint);
                     const fbEndpointLower = (fbSettings.endpoint || '').toLowerCase();
                     const fbIsCloudInference = !fbIsLocal && /nvidia|\.nvcf\.|together|fireworks|groq|replicate|deepinfra/.test(fbEndpointLower);
                     const fbTimeoutMs = fbIsLocal ? timeoutMs : Math.max(60000, Math.floor(timeoutMs * 0.75));
-                    let fbFirstTokenMs: number;
+                    let fbConnectionMs: number;
+                    let fbPrefillMs: number;
                     let fbBetweenTokenMs: number;
                     if (fbIsLocal) {
-                      fbFirstTokenMs = Math.max(120000, fbTimeoutMs - 15000);
+                      fbConnectionMs = 30000;
+                      fbPrefillMs = Math.max(120000, fbTimeoutMs - 15000);
                       fbBetweenTokenMs = Math.max(120000, Math.floor(fbTimeoutMs * 0.75));
                     } else if (fbIsCloudInference) {
-                      fbFirstTokenMs = Math.max(120000, fbTimeoutMs - 15000);
+                      fbConnectionMs = 15000;
+                      fbPrefillMs = 120000;
                       fbBetweenTokenMs = 45000;
                     } else {
-                      fbFirstTokenMs = 30000;
+                      fbConnectionMs = 15000;
+                      fbPrefillMs = 30000;
                       fbBetweenTokenMs = 30000;
                     }
+                    let fbConnectionEstablished = false;
                     let fbFirstTokenReceived = false;
                     let fbRejectInactivity: (err: Error) => void;
                     const fbInactivityPromise = new Promise<never>((_, reject) => {
                       fbRejectInactivity = reject;
-                      fbInactivityTimer = setTimeout(() => reject(new Error(`LLM response timeout (no first token for ${fbFirstTokenMs / 1000}s)`)), fbFirstTokenMs);
+                      fbInactivityTimer = setTimeout(() => reject(new Error(
+                        `LLM connection timeout (no HTTP response in ${fbConnectionMs / 1000}s)`
+                      )), fbConnectionMs);
                     });
                     fbInactivityPromise.catch(() => {});
+                    const fbOnConnected = () => {
+                      if (fbConnectionEstablished) return;
+                      fbConnectionEstablished = true;
+                      clearTimeout(fbInactivityTimer);
+                      console.log(`   🔗 ${choomTag} Fallback connected — ${fbPrefillMs / 1000}s prefill timeout`);
+                      fbInactivityTimer = setTimeout(() => fbRejectInactivity(new Error(
+                        `LLM response timeout (connected but no content for ${fbPrefillMs / 1000}s)`
+                      )), fbPrefillMs);
+                    };
                     const resetFbInactivity = (hasContent: boolean = false) => {
                       clearTimeout(fbInactivityTimer);
+                      if (!fbConnectionEstablished) {
+                        fbConnectionEstablished = true;
+                        console.log(`   🔗 ${choomTag} Fallback connected — ${fbPrefillMs / 1000}s prefill timeout`);
+                      }
                       if (!fbFirstTokenReceived && hasContent) {
                         fbFirstTokenReceived = true;
                         console.log(`   ⚡ ${choomTag} Fallback first content token — switching to ${fbBetweenTokenMs / 1000}s between-token timeout`);
                       }
-                      const currentTimeout = fbFirstTokenReceived ? fbBetweenTokenMs : fbFirstTokenMs;
-                      fbInactivityTimer = setTimeout(() => fbRejectInactivity(new Error(
-                        fbFirstTokenReceived
-                          ? `LLM response timeout (no data for ${fbBetweenTokenMs / 1000}s)`
-                          : `LLM response timeout (no first token for ${fbFirstTokenMs / 1000}s)`
-                      )), currentTimeout);
+                      let currentTimeout: number;
+                      let timeoutMsg: string;
+                      if (fbFirstTokenReceived) {
+                        currentTimeout = fbBetweenTokenMs;
+                        timeoutMsg = `LLM response timeout (no data for ${fbBetweenTokenMs / 1000}s)`;
+                      } else {
+                        currentTimeout = fbPrefillMs;
+                        timeoutMsg = `LLM response timeout (connected but no content for ${fbPrefillMs / 1000}s)`;
+                      }
+                      fbInactivityTimer = setTimeout(() => fbRejectInactivity(new Error(timeoutMsg)), currentTimeout);
                     };
                     const fbWallClockPromise = new Promise<never>((_, reject) => {
                       setTimeout(() => reject(new Error('LLM response timeout')), fbTimeoutMs);
                     });
                     fbWallClockPromise.catch(() => {});
-                    console.log(`   ⏱️  Fallback timeout: ${fbTimeoutMs / 1000}s wall-clock, ${fbFirstTokenMs / 1000}s first-token, ${fbBetweenTokenMs / 1000}s between-token (primary was ${timeoutMs / 1000}s)`);
+                    console.log(`   ⏱️  Fallback timeout: ${fbTimeoutMs / 1000}s wall-clock, ${fbConnectionMs / 1000}s connection, ${fbPrefillMs / 1000}s prefill, ${fbBetweenTokenMs / 1000}s between-token`);
 
                     const fbThinkFilter = createThinkFilter();
                     const fbToolCallXmlFilter = createToolCallXmlFilter();
                     const fbJsonToolCallFilter = createJsonToolCallFilter();
                     const fbStreamPromise = (async () => {
-                      for await (const chunk of fbClient.streamChat(currentMessages, activeTools, undefined, toolChoiceOverride)) {
+                      for await (const chunk of fbClient.streamChat(currentMessages, activeTools, undefined, toolChoiceOverride, fbOnConnected)) {
                         const fbDeltaAny = chunk.choices?.[0]?.delta as { reasoning_content?: string } | undefined;
                         const fbHasContent = !!(chunk.choices?.[0]?.delta?.content || chunk.choices?.[0]?.delta?.tool_calls ||
                           (typeof fbDeltaAny?.reasoning_content === 'string' && fbDeltaAny.reasoning_content.length > 0));
