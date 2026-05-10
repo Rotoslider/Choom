@@ -4923,19 +4923,10 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
 
             // Three-phase timeout system based on endpoint type:
             //
-            // Phase 1 — CONNECTION (10s cloud, 30s local):
-            //   Did we get HTTP 200 back from the server? If the server is down
-            //   (ECONNREFUSED, DNS failure, HTTP 5xx), this fails within seconds.
-            //   If it hangs (queued, overloaded), we bail after the timeout.
-            //
-            // Phase 2 — PREFILL (120s):
-            //   Server is alive (HTTP 200 received). The model is processing our
-            //   prompt tokens before generating output. Large prompts on big models
-            //   can take 30-90s. We're patient here because we KNOW the server is working.
-            //
-            // Phase 3 — BETWEEN-TOKEN (45s cloud, 120s local):
-            //   First content token arrived. Streaming is active. If the gap between
-            //   tokens exceeds this, something broke mid-stream.
+            // Three-phase timeout — tuned per endpoint type:
+            //   Phase 1 — CONNECTION: server alive? (fast fail on ECONNREFUSED/DNS/5xx)
+            //   Phase 2 — PREFILL: processing prompt tokens before first output
+            //   Phase 3 — BETWEEN-TOKEN: gap between streaming tokens (stall detection)
             //
             const isLocal = !usingCloudProvider || isLocalEndpoint(llmSettings.endpoint);
             const endpointLower = (llmSettings.endpoint || '').toLowerCase();
@@ -4952,12 +4943,12 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               BETWEEN_TOKEN_MS = Math.max(120000, Math.floor(timeoutMs * 0.75));
             } else if (isCloudInference) {
               CONNECTION_TIMEOUT_MS = 15000;
-              PREFILL_TIMEOUT_MS = 120000;
-              BETWEEN_TOKEN_MS = 45000;
+              PREFILL_TIMEOUT_MS = 60000;
+              BETWEEN_TOKEN_MS = 15000;
             } else {
               CONNECTION_TIMEOUT_MS = 15000;
               PREFILL_TIMEOUT_MS = 30000;
-              BETWEEN_TOKEN_MS = 30000;
+              BETWEEN_TOKEN_MS = 15000;
             }
             let connectionEstablished = false;
             let firstTokenReceived = false;
@@ -5304,12 +5295,12 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                       fbBetweenTokenMs = Math.max(120000, Math.floor(fbTimeoutMs * 0.75));
                     } else if (fbIsCloudInference) {
                       fbConnectionMs = 15000;
-                      fbPrefillMs = 120000;
-                      fbBetweenTokenMs = 45000;
+                      fbPrefillMs = 60000;
+                      fbBetweenTokenMs = 15000;
                     } else {
                       fbConnectionMs = 15000;
                       fbPrefillMs = 30000;
-                      fbBetweenTokenMs = 30000;
+                      fbBetweenTokenMs = 15000;
                     }
                     let fbConnectionEstablished = false;
                     let fbFirstTokenReceived = false;
