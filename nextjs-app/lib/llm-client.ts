@@ -88,6 +88,14 @@ export class LLMClient {
       return true;
     });
 
+    // NVIDIA (and some other providers) reject requests where the last message
+    // is from the assistant — they set add_generation_prompt=True which requires
+    // user-last ordering. Append a continuation prompt so the model picks up
+    // where the plan/previous iteration left off.
+    if (sanitizedMessages.length > 0 && sanitizedMessages[sanitizedMessages.length - 1].role === 'assistant') {
+      sanitizedMessages.push({ role: 'user', content: 'Continue. Respond to the user based on the above context.' });
+    }
+
     const body: ChatCompletionRequest & { stream_options?: { include_usage: boolean } } = {
       model: this.settings.model,
       messages: sanitizedMessages,

@@ -109,13 +109,31 @@ export const tools: ToolDefinition[] = [
   },
   {
     name: 'ha_get_history',
-    description: 'Get historical state data for a Home Assistant entity. Returns summarized min/max/avg and trend direction over the time period.',
+    description: 'Get historical state data for a Home Assistant entity. Numeric sensors return min/max/avg/trend. Non-numeric entities (location, binary_sensor, etc.) return a timestamped list of state changes.',
     parameters: {
       type: 'object',
       properties: {
         entity_id: {
           type: 'string',
           description: 'Entity to get history for, e.g. "sensor.bathroom_temperature"',
+        },
+        hours: {
+          type: 'number',
+          description: 'Number of hours to look back (default 24, max 168/7 days)',
+        },
+      },
+      required: ['entity_id'],
+    },
+  },
+  {
+    name: 'ha_get_logbook',
+    description: 'Get the logbook (activity history) for a Home Assistant entity. Returns timestamped state change entries — ideal for tracking location history, door open/close events, device tracker changes, and any entity where you need to see WHAT changed and WHEN. This is the same data shown in the HA Activity tab.',
+    parameters: {
+      type: 'object',
+      properties: {
+        entity_id: {
+          type: 'string',
+          description: 'Entity to get logbook for, e.g. "sensor.sm_g988u1_geocoded_location"',
         },
         hours: {
           type: 'number',

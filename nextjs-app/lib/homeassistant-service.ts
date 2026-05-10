@@ -29,6 +29,7 @@ export interface HAHistorySummary {
   unit: string;
   first: string;
   last: string;
+  changes?: Array<{ time: string; state: string }>;
 }
 
 // In-memory cache
@@ -360,7 +361,16 @@ export class HomeAssistantService {
     }
 
     if (numericValues.length === 0) {
-      // Non-numeric entity (e.g. binary_sensor, switch)
+      // Non-numeric entity (e.g. binary_sensor, switch, geocoded_location)
+      // Include individual state changes so the LLM can see the full timeline
+      const changes: Array<{ time: string; state: string }> = [];
+      let prevState = '';
+      for (const e of entries) {
+        if (e.state !== 'unavailable' && e.state !== 'unknown' && e.state !== prevState) {
+          changes.push({ time: e.last_changed || e.last_updated, state: e.state });
+          prevState = e.state;
+        }
+      }
       return {
         entity_id: entityId,
         friendly_name: friendlyName,
@@ -372,6 +382,7 @@ export class HomeAssistantService {
         unit: '',
         first: entries[0].state,
         last: entries[entries.length - 1].state,
+        changes: changes.slice(-100),
       };
     }
 
@@ -410,6 +421,22 @@ export class HomeAssistantService {
       first: String(numericValues[0]),
       last: String(numericValues[numericValues.length - 1]),
     };
+  }
+
+  async getLogbook(entityId: string, hours: number = 24): Promise<Array<{ when: string; state: string; message: string }>> {
+    const start = new Date(Date.now() - hours * 3600 * 1000).toISOString();
+    const end = new Date().toISOString();
+    const data = await this.apiFetch<Array<{ when: string; state?: string; message?: string; entity_id?: string }>>(
+      `/api/logbook/${start}?entity=${entityId}&end_time=${end}`
+    );
+    if (!data || data.length === 0) return [];
+    return data
+      .filter(e => e.entity_id === entityId)
+      .map(e => ({
+        when: e.when,
+        state: e.state || '',
+        message: e.message || '',
+      }));
   }
 
   /**

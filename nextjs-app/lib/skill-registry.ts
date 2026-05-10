@@ -316,11 +316,11 @@ export class SkillRegistry {
    */
   getLevel1Summaries(): string {
     const lines: string[] = [];
-    for (const [, skill] of this.skills) {
-      if (!skill.metadata.enabled) continue;
+    this.skills.forEach((skill) => {
+      if (!skill.metadata.enabled) return;
       const toolList = skill.metadata.tools.map(t => `\`${t}\``).join(', ');
       lines.push(`- **${skill.metadata.name}**: ${skill.metadata.description} [${toolList}]`);
-    }
+    });
     return lines.join('\n');
   }
 
@@ -368,10 +368,10 @@ export class SkillRegistry {
    */
   getAllToolDefinitions(): ToolDefinition[] {
     const tools: ToolDefinition[] = [];
-    for (const [, skill] of this.skills) {
-      if (!skill.metadata.enabled) continue;
+    this.skills.forEach((skill) => {
+      if (!skill.metadata.enabled) return;
       tools.push(...skill.toolDefinitions);
-    }
+    });
     return tools;
   }
 
@@ -415,8 +415,8 @@ export class SkillRegistry {
     const msgLower = userMessage.toLowerCase();
     const scored: { skill: LoadedSkill; score: number }[] = [];
 
-    for (const [, skill] of this.skills) {
-      if (!skill.metadata.enabled) continue;
+    this.skills.forEach((skill) => {
+      if (!skill.metadata.enabled) return;
       let score = 0;
 
       // Check if any tool names are mentioned
@@ -465,7 +465,7 @@ export class SkillRegistry {
       if (score > 0) {
         scored.push({ skill, score });
       }
-    }
+    });
 
     return scored
       .sort((a, b) => b.score - a.score)
@@ -540,7 +540,7 @@ export class SkillRegistry {
   private buildNormalizedIndex(): Map<string, string> {
     if (this.normalizedIndex) return this.normalizedIndex;
     const idx = new Map<string, string>();
-    for (const [toolName] of this.toolIndex) {
+    this.toolIndex.forEach((_skillName, toolName) => {
       const norm = toolName.replace(/[-_]/g, '').toLowerCase();
       // Only store if unambiguous (first writer wins; collision → delete)
       if (idx.has(norm)) {
@@ -548,7 +548,7 @@ export class SkillRegistry {
       } else {
         idx.set(norm, toolName);
       }
-    }
+    });
     this.normalizedIndex = idx;
     return idx;
   }
@@ -583,7 +583,8 @@ export class SkillRegistry {
         candidates.add(name.slice(prefix.length));
       }
     }
-    for (const c of candidates) {
+    const candidateArr = Array.from(candidates);
+    for (const c of candidateArr) {
       if (c !== name && this.toolIndex.has(c)) {
         console.log(`   🔧 Fuzzy tool resolve (tier 1): "${name}" → "${c}"`);
         return c;
@@ -603,20 +604,22 @@ export class SkillRegistry {
     // (e.g. "image-generation") instead of the actual tool name ("generate_image").
     // When matched, pick the first tool (primary action) in the skill's definition.
     const normForSkill = name.replace(/[-_]/g, '').toLowerCase();
-    for (const [, skill] of this.skills) {
-      if (!skill.metadata.enabled) continue;
+    let tier2bMatch: string | null = null;
+    this.skills.forEach((skill) => {
+      if (tier2bMatch || !skill.metadata.enabled) return;
       const skillNorm = skill.metadata.name.replace(/[-_]/g, '').toLowerCase();
       if (skillNorm === normForSkill && skill.toolDefinitions.length > 0) {
-        const bestTool = skill.toolDefinitions[0].name;
-        console.log(`   🔧 Fuzzy tool resolve (tier 2b, skill "${skill.metadata.name}"): "${name}" → "${bestTool}"`);
-        return bestTool;
+        tier2bMatch = skill.toolDefinitions[0].name;
+        console.log(`   🔧 Fuzzy tool resolve (tier 2b, skill "${skill.metadata.name}"): "${name}" → "${tier2bMatch}"`);
       }
-    }
+    });
+    if (tier2bMatch) return tier2bMatch;
 
     // Tier 2c: word-reorder — models swap word order (web_search vs search_web)
     const nameWords = name.toLowerCase().split(/[-_]/).filter(Boolean).sort().join('');
+    const toolNames = Array.from(this.toolIndex.keys());
     if (nameWords.length >= 4) {
-      for (const [toolName] of this.toolIndex) {
+      for (const toolName of toolNames) {
         const toolWords = toolName.toLowerCase().split(/[-_]/).filter(Boolean).sort().join('');
         if (toolWords === nameWords && toolName !== name) {
           console.log(`   🔧 Fuzzy tool resolve (tier 2c, word reorder): "${name}" → "${toolName}"`);
@@ -631,7 +634,7 @@ export class SkillRegistry {
       const normInput = name.toLowerCase().replace(/[-_]/g, '');
       let suffixMatch: string | null = null;
       let suffixAmbiguous = false;
-      for (const [toolName] of this.toolIndex) {
+      for (const toolName of toolNames) {
         const normTool = toolName.toLowerCase().replace(/[-_]/g, '');
         if (normTool.endsWith(normInput) && normTool !== normInput) {
           if (suffixMatch) { suffixAmbiguous = true; break; }
@@ -651,7 +654,7 @@ export class SkillRegistry {
       let bestDist = maxDist + 1;
       let ambiguous = false;
 
-      for (const [toolName] of this.toolIndex) {
+      for (const toolName of toolNames) {
         // Skip if length difference alone exceeds maxDist
         if (Math.abs(toolName.length - name.length) > maxDist) continue;
         const d = levenshtein(name.toLowerCase(), toolName.toLowerCase());

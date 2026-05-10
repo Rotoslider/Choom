@@ -340,16 +340,51 @@ Rules:
 // ============================================================================
 
 /**
+ * Traverse a nested path like "files[0]", "data.nested", or "files[0].name"
+ * on an arbitrary object. Returns undefined if any segment is missing.
+ */
+function resolveNestedPath(obj: unknown, path: string): unknown {
+  // Split on dots and bracket indices: "files[0].name" → ["files", "0", "name"]
+  const segments = path.replace(/\[(\d+)\]/g, '.$1').split('.');
+  let current: unknown = obj;
+  for (const seg of segments) {
+    if (current === null || current === undefined) return undefined;
+    if (typeof current !== 'object') return undefined;
+    const rec = current as Record<string, unknown>;
+    if (rec[seg] !== undefined) {
+      current = rec[seg];
+    } else if (Array.isArray(current)) {
+      const idx = parseInt(seg, 10);
+      if (isNaN(idx) || idx < 0 || idx >= current.length) return undefined;
+      current = current[idx];
+    } else {
+      // Try case conversion: snake_case ↔ camelCase
+      const camel = seg.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
+      const snake = seg.replace(/[A-Z]/g, (l: string) => `_${l.toLowerCase()}`);
+      if (camel !== seg && rec[camel] !== undefined) {
+        current = rec[camel];
+      } else if (snake !== seg && rec[snake] !== undefined) {
+        current = rec[snake];
+      } else {
+        return undefined;
+      }
+    }
+  }
+  return current;
+}
+
+/**
  * Resolve {{step_N.result.field}} template variables in step arguments
  * using results from previous steps.
  */
 function resolveFieldFromResult(resultObj: Record<string, unknown>, field: string): unknown {
-  // Exact match first
+  // Try nested path resolution first (handles "files[0]", "data.nested.value")
+  const nested = resolveNestedPath(resultObj, field);
+  if (nested !== undefined) return nested;
+  // Flat field with case conversion fallback
   if (resultObj[field] !== undefined) return resultObj[field];
-  // snake_case → camelCase: image_id → imageId
   const camel = field.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
   if (camel !== field && resultObj[camel] !== undefined) return resultObj[camel];
-  // camelCase → snake_case: imageId → image_id
   const snake = field.replace(/[A-Z]/g, l => `_${l.toLowerCase()}`);
   if (snake !== field && resultObj[snake] !== undefined) return resultObj[snake];
   return undefined;
@@ -363,8 +398,8 @@ function resolveTemplateVars(
 
   for (const [key, value] of Object.entries(args)) {
     if (typeof value === 'string') {
-      // Handle {{step_N.result.field}} — access a specific field
-      resolved[key] = value.replace(/\{\{(\w+)\.result\.(\w+)\}\}/g, (_match, stepId, field) => {
+      // Handle {{step_N.result.field}} — access a specific field (supports nested: files[0], data.x)
+      resolved[key] = value.replace(/\{\{(\w+)\.result\.([\w\.\[\]]+)\}\}/g, (_match, stepId, field) => {
         const stepResult = completedSteps.get(stepId);
         if (!stepResult?.result || typeof stepResult.result !== 'object') {
           return `[unresolved: ${stepId}.${field}]`;
@@ -390,12 +425,10 @@ function resolveTemplateVars(
         return String(r);
       });
       // Also handle {{prev.result.field}} as shorthand for the immediately preceding step
-      resolved[key] = (resolved[key] as string).replace(/\{\{prev\.result\.(\w+)\}\}/g, (_match, field) => {
+      resolved[key] = (resolved[key] as string).replace(/\{\{prev\.result\.([\w\.\[\]]+)\}\}/g, (_match, field) => {
         // Find the last completed step
-        let lastResult: ToolResult | undefined;
-        for (const [, r] of completedSteps) {
-          lastResult = r;
-        }
+        const values = Array.from(completedSteps.values());
+        const lastResult: ToolResult | undefined = values[values.length - 1];
         if (!lastResult?.result || typeof lastResult.result !== 'object') {
           return `[unresolved: prev.${field}]`;
         }
@@ -405,10 +438,8 @@ function resolveTemplateVars(
       });
       // Handle {{prev.result}} — entire result of preceding step
       resolved[key] = (resolved[key] as string).replace(/\{\{prev\.result\}\}/g, () => {
-        let lastResult: ToolResult | undefined;
-        for (const [, r] of completedSteps) {
-          lastResult = r;
-        }
+        const values = Array.from(completedSteps.values());
+        const lastResult: ToolResult | undefined = values[values.length - 1];
         if (!lastResult?.result) return '[unresolved: prev]';
         const r = lastResult.result;
         if (typeof r === 'string') return r;

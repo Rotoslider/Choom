@@ -4669,6 +4669,20 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                   content: `I executed a ${plan.steps.length}-step plan: "${plan.goal}"\n\n${stepSummaries}\n\n${planSummaryText}`,
                 });
 
+                // When the plan partially failed, add guidance so the LLM retries
+                // failed steps manually instead of giving up.
+                if (planResult.failed > 0 && planResult.succeeded > 0) {
+                  currentMessages.push({
+                    role: 'user',
+                    content: `Some plan steps failed due to template resolution issues. Use the successful results and call the tools directly to complete the remaining work. Do NOT give up — try the failed steps yourself by calling the tools with the correct arguments.`,
+                  });
+                } else if (planResult.failed > 0 && planResult.succeeded === 0) {
+                  currentMessages.push({
+                    role: 'user',
+                    content: `The automated plan failed, but you can still accomplish the goal. Call the tools directly yourself — do NOT give up.`,
+                  });
+                }
+
                 fullContent += `\n\n${planSummaryText}`;
                 send({ type: 'content', content: `\n\n${planSummaryText}` });
 

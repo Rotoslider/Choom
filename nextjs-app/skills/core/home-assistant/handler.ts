@@ -406,6 +406,37 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
             samples: summary.samples,
             first_value: summary.first,
             last_value: summary.last,
+            ...(summary.changes && summary.changes.length > 0 && {
+              changes: summary.changes,
+            }),
+          });
+        }
+
+        case 'ha_get_logbook': {
+          const entityId = args.entity_id as string;
+          if (!entityId) return this.error(toolCall, 'entity_id is required');
+
+          const hours = Math.min(Math.max(Number(args.hours) || 24, 1), 168);
+          const entries = await ha.getLogbook(entityId, hours);
+
+          if (entries.length === 0) {
+            return this.success(toolCall, {
+              entity_id: entityId,
+              period: `${hours} hours`,
+              entries: [],
+              note: `No logbook entries for ${entityId} in the last ${hours} hours`,
+            });
+          }
+
+          return this.success(toolCall, {
+            entity_id: entityId,
+            period: `${hours} hours`,
+            total_entries: entries.length,
+            entries: entries.map(e => ({
+              time: e.when,
+              ...(e.state && { state: e.state }),
+              ...(e.message && { message: e.message }),
+            })),
           });
         }
 
