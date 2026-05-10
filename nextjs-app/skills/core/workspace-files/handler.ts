@@ -155,6 +155,23 @@ export default class WorkspaceFilesHandler extends BaseSkillHandler {
     const filePath = stripMisplacedSharedPrefix(this.sanitizePath((toolCall.arguments.path || toolCall.arguments.file_path || toolCall.arguments.filename) as string || ''));
     const ws = new WorkspaceService(WORKSPACE_ROOT, WORKSPACE_MAX_FILE_SIZE_KB, WORKSPACE_ALLOWED_EXTENSIONS);
 
+    // Intercept image/binary files — reading raw bytes as text is useless.
+    // Redirect to analyze_image which handles vision properly.
+    const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'tiff', 'tif', 'svg', 'ico']);
+    const BINARY_EXTS = new Set(['pdf', 'zip', 'tar', 'gz', 'rar', '7z', 'exe', 'bin', 'dll', 'so', 'dylib', 'mp3', 'mp4', 'wav', 'avi', 'mov', 'mkv', 'flac', 'ogg', 'wma', 'psd', 'ai', 'sketch']);
+    const fileExt = filePath.split('.').pop()?.toLowerCase() || '';
+    if (IMAGE_EXTS.has(fileExt)) {
+      console.log(`   🖼️  Workspace read intercepted: ${filePath} is an image — redirecting to analyze_image`);
+      return this.error(
+        toolCall,
+        `"${filePath}" is an image file (.${fileExt}), not a text file. Reading raw image bytes is not useful. To view this image, call the analyze_image tool instead:\n\n  analyze_image({ image_path: "${filePath}", prompt: "Describe this image" })`
+      );
+    }
+    if (BINARY_EXTS.has(fileExt)) {
+      console.log(`   ⚠️  Workspace read blocked: ${filePath} is a binary file`);
+      return this.error(toolCall, `"${filePath}" is a binary file (.${fileExt}) and cannot be read as text.`);
+    }
+
     try {
       let content = await ws.readFile(filePath);
 
