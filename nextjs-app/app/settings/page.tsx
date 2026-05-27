@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   ArrowLeft,
@@ -45,6 +45,7 @@ import { AvatarSettingsPanel } from '@/components/settings/avatar-settings';
 import { SelfFollowupsSettings } from '@/components/settings/self-followups-settings';
 import { BridgeLogSettings } from '@/components/settings/bridge-log-settings';
 import { cn } from '@/lib/utils';
+import { useAppStore } from '@/lib/store';
 
 type Section =
   | 'llm'
@@ -92,6 +93,16 @@ const sections: { id: Section; label: string; icon: React.ReactNode }[] = [
 export default function SettingsPage() {
   const router = useRouter();
   const [activeSection, setActiveSection] = useState<Section>('llm');
+  const { chooms, setChooms } = useAppStore();
+
+  useEffect(() => {
+    if (chooms.length === 0) {
+      fetch('/api/chooms')
+        .then((r) => r.json())
+        .then((data) => { if (Array.isArray(data)) setChooms(data); })
+        .catch(console.error);
+    }
+  }, [chooms.length, setChooms]);
 
   return (
     <div className="min-h-screen bg-background flex">

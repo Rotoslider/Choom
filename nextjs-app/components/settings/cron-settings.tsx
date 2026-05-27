@@ -91,11 +91,25 @@ const TASK_META: Record<string, { name: string; description: string; details: st
     icon: <Target className="h-4 w-4 text-emerald-500" />,
   },
   db_backup: {
-    name: 'Database Backup',
-    description: 'Backs up dev.db and memories.db to Google Drive',
-    details: 'Uploads date-stamped copies of the Prisma database (dev.db) and long-term memory database (memories.db) to a "Choom Backup" folder in Google Drive. Creates the folder if it doesn\'t exist.',
+    name: 'Full Data Backup',
+    description: 'Databases, configs, presence data, and journals to Google Drive',
+    details: 'Uploads date-stamped copies of dev.db, memories.db, and a config bundle (bridge-config.json, .env files, presence data, self-followups, sibling journal, OAuth credentials) to the "Choom Backup" folder in Google Drive. Also creates a local snapshot in data/backups/daily/. Keeps 5 backups per type on Drive and 14 days locally.',
     choom: 'System (no Choom)',
     icon: <Calendar className="h-4 w-4 text-green-500" />,
+  },
+  selfie_backup: {
+    name: 'Weekly Selfie Backup',
+    description: 'Incremental backup of selfie images to Google Drive (Sundays)',
+    details: 'Archives only new selfie images since the last backup for each Choom. Uploads to "Choom Backup/Selfies/" on Google Drive. Keeps 3 weekly archives per Choom. Selfies total ~5 GB; enable only if you have Drive storage headroom.',
+    choom: 'System (no Choom)',
+    icon: <RefreshCw className="h-4 w-4 text-cyan-500" />,
+  },
+  nightly_doctor: {
+    name: 'Nightly Doctor',
+    description: 'Diagnostic analysis of execution traces',
+    details: 'Analyzes the day\'s execution traces for anomalies, error patterns, and per-Choom tool hotspots. Sends a diagnostic report via Signal with trends and recommendations.',
+    choom: 'System (no Choom)',
+    icon: <Zap className="h-4 w-4 text-orange-500" />,
   },
 };
 
@@ -228,12 +242,14 @@ export function CronSettings() {
     return <div className="text-sm text-muted-foreground">Loading config...</div>;
   }
 
+  const tasks = config.tasks || {};
+
   // Sort tasks: cron jobs only (exclude system_health)
-  const cronTasks = Object.entries(config.tasks).filter(([id]) => id !== 'system_health');
+  const cronTasks = Object.entries(tasks).filter(([id]) => id !== 'system_health');
 
   // Find tasks that are defined in TASK_META but not yet in the config
   const availableToAdd = Object.keys(TASK_META).filter(
-    (id) => !config.tasks[id]
+    (id) => !tasks[id]
   );
 
   return (

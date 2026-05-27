@@ -147,6 +147,19 @@ class ScheduledTaskManager:
                 minute=minute
             )
 
+        # Weekly selfie backup (Sundays)
+        sb = tasks.get("selfie_backup", {})
+        if sb.get("enabled", False):
+            sb_time = sb.get("time", "04:00")
+            hour, minute = map(int, sb_time.split(':'))
+            self.add_cron_task(
+                "selfie_backup",
+                self._backup_selfies,
+                day_of_week='sun',
+                hour=hour,
+                minute=minute
+            )
+
         # Restore pending reminders from config
         self._restore_reminders()
 
@@ -1136,6 +1149,13 @@ Be practical. Only work on things that can actually be accomplished with the too
                     "default_time": "04:00",
                     "func": self._yt_download,
                 },
+                "selfie_backup": {
+                    "cfg": tasks.get("selfie_backup", {}),
+                    "default_enabled": False,
+                    "default_time": "04:00",
+                    "func": self._backup_selfies,
+                    "extra_cron": {"day_of_week": "sun"},
+                },
             }
 
             for task_id, defn in cron_defs.items():
@@ -1160,7 +1180,8 @@ Be practical. Only work on things that can actually be accomplished with the too
                         continue  # No change
 
                 # Add or reschedule
-                self.add_cron_task(task_id, defn["func"], hour=hour, minute=minute)
+                extra = defn.get("extra_cron", {})
+                self.add_cron_task(task_id, defn["func"], hour=hour, minute=minute, **extra)
                 logger.info(f"Cron task rescheduled: {task_id} → {time_str}")
 
         except Exception as e:
@@ -1212,6 +1233,7 @@ Be practical. Only work on things that can actually be accomplished with the too
             "system_health": self._system_health_check,
             "db_backup": self._backup_databases,
             "yt_download": self._yt_download,
+            "selfie_backup": self._backup_selfies,
             "nightly_doctor": self._nightly_doctor,
         }
         func = task_map.get(task_id)
@@ -2274,52 +2296,98 @@ Be practical. Only work on things that can actually be accomplished with the too
             except Exception:
                 pass
 
+    def _get_or_create_backup_folder(self, google, folder_name="Choom Backup", parent_id=None):
+        """Find or create a Google Drive backup folder"""
+        try:
+            q = f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+            if parent_id:
+                q += f" and '{parent_id}' in parents"
+            results = google.drive_service.files().list(
+                q=q, fields='files(id)', pageSize=1
+            ).execute()
+            files = results.get('files', [])
+            if files:
+                return files[0]['id']
+        except Exception as e:
+            logger.warning(f"Error searching for folder '{folder_name}': {e}")
+
+        result = google.create_drive_folder(folder_name, parent_id)
+        if result:
+            logger.info(f"Created folder '{folder_name}': {result['id']}")
+            return result['id']
+        return None
+
+    def _create_local_snapshot(self):
+        """Create a local timestamped snapshot of all config/state files"""
+        import shutil
+        from pathlib import Path
+
+        date_stamp = datetime.now().strftime('%Y-%m-%d')
+        app_root = Path("/home/nuc1/projects/Choom/nextjs-app")
+        snapshot_dir = app_root / "data" / "backups" / "daily" / date_stamp
+        snapshot_dir.mkdir(parents=True, exist_ok=True)
+
+        single_files = [
+            (app_root / "services/signal-bridge/bridge-config.json", "bridge-config.json"),
+            (app_root / ".env", "nextjs-app.env"),
+            (app_root / "services/signal-bridge/.env", "signal-bridge.env"),
+            (app_root / "services/signal-bridge/google_auth/credentials.json", "credentials.json"),
+            (app_root / "services/signal-bridge/google_auth/token.json", "token.json"),
+        ]
+        for src, name in single_files:
+            if src.exists():
+                shutil.copy2(str(src), str(snapshot_dir / name))
+
+        directories = [
+            (app_root / "data/presence", "presence"),
+            (app_root / "data/self_followups", "self_followups"),
+            (Path("/home/nuc1/choom-projects/sibling_journal"), "sibling_journal"),
+        ]
+        for src_dir, name in directories:
+            if src_dir.is_dir():
+                shutil.copytree(str(src_dir), str(snapshot_dir / name), dirs_exist_ok=True)
+
+        # Rotate: keep 14 days
+        backups_root = app_root / "data" / "backups" / "daily"
+        snapshots = sorted([d for d in backups_root.iterdir() if d.is_dir()], reverse=True)
+        for old in snapshots[14:]:
+            shutil.rmtree(str(old), ignore_errors=True)
+
+        logger.info(f"Local snapshot created: {snapshot_dir}")
+
     def _backup_databases(self):
-        """Back up dev.db and memories.db to Google Drive 'Choom Backup' folder"""
+        """Back up databases, configs, and state to Google Drive + local snapshot"""
         if not is_task_enabled("db_backup"):
             logger.debug("Database backup is disabled")
             return
 
-        logger.info("Running daily database backup to Google Drive")
+        logger.info("Running daily full data backup")
 
-        # Database files to back up
+        # Local snapshot first (fast, no network dependency)
+        try:
+            self._create_local_snapshot()
+        except Exception as e:
+            logger.error(f"Local snapshot failed: {e}")
+
         db_files = [
             ("/home/nuc1/projects/Choom/nextjs-app/prisma/dev.db", "dev.db"),
             ("/home/nuc1/Documents/ai_Choom_memory/memory_db/memories.db", "memories.db"),
         ]
 
         try:
+            import tarfile
+            import tempfile
             from pathlib import Path
+
             google = get_google_client()
-
-            # Find or create the "Choom Backup" folder
-            folder_id = None
-            try:
-                results = google.drive_service.files().list(
-                    q="name='Choom Backup' and mimeType='application/vnd.google-apps.folder' and trashed=false",
-                    fields='files(id)',
-                    pageSize=1
-                ).execute()
-                files = results.get('files', [])
-                if files:
-                    folder_id = files[0]['id']
-                    logger.info(f"Found existing 'Choom Backup' folder: {folder_id}")
-            except Exception as e:
-                logger.warning(f"Error searching for backup folder: {e}")
-
+            folder_id = self._get_or_create_backup_folder(google)
             if not folder_id:
-                result = google.create_drive_folder("Choom Backup")
-                if result:
-                    folder_id = result['id']
-                    logger.info(f"Created 'Choom Backup' folder: {folder_id}")
-                else:
-                    logger.error("Failed to create 'Choom Backup' folder")
-                    return
+                raise RuntimeError("Failed to get/create 'Choom Backup' folder")
 
-            # Upload each database file with date-stamped name
             date_stamp = datetime.now().strftime('%Y-%m-%d')
             uploaded = []
 
+            # Upload database files
             for file_path, base_name in db_files:
                 if not Path(file_path).exists():
                     logger.warning(f"Backup file not found: {file_path}")
@@ -2333,17 +2401,149 @@ Be practical. Only work on things that can actually be accomplished with the too
                 else:
                     logger.error(f"Failed to back up {base_name}")
 
-            if uploaded:
-                logger.info(f"Database backup complete: {', '.join(uploaded)}")
+            # Config bundle — all small config/state files in one tar.gz
+            app_root = Path("/home/nuc1/projects/Choom/nextjs-app")
+            bundle_files = [
+                (app_root / "services/signal-bridge/bridge-config.json", "bridge-config.json"),
+                (app_root / ".env", "nextjs-app.env"),
+                (app_root / "services/signal-bridge/.env", "signal-bridge.env"),
+                (app_root / "services/signal-bridge/google_auth/credentials.json", "google_auth/credentials.json"),
+                (app_root / "services/signal-bridge/google_auth/token.json", "google_auth/token.json"),
+            ]
+            bundle_dirs = [
+                (app_root / "data/presence", "presence"),
+                (app_root / "data/self_followups", "self_followups"),
+                (Path("/home/nuc1/choom-projects/sibling_journal"), "sibling_journal"),
+            ]
 
-                # Rotation: keep only the last 5 backups per file type
+            with tempfile.NamedTemporaryFile(suffix='.tar.gz', delete=False) as tmp:
+                bundle_path = tmp.name
+
+            try:
+                with tarfile.open(bundle_path, 'w:gz') as tar:
+                    for src, arcname in bundle_files:
+                        if src.exists():
+                            tar.add(str(src), arcname=arcname)
+                    for src_dir, arcname in bundle_dirs:
+                        if src_dir.is_dir():
+                            tar.add(str(src_dir), arcname=arcname)
+
+                drive_name = f"config-bundle-{date_stamp}.tar.gz"
+                result = google.upload_to_drive(bundle_path, folder_id, drive_name)
+                if result:
+                    uploaded.append(drive_name)
+                    logger.info(f"Backed up config bundle as {drive_name}")
+                else:
+                    logger.error("Failed to upload config bundle")
+            finally:
+                os.unlink(bundle_path)
+
+            if uploaded:
+                logger.info(f"Full backup complete: {', '.join(uploaded)}")
                 self._rotate_backups(google, folder_id, "dev-", 5)
                 self._rotate_backups(google, folder_id, "memories-", 5)
+                self._rotate_backups(google, folder_id, "config-bundle-", 5)
             else:
-                logger.warning("Database backup: no files were uploaded")
+                logger.warning("Full backup: no files were uploaded")
 
         except Exception as e:
-            logger.error(f"Database backup failed: {e}")
+            logger.error(f"Full backup failed: {e}")
+            try:
+                self.send_message_to_owner(
+                    f"Backup failed: {e}", include_audio=False, choom_name="System"
+                )
+            except Exception:
+                pass
+
+    def _backup_selfies(self):
+        """Incremental backup of selfie images to Google Drive (weekly)"""
+        if not is_task_enabled("selfie_backup"):
+            logger.debug("Selfie backup is disabled")
+            return
+
+        logger.info("Running weekly selfie backup to Google Drive")
+
+        try:
+            import tarfile
+            import tempfile
+            from pathlib import Path
+
+            selfies_root = Path("/home/nuc1/choom-projects")
+            marker_path = Path("/home/nuc1/projects/Choom/nextjs-app/data/backups/.selfie_last_backup")
+            marker_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Determine cutoff time for incremental backup
+            cutoff = 0.0
+            if marker_path.exists():
+                cutoff = marker_path.stat().st_mtime
+
+            google = get_google_client()
+            root_folder_id = self._get_or_create_backup_folder(google)
+            if not root_folder_id:
+                raise RuntimeError("Failed to get/create 'Choom Backup' folder")
+
+            selfies_folder_id = self._get_or_create_backup_folder(
+                google, "Selfies", parent_id=root_folder_id
+            )
+            if not selfies_folder_id:
+                raise RuntimeError("Failed to get/create 'Selfies' subfolder")
+
+            date_stamp = datetime.now().strftime('%Y-%m-%d')
+            uploaded = []
+
+            for selfie_dir in sorted(selfies_root.glob("selfies_*")):
+                if not selfie_dir.is_dir():
+                    continue
+
+                choom_slug = selfie_dir.name
+                new_files = []
+
+                for f in selfie_dir.rglob("*"):
+                    if f.is_file() and f.stat().st_mtime > cutoff:
+                        new_files.append(f)
+
+                if not new_files:
+                    logger.info(f"Selfie backup: no new files in {choom_slug}")
+                    continue
+
+                logger.info(f"Selfie backup: {len(new_files)} new files in {choom_slug}")
+
+                with tempfile.NamedTemporaryFile(suffix='.tar.gz', delete=False) as tmp:
+                    archive_path = tmp.name
+
+                try:
+                    with tarfile.open(archive_path, 'w:gz') as tar:
+                        for f in new_files:
+                            arcname = f"{choom_slug}/{f.relative_to(selfie_dir)}"
+                            tar.add(str(f), arcname=arcname)
+
+                    drive_name = f"{choom_slug}-{date_stamp}.tar.gz"
+                    result = google.upload_to_drive(archive_path, selfies_folder_id, drive_name)
+                    if result:
+                        uploaded.append(drive_name)
+                        logger.info(f"Backed up {choom_slug} as {drive_name}")
+                    else:
+                        logger.error(f"Failed to upload {choom_slug}")
+                finally:
+                    os.unlink(archive_path)
+
+                self._rotate_backups(google, selfies_folder_id, f"{choom_slug}-", 3)
+
+            # Update marker on success
+            if uploaded:
+                marker_path.touch()
+                logger.info(f"Selfie backup complete: {', '.join(uploaded)}")
+            else:
+                logger.info("Selfie backup: nothing new to upload")
+
+        except Exception as e:
+            logger.error(f"Selfie backup failed: {e}")
+            try:
+                self.send_message_to_owner(
+                    f"Selfie backup failed: {e}", include_audio=False, choom_name="System"
+                )
+            except Exception:
+                pass
 
     def _rotate_backups(self, google, folder_id: str, prefix: str, keep: int):
         """Delete old backups, keeping only the most recent N files matching prefix"""

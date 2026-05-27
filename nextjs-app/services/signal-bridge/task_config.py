@@ -5,6 +5,7 @@ Manages bridge-config.json for scheduled tasks, heartbeat settings, etc.
 import json
 import logging
 import os
+import shutil
 from datetime import datetime
 from typing import Any, Dict, Optional
 
@@ -22,6 +23,7 @@ DEFAULT_CONFIG = {
         "aurora_check_18:00": {"enabled": True, "time": "18:00"},
         "system_health": {"enabled": True, "interval_minutes": 30},
         "yt_download": {"enabled": False, "time": "04:00"},
+        "selfie_backup": {"enabled": False, "time": "04:00"},
     },
     "yt_downloader": {
         "max_videos_per_channel": 3,
@@ -51,9 +53,34 @@ def load_config() -> Dict[str, Any]:
         return DEFAULT_CONFIG.copy()
 
 
-def save_config(config: Dict[str, Any]) -> bool:
-    """Save bridge config to JSON file"""
+APP_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(CONFIG_FILE)))
+SNAPSHOT_DIR = os.path.join(APP_ROOT, "data", "backups", "bridge-config")
+MAX_SNAPSHOTS = 10
+
+
+def _snapshot_config():
+    """Copy current bridge-config.json to timestamped snapshot before overwrite"""
+    if not os.path.exists(CONFIG_FILE):
+        return
     try:
+        os.makedirs(SNAPSHOT_DIR, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        dest = os.path.join(SNAPSHOT_DIR, f"bridge-config_{timestamp}.json")
+        shutil.copy2(CONFIG_FILE, dest)
+        snapshots = sorted(
+            [f for f in os.listdir(SNAPSHOT_DIR) if f.startswith("bridge-config_")],
+            reverse=True,
+        )
+        for old in snapshots[MAX_SNAPSHOTS:]:
+            os.remove(os.path.join(SNAPSHOT_DIR, old))
+    except Exception as e:
+        logger.warning(f"Failed to snapshot bridge config: {e}")
+
+
+def save_config(config: Dict[str, Any]) -> bool:
+    """Save bridge config to JSON file, snapshotting the previous version first"""
+    try:
+        _snapshot_config()
         with open(CONFIG_FILE, "w") as f:
             json.dump(config, f, indent=2)
         logger.info("Bridge config saved")
