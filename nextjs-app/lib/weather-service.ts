@@ -6,6 +6,15 @@ const weatherCache: Map<string, { data: WeatherData; expiresAt: number }> = new 
 // Cache for forecast data
 const forecastCache: Map<string, { data: ForecastData; expiresAt: number }> = new Map();
 
+async function fetchWithRetry(url: string, retries = 1, delayMs = 2000): Promise<Response> {
+  const response = await fetch(url);
+  if (!response.ok && retries > 0 && (response.status === 404 || response.status >= 500)) {
+    await new Promise((r) => setTimeout(r, delayMs));
+    return fetchWithRetry(url, retries - 1, delayMs);
+  }
+  return response;
+}
+
 export class WeatherService {
   private settings: WeatherSettings;
 
@@ -73,7 +82,7 @@ export class WeatherService {
       throw new Error('No location or coordinates specified for weather lookup');
     }
 
-    const response = await fetch(url);
+    const response = await fetchWithRetry(url);
     if (!response.ok) {
       throw new Error(`Weather API error: ${response.status}`);
     }
@@ -117,7 +126,7 @@ export class WeatherService {
 
     const url = `https://api.weatherapi.com/v1/current.json?key=${this.settings.apiKey}&q=${encodeURIComponent(query)}`;
 
-    const response = await fetch(url);
+    const response = await fetchWithRetry(url);
     if (!response.ok) {
       throw new Error(`Weather API error: ${response.status}`);
     }
@@ -194,7 +203,7 @@ export class WeatherService {
       url = `https://api.openweathermap.org/data/2.5/forecast?q=${encodeURIComponent(loc!)}&units=${units}&appid=${this.settings.apiKey}`;
     }
 
-    const response = await fetch(url);
+    const response = await fetchWithRetry(url);
     if (!response.ok) {
       throw new Error(`Forecast API error: ${response.status}`);
     }
