@@ -717,10 +717,17 @@ class GoogleClient:
             if folder_id:
                 body['parents'] = [folder_id]
 
-            media = MediaFileUpload(str(path), mimetype=mime_type, resumable=True)
-            file = self.drive_service.files().create(
+            # Use 5MB chunks for resumable upload (default is entire file at once)
+            chunk_size = 5 * 1024 * 1024
+            media = MediaFileUpload(str(path), mimetype=mime_type, resumable=True, chunksize=chunk_size)
+            request = self.drive_service.files().create(
                 body=body, media_body=media, fields='id, name, webViewLink, size'
-            ).execute()
+            )
+            file = None
+            while file is None:
+                status, file = request.next_chunk(num_retries=3)
+                if status:
+                    logger.debug(f"Upload {path.name}: {int(status.progress() * 100)}%")
 
             logger.info(f"Uploaded to Drive: {file['name']} ({file['id']})")
             return {

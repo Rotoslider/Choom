@@ -2336,7 +2336,7 @@ Be practical. Only work on things that can actually be accomplished with the too
         ]
         for src, name in single_files:
             if src.exists():
-                shutil.copy2(str(src), str(snapshot_dir / name))
+                shutil.copy(str(src), str(snapshot_dir / name))
 
         directories = [
             (app_root / "data/presence", "presence"),
@@ -2380,6 +2380,11 @@ Be practical. Only work on things that can actually be accomplished with the too
             from pathlib import Path
 
             google = get_google_client()
+            # Force token refresh before upload to avoid expiry mid-transfer
+            if google.creds and google.creds.expired and google.creds.refresh_token:
+                from google.auth.transport.requests import Request
+                google.creds.refresh(Request())
+                logger.info("Refreshed Google credentials before backup upload")
             folder_id = self._get_or_create_backup_folder(google)
             if not folder_id:
                 raise RuntimeError("Failed to get/create 'Choom Backup' folder")
