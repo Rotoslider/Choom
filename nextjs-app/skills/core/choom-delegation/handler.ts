@@ -310,6 +310,11 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
             message: delegationMessage,
             settings: ctx.settings, // Forward shared settings (weather, search, etc.)
             isDelegation: true, // Tells chat route: strip delegation tools, disable plan detection
+            // Delegator identity: lets the worker write artifacts for this task into
+            // the delegator's selfies_ folder (the work IS the delegator's). Without
+            // this the folder-ownership guard blocks the worker and the failure
+            // cascades into a global workspace_write_file disable.
+            delegatorName: ((ctx.choom as Record<string, unknown>)?.name as string) || '',
           }),
           signal: connectController.signal,
           dispatcher: delegationDispatcher,

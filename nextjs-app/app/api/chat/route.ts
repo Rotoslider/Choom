@@ -1110,6 +1110,11 @@ interface ToolContext {
   suppressNotifications?: boolean;
   isHeartbeat?: boolean;
   activeProjectFolder?: string;
+  isDelegation?: boolean;
+  // Slug of the Choom that delegated this task (e.g. "optic"). When set, the
+  // worker is allowed to write into the delegator's own selfies_ folder, since
+  // the artifacts it produces belong to the delegator's task.
+  delegatorSlug?: string;
 }
 
 // ============================================================================
@@ -3315,13 +3320,34 @@ function contractGate(toolCall: ToolCall, ctx: ToolContext): ToolResult | null {
     } else if (isShared) {
       console.log(`   📒 [contract] ${choomName} writing to shared ${firstSeg}/: ${rawPath}`);
     } else if (ownFolderPrefix && !isOwn && firstSeg.startsWith('selfies_') && firstSeg !== `selfies_${choomSlug}`) {
-      // Cross-Choom write into another Choom's selfies folder — block.
-      return {
-        toolCallId: toolCall.id,
-        name: toolCall.name,
-        error: `Blocked: cannot write into another Choom's folder (${firstSeg}/). Your folder is ${ownFolderPrefix}. For messages/artifacts intended for another Choom, write to choom_commons/for_[their_name]/ (e.g. choom_commons/for_eve/your_note.md).`,
-        result: null,
-      };
+      // Cross-Choom write into another Choom's selfies folder.
+      const delegatorPrefix = ctx.delegatorSlug ? `selfies_${ctx.delegatorSlug}/` : '';
+      if (ctx.isDelegation && delegatorPrefix && rawPath.startsWith(delegatorPrefix)) {
+        // The worker is executing the delegator's task, so artifacts belong in
+        // the delegator's folder — allow it. (Falls through to `return null`.)
+        console.log(`   📒 [contract] ${choomName} (delegated by ${ctx.delegatorSlug}) writing to delegator folder: ${rawPath}`);
+      } else if (ctx.isDelegation) {
+        // Cross-Choom write to a NON-delegator folder during a delegated task.
+        // Don't hard-block — a block here counts toward the per-tool failure cap
+        // and disables workspace_write_file for the whole request (so even the
+        // worker's own-folder writes start failing). Redirect into the shared
+        // commons inbox for that Choom so the artifact still lands somewhere sane.
+        const targetSlug = firstSeg.replace(/^selfies_/, '');
+        const rest = rawPath.split('/').filter(Boolean).slice(1).join('/') || 'note.md';
+        const redirected = `choom_commons/for_${targetSlug}/${rest}`;
+        console.warn(`   🔀 [contract] Delegated cross-Choom write redirected: "${rawPath}" → "${redirected}"`);
+        toolCall.arguments.path = redirected;
+        delete toolCall.arguments.file_path;
+        delete toolCall.arguments.filename;
+      } else {
+        // Not a delegation — accidental cross-pollination. Keep blocking.
+        return {
+          toolCallId: toolCall.id,
+          name: toolCall.name,
+          error: `Blocked: cannot write into another Choom's folder (${firstSeg}/). Your folder is ${ownFolderPrefix}. For messages/artifacts intended for another Choom, write to choom_commons/for_[their_name]/ (e.g. choom_commons/for_eve/your_note.md).`,
+          result: null,
+        };
+      }
     }
   }
 
@@ -3504,7 +3530,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { choomId, chatId, message, settings, isDelegation, suppressNotifications, noTools, maxIterationsOverride, isHeartbeat, taskModelOverride } = body;
+    const { choomId, chatId, message, settings, isDelegation, suppressNotifications, noTools, maxIterationsOverride, isHeartbeat, taskModelOverride, delegatorName } = body;
 
     if (!choomId || !chatId || !message) {
       return new Response(
@@ -4527,6 +4553,10 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           suppressNotifications: !!suppressNotifications,
           isHeartbeat: !!isHeartbeat,
           activeProjectFolder: detectedProject?.folder,
+          isDelegation: !!isDelegation,
+          delegatorSlug: typeof delegatorName === 'string' && delegatorName
+            ? delegatorName.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+            : undefined,
         };
 
         try {
@@ -6118,7 +6148,13 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 const isNoData = /no (?:history |data |results? )(?:data |found )?for /i.test(result.error);
                 // File/path not found is recoverable — LLM guessed wrong filename, can list dir and retry
                 const isPathError = /ENOENT|no such file or directory|file not found|path not found|does not exist|not found in project/i.test(result.error);
-                errorClass = isConfigError ? 'config' : isParamError ? 'param' : isGpuBusy ? 'gpu_busy' : isNoData ? 'no_data' : isPathError ? 'path' : 'other';
+                // Folder-ownership / shared-folder blocks (contractGate) are recoverable and
+                // argument-specific: a write to the worker's own folder or choom_commons/
+                // would succeed. Must NOT count toward the per-tool failure cap, or two
+                // mis-targeted writes disable workspace_write_file for the whole request —
+                // including the legitimate writes the model issues right after.
+                const isPermissionBlock = /^Blocked: (?:cannot (?:write into|delete from) another Choom|sibling_journal\/ is archived|[^/]+\/ is a shared folder)/i.test(result.error);
+                errorClass = isConfigError ? 'config' : isParamError ? 'param' : isGpuBusy ? 'gpu_busy' : isNoData ? 'no_data' : (isPathError || isPermissionBlock) ? 'path' : 'other';
                 failedCallCache.set(dedupKey, result.error);
 
                 // Capture "Use TOOL_NAME ..." guidance from error messages.
@@ -6145,12 +6181,13 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                   // No data found is informational — the tool works, the entity just has no data.
                   // Don't count toward failure caps (prevents blocking ha_get_history etc.)
                   console.log(`   ℹ️  ${tc.name}: no data found (informational, not counted as failure)`);
-                } else if (isPathError) {
-                  // File/path not found is recoverable — LLM guessed wrong filename.
+                } else if (isPathError || isPermissionBlock) {
+                  // File/path not found OR folder-ownership block — both recoverable.
                   // Don't count toward failure caps. LLM can list the directory and retry
-                  // with the correct path. Blocking workspace_read_file after ENOENT
-                  // prevents the LLM from reading ANY files for the rest of the request.
-                  console.log(`   📁 ${tc.name}: path not found (recoverable, not counted as failure)`);
+                  // with the correct path, or (for ownership blocks) write to its own
+                  // folder / choom_commons. Counting these would disable the tool after
+                  // 2 tries and lock the model out of ALL writes for the rest of the request.
+                  console.log(`   📁 ${tc.name}: ${isPermissionBlock ? 'folder-ownership block' : 'path not found'} (recoverable, not counted as failure)`);
                 } else if (isGpuBusy) {
                   // GPU busy is temporary — don't count as failure, don't block the tool.
                   // The model should stop retrying and inform the user.
