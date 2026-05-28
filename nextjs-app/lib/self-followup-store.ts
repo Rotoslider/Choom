@@ -31,6 +31,7 @@ export interface QueueEntry {
   consumed: boolean;
   fired_at?: string;
   cancelled_at?: string;
+  updated_at?: string;
   status?: Bucket;
 }
 

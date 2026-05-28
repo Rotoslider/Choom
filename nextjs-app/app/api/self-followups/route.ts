@@ -55,6 +55,39 @@ export async function GET() {
   }
 }
 
+export async function PUT(req: NextRequest) {
+  try {
+    const body = await req.json();
+    const { id, choom_id, trigger_at, prompt } = body;
+    if (!id || !choom_id) {
+      return NextResponse.json({ error: 'id and choom_id required' }, { status: 400 });
+    }
+
+    migrateLegacyJsonl();
+
+    const filePath = entryPath(choom_id, 'pending', id);
+    if (!fs.existsSync(filePath)) {
+      return NextResponse.json({ error: `No pending followup with id "${id}"` }, { status: 404 });
+    }
+
+    const raw = fs.readFileSync(filePath, 'utf-8');
+    const entry = JSON.parse(raw) as QueueEntry;
+
+    if (trigger_at) entry.trigger_at = trigger_at;
+    if (prompt !== undefined) entry.prompt = prompt;
+    entry.updated_at = new Date().toISOString();
+
+    atomicWriteJson(filePath, entry);
+
+    return NextResponse.json({ success: true, entry });
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : 'Unknown error' },
+      { status: 500 }
+    );
+  }
+}
+
 export async function DELETE(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
