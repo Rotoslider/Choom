@@ -508,6 +508,7 @@ export interface Memory {
   importance: number;
   memory_type: MemoryType;
   metadata: Record<string, unknown>;
+  companion_id?: string;
   relevance_score?: number;
   match_type?: 'semantic' | 'semantic_fallback' | 'structured';
 }

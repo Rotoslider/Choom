@@ -16,7 +16,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
-import type { Memory, MemoryType } from '@/lib/types';
+import type { Memory, MemoryType, Choom } from '@/lib/types';
+import { User } from 'lucide-react';
 
 const TYPE_COLORS: Record<string, string> = {
   conversation: 'bg-blue-500/15 text-blue-400',
@@ -32,6 +33,7 @@ const MEMORY_TYPES: MemoryType[] = ['conversation', 'fact', 'preference', 'event
 interface MemoryDetailPanelProps {
   memory: Memory;
   memoryEndpoint: string;
+  chooms?: Choom[];
   onClose: () => void;
   onUpdated: (memory: Memory) => void;
   onDeleted: (id: string) => void;
@@ -40,6 +42,7 @@ interface MemoryDetailPanelProps {
 export function MemoryDetailPanel({
   memory,
   memoryEndpoint,
+  chooms = [],
   onClose,
   onUpdated,
   onDeleted,
@@ -123,6 +126,10 @@ export function MemoryDetailPanel({
     }
   };
 
+  const ownerChoom = memory.companion_id
+    ? chooms.find((c) => c.companionId === memory.companion_id || c.id === memory.companion_id)
+    : undefined;
+
   const tags = Array.isArray(memory.tags)
     ? memory.tags
     : typeof memory.tags === 'string'
@@ -172,6 +179,20 @@ export function MemoryDetailPanel({
               {timestamp.toLocaleDateString()} {timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
             </span>
           </div>
+
+          {/* Owner Choom */}
+          {ownerChoom && (
+            <div className="flex items-center gap-2">
+              <div className="w-5 h-5 rounded-full bg-muted flex items-center justify-center overflow-hidden flex-shrink-0">
+                {ownerChoom.avatarUrl ? (
+                  <img src={ownerChoom.avatarUrl} alt="" className="w-full h-full object-cover" />
+                ) : (
+                  <User className="w-3 h-3 text-muted-foreground" />
+                )}
+              </div>
+              <span className="text-sm font-medium">{ownerChoom.name}</span>
+            </div>
+          )}
 
           {/* Title */}
           {editing ? (

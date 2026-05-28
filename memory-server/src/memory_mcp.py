@@ -126,6 +126,7 @@ class MemoryRecord:
     importance: int
     memory_type: str
     metadata: Dict[str, Any]
+    companion_id: str = "default"
 
 
 @dataclass
@@ -472,6 +473,7 @@ class RobustMemorySystem:
                 importance=importance,
                 memory_type=memory_type,
                 metadata=metadata,
+                companion_id=companion_id,
             )
 
             # Store in SQLite
@@ -651,6 +653,7 @@ class RobustMemorySystem:
                     importance=row["importance"],
                     memory_type=row["memory_type"],
                     metadata=json.loads(row["metadata"]),
+                    companion_id=row["companion_id"] if "companion_id" in row.keys() else "default",
                 )
 
                 search_results.append(
@@ -771,6 +774,7 @@ class RobustMemorySystem:
                     importance=row["importance"],
                     memory_type=row["memory_type"],
                     metadata=json.loads(row["metadata"]),
+                    companion_id=row["companion_id"] if "companion_id" in row.keys() else "default",
                 )
 
                 result_dict = asdict(record)
@@ -837,6 +841,7 @@ class RobustMemorySystem:
                     importance=row["importance"],
                     memory_type=row["memory_type"],
                     metadata=json.loads(row["metadata"]),
+                    companion_id=row["companion_id"] if "companion_id" in row.keys() else "default",
                 )
 
                 result_dict = asdict(record)

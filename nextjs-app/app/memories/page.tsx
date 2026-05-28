@@ -360,6 +360,7 @@ export default function MemoriesPage() {
           <MemoryDetailPanel
             memory={selectedMemory}
             memoryEndpoint={memoryEndpoint}
+            chooms={chooms}
             onClose={() => setSelectedMemoryId(null)}
             onUpdated={handleUpdated}
             onDeleted={handleDeleted}
