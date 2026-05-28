@@ -96,6 +96,23 @@ class GoogleClient {
     // Write refreshed token back to file so Python bridge stays in sync
     this.token!.token = this.accessToken;
     this.token!.expiry = expiryDate.toISOString();
+    // Guard: never narrow scopes — keep at least what was in the file
+    const REQUIRED_SCOPES = [
+      'https://www.googleapis.com/auth/tasks',
+      'https://www.googleapis.com/auth/calendar',
+      'https://www.googleapis.com/auth/spreadsheets',
+      'https://www.googleapis.com/auth/documents',
+      'https://www.googleapis.com/auth/drive',
+      'https://www.googleapis.com/auth/gmail.modify',
+      'https://www.googleapis.com/auth/contacts.readonly',
+      'https://www.googleapis.com/auth/youtube.readonly',
+    ];
+    const currentScopes = new Set(this.token!.scopes || []);
+    const missing = REQUIRED_SCOPES.filter(s => !currentScopes.has(s));
+    if (missing.length > 0) {
+      console.error(`   ⚠️ Token scope narrowing detected! Missing: ${missing.join(', ')}. Restoring full scopes.`);
+      this.token!.scopes = REQUIRED_SCOPES;
+    }
     await writeFile(TOKEN_PATH, JSON.stringify(this.token, null, 2));
   }
 

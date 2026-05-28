@@ -100,6 +100,8 @@ export async function POST(request: NextRequest) {
   }
 }
 
+const PROTECTED_KEYS = new Set(['apiKey', 'accessToken', 'braveApiKey', 'serpApiKey', 'client_secret']);
+
 function deepMerge(base: Record<string, unknown>, override: Record<string, unknown>): Record<string, unknown> {
   const result = { ...base };
   for (const key of Object.keys(override)) {
@@ -107,6 +109,14 @@ function deepMerge(base: Record<string, unknown>, override: Record<string, unkno
     // when the UI clears a field (e.g. switching vision provider to Local)
     if (override[key] === null) {
       delete result[key];
+    } else if (
+      PROTECTED_KEYS.has(key) &&
+      typeof override[key] === 'string' &&
+      override[key] === '' &&
+      typeof result[key] === 'string' &&
+      result[key] !== ''
+    ) {
+      // Never overwrite a real secret/key with an empty string
     } else if (
       result[key] &&
       typeof result[key] === 'object' &&

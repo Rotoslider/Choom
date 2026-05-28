@@ -72,9 +72,18 @@ class GoogleClient:
                 flow = InstalledAppFlow.from_client_secrets_file(str(CREDENTIALS_FILE), SCOPES)
                 self.creds = flow.run_local_server(port=0)
 
-            # Save the credentials for future use
+            # Save the credentials — but guard against scope narrowing
+            token_json = self.creds.to_json()
+            saved_scopes = set(json.loads(token_json).get("scopes") or [])
+            required_scopes = set(SCOPES)
+            if not required_scopes.issubset(saved_scopes):
+                missing = required_scopes - saved_scopes
+                logger.error(f"Token scope narrowing detected! Missing: {missing}. Forcing full SCOPES.")
+                token_data = json.loads(token_json)
+                token_data["scopes"] = list(SCOPES)
+                token_json = json.dumps(token_data)
             with open(TOKEN_FILE, 'w') as token:
-                token.write(self.creds.to_json())
+                token.write(token_json)
             logger.info("Google credentials saved")
 
         # Build services
