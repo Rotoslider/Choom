@@ -166,7 +166,7 @@ export function AutomationBuilder({
   const [choomName, setChoomName] = useState('Choom');
   const [respectQuiet, setRespectQuiet] = useState(true);
   const [notifyOnComplete, setNotifyOnComplete] = useState(true);
-  const [steps, setSteps] = useState<AutomationStep[]>([
+  const [steps, setSteps] = useState<AutomationStep[]>(() => [
     { id: `step_${Date.now()}`, skillName: '', toolName: '', arguments: {} },
   ]);
   const [conditions, setConditions] = useState<AutomationCondition[]>([]);

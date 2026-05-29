@@ -140,6 +140,7 @@ export function SelfFollowupsSettings() {
 
   const timeUntil = (iso: string) => {
     try {
+      // eslint-disable-next-line react-hooks/purity -- relative-time label is meant to reflect the current time at render
       const diffMs = new Date(iso).getTime() - Date.now();
       if (diffMs < 0) return 'overdue';
       const mins = Math.round(diffMs / 60000);
