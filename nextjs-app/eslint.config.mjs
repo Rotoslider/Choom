@@ -67,6 +67,15 @@ const config = [
       '@typescript-eslint/no-require-imports': 'off',
     },
   },
+  {
+    // Imperative Three.js / react-three-fiber code: meshes, materials, and morph
+    // influences must be mutated directly (including every frame in useFrame),
+    // which the React Compiler immutability rule flags but is correct here.
+    files: ['components/avatar/avatar-canvas.tsx'],
+    rules: {
+      'react-hooks/immutability': 'off',
+    },
+  },
 ];
 
 export default config;

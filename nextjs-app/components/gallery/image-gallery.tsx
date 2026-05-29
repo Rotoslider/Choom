@@ -45,14 +45,7 @@ export function ImageGallery({
   const [selectedImage, setSelectedImage] = useState<GeneratedImage | null>(null);
   const [selectedIndex, setSelectedIndex] = useState<number>(-1);
 
-  // Fetch images when gallery opens
-  useEffect(() => {
-    if (open && choomId) {
-      fetchImages();
-    }
-  }, [open, choomId]);
-
-  const fetchImages = async () => {
+  const fetchImages = useCallback(async () => {
     if (!choomId) return;
     setLoading(true);
     try {
@@ -66,7 +59,14 @@ export function ImageGallery({
     } finally {
       setLoading(false);
     }
-  };
+  }, [choomId]);
+
+  // Fetch images when gallery opens
+  useEffect(() => {
+    if (open && choomId) {
+      fetchImages();
+    }
+  }, [open, choomId, fetchImages]);
 
   const handleDelete = async (imageId: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();

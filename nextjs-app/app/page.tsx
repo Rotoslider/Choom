@@ -577,6 +577,7 @@ export default function Home() {
             setCurrentChat(newChat.id);
             setCurrentChatData(newChat);
             // Continue with the new chat
+            // eslint-disable-next-line react-hooks/immutability -- sendMessageToChat is the 258-line core streaming fn (declared below, used in 4 handlers); memoizing it just to satisfy ordering risks stale-closure bugs in the chat flow
             await sendMessageToChat(newChat.id, content);
           }
           return;
