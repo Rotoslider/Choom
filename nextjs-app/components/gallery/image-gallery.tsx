@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
+import NextImage from 'next/image';
 import { X, Download, Trash2, ChevronLeft, ChevronRight, Image as ImageIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -193,10 +194,12 @@ export function ImageGallery({
                     className="group relative aspect-square rounded-lg overflow-hidden bg-muted cursor-pointer"
                     onClick={() => openLightbox(image, index)}
                   >
-                    <img
+                    <NextImage
                       src={imageFileUrl(image.id)}
                       alt={image.prompt}
-                      loading="lazy"
+                      width={512}
+                      height={512}
+                      sizes="(max-width: 768px) 50vw, (max-width: 1024px) 33vw, 25vw"
                       className="w-full h-full object-cover transition-transform group-hover:scale-105"
                     />
                     {/* Hover overlay */}
@@ -280,6 +283,7 @@ export function ImageGallery({
             className="max-w-[90vw] max-h-[90vh] overflow-y-auto flex flex-col items-center"
             onClick={(e) => e.stopPropagation()}
           >
+            {/* eslint-disable-next-line @next/next/no-img-element -- lightbox uses intrinsic object-contain sizing, not a fixed box */}
             <img
               src={imageFileUrl(selectedImage.id)}
               alt={selectedImage.prompt}

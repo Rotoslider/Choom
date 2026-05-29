@@ -1,6 +1,7 @@
 'use client';
 
 import React from 'react';
+import NextImage from 'next/image';
 import { cn } from '@/lib/utils';
 import { User } from 'lucide-react';
 
@@ -52,9 +53,12 @@ export function AvatarDisplay({
       )}
     >
       {avatarUrl ? (
-        <img
+        <NextImage
           src={avatarUrl}
           alt={name || 'Avatar'}
+          width={96}
+          height={96}
+          unoptimized
           className="w-full h-full object-cover"
         />
       ) : initials ? (

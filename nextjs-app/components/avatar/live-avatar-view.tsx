@@ -186,6 +186,7 @@ export const LiveAvatarView = forwardRef<LiveAvatarHandle, LiveAvatarViewProps>(
     return (
       <div className="flex-1 flex flex-col min-h-0">
         <div className="flex-1 relative rounded-xl overflow-hidden border border-border bg-gradient-to-b from-card/80 to-card/40 mx-4 mt-2 flex items-center justify-center">
+          {/* eslint-disable-next-line @next/next/no-img-element -- rapidly-updating base64 video frames; next/image would re-optimize every frame */}
           <img
             src={displaySrc}
             alt="Avatar"

@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
+import NextImage from 'next/image';
 import { useAppStore } from '@/lib/store';
 import { Video, Monitor, MonitorOff, User } from 'lucide-react';
 import type { AvatarMode } from '@/lib/types';
@@ -134,7 +135,7 @@ export function AvatarSettingsPanel() {
                 {/* Avatar thumbnail */}
                 <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center overflow-hidden flex-shrink-0">
                   {choom.avatarUrl ? (
-                    <img src={choom.avatarUrl} alt="" className="w-full h-full object-cover" />
+                    <NextImage src={choom.avatarUrl} alt="" width={32} height={32} unoptimized className="w-full h-full object-cover" />
                   ) : (
                     <User className="w-4 h-4 text-muted-foreground" />
                   )}

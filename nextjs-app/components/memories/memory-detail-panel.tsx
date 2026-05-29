@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import NextImage from 'next/image';
 import {
   X,
   Edit3,
@@ -185,7 +186,7 @@ export function MemoryDetailPanel({
             <div className="flex items-center gap-2">
               <div className="w-5 h-5 rounded-full bg-muted flex items-center justify-center overflow-hidden flex-shrink-0">
                 {ownerChoom.avatarUrl ? (
-                  <img src={ownerChoom.avatarUrl} alt="" className="w-full h-full object-cover" />
+                  <NextImage src={ownerChoom.avatarUrl} alt="" width={20} height={20} unoptimized className="w-full h-full object-cover" />
                 ) : (
                   <User className="w-3 h-3 text-muted-foreground" />
                 )}

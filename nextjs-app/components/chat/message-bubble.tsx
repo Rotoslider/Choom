@@ -130,6 +130,7 @@ function MarkdownContent({ content }: { content: string }) {
                 </span>
               );
             }
+            // eslint-disable-next-line @next/next/no-img-element -- markdown images have unknown dimensions and may be data: URLs
             return <img src={cleanSrc} alt={alt || ''} className="max-w-full rounded my-1" />;
           },
           p({ children }) {
@@ -230,6 +231,7 @@ function ImageById({ imageId, choomName }: { imageId: string; choomName?: string
 
   return (
     <div className="relative">
+      {/* eslint-disable-next-line @next/next/no-img-element -- generated image, intrinsic size, may be a data: URL */}
       <img
         src={imageUrl}
         alt="Generated image"
@@ -361,6 +363,7 @@ export function MessageBubble({
                 <div key={`${img.imageId || 'img'}-${idx}`}>
                   {img.imageUrl ? (
                     <div className="relative">
+                      {/* eslint-disable-next-line @next/next/no-img-element -- generated image, intrinsic size, may be a data: URL */}
                       <img
                         src={img.imageUrl}
                         alt="Generated image"

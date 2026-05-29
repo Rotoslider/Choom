@@ -151,6 +151,7 @@ export function MessageList({ messages, isLoading = false, streamingImage, agent
             <div className="flex flex-col max-w-[75%] space-y-1">
               <div className="px-4 py-2.5 shadow-sm bg-card border border-border rounded-2xl rounded-bl-md">
                 <p className="text-xs text-muted-foreground mb-2">Generated image:</p>
+                {/* eslint-disable-next-line @next/next/no-img-element -- streaming generated image, intrinsic size */}
                 <img
                   src={streamingImage.url}
                   alt={streamingImage.prompt}

@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
+import NextImage from 'next/image';
 import { RefreshCw, Info, Save, X, Plus, Trash2, Wand2, Check, AlertCircle, Loader2 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -923,7 +924,7 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave, onDelete }: 
                   >
                     {avatarUrl ? (
                       <div className="relative w-20 h-20 mx-auto rounded-lg overflow-hidden bg-muted">
-                        <img src={avatarUrl} alt="Avatar" className="w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+                        <NextImage src={avatarUrl} alt="Avatar" width={80} height={80} unoptimized className="w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
                         <Button
                           type="button"
                           variant="destructive"

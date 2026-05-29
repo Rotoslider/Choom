@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useRef, useCallback, useEffect } from 'react';
+import NextImage from 'next/image';
 import { Send, Mic, Image as ImageIcon, Square, Volume2, VolumeX, StopCircle, RotateCcw, Paperclip, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -212,9 +213,12 @@ export function InputArea({
           {attachment && (
             <div className="mb-2 flex items-center gap-2">
               <div className="relative inline-block">
-                <img
+                <NextImage
                   src={attachment.preview}
                   alt="Attachment"
+                  width={64}
+                  height={64}
+                  unoptimized
                   className={cn(
                     'h-16 w-16 object-cover rounded-lg border border-border',
                     attachment.uploading && 'opacity-50',
