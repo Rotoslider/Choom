@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { spawn, ChildProcess } from 'child_process';
+import { spawn, ChildProcess, execSync } from 'child_process';
 import path from 'path';
 
 const SERVICE_DIR = path.join(process.cwd(), 'services', 'avatar-service');
@@ -91,7 +91,6 @@ export async function POST(request: NextRequest) {
 
     // Also try to kill any orphaned service on the port
     try {
-      const { execSync } = require('child_process');
       execSync('fuser -k 8020/tcp 2>/dev/null', { timeout: 3000 });
     } catch {}
 
@@ -141,7 +140,6 @@ export async function POST(request: NextRequest) {
     }
     // Also kill any orphaned desktop_avatar processes
     try {
-      const { execSync } = require('child_process');
       execSync('pkill -f desktop_avatar.py 2>/dev/null', { timeout: 3000 });
     } catch {}
 

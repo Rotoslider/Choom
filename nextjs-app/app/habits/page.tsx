@@ -669,7 +669,7 @@ export default function HabitsPage() {
                           outerRadius={70}
                           dataKey="value"
                           nameKey="name"
-                          label={(props: any) => {
+                          label={(props: { name?: string; value?: number; cx?: number; cy?: number; midAngle?: number; outerRadius?: number }) => {
                             const { name, value, cx, cy, midAngle, outerRadius: oR } = props;
                             const RADIAN = Math.PI / 180;
                             const radius = (oR as number) + 20;

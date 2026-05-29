@@ -133,7 +133,7 @@ class GoogleClient {
    * a proper ListValue, not a string.
    */
 
-  private normalizeSheetValues(values: any): string[][] {
+  private normalizeSheetValues(values: unknown): string[][] {
     if (typeof values === 'string') {
       try {
         return JSON.parse(values);
@@ -142,7 +142,7 @@ class GoogleClient {
         return [[values]];
       }
     }
-    return values;
+    return values as string[][];
   }
 
   private async apiFetch(url: string, options: RequestInit = {}): Promise<Response> {
@@ -484,7 +484,7 @@ class GoogleClient {
   }
 
 
-  async writeSheet(spreadsheetId: string, range: string, values: any): Promise<Record<string, unknown>> {
+  async writeSheet(spreadsheetId: string, range: string, values: unknown): Promise<Record<string, unknown>> {
     const normalized = this.normalizeSheetValues(values);
     const res = await this.apiFetch(
       `${SHEETS_BASE}/${spreadsheetId}/values/${encodeURIComponent(range)}?valueInputOption=USER_ENTERED`,
@@ -508,7 +508,7 @@ class GoogleClient {
   }
 
 
-  async appendToSheet(spreadsheetId: string, range: string, values: any): Promise<Record<string, unknown>> {
+  async appendToSheet(spreadsheetId: string, range: string, values: unknown): Promise<Record<string, unknown>> {
     const normalized = this.normalizeSheetValues(values);
     const res = await this.apiFetch(
       `${SHEETS_BASE}/${spreadsheetId}/values/${encodeURIComponent(range)}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`,

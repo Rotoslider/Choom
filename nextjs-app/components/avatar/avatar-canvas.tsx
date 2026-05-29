@@ -63,7 +63,7 @@ function AvatarScene({
     const dict: Record<string, number> = {};
     const names: string[] =
       headMesh.userData?.targetNames ||
-      (headMesh.parent as any)?.userData?.targetNames ||
+      headMesh.parent?.userData?.targetNames ||
       [];
     names.forEach((name: string, i: number) => {
       dict[name] = i;

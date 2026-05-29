@@ -60,6 +60,13 @@ const config = [
       '@next/next/no-assign-module-variable': 'off',
     },
   },
+  {
+    // Tests legitimately use require() (jest.mock, dynamic loading).
+    files: ['**/__tests__/**', '**/tests/**', '**/*.test.{ts,tsx,js}'],
+    rules: {
+      '@typescript-eslint/no-require-imports': 'off',
+    },
+  },
 ];
 
 export default config;

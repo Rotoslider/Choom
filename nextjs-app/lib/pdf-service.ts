@@ -5,6 +5,7 @@
  */
 
 import { mkdir } from 'fs/promises';
+import { createWriteStream, existsSync } from 'fs';
 import path from 'path';
 
 export interface PDFImage {
@@ -48,7 +49,6 @@ export class PDFService {
     }
 
     return new Promise((resolve, reject) => {
-      const { createWriteStream, existsSync } = require('fs');
       const doc = new PDFDocument({
         size: 'LETTER',
         margins: { top: 72, bottom: 72, left: 72, right: 72 },
