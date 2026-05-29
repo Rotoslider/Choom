@@ -4,6 +4,7 @@ allowBuilds:
   esbuild: true
   prisma: true
   sharp: true
+  unrs-resolver: true
 minimumReleaseAge: 10080
 blockExoticSubdeps: true
 minimumReleaseAgeExclude:

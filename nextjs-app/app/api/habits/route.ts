@@ -161,7 +161,7 @@ export async function GET(req: NextRequest) {
       const yesterdayStr = yesterday.toISOString().slice(0, 10);
 
       if (uniqueDays[0] === today || uniqueDays[0] === yesterdayStr) {
-        let checkDate = new Date(uniqueDays[0]);
+        const checkDate = new Date(uniqueDays[0]);
         for (const day of uniqueDays) {
           if (day === checkDate.toISOString().slice(0, 10)) {
             currentStreak++;

@@ -4,7 +4,7 @@ import type { LogEntry, LogLevel, LogCategory } from './types';
 const MAX_LOGS = 500; // Keep last 500 entries
 
 // Batch persist buffer - collects logs and POSTs in batches
-let _persistBuffer: Array<{
+const _persistBuffer: Array<{
   level: string; category: string; title: string; message: string;
   details?: string; duration?: number; choomId?: string; chatId?: string;
 }> = [];

@@ -329,7 +329,7 @@ export default class HabitTrackerHandler extends BaseSkillHandler {
 
       // Start counting from today or yesterday
       if (uniqueDays[0] === today || uniqueDays[0] === yesterdayStr) {
-        let checkDate = new Date(uniqueDays[0]);
+        const checkDate = new Date(uniqueDays[0]);
         for (const day of uniqueDays) {
           const expected = checkDate.toISOString().slice(0, 10);
           if (day === expected) {

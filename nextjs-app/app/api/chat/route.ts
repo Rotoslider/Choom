@@ -4488,7 +4488,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
 
         let fullContent = '';
         let allToolCalls: ToolCall[] = [];
-        let allToolResults: ToolResult[] = [];
+        const allToolResults: ToolResult[] = [];
         const sessionFileCount = { created: 0, maxAllowed: WORKSPACE_MAX_FILES_PER_SESSION };
         let maxIterations = MAX_ITERATIONS;
         let projectIterationLimitApplied = false;
@@ -5488,7 +5488,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             // Convert accumulated tool calls — parse each individually so one bad call
             // doesn't drop ALL of them. Includes basic JSON repair for common LLM errors.
             let toolCalls: { id: string; name: string; arguments: Record<string, unknown> }[] = [];
-            let droppedToolCalls: string[] = []; // track names of dropped calls for retry logic
+            const droppedToolCalls: string[] = []; // track names of dropped calls for retry logic
             let repairedToolCalls = 0;
             if (toolCallsAccumulator.size > 0) {
               for (const tc of toolCallsAccumulator.values()) {
