@@ -267,10 +267,45 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
               const options = state.attributes?.options as string[] | undefined;
               const requested = String(serviceData.option);
               if (Array.isArray(options) && !options.includes(requested)) {
-                const ciMatch = options.find(o => String(o).toLowerCase() === requested.toLowerCase());
+                // Normalize for loose matching: lowercase, collapse all non-alphanumerics.
+                const norm = (s: string) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '');
+                const ciMatch = options.find(o => String(o).toLowerCase() === requested.toLowerCase())
+                  || options.find(o => norm(o) === norm(requested));
                 if (ciMatch) {
-                  console.log(`   🔀 select_option case-corrected: "${requested}" → "${ciMatch}"`);
+                  console.log(`   🔀 select_option matched: "${requested}" → "${ciMatch}"`);
                   serviceData.option = ciMatch;
+                } else {
+                  // Option does not exist on THIS entity. Reolink/HA returns a cryptic
+                  // 500 (not a 400) for invalid select options, which then trips the
+                  // brokenTools blocker and disables ha_call_service for the whole turn.
+                  // Intercept here: find which sibling select.*_ptz/preset entity DOES
+                  // have this option (Chooms routinely mix up the tower vs garage cam
+                  // preset lists) and return a SUCCESS redirect so the tool stays alive.
+                  let siblingHint: { entity_id: string; option: string } | undefined;
+                  try {
+                    const all = await ha.listStates();
+                    for (const e of all) {
+                      if (e.entity_id === selectTargetEntity) continue;
+                      if (!e.entity_id.startsWith('select.') || !/ptz|preset/i.test(e.entity_id)) continue;
+                      const opts = Array.isArray(e.attributes?.options) ? (e.attributes.options as string[]) : [];
+                      const m = opts.find(o => norm(o) === norm(requested));
+                      if (m) { siblingHint = { entity_id: e.entity_id, option: m }; break; }
+                    }
+                  } catch { /* sibling scan is best-effort */ }
+                  console.log(`   ⚠️  select_option invalid: "${requested}" not on ${selectTargetEntity}${siblingHint ? ` — found on ${siblingHint.entity_id}` : ''}`);
+                  return this.success(toolCall, {
+                    redirected: true,
+                    success: false,
+                    message: `"${requested}" is not a valid preset for ${selectTargetEntity}. The camera did NOT move. (HA returns a 500 for invalid options, which is why earlier calls failed.)`,
+                    valid_options: options,
+                    ...(siblingHint && {
+                      hint: `"${siblingHint.option}" is a preset on a DIFFERENT camera: ${siblingHint.entity_id}. Each camera has its own preset list — don't mix them up.`,
+                      correct_call: `ha_call_service(domain="select", service="select_option", entity_id="${siblingHint.entity_id}", service_data={"option":"${siblingHint.option}"})`,
+                    }),
+                    ...(!siblingHint && {
+                      correct_call: `ha_call_service(domain="select", service="select_option", entity_id="${selectTargetEntity}", service_data={"option":"${options[0]}"})`,
+                    }),
+                  });
                 }
               }
             } catch { /* entity fetch failed — let HA report the error */ }
