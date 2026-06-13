@@ -4,6 +4,9 @@ Handles heartbeats, cron jobs, and scheduled tasks
 """
 import logging
 import os
+import json
+import re
+import glob
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from typing import Callable, Optional, Dict, Any, List
@@ -212,6 +215,16 @@ class ScheduledTaskManager:
             "signal_account_keepalive",
             self._signal_account_keepalive,
             hours=6
+        )
+
+        # Check GitHub daily for a newer signal-cli release and notify the owner.
+        # NOTIFY-ONLY — never auto-applies. The owner reads release notes/issues
+        # first, then runs upgrade-signal-cli.sh manually. 09:00 avoids quiet hours.
+        self.add_cron_task(
+            "signal_cli_update_check",
+            self._check_signal_cli_update,
+            hour=9,
+            minute=0
         )
 
         # Poll for manual triggers from the web GUI (every 10s)
@@ -2651,6 +2664,109 @@ Be practical. Only work on things that can actually be accomplished with the too
                 logger.warning("Signal account keepalive skipped — not connected to daemon")
         except Exception as e:
             logger.error(f"Signal account keepalive error: {e}")
+
+    @staticmethod
+    def _version_tuple(v):
+        """Parse 'v0.14.5' / '0.14.5' into (0, 14, 5) for comparison."""
+        try:
+            return tuple(int(x) for x in str(v).lstrip("v").split(".") if x.isdigit())
+        except Exception:
+            return (0,)
+
+    def _installed_signal_cli_version(self):
+        """Read the installed signal-cli version from the systemd ExecStart path,
+        falling back to the highest version directory found in /opt."""
+        svc = "/etc/systemd/system/signal-cli-daemon.service"
+        try:
+            if os.path.exists(svc):
+                with open(svc) as f:
+                    m = re.search(r"signal-cli-(\d+\.\d+\.\d+)", f.read())
+                    if m:
+                        return m.group(1)
+        except Exception as e:
+            logger.debug(f"Could not read service file for signal-cli version: {e}")
+
+        versions = []
+        for path in glob.glob("/opt/signal-cli-*"):
+            m = re.search(r"signal-cli-(\d+\.\d+\.\d+)$", path)
+            if m:
+                versions.append(m.group(1))
+        return max(versions, key=self._version_tuple) if versions else None
+
+    def _latest_signal_cli_version(self):
+        """Fetch the latest signal-cli release tag from GitHub. Returns None on error."""
+        try:
+            resp = requests.get(
+                "https://api.github.com/repos/AsamK/signal-cli/releases/latest",
+                headers={"Accept": "application/vnd.github+json",
+                         "User-Agent": "choom-signal-bridge"},
+                timeout=15,
+            )
+            resp.raise_for_status()
+            tag = (resp.json().get("tag_name") or "").lstrip("v")
+            return tag or None
+        except Exception as e:
+            logger.warning(f"Could not fetch latest signal-cli version: {e}")
+            return None
+
+    def _check_signal_cli_update(self):
+        """Notify the owner when a newer signal-cli release exists.
+
+        NOTIFY-ONLY by design: the owner wants to review release notes and the
+        issues page before applying, so this never auto-upgrades. It points at
+        upgrade-signal-cli.sh for the manual (and reversible) apply step, and
+        notifies at most once per new version.
+        """
+        if not is_task_enabled("signal_cli_update_check"):
+            logger.debug("signal-cli update check is disabled")
+            return
+
+        try:
+            current = self._installed_signal_cli_version()
+            latest = self._latest_signal_cli_version()
+            if not current or not latest:
+                logger.info(f"signal-cli update check skipped (current={current}, latest={latest})")
+                return
+
+            if self._version_tuple(latest) <= self._version_tuple(current):
+                logger.info(f"signal-cli up to date (installed {current}, latest {latest})")
+                return
+
+            # Newer version available — notify once per version
+            state_path = os.path.join(os.path.dirname(__file__), "signal_cli_update_state.json")
+            last_notified = None
+            try:
+                with open(state_path) as f:
+                    last_notified = json.load(f).get("last_notified")
+            except Exception:
+                pass
+
+            if last_notified == latest:
+                logger.info(f"signal-cli {latest} already notified; skipping")
+                return
+
+            script = os.path.join(os.path.dirname(__file__), "upgrade-signal-cli.sh")
+            message = (
+                f"signal-cli {latest} is available (you have {current}).\n\n"
+                f"Not auto-applied — review first:\n"
+                f"• Release notes: https://github.com/AsamK/signal-cli/releases/tag/v{latest}\n"
+                f"• Issues: https://github.com/AsamK/signal-cli/issues\n\n"
+                f"When ready, on the NUC run:\n"
+                f"  sudo {script} {latest}\n\n"
+                f"It backs up the current install and auto-rolls-back if the daemon "
+                f"fails to come up. The old version stays in /opt for instant rollback."
+            )
+            self.send_message_to_owner(message, include_audio=False, choom_name="System")
+
+            try:
+                with open(state_path, "w") as f:
+                    json.dump({"last_notified": latest, "current_at_notify": current}, f)
+            except Exception as e:
+                logger.warning(f"Could not persist signal-cli update state: {e}")
+
+            logger.info(f"Notified owner: signal-cli {latest} available (installed {current})")
+        except Exception as e:
+            logger.error(f"signal-cli update check failed: {e}")
 
     def _system_health_check(self):
         """Check system health and alert on issues (respects quiet period)"""
