@@ -263,7 +263,85 @@ If you want extra protection:
 
 ## Updating signal-cli
 
-### Step-by-Step
+Keeping signal-cli current matters: Signal occasionally makes **server-side
+protocol changes** that older clients can't handle. In June 2026, for example,
+the server stopped sending the legacy `serverGuid` field on sealed-sender
+envelopes, and signal-cli 0.14.1 threw `getServerGuid(...) must not be null`
+on **every** incoming message — silently dropping all of them (outbound still
+worked, so nothing looked broken). Upgrading to 0.14.5 fixed it. See
+[Troubleshooting](#inbound-messages-silently-stop-getserverguid--protocol-drift)
+below.
+
+### Automatic update check (notify-only)
+
+The bridge checks GitHub once a day (09:00 local, via the scheduler task
+`signal_cli_update_check`) and compares the installed version against the
+latest release. **It never upgrades on its own** — when a newer version
+exists it just sends you a Signal message like:
+
+```
+[System]
+
+signal-cli 0.14.6 is available (you have 0.14.5).
+
+Not auto-applied — review first:
+• Release notes: https://github.com/AsamK/signal-cli/releases/tag/v0.14.6
+• Issues: https://github.com/AsamK/signal-cli/issues
+
+When ready, on the NUC run:
+  sudo .../services/signal-bridge/upgrade-signal-cli.sh 0.14.6
+
+It backs up the current install and auto-rolls-back if the daemon fails to
+come up. The old version stays in /opt for instant rollback.
+```
+
+This is deliberate — you read the release notes and issues page first (in case
+of new bugs/regressions), then apply on your own schedule.
+
+- **Notify once per version**: state is kept in `signal_cli_update_state.json`
+  so you aren't pinged daily for the same release.
+- **Disable it**: set the `signal_cli_update_check` task to disabled in the task
+  config (it defaults to enabled).
+- Activating after a code change requires a bridge restart
+  (`sudo systemctl restart signal-bridge`) so the new scheduler code loads.
+
+### Recommended: `upgrade-signal-cli.sh`
+
+The one-command apply step. It does the whole manual procedure below
+automatically, with verification and **automatic rollback**:
+
+```bash
+# Upgrade to a specific version (what the notification suggests)
+sudo ./upgrade-signal-cli.sh 0.14.6
+
+# Or omit the version to take the latest GitHub release
+sudo ./upgrade-signal-cli.sh
+```
+
+What it does:
+1. Resolves the target version (arg, or latest from GitHub) and the currently
+   installed version (from the systemd `ExecStart` path). Exits early if already
+   current.
+2. Downloads the JVM distribution tarball and extracts it to `/opt`
+   (skips the download if that version dir already exists).
+3. Backs up the service file, repoints `ExecStart` to the new version,
+   `daemon-reload`, and restarts `signal-cli-daemon`.
+4. Verifies the daemon came up (`is-active` + `Started JSON-RPC server` in the
+   journal). **If it doesn't, it restores the backed-up service file and
+   restarts the old version** — so a bad upgrade self-heals.
+
+The bridge auto-reconnects to the restarted daemon within a few seconds. After
+it reports success, send a test message and watch
+`journalctl -u signal-cli-daemon -f`.
+
+> Note: the script does **not** back up your account data (it's a binary-only
+> swap that leaves `~/.local/share/signal-cli` untouched). For a major version
+> bump where you want extra safety, take the account backup from the manual
+> procedure first.
+
+### Manual procedure (step-by-step)
+
+The script above is preferred, but here's the equivalent by hand:
 
 ```bash
 # 1. Back up account data (do this FIRST)
@@ -408,6 +486,34 @@ signal-cli -a +1YOUR_NUMBER receive -t 5
 # Re-link if needed
 signal-cli link -n "Choom Server"
 ```
+
+### Inbound messages silently stop (`getServerGuid` / protocol drift)
+
+**Symptom:** Messages you send show as delivered on your phone, but nothing
+reaches the Chooms — and `data/logs/bridge.log` shows **no errors** (it's all
+scheduler noise). Outbound (heartbeats, scheduled messages) keeps working.
+
+**Why it's sneaky:** Sends and receives use different code paths, so the bridge
+looks alive. And signal-cli's own decode errors go to the **systemd journal,
+not bridge.log**. The receive path is the `signal-cli-daemon` / `signal-bridge`
+**system services** — restarting Next.js (`pnpm dev`) or your phone does nothing
+for it.
+
+**Diagnose** — look in the daemon journal, not bridge.log:
+```bash
+journalctl -u signal-cli-daemon -n 50 --no-pager | grep -E "Envelope|Exception|getServerGuid"
+```
+If you see incoming envelopes paired with `Exception: getServerGuid(...) must
+not be null (NullPointerException)`, signal-cli is receiving messages but
+crashing while decoding them (a Signal server-side protocol change your version
+can't handle). Confirm zero are getting through:
+```bash
+# Inbound that actually reached the bridge (should be > 0 when healthy):
+grep -c "Received message from" data/logs/bridge.log
+```
+
+**Fix:** upgrade signal-cli (see [Updating signal-cli](#updating-signal-cli)).
+The daily update check exists precisely to surface the fixed release quickly.
 
 ### Bridge Not Responding
 
