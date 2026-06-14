@@ -1,1 +1,5 @@
 *.bak
+
+# Runtime data (backups, logs, traces, presence state, yt reports, pending files, etc.)
+# Generated at runtime — not source. The tracked data/presence/.gitkeep stays tracked.
+/data/
