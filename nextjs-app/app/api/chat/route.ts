@@ -4012,14 +4012,23 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
     // Strip schedule_self_followup too — a delegated Choom shouldn't queue its own
     // future ticks detached from the orchestrator's flow; it should return a result.
     if (isDelegation || isGroupTurn) {
-      const delegationTools = new Set([
+      const stripTools = new Set([
         'delegate_to_choom', 'list_team', 'get_delegation_result',
         'create_plan', 'execute_plan', 'adjust_plan',
         'heartbeat_complete', 'talk_with_sisters',
-        'schedule_self_followup', 'list_self_followups', 'cancel_self_followup',
       ]);
+      // Self-scheduling is stripped for DELEGATION (a worker shouldn't queue
+      // detached ticks instead of returning a result) but ALLOWED in group turns:
+      // a Choom in a room may legitimately want to schedule a followup to pop back
+      // in later. The followup fires later as a heartbeat (not a group turn), where
+      // talk_with_sisters IS available, so she can rejoin the room then.
+      if (isDelegation) {
+        stripTools.add('schedule_self_followup');
+        stripTools.add('list_self_followups');
+        stripTools.add('cancel_self_followup');
+      }
       const before = activeTools.length;
-      activeTools = activeTools.filter(t => !delegationTools.has(t.name));
+      activeTools = activeTools.filter(t => !stripTools.has(t.name));
       console.log(`   🔒 ${isGroupTurn ? 'Group-turn' : 'Delegation'} mode: stripped ${before - activeTools.length} delegation/plan tools → ${activeTools.length} tools`);
     }
 

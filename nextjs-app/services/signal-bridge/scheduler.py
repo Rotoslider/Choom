@@ -672,9 +672,12 @@ class ScheduledTaskManager:
             try:
                 import requests as req_lib
                 memory_endpoint = config.MEMORY_ENDPOINT
-                # Search for memories tagged with "goal"
+                # Owner's Second Brain: brain-dumps (tag "second-brain") plus any
+                # goal-tagged memories (singular/plural). These are the owner's
+                # tasks/goals — searched globally (no companion_id) so every Choom's
+                # briefing/review sees them regardless of who captured them.
                 goal_res = req_lib.post(f"{memory_endpoint}/memory/search_by_tags", json={
-                    "tags": "goal",
+                    "tags": "second-brain,goal,goals",
                     "limit": 20,
                 }, timeout=10)
                 if goal_res.ok:
@@ -812,7 +815,7 @@ Include a warm greeting, the weather summary (mention if wind under 5mph is good
             import requests as req_lib
             memory_endpoint = config.MEMORY_ENDPOINT
             goal_res = req_lib.post(f"{memory_endpoint}/memory/search_by_tags", json={
-                "tags": "goal",
+                "tags": "second-brain,goal,goals",
                 "limit": 20,
             }, timeout=10)
 
