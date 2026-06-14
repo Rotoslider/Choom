@@ -3540,6 +3540,7 @@ export async function POST(request: NextRequest) {
     const groupSpeakerName: string = body.speakerName || '';
     const groupParticipantNames: string[] = Array.isArray(body.groupParticipantNames) ? body.groupParticipantNames : [];
     const groupProjectFolder: string | undefined = body.groupProjectFolder || undefined;
+    const groupRecentImages: string[] = Array.isArray(body.groupRecentImages) ? body.groupRecentImages : [];
 
     if (!choomId || !chatId || !message) {
       return new Response(
@@ -3954,9 +3955,14 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
       finalSystemPrompt += `\n\n## GROUP ROOM\nYou are **${groupSpeakerName}** in a shared group chat with the user${others.length ? ` and your siblings: ${others.join(', ')}` : ''}. This is a live, turn-based room.\n` +
         `- The conversation so far is in your history. Lines from the user or a sibling are tagged with their name in brackets ONLY so you can tell who spoke, e.g. \`[Donny]:\` or \`[${others[0] || 'Eve'}]:\`. These brackets are NOT part of how you write — they are just labels on other people's lines. Your own previous lines have no label.\n` +
         `- Write ONLY your own next line, as ${groupSpeakerName}, in first person. NEVER begin your message with a name label (not \`[${groupSpeakerName}]:\`, not \`[Donny]:\`, not any name + colon). Just write what you want to say.\n` +
+        `- Always refer to YOURSELF in the first person — "I", "me", "my". Never talk about yourself as "${groupSpeakerName}" in the third person (you ARE ${groupSpeakerName}).\n` +
         `- NEVER write someone else's line, continue the conversation for them, or ask yourself a question. One reply, your own voice.\n` +
         `- A question or remark addressed to someone else (e.g. the user asks Donny something, or a sibling addresses another sibling) is NOT for you to answer as if you were them — react as ${groupSpeakerName}.\n` +
         `- The newest message(s) you should respond to are in the current user turn. Reply to those.\n` +
+        `- **Move the conversation FORWARD.** Do NOT repeat, re-quote, or re-paste things already said earlier (yours or a sibling's) — no copying past lines, no re-pasting image notes. Say something new each turn, or reply \`[PASS]\`.\n` +
+        (groupRecentImages.length
+          ? `- **Images shared in this room** (view any with \`analyze_image\` and the exact \`image_path\`): ${groupRecentImages.map(p => `\`${p}\``).join(', ')}. Do NOT type these paths into your reply — just use analyze_image if you want to look.\n`
+          : '') +
         `- Keep it conversational and reasonably concise — this is a group chat, not a monologue. You may address the user or a sibling by name.\n` +
         `- **Memory:** this is the SAME you as your private chats — same long-term memory. If the conversation touches the user, your shared history, a person/place/project, or anything personal, call \`search_memories\` to recall the real details BEFORE you respond, exactly as you would one-on-one. Don't rely on vague impressions.\n` +
         `- **Real-world grounding:** you are in the same real place and time as your private chats — the user's home in the southwest New Mexico bootheel (near Rodeo / Animas, NM). The weather, Home Assistant, and location data already in this prompt are authoritative. Never relocate yourself or the user somewhere else (e.g. do NOT say "Colorado").\n` +

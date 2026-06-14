@@ -58,6 +58,47 @@ export function stripSpeakerPrefix(content: string, knownNames: string[]): strin
   return out.trim();
 }
 
+// The orchestrator appends a verbose "[image shared to the room — saved at …]"
+// note to each message that produced an image. Weak local models COPY these
+// notes (and the prose around them) into later turns. So we strip them from the
+// transcript the model reads — siblings still get the paths via the GROUP ROOM
+// "recent images" list instead.
+const IMG_NOTE_RE = /\n*_?\[image shared to the room[\s\S]*?\]_?/gi;
+const IMG_PATH_RE = /analyze_image image_path="([^"]+)"/gi;
+
+export function stripImageNotes(s: string): string {
+  return (s || '').replace(IMG_NOTE_RE, '').trim();
+}
+
+// Collect the room-relative paths of images shared so far (most recent last,
+// de-duplicated) so we can hand them to the speaker as a clean, non-prose list.
+export function extractImagePaths(transcript: GroupTranscriptEntry[]): string[] {
+  const seen: string[] = [];
+  for (const m of transcript) {
+    IMG_PATH_RE.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = IMG_PATH_RE.exec(m.content || '')) !== null) {
+      if (!seen.includes(match[1])) seen.push(match[1]);
+    }
+  }
+  return seen;
+}
+
+// Drop paragraphs that exactly repeat an earlier paragraph in the SAME response
+// (weak models sometimes regurgitate whole past turns several times in one go).
+export function dedupeParagraphs(content: string): string {
+  const paras = content.split(/\n{2,}/);
+  const seen = new Set<string>();
+  const kept: string[] = [];
+  for (const p of paras) {
+    const key = p.trim().toLowerCase().replace(/\s+/g, ' ');
+    if (key.length > 25 && seen.has(key)) continue; // only dedupe substantial repeats
+    if (key.length > 25) seen.add(key);
+    kept.push(p);
+  }
+  return kept.join('\n\n');
+}
+
 // Render the shared transcript from one speaker's perspective:
 //   own lines  -> assistant (no name prefix)
 //   all others -> user, prefixed "[Name]:"
@@ -69,11 +110,12 @@ export function renderPov(
 ): Array<{ role: 'user' | 'assistant'; content: string }> {
   const raw: Array<{ role: 'user' | 'assistant'; content: string }> = [];
   for (const m of transcript) {
-    if (!m.content || !m.content.trim()) continue;
+    const clean = stripImageNotes(m.content);
+    if (!clean.trim()) continue;
     if (m.authorChoomId && m.authorChoomId === speakerChoomId) {
-      raw.push({ role: 'assistant', content: m.content });
+      raw.push({ role: 'assistant', content: clean });
     } else {
-      raw.push({ role: 'user', content: `[${m.authorName}]: ${m.content}` });
+      raw.push({ role: 'user', content: `[${m.authorName}]: ${clean}` });
     }
   }
   // Merge consecutive same-role messages.
@@ -119,13 +161,18 @@ export async function runSpeakerTurn(opts: {
   const historyPart = transcript.slice(0, lastSelfIdx + 1);
   const newPart = transcript.slice(lastSelfIdx + 1);
   const povMessages = renderPov(historyPart, choomId);
-  // The new content the speaker must react to (all from others → labelled).
+  // The new content the speaker must react to (all from others → labelled,
+  // with image-share notes stripped so they aren't parroted).
   const newContent = newPart
-    .filter(m => m.content && m.content.trim())
-    .map(m => `[${m.authorName}]: ${m.content}`)
+    .map(m => ({ name: m.authorName, c: stripImageNotes(m.content) }))
+    .filter(m => m.c.trim())
+    .map(m => `[${m.name}]: ${m.c}`)
     .join('\n\n');
   // Fallback when there is no new content (e.g. keep-going with empty tail).
   const message = newContent || '[The room is quiet — continue the conversation as yourself if you have something to add, otherwise reply [PASS].]';
+  // Clean, non-prose list of images shared in this room (most recent last) so
+  // siblings can analyze_image them without us embedding copyable path notes.
+  const recentImagePaths = extractImagePaths(transcript).slice(-6);
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -148,6 +195,7 @@ export async function runSpeakerTurn(opts: {
           speakerName,
           groupParticipantNames: participantNames,
           groupProjectFolder: projectFolder || undefined,
+          groupRecentImages: recentImagePaths,
         }),
         signal: controller.signal,
         dispatcher: groupDispatcher,
@@ -238,6 +286,8 @@ export async function runSpeakerTurn(opts: {
     // Strip any leading "[Name]:" / "OwnName:" label the model parroted from the
     // transcript format (prevents identity confusion compounding across rounds).
     finalContent = stripSpeakerPrefix(finalContent, [...participantNames, 'Donny', 'You']);
+    // Drop repeated paragraphs (model regurgitating whole past turns in one reply).
+    finalContent = dedupeParagraphs(finalContent);
     if (PASS_RE.test(finalContent)) {
       result.passed = true;
       result.content = '';

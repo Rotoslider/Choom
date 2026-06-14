@@ -42,6 +42,22 @@ interface RoomMessage {
   createdAt: string;
 }
 
+// Strip a leading "Name:" / "[Name]:" label the model sometimes parrots at the
+// very start of its reply. The final saved text is cleaned server-side, but the
+// live stream + TTS read raw tokens — without this the audio speaks the name.
+function stripLeadingName(s: string, names: string[]): string {
+  let out = s.replace(/^\s+/, '');
+  const alt = names.filter(Boolean).map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+  const bracket = /^\[[^\]\n]{1,40}\]\s*[:：]\s*/;
+  const bare = alt ? new RegExp(`^(?:${alt})\\s*[:：]\\s*`, 'i') : null;
+  for (let i = 0; i < 3; i++) {
+    if (bracket.test(out)) { out = out.replace(bracket, '').replace(/^\s+/, ''); continue; }
+    if (bare && bare.test(out)) { out = out.replace(bare, '').replace(/^\s+/, ''); continue; }
+    break;
+  }
+  return out;
+}
+
 export default function RoomsPage() {
   const router = useRouter();
   const { settings, ui } = useAppStore();
@@ -70,6 +86,8 @@ export default function RoomsPage() {
   const ttsBufRef = useRef('');
   const ttsVoiceRef = useRef<string | null>(null);
   const lastTtsRef = useRef(''); // last sentence enqueued — dedup looping models
+  const streamRawRef = useRef(''); // raw accumulation for the live display
+  const firstChunkRef = useRef(true); // first TTS chunk of a speaker may carry a "Name:" label
   const choomsRef = useRef<Choom[]>([]);
   useEffect(() => { choomsRef.current = chooms; }, [chooms]);
 
@@ -196,20 +214,28 @@ export default function RoomsPage() {
               setStreamingText('');
               ttsBufRef.current = '';
               lastTtsRef.current = '';
+              streamRawRef.current = '';
+              firstChunkRef.current = true;
               ttsVoiceRef.current = choomsRef.current.find(c => c.id === data.speakerChoomId)?.voiceId || null;
               break;
             case 'speaker_content': {
               const tok = (data.content as string) || '';
-              setStreamingText(prev => prev + tok);
+              const names = [...choomsRef.current.map(c => c.name), 'Donny', 'You'];
+              // Live display: strip a leading "Name:" label from the raw accumulation.
+              streamRawRef.current += tok;
+              setStreamingText(stripLeadingName(streamRawRef.current, names));
               // Stream TTS sentence-by-sentence so audio starts sooner. Content
               // is already think/tool-call filtered server-side. Skip a sentence
               // identical to the previous one (weak models sometimes loop and
               // repeat a line several times — don't speak it 3×).
               ttsBufRef.current += tok;
               if (isSentenceEnd(ttsBufRef.current.trim())) {
-                const sentence = ttsBufRef.current.trim();
+                // First chunk of a speaker may start with a parroted "Name:" label —
+                // strip it so the audio doesn't speak the name (final text already is).
+                let sentence = ttsBufRef.current.trim();
+                if (firstChunkRef.current) { sentence = stripLeadingName(sentence, names); firstChunkRef.current = false; }
                 if (sentence && sentence !== lastTtsRef.current) {
-                  ttsRef.current?.enqueue(ttsBufRef.current, ttsVoiceRef.current);
+                  ttsRef.current?.enqueue(sentence, ttsVoiceRef.current);
                   lastTtsRef.current = sentence;
                 }
                 ttsBufRef.current = '';
@@ -220,9 +246,12 @@ export default function RoomsPage() {
               setActiveSpeaker(s => s ? { ...s, status: `using ${data.name as string}…` } : s);
               break;
             case 'speaker_done': {
-              // Flush any trailing partial sentence for this speaker (deduped).
-              if (ttsBufRef.current.trim() && ttsBufRef.current.trim() !== lastTtsRef.current) {
-                ttsRef.current?.enqueue(ttsBufRef.current, ttsVoiceRef.current);
+              // Flush any trailing partial sentence for this speaker (deduped,
+              // and leading-name-stripped if this is the only/first chunk).
+              let tail = ttsBufRef.current.trim();
+              if (firstChunkRef.current) { tail = stripLeadingName(tail, [...choomsRef.current.map(c => c.name), 'Donny', 'You']); firstChunkRef.current = false; }
+              if (tail && tail !== lastTtsRef.current) {
+                ttsRef.current?.enqueue(tail, ttsVoiceRef.current);
               }
               ttsBufRef.current = '';
               const doneMsg: RoomMessage = {
