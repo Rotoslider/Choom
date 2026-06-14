@@ -4801,7 +4801,16 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           const strongToolIntent = /\b(what(?:'?s| is) the weather|weather (?:like|today|tomorrow|forecast)|search (?:for|the web)|look up|find (?:me|out)|generate (?:an? |some )?(?:image|picture|photo|selfie|portrait)|take a (?:selfie|photo|picture)|create (?:a |an )?(?:image|picture)|make (?:me |an? )?(?:image|picture|selfie)|(?:please |can you |you should )remember (?:that|this|my|i |the |for )|(?<!i )(?<!i'll )remember (?:that |this |my |i |the |for )|(?:don'?t |never )forget (?:that|this|my|i )|(?:save|store|note|keep) (?:this|that|my|the |it )(?:in |to |as )?(?:memory|mind)?|use (?:the )?remember(?: tool)?|remind me|set (?:a )?reminder|send (?:a )?(?:notification|message|alert)|check (?:the |my )?(?:calendar|schedule|tasks|email|inbox)|(?:any |do i have (?:any )?|what )(?:appointments?|meetings?|events?)|(?:am i |are we )(?:free|busy|available)|what(?:'?s| is) on (?:my )?(?:calendar|schedule|for )?(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this week|next week)|(?:what(?:'?s| is| do i have) )(?:scheduled|planned|coming up)|when (?:is|was|did) (?:my |the )?(?:next|last) |when (?:is|was) the last time i |when did i (?:last )?(?:go|get|have|see|do|visit|fill|take)|write (?:a |an )?(?:file|document|report)|read (?:the |my |this )?(?:file|document|pdf|report)|(?:look|take a look|glance) at (?:the |this |that )?(?:file|document|pdf|report)|open (?:the |this |that )?(?:pdf|report|document)|review (?:the |this |that )?(?:file|document|pdf|report)|list (?:my |the )?(?:files|projects|tasks)|download|scrape|analyze (?:this|the|that) (?:image|photo|picture)|turn (?:on|off) (?:the )?|(?:open|close) (?:the )?|(?:lights?|switch|fan|heater|thermostat) (?:on|off)|delegate|get (?:the )?(?:weather|forecast)|search (?:youtube|email|gmail|contacts)|draft (?:an? )?email|compose (?:an? )?email|^habit\b|habit (?:stats|summary|report|breakdown)|how (?:often|many times) (?:do|did|have) i |play (?:some |me )?(?:music|song|track|album|artist|playlist|radio)|put on (?:some )?(?:music|song)|what(?:'?s| is) (?:playing|on)(?: right now| currently)?|(?:pause|stop|skip|next|previous|resume)(?: the)?(?: music| song| track| playback)?|(?:turn|volume) (?:up|down)|(?:search|find)(?: for)?(?: some| a)? (?:music|song|track|artist|album))\b/i.test(msgLower);
           // In noTools mode (heartbeat briefings), tools are stripped — never force tool_choice='required'.
           // Without this guard the model is forced to call tools that don't exist and the loop loses the briefing.
-          let forceToolCall = strongToolIntent && activeTools.length > 0; // Force tool_choice:'required' on first iteration if intent is strong
+          //
+          // Group turns are CONVERSATIONAL: the Choom is replying to the room, not
+          // executing a tool request. Here `message` is the other speakers' lines,
+          // which routinely trip the tool-intent regex (someone mentions weather,
+          // music, "remind", etc.). Forcing tool_choice='required' then makes the
+          // model emit an empty response (it has nothing to call) — observed
+          // cascading through every fallback model and producing ZERO output, so
+          // the Choom says nothing in the room. Never force tools on a group turn.
+          const allowToolForcing = !isGroupTurn;
+          let forceToolCall = strongToolIntent && activeTools.length > 0 && allowToolForcing; // Force tool_choice:'required' on first iteration if intent is strong
           const executedToolCache = new Map<string, unknown>(); // Dedup: normalizedKey → result
           const dedupHitCounts = new Map<string, number>(); // How many times each dedup key was hit
           let loopBreakRequested = false; // Set when a tight repeat-call loop is detected
@@ -4843,11 +4852,13 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           } else if (/\b(?:search|find)(?: for)?(?: some| a)? (?:music|song|track|artist|album)\b/i.test(msgLower)) {
             intentToolHint = 'music_search';
           }
-          if (strongToolIntent && activeTools.length > 0) {
+          if (strongToolIntent && activeTools.length > 0 && allowToolForcing) {
             traceBuilder.setForceToolCall();
             console.log(`   ⚡ ${choomTag} Strong tool intent detected — using tool_choice='required' on first iteration${intentToolHint ? ` (hint: ${intentToolHint})` : ''}`);
+          } else if (strongToolIntent && isGroupTurn) {
+            console.log(`   💬 ${choomTag} Group turn — skipping tool_choice='required' (conversational, false tool-intent from transcript)`);
           }
-          if (intentToolHint && activeTools.length > 0) {
+          if (intentToolHint && activeTools.length > 0 && allowToolForcing) {
             currentMessages.push({
               role: 'system',
               content: `[Tool guidance] The user's request maps to the "${intentToolHint}" tool. Call that tool directly — do NOT use other tools for this request.`,
