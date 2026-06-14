@@ -4864,15 +4864,20 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           } else if (/\b(?:search|find)(?: for)?(?: some| a)? (?:music|song|track|artist|album)\b/i.test(msgLower)) {
             intentToolHint = 'music_search';
           }
-          // In a group turn, force ONLY when a specific intent matched (avoids empty
-          // responses from broad false-positives); 1:1 chats force on any strong intent.
-          const allowToolForcing = !isGroupTurn || !!intentToolHint;
-          forceToolCall = (strongToolIntent || !!intentToolHint) && activeTools.length > 0 && allowToolForcing;
+          // tool_choice='required' is UNRELIABLE with the local qwen model — it very
+          // often returns an EMPTY completion (seen across qwen3.6/qwen3.5/NVIDIA),
+          // which leaves the Choom silent. So we do NOT force on group turns at all:
+          // a Choom in a room must keep talking even if she doesn't call a tool. 1:1
+          // chats keep proactive forcing on strong intent (smaller context, and the
+          // historical behavior the user relies on). The intentToolHint guidance below
+          // still steers tool choice everywhere WITHOUT forcing.
+          const allowToolForcing = !isGroupTurn;
+          forceToolCall = strongToolIntent && activeTools.length > 0 && allowToolForcing;
           if (forceToolCall) {
             traceBuilder.setForceToolCall();
             console.log(`   ⚡ ${choomTag} Tool intent detected — using tool_choice='required' on first iteration${intentToolHint ? ` (hint: ${intentToolHint})` : ''}`);
           } else if ((strongToolIntent || intentToolHint) && isGroupTurn) {
-            console.log(`   💬 ${choomTag} Group turn — not forcing tool_choice (no specific actionable intent)`);
+            console.log(`   💬 ${choomTag} Group turn — not forcing tool_choice (conversational; forcing empties this model)`);
           }
           if (intentToolHint && activeTools.length > 0) {
             currentMessages.push({
