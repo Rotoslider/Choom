@@ -220,6 +220,14 @@ class SignalBridge:
                 self._send_response(source, remove_response, None)
                 return
 
+            # Brain-dump → Second Brain: "idea: ...", "note: ...", "todo: ...",
+            # "goal: ...", "brain: ...", "capture: ..." store directly to the memory
+            # DB (deterministic — doesn't depend on a Choom calling the remember tool).
+            braindump_response = self._handle_braindump(message_text)
+            if braindump_response:
+                self._send_response(source, braindump_response, None)
+                return
+
             # Extract Choom name from message first (to get the cleaned message)
             choom_name, cleaned_message = MessageParser.extract_choom_name(message_text)
             logger.info(f"Parsed message - choom_name: {choom_name}, cleaned: '{cleaned_message[:100] if cleaned_message else ''}'")
@@ -378,10 +386,17 @@ class SignalBridge:
     # accidentally fire mid-conversation. Optional trailing punctuation/emoji
     # is tolerated so "show me the files!" or "files please" still works.
     _SHOW_FILES_RE = re.compile(
-        r'^\s*(?:show\s+(?:me\s+)?(?:the\s+)?files?'
-        r'|send\s+(?:me\s+)?(?:the\s+)?files?'
-        r'|gimme\s+(?:the\s+)?files?'
-        r'|files?(?:\s+please|\s+pls)?)\s*[.!?]*\s*$',
+        r'^\s*(?:'
+        # show/send/gimme/get/fetch [me] [the|my] [md/doc/note] files
+        r'(?:show|send|gimme|give\s+me|get\s+me|fetch)\s+(?:me\s+)?(?:the\s+|my\s+)?'
+        r'(?:md\s+|markdown\s+|doc\s+|docs\s+|document\s+|documents\s+|note\s+|notes\s+)?files?'
+        # show/send [me] [the|my] docs/notes/markdown (without the word "files")
+        r'|(?:show|send|gimme|get\s+me|fetch)\s+(?:me\s+)?(?:the\s+|my\s+)?(?:docs?|documents?|notes?|markdown)'
+        # bare "files" / "the files" / "my files"
+        r'|(?:the\s+|my\s+)?files?'
+        # bare "show me"
+        r'|show\s+me'
+        r')(?:\s+please|\s+pls)?\s*[.!?]*\s*$',
         re.IGNORECASE,
     )
 
@@ -410,13 +425,66 @@ class SignalBridge:
             "• \"remind me to ... at 3pm\" — set a reminder.\n"
             "• \"what's on my calendar\" / \"add event ...\" — calendar.\n"
             "• \"add milk to groceries\" — add to a list.\n"
+            "• Second Brain — \"idea: ...\", \"note: ...\", \"todo: ...\", or \"goal: ...\" "
+            "saves the idea straight to your memory database (browse it at /memories). "
+            "Your Chooms can see and act on these.\n"
             "• \"remove <Name> from <Room>\" — take a Choom out of a group room "
             "(their history is kept; you can invite them back).\n"
             "• Send a voice note — it gets transcribed.\n"
             "• Send a photo — they can look at it.\n"
-            "• \"show files\" — get any files they queued up for you.\n"
+            "• \"show me my files\" (or \"show files\" / \"show my notes\") — get the .md files "
+            "and docs your Chooms made for you.\n"
             "• \"help\" — show this list again."
         )
+
+    def _handle_braindump(self, text: str) -> Optional[str]:
+        """'idea: ...' / 'note: ...' / 'todo: ...' / 'goal: ...' / 'brain: ...' /
+        'capture: ...' → store straight into the Second Brain (memory DB) as a
+        task memory. Deterministic capture that doesn't rely on a Choom remembering
+        to call the remember tool. 'goal:' is tagged so the goal-review picks it up."""
+        if not text:
+            return None
+        m = re.match(r'^\s*(idea|note|todo|task|goal|brain|capture)\s*[:\-–—]\s*(.+)$',
+                     text.strip(), re.IGNORECASE | re.DOTALL)
+        if not m:
+            return None
+        kind = m.group(1).lower()
+        content = m.group(2).strip()
+        if not content:
+            return None
+
+        # Attribute to the default Choom (same as texting that Choom directly).
+        companion_id = None
+        try:
+            default_choom = self.choom.get_choom_by_name(config.DEFAULT_CHOOM_NAME)
+            if default_choom:
+                companion_id = default_choom.id
+        except Exception:
+            pass
+
+        # The memory service expects tags as a comma-separated STRING (not a list).
+        tags = 'second-brain,goal' if kind == 'goal' else 'second-brain'
+        # A short title from the first line / first few words.
+        first_line = content.splitlines()[0].strip()
+        title = (first_line[:60] + '…') if len(first_line) > 60 else first_line
+
+        try:
+            self.choom._make_request("POST", "/api/memories", json={
+                "action": "remember",
+                "title": title or kind,
+                "content": content,
+                "memory_type": "task",
+                "tags": tags,
+                "importance": 7 if kind == 'goal' else 5,
+                "companion_id": companion_id,
+            })
+        except Exception as e:
+            logger.error(f"braindump capture failed: {e}")
+            return "I couldn't save that to your Second Brain — check the app logs. (Tip: you can also just tell a Choom the idea.)"
+
+        label = 'goal' if kind == 'goal' else 'note'
+        return (f"Saved to your Second Brain as a {label}: \"{title}\". "
+                "Your Chooms can see it, and you can browse everything in the Second Brain dashboard (/memories).")
 
     def _handle_remove_from_room(self, text: str) -> Optional[str]:
         """'remove <Choom> from <Room>' → set that Choom inactive in the room.
