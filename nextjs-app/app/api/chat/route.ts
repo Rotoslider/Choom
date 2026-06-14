@@ -4813,15 +4813,14 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           // In noTools mode (heartbeat briefings), tools are stripped — never force tool_choice='required'.
           // Without this guard the model is forced to call tools that don't exist and the loop loses the briefing.
           //
-          // Group turns are CONVERSATIONAL: the Choom is replying to the room, not
-          // executing a tool request. Here `message` is the other speakers' lines,
-          // which routinely trip the tool-intent regex (someone mentions weather,
-          // music, "remind", etc.). Forcing tool_choice='required' then makes the
-          // model emit an empty response (it has nothing to call) — observed
-          // cascading through every fallback model and producing ZERO output, so
-          // the Choom says nothing in the room. Never force tools on a group turn.
-          const allowToolForcing = !isGroupTurn;
-          let forceToolCall = strongToolIntent && activeTools.length > 0 && allowToolForcing; // Force tool_choice:'required' on first iteration if intent is strong
+          // Group turns are CONVERSATIONAL: `message` is the other speakers' lines,
+          // which trip the BROAD tool-intent regex (someone mentions weather, music,
+          // etc.). Forcing tool_choice='required' on such a false positive makes the
+          // model return an empty response. So in a group turn we force ONLY when a
+          // SPECIFIC actionable intent matched (intentToolHint, computed below) — e.g.
+          // the owner explicitly asks a Choom to "set a followup". forceToolCall is
+          // finalized right after intent detection.
+          let forceToolCall = false;
           const executedToolCache = new Map<string, unknown>(); // Dedup: normalizedKey → result
           const dedupHitCounts = new Map<string, number>(); // How many times each dedup key was hit
           let loopBreakRequested = false; // Set when a tight repeat-call loop is detected
@@ -4846,7 +4845,9 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           // system message steering the LLM to the correct tool. This prevents the LLM
           // from calling get_calendar_events when the user says "remind me" etc.
           let intentToolHint = '';
-          if (/\b(?:remind me|set (?:a )?reminder)\b/i.test(msgLower)) {
+          if (/\b(?:set|schedule|make|create|queue|put in)\b[^.!?\n]{0,24}?\bfollow[\s-]?up\b|\bremind\s+yourself\b|\bself[\s-]?follow[\s-]?up\b|\bfollow[\s-]?up\s+with\s+yourself\b|\b(?:set|make)\s+(?:a\s+)?reminder\s+for\s+yourself\b/i.test(msgLower)) {
+            intentToolHint = 'schedule_self_followup';
+          } else if (/\b(?:remind me|set (?:a )?reminder)\b/i.test(msgLower)) {
             intentToolHint = 'create_reminder';
           } else if (/\b(?:check (?:the |my )?(?:calendar|schedule)|what(?:'?s| is) on (?:my )?(?:calendar|schedule|for )?(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this week|next week)?|(?:any |do i have (?:any )?|what )(?:appointments?|meetings?|events?)|(?:am i |are we )(?:free|busy|available)|(?:what(?:'?s| is| do i have) )(?:scheduled|planned|coming up)|(?:anything )(?:on |scheduled )(?:for )?(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this week|next week)|when (?:is|was|did) (?:my |the )?(?:next|last) |when (?:is|was) the last time i |when did i (?:last )?(?:go|get|have|see|do|visit|fill|take))\b/i.test(msgLower)) {
             intentToolHint = 'get_calendar_events';
@@ -4863,13 +4864,17 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           } else if (/\b(?:search|find)(?: for)?(?: some| a)? (?:music|song|track|artist|album)\b/i.test(msgLower)) {
             intentToolHint = 'music_search';
           }
-          if (strongToolIntent && activeTools.length > 0 && allowToolForcing) {
+          // In a group turn, force ONLY when a specific intent matched (avoids empty
+          // responses from broad false-positives); 1:1 chats force on any strong intent.
+          const allowToolForcing = !isGroupTurn || !!intentToolHint;
+          forceToolCall = (strongToolIntent || !!intentToolHint) && activeTools.length > 0 && allowToolForcing;
+          if (forceToolCall) {
             traceBuilder.setForceToolCall();
-            console.log(`   ⚡ ${choomTag} Strong tool intent detected — using tool_choice='required' on first iteration${intentToolHint ? ` (hint: ${intentToolHint})` : ''}`);
-          } else if (strongToolIntent && isGroupTurn) {
-            console.log(`   💬 ${choomTag} Group turn — skipping tool_choice='required' (conversational, false tool-intent from transcript)`);
+            console.log(`   ⚡ ${choomTag} Tool intent detected — using tool_choice='required' on first iteration${intentToolHint ? ` (hint: ${intentToolHint})` : ''}`);
+          } else if ((strongToolIntent || intentToolHint) && isGroupTurn) {
+            console.log(`   💬 ${choomTag} Group turn — not forcing tool_choice (no specific actionable intent)`);
           }
-          if (intentToolHint && activeTools.length > 0 && allowToolForcing) {
+          if (intentToolHint && activeTools.length > 0) {
             currentMessages.push({
               role: 'system',
               content: `[Tool guidance] The user's request maps to the "${intentToolHint}" tool. Call that tool directly — do NOT use other tools for this request.`,
