@@ -1000,6 +1000,25 @@ Entity state data is cached in memory with a configurable TTL (default 30 second
 
 A Python daemon that connects Chooms to Signal messaging via `signal-cli`.
 
+### Signal Commands
+
+Everything you can do from a Signal text. Text **`help`** to get this list in-app any time.
+
+| Text this | What it does |
+|-----------|--------------|
+| *(any message)* | Talks to the default Choom |
+| `Eve, …` / `Genesis: …` | Address a specific Choom by name |
+| `group: …` / `room: …` | Talk to the whole group room (the shared `defaultGroupRoomId` room) |
+| `idea: …` · `note: …` · `todo: …` · `goal: …` · `brain: …` · `capture: …` | Save straight to the **Second Brain** (memory DB) as a task. `goal:` is tagged for the goal-review. Browse everything at `/memories`. Chooms' morning briefing + goal-review surface these |
+| `remind me … at 3pm` / `remind me in 30 minutes …` | Create a reminder (persists across restarts) |
+| `what's on my calendar` · `add event …` | Calendar |
+| `add milk to groceries` | Add to a Google Tasks list |
+| `remove <Name> from <Room>` | Owner removes a Choom from a group room (history kept; re-invitable). Only fires when `<Name>` is a real Choom |
+| `show me my files` · `show files` · `show my notes` | Deliver the `.md` files/docs the Chooms queued for you |
+| *(send a voice note)* | Transcribed to text, then routed |
+| *(send a photo)* | Forwarded to Optic for vision analysis |
+| `help` · `commands` · `what can I do` | Show this list over Signal |
+
 ### How It Works
 
 1. Listens on the signal-cli JSON-RPC socket (`/run/user/1000/signal-cli/socket`)
