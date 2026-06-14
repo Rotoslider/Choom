@@ -45,11 +45,15 @@ export default class GroupChatHandler extends BaseSkillHandler {
     else if (typeof args.sisters === 'string') sisterNames = args.sisters.split(',').map(s => s.trim());
     sisterNames = sisterNames.filter(n => n && n.toLowerCase() !== caller.name.toLowerCase());
     if (sisterNames.length === 0) {
-      return this.error(toolCall, 'Name at least one sister to talk with (other than yourself).');
+      // Phrase as "is required" so the loop classifies this as a recoverable
+      // param error (not a tool failure that disables the tool after 2 tries),
+      // and tell the model EXACTLY what to add — local models routinely put the
+      // sister's name in the prose but omit the structured `sisters` array.
+      return this.error(toolCall, 'The "sisters" parameter is required: pass an array of sister names, e.g. sisters: ["Eve"]. Naming someone in the message text is not enough — add them to the sisters array (list only OTHERS, not yourself).');
     }
 
     const message = typeof args.message === 'string' ? args.message.trim() : '';
-    if (!message) return this.error(toolCall, 'Provide an opening message for the conversation.');
+    if (!message) return this.error(toolCall, 'The "message" parameter is required: provide your opening line for the conversation, in your own voice.');
 
     const rounds = Math.max(1, Math.min(MAX_ROUNDS, typeof args.rounds === 'number' ? args.rounds : 3));
 
