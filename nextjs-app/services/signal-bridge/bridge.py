@@ -196,6 +196,17 @@ class SignalBridge:
                 logger.debug("Empty message, skipping")
                 return
 
+            # Group room: "group: ..." or "room: ..." routes into the shared
+            # multi-Choom room instead of a single Choom. Same room as the web app
+            # (shared DB) — switching phone↔computer keeps context.
+            group_match = re.match(r'^\s*(?:group|room)\s*[:,]\s*(.*)$', message_text,
+                                   re.IGNORECASE | re.DOTALL)
+            if group_match:
+                group_text = group_match.group(1).strip()
+                if group_text:
+                    self._process_group_message(source, group_text)
+                return
+
             # Extract Choom name from message first (to get the cleaned message)
             choom_name, cleaned_message = MessageParser.extract_choom_name(message_text)
             logger.info(f"Parsed message - choom_name: {choom_name}, cleaned: '{cleaned_message[:100] if cleaned_message else ''}'")
@@ -287,6 +298,39 @@ class SignalBridge:
 
         except Exception as e:
             logger.error(f"Error processing message: {e}", exc_info=True)
+
+    def _process_group_message(self, source: str, message_text: str):
+        """Route a "group: ..." Signal message into the shared group room.
+
+        Streams each Choom's reply and delivers them sequentially via
+        _send_response — so every speaker gets their own voice TTS, fully
+        rendered before the next, with images attached. Same room as the web
+        app (shared DB), so context carries across devices."""
+        try:
+            from task_config import load_config as load_bridge_config
+            cfg = load_bridge_config()
+            room_id = cfg.get("defaultGroupRoomId")
+            if not room_id:
+                self._send_response(
+                    source,
+                    "No default group room is set. Open Group Rooms in the web app, "
+                    "create a room, and set it as the Signal default.",
+                    "Rooms",
+                )
+                return
+
+            logger.info(f"Routing to group room {room_id} | Message: '{message_text[:80]}'")
+
+            def on_speaker(name, content, voice_id, images):
+                # Deliver this speaker's turn immediately: text + their voice + images.
+                self._send_response(source, content, name, images)
+
+            spoke = self.choom.send_group_message(room_id, message_text, on_speaker)
+            if spoke == 0:
+                self._send_response(source, "(Everyone in the room had nothing to add.)", "Rooms")
+        except Exception as e:
+            logger.error(f"Error processing group message: {e}", exc_info=True)
+            self._send_response(source, f"Group room error: {str(e)}", "Rooms")
 
     def _check_heartbeat_response(self, choom_name: str):
         """Check if user is responding to a recent heartbeat and give bonus reward.

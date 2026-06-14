@@ -273,6 +273,148 @@ class ChoomClient:
             logger.warning(f"Failed to fetch recent conversations: {e}")
             return ""
 
+    def _build_shared_settings(self, settings: Optional[Dict] = None) -> Dict:
+        """Build the settings payload from bridge-config.json (synced from the web
+        GUI), independent of any single Choom. Used by both 1:1 chat and group
+        rooms. Per-Choom overrides (model/endpoint/imageSettings) are applied by
+        the caller (1:1) or server-side per speaker (group rooms)."""
+        from task_config import load_config as load_bridge_config
+        bridge_cfg = load_bridge_config()
+
+        weather_cfg = bridge_cfg.get("weather", {})
+        search_cfg = bridge_cfg.get("search", {})
+        image_cfg = bridge_cfg.get("imageGen", {})
+        llm_cfg = bridge_cfg.get("llm", {})
+
+        default_settings = {
+            "llm": {
+                "endpoint": config.LLM_ENDPOINT,
+                "model": llm_cfg.get("model", ""),
+                "temperature": 0.7,
+                "maxTokens": 4096,
+                "simpleTasksModel": llm_cfg.get("simpleTasksModel"),
+                "simpleTasksProviderId": llm_cfg.get("simpleTasksProviderId"),
+                "simpleTasksEnabled": llm_cfg.get("simpleTasksEnabled", False),
+            },
+            "memory": {
+                "endpoint": config.MEMORY_ENDPOINT,
+            },
+            "weather": {
+                "apiKey": weather_cfg.get("apiKey", config.OPENWEATHER_API_KEY),
+                "provider": weather_cfg.get("provider", "openweathermap"),
+                "location": weather_cfg.get("location", os.getenv("DEFAULT_WEATHER_LOCATION", "")),
+                "latitude": weather_cfg.get("latitude", float(os.getenv("DEFAULT_WEATHER_LAT", "0"))),
+                "longitude": weather_cfg.get("longitude", float(os.getenv("DEFAULT_WEATHER_LON", "0"))),
+                "useCoordinates": weather_cfg.get("useCoordinates", True),
+                "units": weather_cfg.get("units", "imperial"),
+                "cacheMinutes": weather_cfg.get("cacheMinutes", 30),
+            },
+            "search": {
+                "provider": search_cfg.get("provider", "brave" if config.BRAVE_API_KEY else "searxng"),
+                "braveApiKey": search_cfg.get("braveApiKey", config.BRAVE_API_KEY),
+                "searxngEndpoint": search_cfg.get("searxngEndpoint", os.getenv("SEARXNG_ENDPOINT", "")),
+                "maxResults": search_cfg.get("maxResults", 5),
+            },
+        }
+
+        if image_cfg:
+            default_settings["imageGen"] = image_cfg
+
+        vision_cfg = bridge_cfg.get("vision", {})
+        if vision_cfg:
+            default_settings["vision"] = vision_cfg
+        else:
+            default_settings["vision"] = {
+                "endpoint": config.LLM_ENDPOINT.replace("/v1", ""),
+                "model": "vision-model",
+                "maxTokens": 1024,
+                "temperature": 0.3,
+            }
+
+        ha_cfg = bridge_cfg.get("homeAssistant", {})
+        if ha_cfg and ha_cfg.get("baseUrl") and ha_cfg.get("accessToken"):
+            default_settings["homeAssistant"] = ha_cfg
+
+        providers_cfg = bridge_cfg.get("providers", [])
+        if providers_cfg:
+            default_settings["providers"] = providers_cfg
+
+        vision_profiles_cfg = bridge_cfg.get("visionProfiles", [])
+        if vision_profiles_cfg:
+            default_settings["visionProfiles"] = vision_profiles_cfg
+
+        if settings:
+            for key, value in settings.items():
+                if key in default_settings and isinstance(value, dict):
+                    default_settings[key].update(value)
+                else:
+                    default_settings[key] = value
+
+        return default_settings
+
+    def send_group_message(self, room_id: str, message: str, on_speaker, owner_name: str = "Donny") -> int:
+        """Send a message into a group room and stream each Choom's reply.
+
+        Calls the Next.js /api/group-chat orchestrator and invokes
+        `on_speaker(name, content, voice_id, images)` for every speaker_done
+        event — so the bridge can deliver each Choom's text + own-voice TTS +
+        images sequentially (no overlap; full render before the next speaker).
+
+        Returns the number of speakers that replied (non-PASS).
+        """
+        default_settings = self._build_shared_settings()
+        payload = {
+            "roomId": room_id,
+            "message": message,
+            "settings": default_settings,
+            "ownerName": owner_name,
+        }
+
+        response = self._make_request(
+            "POST", "/api/group-chat", json=payload, stream=True, timeout=(10, 600)
+        )
+
+        spoke = 0
+        cur_images = []  # images accumulated for the in-flight speaker
+        for line in response.iter_lines(chunk_size=8192):
+            if not line:
+                continue
+            line = line.decode('utf-8')
+            if not line.startswith('data: '):
+                continue
+            try:
+                data = json.loads(line[6:])
+            except json.JSONDecodeError:
+                continue
+            etype = data.get('type')
+            if etype == 'speaker_start':
+                cur_images = []
+            elif etype == 'speaker_image':
+                if data.get('imageUrl'):
+                    cur_images.append({'url': data.get('imageUrl'), 'id': data.get('imageId')})
+            elif etype == 'speaker_done':
+                name = data.get('speakerName')
+                content = data.get('content', '')
+                voice_id = data.get('voiceId')
+                imgs = list(cur_images)
+                if data.get('imageUrl') and not imgs:
+                    imgs.append({'url': data.get('imageUrl')})
+                cur_images = []
+                if content:
+                    spoke += 1
+                    try:
+                        on_speaker(name, content, voice_id, imgs)
+                    except Exception as cb_err:
+                        logger.error(f"Group on_speaker callback failed for {name}: {cb_err}")
+            elif etype == 'error':
+                logger.error(f"Group chat error: {data.get('error')}")
+                raise Exception(data.get('error', 'Unknown group error'))
+            elif etype == 'done':
+                break
+
+        logger.info(f"Group room {room_id}: {spoke} speaker(s) replied")
+        return spoke
+
     def send_message(self, choom_name: str, message: str, settings: Optional[Dict] = None, fresh_chat: bool = False, no_tools: bool = False, max_iterations: Optional[int] = None, is_heartbeat: bool = False, task_model_override: Optional[Dict] = None) -> ChatResponse:
         """
         Send a message to a Choom and get the response
@@ -308,89 +450,9 @@ class ChoomClient:
         else:
             chat_id = self.get_or_create_chat(choom.id)
 
-        # Load shared settings from bridge-config.json (synced from web GUI)
-        from task_config import load_config as load_bridge_config
-        bridge_cfg = load_bridge_config()
-
-        # Build settings from bridge config, falling back to hardcoded defaults
-        weather_cfg = bridge_cfg.get("weather", {})
-        search_cfg = bridge_cfg.get("search", {})
-        image_cfg = bridge_cfg.get("imageGen", {})
-
-        # Get default LLM model from bridge config (synced from GUI settings)
-        llm_cfg = bridge_cfg.get("llm", {})
-
-        default_settings = {
-            "llm": {
-                "endpoint": config.LLM_ENDPOINT,
-                "model": llm_cfg.get("model", ""),
-                "temperature": 0.7,
-                "maxTokens": 4096,
-                # Simple tasks model routing (synced from GUI settings)
-                "simpleTasksModel": llm_cfg.get("simpleTasksModel"),
-                "simpleTasksProviderId": llm_cfg.get("simpleTasksProviderId"),
-                "simpleTasksEnabled": llm_cfg.get("simpleTasksEnabled", False),
-            },
-            "memory": {
-                "endpoint": config.MEMORY_ENDPOINT,
-            },
-            "weather": {
-                "apiKey": weather_cfg.get("apiKey", config.OPENWEATHER_API_KEY),
-                "provider": weather_cfg.get("provider", "openweathermap"),
-                "location": weather_cfg.get("location", os.getenv("DEFAULT_WEATHER_LOCATION", "")),
-                "latitude": weather_cfg.get("latitude", float(os.getenv("DEFAULT_WEATHER_LAT", "0"))),
-                "longitude": weather_cfg.get("longitude", float(os.getenv("DEFAULT_WEATHER_LON", "0"))),
-                "useCoordinates": weather_cfg.get("useCoordinates", True),
-                "units": weather_cfg.get("units", "imperial"),
-                "cacheMinutes": weather_cfg.get("cacheMinutes", 30),
-            },
-            "search": {
-                "provider": search_cfg.get("provider", "brave" if config.BRAVE_API_KEY else "searxng"),
-                "braveApiKey": search_cfg.get("braveApiKey", config.BRAVE_API_KEY),
-                "searxngEndpoint": search_cfg.get("searxngEndpoint", os.getenv("SEARXNG_ENDPOINT", "")),
-                "maxResults": search_cfg.get("maxResults", 5),
-            },
-        }
-
-        # Apply imageGen settings from bridge config if present
-        if image_cfg:
-            default_settings["imageGen"] = image_cfg
-
-        # Apply vision settings from bridge config if present
-        vision_cfg = bridge_cfg.get("vision", {})
-        if vision_cfg:
-            default_settings["vision"] = vision_cfg
-        else:
-            # Fallback to same LLM endpoint with sensible defaults
-            default_settings["vision"] = {
-                "endpoint": config.LLM_ENDPOINT.replace("/v1", ""),
-                "model": "vision-model",
-                "maxTokens": 1024,
-                "temperature": 0.3,
-            }
-
-        # Apply Home Assistant settings from bridge config if present
-        ha_cfg = bridge_cfg.get("homeAssistant", {})
-        if ha_cfg and ha_cfg.get("baseUrl") and ha_cfg.get("accessToken"):
-            default_settings["homeAssistant"] = ha_cfg
-
-        # Pass providers so chat route can resolve per-Choom/project provider API keys
-        providers_cfg = bridge_cfg.get("providers", [])
-        if providers_cfg:
-            default_settings["providers"] = providers_cfg
-
-        # Pass vision profiles so heartbeat tasks get model-specific image settings
-        vision_profiles_cfg = bridge_cfg.get("visionProfiles", [])
-        if vision_profiles_cfg:
-            default_settings["visionProfiles"] = vision_profiles_cfg
-
-        # Merge with any provided settings
-        if settings:
-            for key, value in settings.items():
-                if key in default_settings and isinstance(value, dict):
-                    default_settings[key].update(value)
-                else:
-                    default_settings[key] = value
+        # Build shared settings (bridge-config.json synced from GUI) — same block
+        # used by group rooms.
+        default_settings = self._build_shared_settings(settings)
 
         # Apply Choom-specific overrides (these take priority over everything)
         if choom.llm_model:

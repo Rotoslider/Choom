@@ -32,6 +32,8 @@ model Choom {
   updatedAt     DateTime  @updatedAt
   chats         Chat[]
   images        GeneratedImage[]
+  groupParticipants GroupParticipant[]
+  groupMessages     GroupMessage[]
 }
 
 model Chat {
@@ -55,6 +57,52 @@ model Message {
   toolCalls   String?  // JSON string - Tool calls made by assistant
   toolResults String?  // JSON string - Results from tool execution
   createdAt   DateTime @default(now())
+}
+
+// ============================================================================
+// Group Chat Rooms — shared, turn-based, multi-Choom conversations
+// ============================================================================
+
+model GroupRoom {
+  id            String   @id @default(cuid())
+  title         String?
+  projectFolder String?  // Shared workspace folder, e.g. "choom_commons/rooms/<slug>"
+  autoRounds    Int      @default(0) // Max extra Choom↔Choom rounds after the first (0 = off)
+  archived      Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  participants  GroupParticipant[]
+  messages      GroupMessage[]
+}
+
+model GroupParticipant {
+  id      String    @id @default(cuid())
+  roomId  String
+  room    GroupRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  choomId String
+  choom   Choom     @relation(fields: [choomId], references: [id], onDelete: Cascade)
+  order   Int       @default(0) // Speaking order in round-robin
+  active  Boolean   @default(true)
+  scratchChatId String? // FK anchor for /api/chat group turns (history ignored)
+
+  @@unique([roomId, choomId])
+  @@index([roomId])
+}
+
+model GroupMessage {
+  id            String    @id @default(cuid())
+  roomId        String
+  room          GroupRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  role          String    // 'user' | 'assistant'
+  authorChoomId String?   // null = owner (the user); else the speaking Choom
+  author        Choom?    @relation(fields: [authorChoomId], references: [id], onDelete: SetNull)
+  authorName    String    // Display name for attribution ('Donny' / 'Eve')
+  content       String
+  toolCalls     String?   // JSON string - tool calls made during this turn
+  imageUrl      String?   // Optional attached generated image (data: URL or /api/images id)
+  createdAt     DateTime  @default(now())
+
+  @@index([roomId])
 }
 
 model GeneratedImage {

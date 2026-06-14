@@ -12,6 +12,7 @@ import {
   Blocks,
   Brain,
   Gauge,
+  Users,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
@@ -188,6 +189,16 @@ export function Sidebar({
               Activity Log
             </Button>
           )}
+
+          {/* Group Rooms */}
+          <Button
+            variant="ghost"
+            onClick={() => router.push('/rooms')}
+            className="w-full justify-start gap-2 mb-1"
+          >
+            <Users className="h-4 w-4" />
+            Group Rooms
+          </Button>
 
           {/* Memories / Second Brain */}
           <Button

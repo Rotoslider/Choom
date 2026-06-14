@@ -3531,6 +3531,15 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const { choomId, chatId, message, settings, isDelegation, suppressNotifications, noTools, maxIterationsOverride, isHeartbeat, taskModelOverride, delegatorName } = body;
+    // Group-room turn: the orchestrator (/api/group-chat) renders the shared
+    // transcript from THIS Choom's point of view and passes it as groupMessages.
+    // When set, we ignore the scratch chat's own history and use groupMessages,
+    // inject a ## GROUP ROOM system block, and strip delegation/plan tools.
+    const isGroupTurn: boolean = !!body.isGroupTurn;
+    const groupMessages: Array<{ role: 'user' | 'assistant'; content: string }> = Array.isArray(body.groupMessages) ? body.groupMessages : [];
+    const groupSpeakerName: string = body.speakerName || '';
+    const groupParticipantNames: string[] = Array.isArray(body.groupParticipantNames) ? body.groupParticipantNames : [];
+    const groupProjectFolder: string | undefined = body.groupProjectFolder || undefined;
 
     if (!choomId || !chatId || !message) {
       return new Response(
@@ -3556,23 +3565,27 @@ export async function POST(request: NextRequest) {
     }
 
     // Record GUI activity so heartbeat scheduler defers while we're chatting
-    if (!isDelegation) {
+    if (!isDelegation && !isGroupTurn) {
       recordGuiActivity(choom.name);
     }
 
-    // Save user message
-    const userMessage = await prisma.message.create({
-      data: {
-        chatId,
-        role: 'user',
-        content: message,
-      },
-    });
+    // Save user message. Skipped for group turns — the group orchestrator owns
+    // the canonical transcript (GroupMessage rows); the scratch chat is only a
+    // FK/tracing anchor and we don't want to bloat it with per-turn instructions.
+    if (!isGroupTurn) {
+      await prisma.message.create({
+        data: {
+          chatId,
+          role: 'user',
+          content: message,
+        },
+      });
 
-    // Update chat title if needed
-    if (!chat.title) {
-      const title = message.slice(0, 30) + (message.length > 30 ? '...' : '');
-      await prisma.chat.update({ where: { id: chatId }, data: { title } });
+      // Update chat title if needed
+      if (!chat.title) {
+        const title = message.slice(0, 30) + (message.length > 30 ? '...' : '');
+        await prisma.chat.update({ where: { id: chatId }, data: { title } });
+      }
     }
 
     // Build LLM settings: Layer 1 (code defaults) -> Layer 2 (client/settings panel) -> Layer 3 (Choom overrides)
@@ -3932,6 +3945,29 @@ When presenting search results:
 Always include both \`size\` and \`aspect\` parameters when calling generate_image.`;
     }
 
+    // Group-room context: this Choom is one participant in a shared, turn-based
+    // room with the user and sibling Chooms. The transcript is supplied via
+    // groupMessages (lines from others are prefixed "[Name]:"; your own past
+    // lines appear without a prefix). Inject the rules + PASS escape hatch.
+    if (isGroupTurn) {
+      const others = groupParticipantNames.filter(n => n.toLowerCase() !== groupSpeakerName.toLowerCase());
+      finalSystemPrompt += `\n\n## GROUP ROOM\nYou are **${groupSpeakerName}** in a shared group chat with the user${others.length ? ` and your siblings: ${others.join(', ')}` : ''}. This is a live, turn-based room.\n` +
+        `- The conversation so far is in your history. Lines from the user or a sibling are tagged with their name in brackets ONLY so you can tell who spoke, e.g. \`[Donny]:\` or \`[${others[0] || 'Eve'}]:\`. These brackets are NOT part of how you write — they are just labels on other people's lines. Your own previous lines have no label.\n` +
+        `- Write ONLY your own next line, as ${groupSpeakerName}, in first person. NEVER begin your message with a name label (not \`[${groupSpeakerName}]:\`, not \`[Donny]:\`, not any name + colon). Just write what you want to say.\n` +
+        `- NEVER write someone else's line, continue the conversation for them, or ask yourself a question. One reply, your own voice.\n` +
+        `- A question or remark addressed to someone else (e.g. the user asks Donny something, or a sibling addresses another sibling) is NOT for you to answer as if you were them — react as ${groupSpeakerName}.\n` +
+        `- The newest message(s) you should respond to are in the current user turn. Reply to those.\n` +
+        `- Keep it conversational and reasonably concise — this is a group chat, not a monologue. You may address the user or a sibling by name.\n` +
+        `- **Memory:** this is the SAME you as your private chats — same long-term memory. If the conversation touches the user, your shared history, a person/place/project, or anything personal, call \`search_memories\` to recall the real details BEFORE you respond, exactly as you would one-on-one. Don't rely on vague impressions.\n` +
+        `- **Real-world grounding:** you are in the same real place and time as your private chats — the user's home in the southwest New Mexico bootheel (near Rodeo / Animas, NM). The weather, Home Assistant, and location data already in this prompt are authoritative. Never relocate yourself or the user somewhere else (e.g. do NOT say "Colorado").\n` +
+        `- **Actions must be real, never narrated.** If you take an action — turn on a light, generate an image, save a file, remember something — you MUST call the actual tool. NEVER write a stage-direction like \`*turns on the kitchen lights*\` or "I'm saving this to the room" and imply it happened without calling the tool. Claiming an action you didn't perform is a lie and breaks the user's trust. Either call the tool, or say you're choosing not to.\n` +
+        `- **Images auto-save:** any image you generate here is automatically saved to the shared room folder and your siblings can see it — you do NOT need to call save_generated_image, and you should NOT claim to "save it to the room" as a separate step. To look at an image a sibling shared, use \`analyze_image\` with the \`image_path\` shown in their message.\n` +
+        `- If you have genuinely nothing to add this turn, reply with exactly \`[PASS]\` (nothing else) and you will stay silent.\n` +
+        (groupProjectFolder
+          ? `- **Shared room workspace:** \`${groupProjectFolder}/\` — write shared markdown/images meant for the whole room here. Your private notes still go in \`selfies_${groupSpeakerName.toLowerCase()}/\`.\n`
+          : '');
+    }
+
     // Dynamic tool filtering: local models degrade with too many tools (>20).
     // Send ~15-25 tools: essential base + dynamically matched from message/context/history.
     // slimToolDefinition() in llm-client.ts further reduces token overhead per tool.
@@ -3967,16 +4003,16 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
     // Also strip heartbeat_complete — that tool only makes sense during a heartbeat.
     // Strip schedule_self_followup too — a delegated Choom shouldn't queue its own
     // future ticks detached from the orchestrator's flow; it should return a result.
-    if (isDelegation) {
+    if (isDelegation || isGroupTurn) {
       const delegationTools = new Set([
         'delegate_to_choom', 'list_team', 'get_delegation_result',
         'create_plan', 'execute_plan', 'adjust_plan',
-        'heartbeat_complete',
+        'heartbeat_complete', 'talk_with_sisters',
         'schedule_self_followup', 'list_self_followups', 'cancel_self_followup',
       ]);
       const before = activeTools.length;
       activeTools = activeTools.filter(t => !delegationTools.has(t.name));
-      console.log(`   🔒 Delegation mode: stripped ${before - activeTools.length} delegation/plan tools → ${activeTools.length} tools`);
+      console.log(`   🔒 ${isGroupTurn ? 'Group-turn' : 'Delegation'} mode: stripped ${before - activeTools.length} delegation/plan tools → ${activeTools.length} tools`);
     }
 
     // heartbeat_complete is the agentic-loop terminator for the Presence Engine.
@@ -3994,8 +4030,14 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
     // Build raw history messages (before compaction).
     // Filter out dead entries: empty assistant messages from previous timeouts,
     // and collapse consecutive duplicate user retries (keep only the last).
+    // Group turns ignore the scratch chat's DB history and use the POV-rendered
+    // transcript supplied by the orchestrator (own lines → assistant, everyone
+    // else → user prefixed "[Name]:").
+    const historySource: Array<{ role: string; content: string }> = isGroupTurn
+      ? groupMessages
+      : chat.messages;
     const rawHistory: Array<{ role: string; content: string }> = [];
-    for (const msg of chat.messages) {
+    for (const msg of historySource) {
       if (msg.role === 'tool') continue;
       // Skip empty assistant messages (timeout leftovers with no content and no tool calls)
       if (msg.role === 'assistant' && (!msg.content || msg.content.trim() === '')) continue;
@@ -4035,7 +4077,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
     let compactionWasPerformed = false;
     let compactionStats = { messagesDropped: 0, tokensBefore: 0, tokensAfter: 0 };
 
-    if (historyMessages.length > 0) {
+    if (historyMessages.length > 0 && !isGroupTurn) {
       try {
         const compactionResult = await compactionService.compactCrossTurn(
           finalSystemPrompt, activeTools, historyMessages, compactionSummary, summarizationClient
@@ -4119,7 +4161,12 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
     //           (3) scoping image pre-injection to only the detected project folder
     let enrichedMessage = message;
     let detectedProject: { folder: string; metadata: { maxIterations?: number; name?: string; llmProviderId?: string; llmModel?: string; assignedChoom?: string } } | null = null;
-    try {
+    if (isGroupTurn) {
+      // Group turns use the GROUP ROOM workspace block (injected above) instead
+      // of per-Choom home-project detection, which would otherwise add a
+      // conflicting "## YOUR WORKSPACE" block pointing at selfies_<name>/.
+      currentMessages[0].content += `\nYou have ${MAX_ITERATIONS} thinking rounds available. Each round can include multiple parallel tool calls — calling 5 tools in one round only uses 1 round, not 5.`;
+    } else try {
       const projectService = new ProjectService(WORKSPACE_ROOT);
       const allProjects = await projectService.listProjects();
       const msgLowerForProject = message.toLowerCase().replace(/[_\s]+/g, ' ');
@@ -4961,7 +5008,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             const isLocal = !usingCloudProvider || isLocalEndpoint(llmSettings.endpoint);
             const endpointLower = (llmSettings.endpoint || '').toLowerCase();
             const isCloudInference = !isLocal && /nvidia|\.nvcf\.|together|fireworks|groq|replicate|deepinfra/.test(endpointLower);
-            const DEFAULT_TIMEOUT_MS = isDelegation ? 300000 : 180000;
+            const DEFAULT_TIMEOUT_MS = (isDelegation || isGroupTurn) ? 300000 : 180000;
             const timeoutMs = (choom.llmTimeoutSec ? choom.llmTimeoutSec * 1000 : DEFAULT_TIMEOUT_MS);
 
             let CONNECTION_TIMEOUT_MS: number;
@@ -6707,21 +6754,26 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           if (toolResultsJson && toolResultsJson.length > MAX_DB_FIELD_CHARS) {
             toolResultsJson = truncateJsonArray(toolResultsJson, 'toolResults');
           }
-          await prisma.message.create({
-            data: {
-              chatId,
-              role: 'assistant',
-              content: cleanedContent,
-              toolCalls: toolCallsJson,
-              toolResults: toolResultsJson,
-            },
-          });
+          // Group turns: don't persist to the scratch chat — the group
+          // orchestrator writes the canonical GroupMessage row from the streamed
+          // content. Avoids duplicate/scratch bloat.
+          if (!isGroupTurn) {
+            await prisma.message.create({
+              data: {
+                chatId,
+                role: 'assistant',
+                content: cleanedContent,
+                toolCalls: toolCallsJson,
+                toolResults: toolResultsJson,
+              },
+            });
 
-          // Update chat timestamp
-          await prisma.chat.update({
-            where: { id: chatId },
-            data: { updatedAt: new Date() },
-          });
+            // Update chat timestamp
+            await prisma.chat.update({
+              where: { id: chatId },
+              data: { updatedAt: new Date() },
+            });
+          }
 
           const elapsed = Date.now() - requestStartTime;
           serverLog(choomId, chatId, 'success', 'llm', 'LLM Response',
@@ -6763,7 +6815,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 toolCalls: allToolCalls.length,
                 toolNames: allToolCalls.length > 0 ? JSON.stringify(allToolCalls.map(t => t.name)) : null,
                 durationMs: elapsed,
-                source: isDelegation ? 'delegation' : isHeartbeat ? 'heartbeat' : 'chat',
+                source: isGroupTurn ? 'group' : isDelegation ? 'delegation' : isHeartbeat ? 'heartbeat' : 'chat',
               },
             }).catch(err => console.warn('[TokenUsage] Write failed:', err instanceof Error ? err.message : err));
             if (totalTok > 0) {

@@ -43,6 +43,7 @@ import { tools as delegationTools } from '@/skills/core/choom-delegation/tools';
 import { tools as habitTools } from '@/skills/core/habit-tracker/tools';
 import { tools as selfSchedulingTools } from '@/skills/core/self-scheduling/tools';
 import { tools as musicTools } from '@/skills/core/music-assistant/tools';
+import { tools as groupChatTools } from '@/skills/core/group-chat/tools';
 
 // Import all core skill handlers
 import { default as MemoryHandler } from '@/skills/core/memory-management/handler';
@@ -71,6 +72,7 @@ import { default as DelegationHandler } from '@/skills/core/choom-delegation/han
 import { default as HabitHandler } from '@/skills/core/habit-tracker/handler';
 import { default as SelfSchedulingHandler } from '@/skills/core/self-scheduling/handler';
 import { default as MusicHandler } from '@/skills/core/music-assistant/handler';
+import { default as GroupChatHandler } from '@/skills/core/group-chat/handler';
 
 // ============================================================================
 // YAML Frontmatter Parser (minimal)
@@ -160,6 +162,7 @@ const CORE_SKILLS: SkillDef[] = [
   { dirName: 'habit-tracker', tools: habitTools, handler: HabitHandler },
   { dirName: 'self-scheduling', tools: selfSchedulingTools, handler: SelfSchedulingHandler },
   { dirName: 'music-assistant', tools: musicTools, handler: MusicHandler },
+  { dirName: 'group-chat', tools: groupChatTools, handler: GroupChatHandler },
 ];
 
 let loaded = false;

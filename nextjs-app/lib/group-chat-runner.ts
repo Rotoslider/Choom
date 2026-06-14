@@ -1,0 +1,254 @@
+// Group-chat turn runner.
+//
+// Runs a SINGLE Choom's turn inside a group room by calling the existing
+// /api/chat endpoint with the `isGroupTurn` flag (mirrors the delegation
+// handler's internal SSE call). The shared transcript is rendered from the
+// speaker's point of view and passed as `groupMessages`, so each turn is a
+// normal agentic loop — tools, memory (companionId), workspace, and the
+// folder-ownership guard all work unchanged.
+
+import { Agent, fetch as undiciFetch } from 'undici';
+
+// Dedicated dispatcher: disable undici's body/headers timeouts so a slow local
+// model with gaps between iterations doesn't kill the SSE stream. Our own
+// AbortController is the single deadline. (Same rationale as delegation.)
+const groupDispatcher = new Agent({ bodyTimeout: 0, headersTimeout: 0 });
+
+export interface GroupTranscriptEntry {
+  authorChoomId: string | null; // null = the user/owner
+  authorName: string;
+  content: string;
+}
+
+export interface GroupSpeakerResult {
+  passed: boolean;
+  content: string;
+  imageUrl: string | null;
+  imageId: string | null;
+  toolCalls: Array<{ name: string; result?: unknown }>;
+  error?: string;
+}
+
+// A function the route uses to forward tagged SSE events to its own client.
+export type GroupSend = (event: Record<string, unknown>) => void;
+
+const PASS_RE = /^\s*\[?\s*pass\s*[.!]?\s*\]?\s*$/i;
+
+// Weak local models (e.g. Qwen) often parrot the "[Name]:" transcript-label
+// format and prefix their OWN reply with a speaker label — sometimes the wrong
+// one (e.g. Genesis writing "[Donny]: ..."). Strip any leading bracketed label
+// and any leading "OwnName:" so the saved content is clean and never pollutes
+// the transcript on later rounds. Repeats to catch stacked labels.
+export function stripSpeakerPrefix(content: string, knownNames: string[]): string {
+  let out = content.trimStart();
+  const namesAlt = knownNames
+    .filter(Boolean)
+    .map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('|');
+  // [Anything]: — the bracketed form is always a transcript artifact, never prose.
+  const bracketed = /^\s*\[[^\]\n]{1,40}\]\s*[:：]\s*/;
+  // Bare "KnownName:" at the very start (only known participant/owner names, to
+  // avoid eating legitimate prose like "Note:" or a "8:30" time).
+  const bareName = namesAlt ? new RegExp(`^\\s*(?:${namesAlt})\\s*[:：]\\s*`, 'i') : null;
+  for (let i = 0; i < 4; i++) {
+    if (bracketed.test(out)) { out = out.replace(bracketed, '').trimStart(); continue; }
+    if (bareName && bareName.test(out)) { out = out.replace(bareName, '').trimStart(); continue; }
+    break;
+  }
+  return out.trim();
+}
+
+// Render the shared transcript from one speaker's perspective:
+//   own lines  -> assistant (no name prefix)
+//   all others -> user, prefixed "[Name]:"
+// Consecutive same-role entries are merged so local models keep clean
+// user/assistant alternation.
+export function renderPov(
+  transcript: GroupTranscriptEntry[],
+  speakerChoomId: string,
+): Array<{ role: 'user' | 'assistant'; content: string }> {
+  const raw: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+  for (const m of transcript) {
+    if (!m.content || !m.content.trim()) continue;
+    if (m.authorChoomId && m.authorChoomId === speakerChoomId) {
+      raw.push({ role: 'assistant', content: m.content });
+    } else {
+      raw.push({ role: 'user', content: `[${m.authorName}]: ${m.content}` });
+    }
+  }
+  // Merge consecutive same-role messages.
+  const merged: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+  for (const entry of raw) {
+    const last = merged[merged.length - 1];
+    if (last && last.role === entry.role) {
+      last.content += `\n\n${entry.content}`;
+    } else {
+      merged.push({ ...entry });
+    }
+  }
+  return merged;
+}
+
+export async function runSpeakerTurn(opts: {
+  baseUrl: string;
+  choomId: string;
+  speakerName: string;
+  scratchChatId: string;
+  transcript: GroupTranscriptEntry[];
+  participantNames: string[];
+  projectFolder?: string | null;
+  settings: unknown;
+  timeoutMs: number;
+  send: GroupSend;
+}): Promise<GroupSpeakerResult> {
+  const {
+    baseUrl, choomId, speakerName, scratchChatId, transcript,
+    participantNames, projectFolder, settings, timeoutMs, send,
+  } = opts;
+
+  // Split the transcript so `message` carries the REAL conversational content
+  // this speaker is responding to (everything since their own last turn), while
+  // settled history goes in groupMessages. This is what makes the route's
+  // proactive memory-recall / search_memories nudges fire (they key off
+  // `message`), matching 1:1 behavior — and it stops the model echoing a
+  // "[Your turn…]" instruction, which used to be the final user message.
+  let lastSelfIdx = -1;
+  for (let i = transcript.length - 1; i >= 0; i--) {
+    if (transcript[i].authorChoomId === choomId) { lastSelfIdx = i; break; }
+  }
+  const historyPart = transcript.slice(0, lastSelfIdx + 1);
+  const newPart = transcript.slice(lastSelfIdx + 1);
+  const povMessages = renderPov(historyPart, choomId);
+  // The new content the speaker must react to (all from others → labelled).
+  const newContent = newPart
+    .filter(m => m.content && m.content.trim())
+    .map(m => `[${m.authorName}]: ${m.content}`)
+    .join('\n\n');
+  // Fallback when there is no new content (e.g. keep-going with empty tail).
+  const message = newContent || '[The room is quiet — continue the conversation as yourself if you have something to add, otherwise reply [PASS].]';
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  const result: GroupSpeakerResult = { passed: false, content: '', imageUrl: null, imageId: null, toolCalls: [] };
+
+  try {
+    let response: Awaited<ReturnType<typeof undiciFetch>>;
+    try {
+      response = await undiciFetch(`${baseUrl}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          choomId,
+          chatId: scratchChatId,
+          message,
+          settings,
+          isGroupTurn: true,
+          groupMessages: povMessages,
+          speakerName,
+          groupParticipantNames: participantNames,
+          groupProjectFolder: projectFolder || undefined,
+        }),
+        signal: controller.signal,
+        dispatcher: groupDispatcher,
+      });
+    } catch (fetchErr) {
+      clearTimeout(timeout);
+      const isAbort = (fetchErr as Error).name === 'AbortError';
+      result.error = isAbort
+        ? `${speakerName} timed out connecting to the chat API`
+        : `${speakerName} fetch error: ${(fetchErr as Error).message}`;
+      return result;
+    }
+
+    if (!response.ok) {
+      clearTimeout(timeout);
+      const errText = await response.text().catch(() => '');
+      result.error = `${speakerName} chat API error (${response.status}): ${errText.slice(0, 200)}`;
+      return result;
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) {
+      clearTimeout(timeout);
+      result.error = `No response stream from ${speakerName}`;
+      return result;
+    }
+
+    const decoder = new TextDecoder();
+    let content = '';
+    let doneContent = '';
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const data = JSON.parse(line.slice(6));
+          switch (data.type) {
+            case 'content':
+              content += data.content || '';
+              // Forward streaming tokens tagged with the speaker.
+              send({ type: 'speaker_content', speakerChoomId: choomId, speakerName, content: data.content || '' });
+              break;
+            case 'tool_call':
+              result.toolCalls.push({ name: data.toolCall?.name || 'unknown' });
+              send({ type: 'speaker_tool_call', speakerChoomId: choomId, speakerName, name: data.toolCall?.name });
+              break;
+            case 'tool_result':
+              if (result.toolCalls.length > 0) {
+                const last = result.toolCalls[result.toolCalls.length - 1];
+                const rd = data.toolResult?.result;
+                if (rd !== undefined) last.result = typeof rd === 'string' ? rd.slice(0, 500) : JSON.stringify(rd).slice(0, 500);
+              }
+              send({ type: 'speaker_tool_result', speakerChoomId: choomId, speakerName, name: data.toolResult?.name });
+              break;
+            case 'image_generated':
+              if (data.imageUrl && !result.imageUrl) { result.imageUrl = data.imageUrl; result.imageId = data.imageId || null; }
+              send({ type: 'speaker_image', speakerChoomId: choomId, speakerName, imageUrl: data.imageUrl, imageId: data.imageId });
+              break;
+            case 'retract_partial':
+              if (data.length && content.length >= data.length) content = content.slice(0, content.length - data.length);
+              break;
+            case 'done':
+              if (data.content) doneContent = data.content;
+              break;
+            case 'error':
+              result.error = data.error || 'Unknown error';
+              break;
+          }
+        } catch {
+          // skip unparseable SSE line
+        }
+      }
+    }
+
+    clearTimeout(timeout);
+    let finalContent = (doneContent || content).trim();
+    // Cut off any "[Your turn, …]" instruction the model kept writing past its
+    // own reply (it sometimes continues the script into the next turn's prompt).
+    finalContent = finalContent.split(/\[\s*your turn\b/i)[0].trim();
+    // Drop a trailing fabricated "[Name]:" line — model starting a sibling's turn.
+    finalContent = finalContent.replace(/\n+\[[^\]\n]{1,40}\]\s*[:：]\s*$/i, '').trim();
+    // Strip any leading "[Name]:" / "OwnName:" label the model parroted from the
+    // transcript format (prevents identity confusion compounding across rounds).
+    finalContent = stripSpeakerPrefix(finalContent, [...participantNames, 'Donny', 'You']);
+    if (PASS_RE.test(finalContent)) {
+      result.passed = true;
+      result.content = '';
+    } else {
+      result.content = finalContent;
+    }
+    return result;
+  } catch (streamErr) {
+    clearTimeout(timeout);
+    result.error = `${speakerName} stream error: ${(streamErr as Error).message}`;
+    // Preserve any partial content captured before the failure.
+    return result;
+  }
+}
