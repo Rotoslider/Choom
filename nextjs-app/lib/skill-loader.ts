@@ -400,6 +400,17 @@ export function loadCustomSkills(): void {
                   }
                   try {
                     const result = await fn(tc.arguments);
+                    // Plain handlers conventionally return { success: false, error }
+                    // for failures instead of throwing. Surface that as a real tool
+                    // error — otherwise the agentic loop (and the nightly doctor)
+                    // see a "success" while the model is actually getting an error
+                    // payload, so it never triggers fallback/nudge logic and the
+                    // failure is invisible in traces.
+                    if (result && typeof result === 'object' && (result as { success?: unknown }).success === false) {
+                      const r = result as { error?: unknown };
+                      return { toolCallId: tc.id, name: tc.name, result: null,
+                        error: typeof r.error === 'string' && r.error ? r.error : `${tc.name} failed` };
+                    }
                     return { toolCallId: tc.id, name: tc.name, result };
                   } catch (err) {
                     return { toolCallId: tc.id, name: tc.name, result: null,
