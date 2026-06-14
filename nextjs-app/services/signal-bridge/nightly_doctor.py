@@ -21,24 +21,55 @@ TRACES_DIR = Path(__file__).parent.parent.parent / "data" / "traces"
 REPORTS_DIR = TRACES_DIR / "reports"
 
 
+def _local_date_of(ts: Optional[str]) -> Optional[str]:
+    """Convert an ISO-8601 UTC trace timestamp to the server's LOCAL calendar
+    date (YYYY-MM-DD). Trace timestamps are written as UTC (e.g.
+    2026-06-14T17:07:24.705Z) but reports describe local days."""
+    if not ts:
+        return None
+    try:
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        return dt.astimezone().strftime("%Y-%m-%d")
+    except (ValueError, TypeError):
+        return None
+
+
 def load_traces(date_str: Optional[str] = None, lookback_days: int = 1) -> List[Dict[str, Any]]:
-    """Load trace files for a date range. Defaults to the last 24 hours.
+    """Load trace files for one or more LOCAL calendar days. Defaults to today.
+
+    Trace files are bucketed on disk by the UTC date of their timestamp, but we
+    report on LOCAL days. With a -6/-7h offset (America/Denver) a single local
+    day's traces straddle two UTC dirs — so we scan a padded ±1-day window of
+    day-dirs and then keep only the traces whose LOCAL date matches a target.
+    This stops the report from being shifted ~6h and dropping the current
+    evening's activity into "tomorrow's" dir.
 
     Each returned trace has `_trace_file` attached (relative to TRACES_DIR) so
     downstream analysis can surface drill-in pointers in the report.
     """
-    traces = []
+    traces: List[Dict[str, Any]] = []
 
+    # Target LOCAL dates we actually want in the report.
     if date_str:
-        dates = [date_str]
+        target_dates = {date_str}
     else:
-        # Load today and yesterday (traces may span midnight)
-        dates = []
-        for i in range(lookback_days):
-            d = datetime.now() - timedelta(days=i)
-            dates.append(d.strftime("%Y-%m-%d"))
+        target_dates = {
+            (datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d")
+            for i in range(lookback_days)
+        }
 
-    for ds in dates:
+    # Pad ±1 day so UTC-bucketed files for a target local day are all scanned.
+    scan_dates = set()
+    for ds in target_dates:
+        try:
+            base = datetime.strptime(ds, "%Y-%m-%d")
+        except ValueError:
+            continue
+        for off in (-1, 0, 1):
+            scan_dates.add((base + timedelta(days=off)).strftime("%Y-%m-%d"))
+
+    seen_ids = set()
+    for ds in sorted(scan_dates):
         day_dir = TRACES_DIR / ds
         if not day_dir.exists():
             continue
@@ -46,14 +77,25 @@ def load_traces(date_str: Optional[str] = None, lookback_days: int = 1) -> List[
             try:
                 with open(f, "r") as fp:
                     trace = json.load(fp)
-                    # Attach relative path so reports can point to specific traces
-                    try:
-                        trace["_trace_file"] = str(f.relative_to(TRACES_DIR))
-                    except ValueError:
-                        trace["_trace_file"] = str(f)
-                    traces.append(trace)
             except (json.JSONDecodeError, IOError) as e:
                 logger.warning(f"Failed to read trace {f}: {e}")
+                continue
+            # Keep only traces whose LOCAL date is one we're reporting on.
+            local_date = _local_date_of(trace.get("timestamp"))
+            if local_date is not None and local_date not in target_dates:
+                continue
+            # De-dupe in case the padded window picked a file up twice.
+            tid = trace.get("traceId")
+            if tid:
+                if tid in seen_ids:
+                    continue
+                seen_ids.add(tid)
+            # Attach relative path so reports can point to specific traces
+            try:
+                trace["_trace_file"] = str(f.relative_to(TRACES_DIR))
+            except ValueError:
+                trace["_trace_file"] = str(f)
+            traces.append(trace)
 
     return traces
 
@@ -124,8 +166,10 @@ def analyze_traces(traces: List[Dict[str, Any]]) -> Dict[str, Any]:
     tool_call_counts = []
     tool_success_rates = []
     nudge_counts = []
+    nudge_type_counts: Dict[str, int] = defaultdict(int)
     token_totals = []
     response_lengths = []
+    stuck_requests = 0  # requests with 4+ consecutive tool failures
 
     # Per-tool tracking
     tool_stats: Dict[str, Dict[str, int]] = {}  # tool_name -> {calls, successes, failures}
@@ -178,8 +222,12 @@ def analyze_traces(traces: List[Dict[str, Any]]) -> Dict[str, Any]:
             tool_success_rates.append(tc_success / tc_count)
 
         nudge_counts.append(t.get("nudgeCount", 0))
+        for nt in t.get("nudgeTypes", []) or []:
+            nudge_type_counts[nt] += 1
         token_totals.append(t.get("totalTokens", 0))
         response_lengths.append(t.get("responseLength", 0))
+        if t.get("consecutiveFailuresMax", 0) >= 4:
+            stuck_requests += 1
 
         if t.get("fallbackActivated"):
             fallback_count += 1
@@ -280,6 +328,16 @@ def analyze_traces(traces: List[Dict[str, Any]]) -> Dict[str, Any]:
         idx = int(len(s) * 0.95)
         return s[min(idx, len(s) - 1)]
 
+    # Global, calls-weighted tool success rate. Averaging per-request ratios
+    # (the old approach) lets a 1-call request count as much as a 50-call one,
+    # which badly skews the headline number. Weight by actual call volume.
+    total_tool_calls = sum(s["calls"] for s in tool_stats.values())
+    total_tool_successes = sum(s["successes"] for s in tool_stats.values())
+    global_success_rate = (
+        round(total_tool_successes / total_tool_calls * 100, 1)
+        if total_tool_calls else 100
+    )
+
     # Find problematic tools (>30% failure rate with at least 3 calls)
     problem_tools = []
     for tool, stats in tool_stats.items():
@@ -307,10 +365,15 @@ def analyze_traces(traces: List[Dict[str, Any]]) -> Dict[str, Any]:
     if avg_nudges > 1.5:
         anomalies.append(f"High nudge rate: avg {avg_nudges:.1f} nudges/request (models narrating instead of acting)")
 
-    # Frequent fallbacks
-    if fallback_count > 0:
-        fb_rate = fallback_count / total * 100
-        anomalies.append(f"Fallback activated {fallback_count} times ({fb_rate:.0f}%) -- primary model may be unreliable")
+    # Frequent fallbacks. Only flag when the RATE is high — a handful of
+    # fallbacks across hundreds of requests is normal (and same-model local
+    # retries now count here too), so `> 0` was pure noise.
+    fallback_rate = fallback_count / total * 100 if total else 0
+    if fallback_rate > 15:
+        anomalies.append(
+            f"High fallback rate: {fallback_rate:.0f}% of requests fell back "
+            f"({fallback_count}/{total}) -- primary model/endpoint may be flaky"
+        )
 
     # Problem tools
     for pt in problem_tools:
@@ -325,6 +388,15 @@ def analyze_traces(traces: List[Dict[str, Any]]) -> Dict[str, Any]:
     avg_iters = avg(iterations_list)
     if avg_iters > 8:
         anomalies.append(f"High avg iterations: {avg_iters:.1f} (model may be struggling)")
+
+    # Requests that got stuck retrying the same failing tool (4+ in a row).
+    if stuck_requests > 0:
+        stuck_rate = stuck_requests / total * 100
+        if stuck_rate > 5:
+            anomalies.append(
+                f"Stuck requests: {stuck_requests} ({stuck_rate:.0f}%) hit 4+ "
+                f"consecutive tool failures (model looping on a broken call)"
+            )
 
     # --- Smarter-doctor derived views ---
 
@@ -397,7 +469,7 @@ def analyze_traces(traces: List[Dict[str, Any]]) -> Dict[str, Any]:
         "tool_calls": {
             "total": sum(tool_call_counts),
             "avg_per_request": round(avg(tool_call_counts), 1),
-            "success_rate": round(avg(tool_success_rates) * 100, 1) if tool_success_rates else 100,
+            "success_rate": global_success_rate,
         },
         "tokens": {
             "avg_total": round(avg(token_totals)),
@@ -406,10 +478,13 @@ def analyze_traces(traces: List[Dict[str, Any]]) -> Dict[str, Any]:
         "behavior": {
             "nudges_total": sum(nudge_counts),
             "nudge_avg": round(avg(nudge_counts), 2),
+            "nudge_types": dict(sorted(nudge_type_counts.items(), key=lambda x: -x[1])),
             "fallback_count": fallback_count,
+            "fallback_rate": round(fallback_rate, 1),
             "compaction_count": compaction_count,
             "force_tool_count": force_tool_count,
             "plan_mode_count": plan_mode_count,
+            "stuck_requests": stuck_requests,
         },
         "error_classes": error_classes,
         "problem_tools": problem_tools,
@@ -457,10 +532,13 @@ def compute_trends(today: Dict[str, Any], history: List[Dict[str, Any]]) -> Dict
             return default
 
     # Metrics to track: path, label, "bad direction" (higher=bad / lower=bad), min_delta_pct
+    # Fallback is tracked as a RATE, not a raw count — otherwise a high-traffic
+    # day looks "worse" than a quiet one purely on volume. (Older reports that
+    # predate fallback_rate fall back to 0 via avg_of's default and are skipped.)
     metrics = [
         (["tool_calls", "success_rate"], "tool success rate", "lower", 5),
         (["iterations", "avg"], "avg iterations", "higher", 25),
-        (["behavior", "fallback_count"], "fallback count", "higher", 50),
+        (["behavior", "fallback_rate"], "fallback rate", "higher", 50),
         (["behavior", "nudge_avg"], "nudge rate", "higher", 50),
     ]
 
@@ -563,13 +641,20 @@ def format_report(report: Dict[str, Any]) -> str:
     if beh["nudges_total"] > 0:
         behavior_parts.append(f"{beh['nudges_total']} nudges")
     if beh["fallback_count"] > 0:
-        behavior_parts.append(f"{beh['fallback_count']} fallbacks")
+        behavior_parts.append(f"{beh['fallback_count']} fallbacks ({beh.get('fallback_rate', 0):.0f}%)")
     if beh["compaction_count"] > 0:
         behavior_parts.append(f"{beh['compaction_count']} compactions")
     if beh["plan_mode_count"] > 0:
         behavior_parts.append(f"{beh['plan_mode_count']} plan mode")
+    if beh.get("stuck_requests", 0) > 0:
+        behavior_parts.append(f"{beh['stuck_requests']} stuck")
     if behavior_parts:
         lines.append(f"  Behavior: {', '.join(behavior_parts)}")
+    # Nudge-type breakdown — explains WHY models needed nudging.
+    nudge_types = beh.get("nudge_types", {})
+    if nudge_types:
+        nt_parts = [f"{k}: {v}" for k, v in nudge_types.items()]
+        lines.append(f"  Nudge types: {', '.join(nt_parts)}")
 
     # Error breakdown
     ec = report.get("error_classes", {})

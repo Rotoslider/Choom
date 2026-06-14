@@ -62,6 +62,17 @@ export default class GoogleDocsHandler extends BaseSkillHandler {
             );
           }
 
+          // Shape check: real Google Drive IDs are opaque ≥25-char strings of
+          // [A-Za-z0-9_-] with no spaces. A short string or one with spaces is a
+          // document NAME (or a guess), which the Docs API answers with a cryptic
+          // 404. Catch it here and point at the lookup tools instead of guessing.
+          if (!/^[A-Za-z0-9_-]{25,}$/.test(documentId || '')) {
+            return this.error(
+              toolCall,
+              `"${documentId}" is not a valid Google Docs ID (IDs are opaque ≥25-char strings like "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms"). If you only have the document's NAME, call list_documents() (or search_drive("${documentId}")) first and pass the id from the result. Do not guess document IDs.`
+            );
+          }
+
           const result = await googleClient.readDocument(documentId);
 
           console.log(`   [docs] Read document: "${result.title}" (${result.content.length} chars)`);
@@ -87,10 +98,17 @@ export default class GoogleDocsHandler extends BaseSkillHandler {
           return this.error(toolCall, `Unknown tool: ${toolCall.name}`);
       }
     } catch (err) {
-      return this.error(
-        toolCall,
-        `Failed ${toolCall.name}: ${err instanceof Error ? err.message : 'Unknown error'}`
-      );
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      // A 404 from the Docs API means the ID is well-formed but doesn't resolve:
+      // wrong account, deleted doc, or an ID that points at a non-Doc Drive file
+      // (Sheet/PDF/folder). Tell the model how to recover instead of looping.
+      if (/\b404\b|not\s+found/i.test(msg) && (toolCall.name === 'read_document' || toolCall.name === 'append_to_document')) {
+        return this.error(
+          toolCall,
+          `${toolCall.name} got a 404 — that ID doesn't resolve to a Google Doc on this account. It may be deleted, owned by another account, or actually a Sheet/PDF/folder (not a Doc). Call list_documents() to get a valid id, or search_drive("<name>") and check the result's mimeType is "application/vnd.google-apps.document". Do not retry the same id.`
+        );
+      }
+      return this.error(toolCall, `Failed ${toolCall.name}: ${msg}`);
     }
   }
 }

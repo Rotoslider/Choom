@@ -338,6 +338,23 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
             const updatedEntity = result.find(e => e.entity_id === entityId);
             const newState = updatedEntity?.state || 'unknown';
             const name = updatedEntity ? String(updatedEntity.attributes.friendly_name || entityId) : entityId;
+            // PTZ preset selects are WRITE-ONLY on Reolink/HA: the command moves
+            // the camera, but HA never reads the active preset back, so the
+            // entity state stays "unknown". Reporting "unknown" makes Chooms
+            // think the move failed and retry. Echo the option we just set as the
+            // confirmed position and explain the quirk so they stop second-guessing.
+            if (isPtzPreset && (newState === 'unknown' || newState === 'unavailable')) {
+              const requested = serviceData?.option ? String(serviceData.option) : undefined;
+              return this.success(toolCall, {
+                success: true,
+                entity_id: entityId,
+                friendly_name: name,
+                service_called: `${domain}.${service}`,
+                moved_to: requested,
+                new_state: requested ?? newState,
+                note: `Camera moved to "${requested}". The select entity reports state "unknown" because Reolink/HA does not read the active preset back — this is NORMAL and does NOT mean the move failed. Do not re-select or call ha_get_state to "confirm"; trust this success. To see the new view, call ha_get_camera_snapshot.`,
+              });
+            }
             return this.success(toolCall, {
               success: true,
               entity_id: entityId,

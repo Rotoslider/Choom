@@ -41,13 +41,13 @@ export const tools: ToolDefinition[] = [
   {
     name: 'send_email',
     description:
-      'Send a new email IMMEDIATELY. Only use this when the user explicitly says "send". If the user says "draft", "compose", "write", or "prepare" an email, use draft_email instead. This tool sends instantly and CANNOT be undone.',
+      'Send a new email IMMEDIATELY to a REAL external person. Only use when the user explicitly says "send". For "draft"/"compose"/"write"/"prepare", use draft_email. Sends instantly and CANNOT be undone. NEVER email a sibling Choom or Donny — there are no email addresses for them; use delegate_to_choom / a workspace_write_file letter for siblings, and send_notification (Signal) for Donny. Do NOT invent addresses — made-up ones bounce out of Donny\'s real Gmail.',
     parameters: {
       type: 'object',
       properties: {
         to: {
           type: 'string',
-          description: 'Recipient email address',
+          description: 'Recipient email address — must be a real, verified address. If unsure, use search_contacts first. Never guess or fabricate addresses.',
         },
         subject: {
           type: 'string',

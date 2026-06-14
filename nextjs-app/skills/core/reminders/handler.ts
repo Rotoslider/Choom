@@ -70,6 +70,18 @@ export default class RemindersHandler extends BaseSkillHandler {
       // Clean up text: strip stray time abbreviations like "1.m.", "a.m.", "p.m."
       text = text.replace(/\b\d+\.m\.\s*/gi, '').replace(/\b[ap]\.m\.\s*/gi, '').trim();
 
+      // Guardrail: a "reminder" whose text is addressed to the Choom itself
+      // ("remind myself…", "note to self…") is almost always meant to be a
+      // self-followup, not a Signal message to Donny — sending it as a reminder
+      // just spams the user. Redirect to schedule_self_followup. Conservative:
+      // only fires on explicit self-reference, never on "remind me to …".
+      if (/\b(?:remind\s+myself|note\s+to\s+self|for\s+myself|follow\s*up\s+with\s+myself)\b/i.test(text)) {
+        return this.error(
+          toolCall,
+          `This reads as a note to yourself, but create_reminder sends a Signal message to Donny. To give your future self a fresh turn instead, use schedule_self_followup(delay_minutes=…, prompt="…"). If you really did mean to ping Donny, rephrase without "myself".`
+        );
+      }
+
       // AM/PM cross-check: if the user's message explicitly says "pm" but the LLM
       // sent "AM" (or vice versa), correct it. LLMs frequently confuse AM/PM.
       if (timeStr && userMessage) {
@@ -93,35 +105,64 @@ export default class RemindersHandler extends BaseSkillHandler {
         remindAt = new Date(Date.now() + minutesFromNow * 60_000);
       } else if (timeStr) {
         const now = new Date();
-        // Match "3:00 PM", "3:00PM", "3:00 pm"
-        const match12 = timeStr.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
-        // Match "15:00"
-        const match24 = timeStr.match(/^(\d{1,2}):(\d{2})$/);
-        // Match bare "4pm", "4 PM", "4PM", "4 am" (no colon)
-        const matchBare = timeStr.match(/^(\d{1,2})\s*(AM|PM)$/i);
 
+        // Normalize: drop timezone abbreviations (MDT/MST/UTC/…) and a leading
+        // "at "/"on "/"by ". Chooms frequently send a FULL datetime such as
+        // "2026-06-14 09:00 AM MDT" — the old parser only accepted a bare
+        // time-of-day and threw "Could not parse time", silently failing.
+        let s = timeStr.trim()
+          .replace(/\b(?:MDT|MST|MT|PDT|PST|PT|EDT|EST|ET|CDT|CST|CT|UTC|GMT|Z)\b/gi, '')
+          .replace(/^(?:at|on|by)\s+/i, '')
+          .trim();
+
+        // Pull out an explicit calendar date if present (ISO YYYY-MM-DD or M/D[/Y]).
+        // When a date is given we honor it exactly (no "bump to tomorrow").
+        let yr: number | undefined, mo: number | undefined, day: number | undefined;
+        const iso = s.match(/(\d{4})-(\d{2})-(\d{2})/);
+        const us = s.match(/\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/);
+        if (iso) {
+          yr = parseInt(iso[1]); mo = parseInt(iso[2]) - 1; day = parseInt(iso[3]);
+          s = s.replace(iso[0], ' ');
+        } else if (us) {
+          mo = parseInt(us[1]) - 1; day = parseInt(us[2]);
+          yr = us[3] ? (us[3].length === 2 ? 2000 + parseInt(us[3]) : parseInt(us[3])) : now.getFullYear();
+          s = s.replace(us[0], ' ');
+        }
+        // Drop an ISO "T" separator ("2026-06-14T09:00" → "09:00") and collapse space.
+        s = s.replace(/\bT(?=\d)/i, ' ').replace(/\s+/g, ' ').trim();
+
+        // Parse the time-of-day from whatever remains.
+        const match12 = s.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+        const match24 = s.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+        const matchBare = s.match(/(\d{1,2})\s*(AM|PM)/i);
+
+        let hours: number, minutes: number;
         if (match12) {
-          let hours = parseInt(match12[1]);
-          const minutes = parseInt(match12[2]);
+          hours = parseInt(match12[1]); minutes = parseInt(match12[2]);
           const period = match12[3].toUpperCase();
           if (period === 'PM' && hours !== 12) hours += 12;
           if (period === 'AM' && hours === 12) hours = 0;
-          remindAt = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes);
         } else if (matchBare) {
-          let hours = parseInt(matchBare[1]);
+          hours = parseInt(matchBare[1]); minutes = 0;
           const period = matchBare[2].toUpperCase();
           if (period === 'PM' && hours !== 12) hours += 12;
           if (period === 'AM' && hours === 12) hours = 0;
-          remindAt = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, 0);
         } else if (match24) {
-          const hours = parseInt(match24[1]);
-          const minutes = parseInt(match24[2]);
-          remindAt = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes);
+          hours = parseInt(match24[1]); minutes = parseInt(match24[2]);
         } else {
-          throw new Error(`Could not parse time: "${timeStr}". Use format like "3:00 PM", "4pm", or "15:00".`);
+          throw new Error(`Could not parse time: "${timeStr}". Use a time like "3:00 PM", "4pm", or "15:00" — optionally with a date like "2026-06-14 9:00 AM". For "in N minutes", pass minutes_from_now instead.`);
         }
 
-        if (remindAt.getTime() <= now.getTime()) {
+        const hasExplicitDate = day !== undefined;
+        remindAt = new Date(
+          yr ?? now.getFullYear(),
+          mo ?? now.getMonth(),
+          day ?? now.getDate(),
+          hours, minutes,
+        );
+        // Only roll a bare time-of-day forward to tomorrow when it's already
+        // past today. An explicit date is honored as-is.
+        if (!hasExplicitDate && remindAt.getTime() <= now.getTime()) {
           remindAt.setDate(remindAt.getDate() + 1);
         }
       } else {

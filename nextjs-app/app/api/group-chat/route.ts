@@ -161,6 +161,12 @@ export async function POST(request: NextRequest) {
         const maxRounds = continueRun
           ? Math.max(1, roundsOverride ?? room.autoRounds)
           : 1 + Math.max(0, room.autoRounds);
+        // Settle gap between consecutive turns: every Choom usually shares one
+        // local model, so firing back-to-back large-context requests at the same
+        // LM Studio endpoint can make it return an empty completion (KV-cache
+        // churn). A short pause lets the server settle between speakers and cuts
+        // down the spurious cloud fallbacks. Skipped before the very first turn.
+        let priorTurnRan = false;
         for (let round = 0; round < maxRounds && !cancelled; round++) {
           // Round 0 honors mentions; auto-rounds include all active participants.
           const speakers = round === 0 ? firstRoundSpeakers : activeParticipants;
@@ -168,6 +174,8 @@ export async function POST(request: NextRequest) {
 
           for (const p of speakers) {
             if (cancelled) break;
+            if (priorTurnRan) await new Promise(res => setTimeout(res, 800));
+            priorTurnRan = true;
             const scratchChatId = await ensureScratchChat(p);
             send({
               type: 'speaker_start',

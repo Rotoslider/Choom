@@ -4415,7 +4415,9 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
       : defaultLLMSettings.endpoint;
 
     // Build fallback model configurations (tried in order if primary times out or errors)
-    type FallbackConfig = { model: string; providerId: string | null; label: string };
+    // retryDelayMs: when set, the fallback loop sleeps this long before the attempt —
+    // used by the same-model local retry so the local server can settle.
+    type FallbackConfig = { model: string; providerId: string | null; label: string; retryDelayMs?: number };
     const fallbackConfigs: FallbackConfig[] = [];
 
     // When a task override is active (heartbeat/cron using a different model than the
@@ -4912,6 +4914,28 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             }
           }
 
+          // Same-model local retry: when the primary is a LOCAL model, an empty
+          // response (200 OK, 0 chars, no tool calls) is almost always a transient
+          // server hiccup — common under back-to-back, large-context group-chat load
+          // where LM Studio churns its KV cache. Escalating straight to a cloud
+          // fallback (NVIDIA, etc.) is wrong when every Choom shares one local model.
+          // Prepend a retry of the SAME local model as fallback #0 (with a short
+          // settle delay) so we give the local server a second chance before paying
+          // for — and waiting on — a cloud provider. Skipped when a task override
+          // already prepended the primary (heartbeat/cron) to avoid a double retry.
+          {
+            const primaryIsLocal = !usingCloudProvider || isLocalEndpoint(llmSettings.endpoint);
+            if (primaryIsLocal && !taskOverrideActive) {
+              fallbackConfigs.unshift({
+                model: llmSettings.model,
+                providerId: (resolvedProvider && resolvedProvider !== 'local') ? resolvedProvider : null,
+                label: `local/${llmSettings.model} (retry)`,
+                retryDelayMs: 1500,
+              });
+              console.log(`   🔁 ${choomTag} Prepended same-model local retry as fallback #0 (local primary — empty responses retry before cloud escalation)`);
+            }
+          }
+
           // If plan fully succeeded, allow some follow-up iterations for summary, cleanup,
           // and handling incomplete delegations. Don't cap too aggressively — delegation
           // results are often partial and the orchestrator needs room to continue work.
@@ -5355,6 +5379,13 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                   // Log fallback switch server-side only — don't send as content
                   // (it was leaking to Signal messages and TTS audio)
                   send({ type: 'status', content: `Switching to ${fb.label}` });
+
+                  // Let a flaky local server settle before a same-model retry,
+                  // so we don't immediately re-hit it mid-churn.
+                  if (fb.retryDelayMs) {
+                    console.log(`   ⏳ ${choomTag} Settling ${fb.retryDelayMs}ms before retry...`);
+                    await new Promise(res => setTimeout(res, fb.retryDelayMs));
+                  }
 
                   let fbInactivityTimer: ReturnType<typeof setTimeout> = undefined!;
                   try {
