@@ -5054,6 +5054,13 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
 
             // Stream LLM response
             let iterationContent = '';
+            // qwen3.6 (enableThinking=false) streams its WHOLE reply through
+            // delta.reasoning_content; tool calls get salvaged from it but the
+            // conversational PROSE was being discarded as "monologue" → empty turn
+            // → false fallback cascade (this is why tool-heavy 1:1 works but a
+            // conversational room reply vanished). Buffer that prose so we can use
+            // it as the reply when the turn produced no normal content and no tool call.
+            let reasoningProse = '';
             let toolCallsAccumulator = new Map<
               number,
               { id: string; name: string; arguments: string }
@@ -5295,6 +5302,12 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                             send({ type: 'content', content: visible });
                           }
                         }
+                      } else {
+                        // Reasoning-channel prose with thinking OFF: for qwen3.6 this
+                        // IS the reply, not chain-of-thought. Buffer it; salvaged after
+                        // the stream ONLY if the turn produced no normal content and no
+                        // tool call (so tool turns are completely unaffected).
+                        reasoningProse += visible;
                       }
                     }
                   } else if (choice.delta.content.length > 0) {
@@ -5360,7 +5373,19 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 toolCallXmlFilter.getCaptured().length > 0 ||
                 jsonToolCallFilter.getCaptured().length > 0 ||
                 gemmaToolCallFilter.getCaptured().length > 0;
-              if (!iterationContent.trim() && !hasToolCalls && fallbackAttempt < fallbackConfigs.length) {
+              // Salvage: qwen3.6 routes its whole reply through reasoning_content.
+              // If the turn produced no normal content and no tool call but DID stream
+              // reasoning-channel prose, that prose IS the reply (e.g. a conversational
+              // group turn) — use it instead of declaring "empty" and firing the
+              // fallback chain. Tool turns are unaffected (they have a tool call, so
+              // this branch is skipped). This is the actual cause of rooms going silent.
+              if (!iterationContent.trim() && !hasToolCalls && reasoningProse.trim()) {
+                iterationContent = reasoningProse.trim();
+                if (!bufferForDedup) {
+                  send({ type: 'content', content: iterationContent });
+                }
+                console.log(`   💬 ${choomTag} Salvaged reply from reasoning_content channel (${iterationContent.length} chars) — not an empty response`);
+              } else if (!iterationContent.trim() && !hasToolCalls && fallbackAttempt < fallbackConfigs.length) {
                 throw new Error('Empty response from model (0 characters, no tool calls)');
               }
             } catch (timeoutError) {
