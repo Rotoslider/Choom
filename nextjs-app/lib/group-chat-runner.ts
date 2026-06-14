@@ -139,13 +139,14 @@ export async function runSpeakerTurn(opts: {
   transcript: GroupTranscriptEntry[];
   participantNames: string[];
   projectFolder?: string | null;
+  roomTopic?: string;
   settings: unknown;
   timeoutMs: number;
   send: GroupSend;
 }): Promise<GroupSpeakerResult> {
   const {
     baseUrl, choomId, speakerName, scratchChatId, transcript,
-    participantNames, projectFolder, settings, timeoutMs, send,
+    participantNames, projectFolder, roomTopic, settings, timeoutMs, send,
   } = opts;
 
   // Split the transcript so `message` carries the REAL conversational content
@@ -195,6 +196,7 @@ export async function runSpeakerTurn(opts: {
           speakerName,
           groupParticipantNames: participantNames,
           groupProjectFolder: projectFolder || undefined,
+          groupRoomTopic: roomTopic || undefined,
           groupRecentImages: recentImagePaths,
         }),
         signal: controller.signal,

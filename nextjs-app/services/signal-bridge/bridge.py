@@ -207,6 +207,19 @@ class SignalBridge:
                     self._process_group_message(source, group_text)
                 return
 
+            # Help / list-commands — quick reference of what works over Signal.
+            help_response = self._handle_help_command(message_text)
+            if help_response:
+                self._send_response(source, help_response, None)
+                return
+
+            # "remove <Choom> from <Room>" — owner removes a Choom from a group room.
+            # Only fires when <Choom> is a real Choom name (so it won't hijack normal chat).
+            remove_response = self._handle_remove_from_room(message_text)
+            if remove_response:
+                self._send_response(source, remove_response, None)
+                return
+
             # Extract Choom name from message first (to get the cleaned message)
             choom_name, cleaned_message = MessageParser.extract_choom_name(message_text)
             logger.info(f"Parsed message - choom_name: {choom_name}, cleaned: '{cleaned_message[:100] if cleaned_message else ''}'")
@@ -371,6 +384,110 @@ class SignalBridge:
         r'|files?(?:\s+please|\s+pls)?)\s*[.!?]*\s*$',
         re.IGNORECASE,
     )
+
+    def _handle_help_command(self, text: str) -> Optional[str]:
+        """Whole-message 'help'/'commands'/'what can I do' → list Signal capabilities."""
+        if not text:
+            return None
+        t = text.strip().lower().rstrip('?!.')
+        triggers = {
+            'help', 'commands', 'command', 'menu', 'options', 'list commands',
+            'what can i do', 'what can you do', 'what can i say', 'how do i use this',
+        }
+        if t not in triggers:
+            return None
+        default_choom = config.DEFAULT_CHOOM_NAME
+        try:
+            names = ', '.join(sorted(self.choom.chooms.keys())) if getattr(self.choom, 'chooms', None) else default_choom
+        except Exception:
+            names = default_choom
+        return (
+            "Here's what you can do here via Signal:\n\n"
+            f"• Just type a message — talks to {default_choom}.\n"
+            "• Start with a name to reach a specific one, e.g. \"Eve, ...\" or \"Genesis: ...\".\n"
+            f"   (Your Chooms: {names})\n"
+            "• \"group: ...\" or \"room: ...\" — talk to the whole group room.\n"
+            "• \"remind me to ... at 3pm\" — set a reminder.\n"
+            "• \"what's on my calendar\" / \"add event ...\" — calendar.\n"
+            "• \"add milk to groceries\" — add to a list.\n"
+            "• \"remove <Name> from <Room>\" — take a Choom out of a group room "
+            "(their history is kept; you can invite them back).\n"
+            "• Send a voice note — it gets transcribed.\n"
+            "• Send a photo — they can look at it.\n"
+            "• \"show files\" — get any files they queued up for you.\n"
+            "• \"help\" — show this list again."
+        )
+
+    def _handle_remove_from_room(self, text: str) -> Optional[str]:
+        """'remove <Choom> from <Room>' → set that Choom inactive in the room.
+        Returns None (falls through to normal routing) unless the target is a
+        real Choom name, so it can't hijack ordinary messages."""
+        if not text:
+            return None
+        m = re.match(
+            r'^\s*(?:remove|kick|drop|take)\s+(.+?)\s+(?:from|out of)\s+(?:the\s+)?(.+?)\s*[.!]*$',
+            text.strip(), re.IGNORECASE,
+        )
+        if not m:
+            return None
+        target_name = m.group(1).strip()
+        room_query = m.group(2).strip()
+
+        # Guard: only treat as a removal command when the target is a known Choom.
+        try:
+            known = {n.lower() for n in self.choom.chooms.keys()} if getattr(self.choom, 'chooms', None) else set()
+        except Exception:
+            known = set()
+        if target_name.lower() not in known:
+            return None
+
+        def _norm(s: str) -> str:
+            return re.sub(r'[^a-z0-9]+', ' ', (s or '').lower().replace('the', '')).strip()
+
+        try:
+            rooms = self.choom._make_request("GET", "/api/group-chats").json()
+        except Exception as e:
+            logger.error(f"remove-from-room: list failed: {e}")
+            return "I couldn't reach the rooms list — check the app/bridge logs."
+
+        rq = _norm(room_query)
+        room = None
+        for r in rooms:
+            title = r.get('title') or ' & '.join(
+                p['choom']['name'] for p in r.get('participants', []) if p.get('active'))
+            t = _norm(title)
+            if t and (rq in t or t in rq):
+                room = r
+                break
+        if not room:
+            available = ', '.join((r.get('title') or '(unnamed)') for r in rooms) or '(none)'
+            return f"I couldn't find a room called \"{room_query}\". Rooms: {available}."
+
+        active = [p for p in room.get('participants', []) if p.get('active')]
+        target = next((p for p in active if p['choom']['name'].lower() == target_name.lower()), None)
+        room_title = room.get('title') or room_query
+        if not target:
+            members = ', '.join(p['choom']['name'] for p in active) or '(none)'
+            return f"{target_name} isn't in \"{room_title}\". Members: {members}."
+
+        remaining = [p for p in active if p['choomId'] != target['choomId']]
+        if not remaining:
+            return f"\"{room_title}\" would be empty — archive or delete it instead."
+
+        try:
+            self.choom._make_request(
+                "PUT", f"/api/group-chats/{room['id']}",
+                json={"participants": [
+                    {"choomId": p['choomId'], "order": i, "active": True}
+                    for i, p in enumerate(remaining)
+                ]},
+            )
+        except Exception as e:
+            logger.error(f"remove-from-room: PUT failed: {e}")
+            return "I found the room but couldn't update it — check the app logs."
+
+        return (f"Removed {target['choom']['name']} from \"{room_title}\". "
+                "Their messages stay in the history; invite them back anytime.")
 
     def _is_show_files_trigger(self, text: str) -> bool:
         if not text:

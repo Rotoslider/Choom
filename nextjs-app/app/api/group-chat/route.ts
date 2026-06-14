@@ -108,6 +108,14 @@ export async function POST(request: NextRequest) {
     return new Response(JSON.stringify({ error: 'Room has no active participants' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
   }
 
+  // Pinned room topic (one-liner injected into every turn). Read via raw SQL so
+  // it works without a Prisma client regeneration for the new `topic` column.
+  let roomTopic: string | undefined;
+  try {
+    const rows = await prisma.$queryRaw<Array<{ topic: string | null }>>`SELECT topic FROM GroupRoom WHERE id = ${roomId}`;
+    roomTopic = rows?.[0]?.topic || undefined;
+  } catch { /* topic column optional */ }
+
   const participantNames = activeParticipants.map(p => p.choom.name);
   const initiator = initiatorChoomId ? activeParticipants.find(p => p.choomId === initiatorChoomId) : null;
 
@@ -144,6 +152,11 @@ export async function POST(request: NextRequest) {
   // jump in). Checked between speakers so we stop the sequence promptly instead
   // of running every remaining auto-round in the background.
   let cancelled = false;
+  // When a CHOOM starts a room on her own (e.g. during a self-scheduled wakeup),
+  // Donny isn't watching — ping him once so he can hop into the room. Skipped for
+  // owner-driven runs (he's already in /rooms) and keep-going.
+  let notifiedOwner = false;
+  const shouldNotifyOwner = !!initiator && !continueRun;
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -193,6 +206,7 @@ export async function POST(request: NextRequest) {
               transcript,
               participantNames,
               projectFolder: room.projectFolder,
+              roomTopic,
               settings,
               timeoutMs: TURN_TIMEOUT_MS,
               send,
@@ -233,6 +247,23 @@ export async function POST(request: NextRequest) {
             // (and later rounds) see what was just said.
             transcript.push({ authorChoomId: p.choomId, authorName: p.choom.name, content: savedContent });
             anySpoke = true;
+
+            // First real reply of a Choom-initiated run → ping Donny via Signal so
+            // he knows the room lit up and can join. Fire-and-forget; never blocks.
+            if (shouldNotifyOwner && !notifiedOwner) {
+              notifiedOwner = true;
+              const roomName = room.title || participantNames.join(' & ');
+              const others = participantNames.join(' & ');
+              fetch(`${baseUrl}/api/notifications`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  choomId: initiator!.choomId,
+                  message: `${others} are chatting in "${roomName}". Open Group Rooms to listen in or join.`,
+                  includeAudio: false,
+                }),
+              }).catch(() => { /* notification is best-effort */ });
+            }
 
             send({
               type: 'speaker_done',

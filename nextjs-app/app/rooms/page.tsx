@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, Plus, Users, Trash2, Loader2, Smartphone, Square, Minus, Play, Download } from 'lucide-react';
+import { ArrowLeft, Plus, Users, Trash2, Loader2, Smartphone, Square, Minus, Play, Download, Archive, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -70,6 +70,7 @@ export default function RoomsPage() {
   const [currentRoomId, setCurrentRoomId] = useState<string | null>(null);
   const [messages, setMessages] = useState<RoomMessage[]>([]);
   const [createOpen, setCreateOpen] = useState(false);
+  const [managingMembers, setManagingMembers] = useState(false);
   const [signalRoomId, setSignalRoomId] = useState<string | null>(null);
   // Per-speaker live state during a turn
   const [activeSpeaker, setActiveSpeaker] = useState<{ name: string; choomId: string; status: string } | null>(null);
@@ -353,6 +354,32 @@ export default function RoomsPage() {
     if (currentRoomId === id) setCurrentRoomId(null);
   }, [currentRoomId]);
 
+  // Archive: hide the room from the list but KEEP its history on disk (unlike delete).
+  const handleArchiveRoom = useCallback(async (id: string) => {
+    if (!confirm('Archive this room? It will be hidden from the list, but the conversation history is kept and you can restore it later.')) return;
+    await fetch(`/api/group-chats/${id}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ archived: true }),
+    });
+    setRooms(prev => prev.filter(r => r.id !== id));
+    if (currentRoomId === id) setCurrentRoomId(null);
+  }, [currentRoomId]);
+
+  // Remove a Choom from a room (owner action). The Choom's past messages stay in
+  // the history and they can be invited back later. A room must keep ≥1 member.
+  const handleRemoveParticipant = useCallback(async (roomId: string, choomId: string, name: string) => {
+    const room = rooms.find(r => r.id === roomId);
+    if (!room) return;
+    const remaining = room.participants.filter(p => p.active && p.choomId !== choomId);
+    if (remaining.length === 0) { alert('A room needs at least one member — delete or archive it instead.'); return; }
+    if (!confirm(`Remove ${name} from this room? Their messages stay in the history and they can be invited back.`)) return;
+    setRooms(prev => prev.map(r => r.id === roomId ? { ...r, participants: remaining } : r));
+    await fetch(`/api/group-chats/${roomId}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ participants: remaining.map((p, i) => ({ choomId: p.choomId, order: i, active: true })) }),
+    });
+  }, [rooms]);
+
   return (
     <div className="flex h-screen bg-background">
       {/* Room list column */}
@@ -411,14 +438,14 @@ export default function RoomsPage() {
           <>
             <div className="px-6 py-3 border-b border-border flex items-center gap-3">
               <div className="flex -space-x-2">
-                {currentRoom.participants.map(p => (
+                {currentRoom.participants.filter(p => p.active).map(p => (
                   <AvatarDisplay key={p.id} name={p.choom.name} avatarUrl={p.choom.avatarUrl} size="sm" />
                 ))}
               </div>
               <div className="flex-1">
-                <p className="font-semibold">{currentRoom.title || currentRoom.participants.map(p => p.choom.name).join(', ')}</p>
+                <p className="font-semibold">{currentRoom.title || currentRoom.participants.filter(p => p.active).map(p => p.choom.name).join(', ')}</p>
                 <p className="text-xs text-muted-foreground">
-                  Turn order: {currentRoom.participants.map(p => p.choom.name).join(' → ')}
+                  Turn order: {currentRoom.participants.filter(p => p.active).map(p => p.choom.name).join(' → ')}
                 </p>
               </div>
               {/* Auto-rounds stepper — adjustable on the fly (applies to next turn) */}
@@ -453,7 +480,34 @@ export default function RoomsPage() {
                 <Smartphone className="h-4 w-4" />
                 {signalRoomId === currentRoom.id ? 'Signal room' : 'Set as Signal room'}
               </Button>
+              <Button variant={managingMembers ? 'default' : 'ghost'} size="icon" className="h-8 w-8"
+                onClick={() => setManagingMembers(v => !v)}
+                title="Manage members — remove a Choom from this room (they keep their history and can be invited back)">
+                <Users className="h-4 w-4" />
+              </Button>
+              <Button variant="ghost" size="icon" className="h-8 w-8"
+                onClick={() => handleArchiveRoom(currentRoom.id)}
+                title="Archive this room (hide it but keep the history)">
+                <Archive className="h-4 w-4" />
+              </Button>
             </div>
+
+            {managingMembers && (
+              <div className="px-6 py-2 border-b border-border bg-muted/30 flex flex-wrap items-center gap-2">
+                <span className="text-xs text-muted-foreground mr-1">Members (click ✕ to remove):</span>
+                {currentRoom.participants.filter(p => p.active).map(p => (
+                  <span key={p.id} className="inline-flex items-center gap-1 rounded-full border border-border bg-background px-2 py-0.5 text-xs">
+                    {p.choom.name}
+                    <button
+                      onClick={() => handleRemoveParticipant(currentRoom.id, p.choomId, p.choom.name)}
+                      title={`Remove ${p.choom.name}`}
+                      className="text-muted-foreground hover:text-destructive">
+                      <X className="h-3 w-3" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
 
             <ScrollArea className="flex-1">
               <div className="max-w-3xl mx-auto px-6 py-4 space-y-4">

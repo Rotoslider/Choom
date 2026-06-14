@@ -66,6 +66,7 @@ model Message {
 model GroupRoom {
   id            String   @id @default(cuid())
   title         String?
+  topic         String?  // Pinned one-line purpose, injected into every turn's prompt
   projectFolder String?  // Shared workspace folder, e.g. "choom_commons/rooms/<slug>"
   autoRounds    Int      @default(0) // Max extra Choom↔Choom rounds after the first (0 = off)
   archived      Boolean  @default(false)

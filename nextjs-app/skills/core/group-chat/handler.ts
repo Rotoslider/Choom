@@ -3,13 +3,47 @@ import type { ToolCall, ToolResult } from '@/lib/types';
 import prisma from '@/lib/db';
 import { Agent, fetch as undiciFetch } from 'undici';
 
-const TOOL_NAMES = new Set(['talk_with_sisters', 'list_my_rooms']);
+const TOOL_NAMES = new Set([
+  'talk_with_sisters', 'list_my_rooms', 'leave_room', 'rename_room', 'set_room_topic',
+]);
 const MAX_ROUNDS = 10;
 const dispatcher = new Agent({ bodyTimeout: 0, headersTimeout: 0 });
+
+// Loose title normalization for matching a spoken room name ("the Tune Lounge")
+// against a stored title — drop "the", collapse punctuation to spaces.
+function normTitle(s: string): string {
+  return (s || '').toLowerCase().replace(/\bthe\b/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+type RoomWithParticipants = Awaited<ReturnType<typeof prisma.groupRoom.findMany>>[number] & {
+  participants: Array<{ id: string; choomId: string; order: number; active: boolean; choom?: { name: string } }>;
+};
 
 export default class GroupChatHandler extends BaseSkillHandler {
   canHandle(toolName: string): boolean {
     return TOOL_NAMES.has(toolName);
+  }
+
+  // Find the (active, non-archived) room the caller means: by loose name match,
+  // or — when no name is given — their single room if they're only in one.
+  private async findMyRoom(callerId: string, roomQuery?: string): Promise<{ room: RoomWithParticipants | null; candidates: RoomWithParticipants[] }> {
+    const mine = (await prisma.groupRoom.findMany({
+      where: { archived: false, participants: { some: { choomId: callerId, active: true } } },
+      include: { participants: { include: { choom: true } } },
+      orderBy: { updatedAt: 'desc' },
+    })) as unknown as RoomWithParticipants[];
+    if (mine.length === 0) return { room: null, candidates: [] };
+    if (roomQuery && roomQuery.trim()) {
+      const q = normTitle(roomQuery);
+      const hit = mine.find(r => { const t = normTitle(r.title || ''); return t && (t.includes(q) || q.includes(t)); });
+      return { room: hit || null, candidates: mine };
+    }
+    // No name given: use it only if it's unambiguous.
+    return { room: mine.length === 1 ? mine[0] : null, candidates: mine };
+  }
+
+  private roomLabel(r: RoomWithParticipants): string {
+    return r.title || r.participants.filter(p => p.active).map(p => p.choom?.name).filter(Boolean).join(' & ') || '(unnamed room)';
   }
 
   async execute(toolCall: ToolCall, ctx: SkillHandlerContext): Promise<ToolResult> {
@@ -38,6 +72,63 @@ export default class GroupChatHandler extends BaseSkillHandler {
           : "You're not in any group rooms yet. Start one with talk_with_sisters.",
       });
     }
+
+    // ── leave_room: a Choom removes HERSELF (never others). History is kept. ──
+    if (toolCall.name === 'leave_room') {
+      const { room, candidates } = await this.findMyRoom(caller.id, typeof args.room === 'string' ? args.room : undefined);
+      if (!room) {
+        if (candidates.length === 0) return this.error(toolCall, "You're not in any group rooms, so there's nothing to leave.");
+        return this.error(toolCall, `Which room do you want to leave? You're in: ${candidates.map(r => `"${this.roomLabel(r)}"`).join(', ')}. Pass the name as the "room" parameter.`);
+      }
+      await prisma.groupParticipant.updateMany({ where: { roomId: room.id, choomId: caller.id }, data: { active: false } });
+      const label = this.roomLabel(room);
+      return this.success(toolCall, {
+        left: label,
+        note: `You've left "${label}". Your past messages stay in the room's history. You can't rejoin yourself — a sibling can invite you back by naming you in talk_with_sisters with room "${label}", or Donny can re-add you.`,
+      });
+    }
+
+    // ── rename_room: rename a room the caller is in. Lookups key off title, so a ──
+    //    rename is all that's needed for tools + siblings to find it by the new name.
+    if (toolCall.name === 'rename_room') {
+      const newName = (typeof args.new_name === 'string' && args.new_name.trim())
+        || (typeof args.name === 'string' && args.name.trim()) || '';
+      if (!newName) return this.error(toolCall, 'The "new_name" parameter is required: the new name to give the room.');
+      const { room, candidates } = await this.findMyRoom(caller.id, typeof args.room === 'string' ? args.room : undefined);
+      if (!room) {
+        if (candidates.length === 0) return this.error(toolCall, "You're not in any rooms to rename.");
+        return this.error(toolCall, `Which room? You're in: ${candidates.map(r => `"${this.roomLabel(r)}"`).join(', ')}. Pass the current name as "room" and the new name as "new_name".`);
+      }
+      const oldLabel = this.roomLabel(room);
+      await prisma.groupRoom.update({ where: { id: room.id }, data: { title: newName } });
+      return this.success(toolCall, {
+        renamed: { from: oldLabel, to: newName },
+        note: `Renamed "${oldLabel}" to "${newName}". You and your siblings can now reach it with room: "${newName}" — the conversation history is unchanged.`,
+      });
+    }
+
+    // ── set_room_topic: pin a one-line purpose that's injected into every turn. ──
+    //    Stored via raw SQL on the GroupRoom.topic column so it works without a
+    //    Prisma client regeneration (graceful with the running dev server).
+    if (toolCall.name === 'set_room_topic') {
+      const topic = typeof args.topic === 'string' ? args.topic.trim() : '';
+      const { room, candidates } = await this.findMyRoom(caller.id, typeof args.room === 'string' ? args.room : undefined);
+      if (!room) {
+        if (candidates.length === 0) return this.error(toolCall, "You're not in any rooms.");
+        return this.error(toolCall, `Which room? You're in: ${candidates.map(r => `"${this.roomLabel(r)}"`).join(', ')}. Pass the name as "room".`);
+      }
+      await prisma.$executeRaw`UPDATE GroupRoom SET topic = ${topic || null} WHERE id = ${room.id}`;
+      const label = this.roomLabel(room);
+      return this.success(toolCall, {
+        room: label,
+        topic,
+        note: topic
+          ? `Pinned the topic for "${label}": "${topic}". Everyone in the room will see it as guiding context on every turn.`
+          : `Cleared the topic for "${label}".`,
+      });
+    }
+
+    // ── talk_with_sisters ──────────────────────────────────────────────────────
 
     // Normalize sisters (array or comma string), drop the caller if listed.
     let sisterNames: string[] = [];
@@ -73,25 +164,44 @@ export default class GroupChatHandler extends BaseSkillHandler {
     // Build the participant set (caller first, then sisters).
     const participantIds = [caller.id, ...sisters.map(s => s.id)];
     const wantKey = [...participantIds].sort().join(',');
-    const existingRooms = await prisma.groupRoom.findMany({
+    const existingRooms = (await prisma.groupRoom.findMany({
       where: { archived: false },
       include: { participants: true },
-    });
+    })) as unknown as RoomWithParticipants[];
 
-    let room: (typeof existingRooms)[number] | null = null;
+    let room: RoomWithParticipants | null = null;
+    let addedNames: string[] = [];
     const roomQuery = typeof args.room === 'string' ? args.room.trim().toLowerCase() : '';
     if (roomQuery) {
       // Return to a NAMED room the caller is in (e.g. "the lounge"). Match the
       // title loosely (ignore filler words like "the").
-      const q = roomQuery.replace(/\bthe\b/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+      const q = normTitle(roomQuery);
       const mine = existingRooms.filter(r => r.participants.some(p => p.active && p.choomId === caller.id));
       room = mine.find(r => {
-        const t = (r.title || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+        const t = normTitle(r.title || '');
         return t && (t.includes(q) || q.includes(t));
       }) || null;
       if (!room) {
         const names = mine.map(r => r.title).filter(Boolean).join(', ') || '(none)';
         return this.error(toolCall, `Couldn't find a room named "${args.room}" that you're in. Your rooms: ${names}. Call list_my_rooms to see them.`);
+      }
+      // ADD: bring any named sisters who aren't already active members INTO this
+      // existing room (so "talk with Eve and Aloy in the Tune Lounge" pulls Aloy
+      // in — she joins and sees the full backlog — instead of forking a new room).
+      const activeIds = new Set(room.participants.filter(p => p.active).map(p => p.choomId));
+      const toAdd = sisters.filter(s => !activeIds.has(s.id));
+      if (toAdd.length) {
+        const maxOrder = room.participants.reduce((m, p) => Math.max(m, p.order), 0);
+        for (let i = 0; i < toAdd.length; i++) {
+          const s = toAdd[i];
+          const existing = room.participants.find(p => p.choomId === s.id);
+          if (existing) {
+            await prisma.groupParticipant.update({ where: { id: existing.id }, data: { active: true } });
+          } else {
+            await prisma.groupParticipant.create({ data: { roomId: room.id, choomId: s.id, order: maxOrder + 1 + i, active: true } });
+          }
+        }
+        addedNames = toAdd.map(s => s.name);
       }
     }
 
@@ -121,7 +231,7 @@ export default class GroupChatHandler extends BaseSkillHandler {
         const { WORKSPACE_ROOT } = await import('@/lib/config');
         fs.mkdirSync(path.join(WORKSPACE_ROOT, projectFolder), { recursive: true });
       } catch { /* folder is auto-created on first write anyway */ }
-      room = await prisma.groupRoom.update({ where: { id: created.id }, data: { projectFolder }, include: { participants: true } });
+      room = (await prisma.groupRoom.update({ where: { id: created.id }, data: { projectFolder }, include: { participants: true } })) as unknown as RoomWithParticipants;
     }
 
     // Run the conversation by calling the orchestrator with us as the initiator.
@@ -173,15 +283,17 @@ export default class GroupChatHandler extends BaseSkillHandler {
       return this.error(toolCall, `Group chat error: ${(e as Error).message}`);
     }
 
-    const note = notFound.length ? ` (couldn't find: ${notFound.join(', ')})` : '';
+    const notFoundNote = notFound.length ? ` (couldn't find: ${notFound.join(', ')})` : '';
+    const addedNote = addedNames.length ? ` Added ${addedNames.join(', ')} to the room — they can see the full backlog.` : '';
     return this.success(toolCall, {
       room_id: room.id,
       room_title: room.title,
       sisters: sisters.map(s => s.name),
+      added: addedNames,
       rounds,
       replies: speakers,
       transcript: transcript.trim() || '(no replies)',
-      note: `You talked with ${sisters.map(s => s.name).join(', ')} in the room "${room.title}". ${speakers} replies over up to ${rounds} rounds.${note} The user can see and join this conversation in the Group Rooms view.`,
+      note: `You talked with ${sisters.map(s => s.name).join(', ')} in the room "${room.title}".${addedNote} ${speakers} replies over up to ${rounds} rounds.${notFoundNote} The user can see and join this conversation in the Group Rooms view.`,
     });
   }
 }

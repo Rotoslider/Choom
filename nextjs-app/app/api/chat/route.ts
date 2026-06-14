@@ -3540,6 +3540,7 @@ export async function POST(request: NextRequest) {
     const groupSpeakerName: string = body.speakerName || '';
     const groupParticipantNames: string[] = Array.isArray(body.groupParticipantNames) ? body.groupParticipantNames : [];
     const groupProjectFolder: string | undefined = body.groupProjectFolder || undefined;
+    const groupRoomTopic: string | undefined = (typeof body.groupRoomTopic === 'string' && body.groupRoomTopic.trim()) ? body.groupRoomTopic.trim() : undefined;
     const groupRecentImages: string[] = Array.isArray(body.groupRecentImages) ? body.groupRecentImages : [];
 
     if (!choomId || !chatId || !message) {
@@ -3953,6 +3954,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
     if (isGroupTurn) {
       const others = groupParticipantNames.filter(n => n.toLowerCase() !== groupSpeakerName.toLowerCase());
       finalSystemPrompt += `\n\n## GROUP ROOM\nYou are **${groupSpeakerName}** in a shared group chat with the user${others.length ? ` and your siblings: ${others.join(', ')}` : ''}. This is a live, turn-based room.\n` +
+        (groupRoomTopic ? `- **This room's topic:** ${groupRoomTopic} — keep your contributions in that spirit.\n` : '') +
         `- The conversation so far is in your history. Lines from the user or a sibling are tagged with their name in brackets ONLY so you can tell who spoke, e.g. \`[Donny]:\` or \`[${others[0] || 'Eve'}]:\`. These brackets are NOT part of how you write — they are just labels on other people's lines. Your own previous lines have no label.\n` +
         `- Write ONLY your own next line, as ${groupSpeakerName}, in first person. NEVER begin your message with a name label (not \`[${groupSpeakerName}]:\`, not \`[Donny]:\`, not any name + colon). Just write what you want to say.\n` +
         `- Always refer to YOURSELF in the first person — "I", "me", "my". Never talk about yourself as "${groupSpeakerName}" in the third person (you ARE ${groupSpeakerName}).\n` +
