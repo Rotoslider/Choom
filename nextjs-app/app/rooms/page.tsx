@@ -2,7 +2,8 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, Plus, Users, Trash2, Loader2, Smartphone, Square, Minus, Play, Download, Archive, X } from 'lucide-react';
+import { ArrowLeft, Plus, Users, Trash2, Loader2, Smartphone, Square, Minus, Play, Download, Archive, X, MoreVertical, Pencil } from 'lucide-react';
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -377,6 +378,16 @@ export default function RoomsPage() {
     setSignalRoomId(id);
   }, []);
 
+  const handleRenameRoom = useCallback(async (id: string, current: string) => {
+    const name = prompt('Rename this room:', current)?.trim();
+    if (!name || name === current) return;
+    setRooms(prev => prev.map(r => r.id === id ? { ...r, title: name } : r));
+    await fetch(`/api/group-chats/${id}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: name }),
+    });
+  }, []);
+
   const handleDeleteRoom = useCallback(async (id: string) => {
     if (!confirm('Delete this room and its transcript?')) return;
     await fetch(`/api/group-chats/${id}`, { method: 'DELETE' });
@@ -437,10 +448,15 @@ export default function RoomsPage() {
                 )}
                 onClick={() => setCurrentRoomId(room.id)}
               >
-                <div className="flex -space-x-2">
+                <div className="flex -space-x-2 shrink-0">
                   {room.participants.slice(0, 3).map(p => (
                     <AvatarDisplay key={p.id} name={p.choom.name} avatarUrl={p.choom.avatarUrl} size="sm" />
                   ))}
+                  {room.participants.length > 3 && (
+                    <span className="flex items-center justify-center h-6 w-6 rounded-full bg-muted text-[10px] font-medium ring-2 ring-background">
+                      +{room.participants.length - 3}
+                    </span>
+                  )}
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium truncate">
@@ -452,10 +468,28 @@ export default function RoomsPage() {
                     {room._count && room._count.messages > 300 ? ' ⚠️' : ''}
                   </p>
                 </div>
-                <Button variant="ghost" size="icon" className="h-7 w-7 opacity-0 group-hover:opacity-100"
-                  onClick={(e) => { e.stopPropagation(); handleDeleteRoom(room.id); }}>
-                  <Trash2 className="h-4 w-4 text-destructive" />
-                </Button>
+                {/* Room actions — kebab menu (always reachable, never squeezed by
+                    the avatars/name; replaces the hover-only delete button). */}
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0 text-muted-foreground"
+                      onClick={(e) => e.stopPropagation()} title="Room actions">
+                      <MoreVertical className="h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleRenameRoom(room.id, room.title || room.participants.map(p => p.choom.name).join(', ')); }}>
+                      <Pencil className="h-4 w-4 mr-2" /> Rename
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleArchiveRoom(room.id); }}>
+                      <Archive className="h-4 w-4 mr-2" /> Archive
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={(e) => { e.stopPropagation(); handleDeleteRoom(room.id); }}>
+                      <Trash2 className="h-4 w-4 mr-2" /> Delete
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </div>
             ))}
           </div>
