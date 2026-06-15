@@ -4882,18 +4882,20 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           // chats keep proactive forcing on strong intent (smaller context, and the
           // historical behavior the user relies on). The intentToolHint guidance below
           // still steers tool choice everywhere WITHOUT forcing.
-          // Force tool_choice='required' on a strong/specific intent in BOTH 1:1 and
-          // group turns. This is what made last night's rich room tool-use (images,
-          // music, files, memory) reliable — Chooms "rarely forgot a tool". It was
-          // briefly disabled in rooms because forcing made the model return empty,
-          // but that empty was the reasoning_content PROSE being discarded; the
-          // salvage above now keeps that prose, so forcing can no longer cause
-          // silence (worst case the Choom just talks). Empty/noTools turns never
-          // force (activeTools.length guard).
-          forceToolCall = (strongToolIntent || !!intentToolHint) && activeTools.length > 0;
+          // Force tool_choice='required' on a real tool request — but ONLY in 1:1.
+          // In a GROUP turn the `message` is conversational transcript (sibling lines,
+          // including chatter ABOUT tools/followups), so intent detection false-positives
+          // and forcing makes qwen return a GENUINELY empty completion (0 tokens, nothing
+          // even in reasoning_content → the salvage can't help) → fallback cascade. Rooms
+          // are conversational; the model calls tools fine UNFORCED (observed: "rarely
+          // forgot a tool"). So: force in 1:1, never in group. (Verified by logs: forced
+          // group turns empty out; forced 1:1 turns work.)
+          forceToolCall = (strongToolIntent || !!intentToolHint) && activeTools.length > 0 && !isGroupTurn;
           if (forceToolCall) {
             traceBuilder.setForceToolCall();
             console.log(`   ⚡ ${choomTag} Tool intent detected — using tool_choice='required' on first iteration${intentToolHint ? ` (hint: ${intentToolHint})` : ''}`);
+          } else if ((strongToolIntent || intentToolHint) && isGroupTurn) {
+            console.log(`   💬 ${choomTag} Group turn — not forcing tool_choice (conversational)`);
           }
           if (intentToolHint && activeTools.length > 0) {
             currentMessages.push({
