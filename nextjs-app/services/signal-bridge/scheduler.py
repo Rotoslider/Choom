@@ -1681,6 +1681,15 @@ Be practical. Only work on things that can actually be accomplished with the too
                 if trigger_at > now:
                     continue
 
+                # Room re-entries DEFER (stay pending, retry next poll) if the user is
+                # actively chatting with this Choom — avoids two concurrent requests to
+                # the local model colliding (the "stepping on each other" empties).
+                # Signal (1:1) followups keep their existing fire-path behavior below.
+                is_room = entry.get("target") == "room" and bool(entry.get("room_id"))
+                if is_room and self.choom.is_user_active(entry.get("choom_name") or "", window_seconds=120):
+                    logger.info(f"Room-followup {entry.get('id')} deferred: user active with {entry.get('choom_name')} — will retry next poll")
+                    continue
+
                 # Atomic claim — rename pending/X.json → fired/X.json before doing any work.
                 # If Node cancelled it concurrently, the rename fails with ENOENT and we skip.
                 fired_path = os.path.join(choom_root, "fired", fname)
@@ -1747,14 +1756,26 @@ Be practical. Only work on things that can actually be accomplished with the too
                 fire_status = "fired"
                 fire_error: Optional[str] = None
                 try:
-                    # Reuse the heartbeat delivery path — same as custom heartbeats.
-                    # respect_quiet=False because the Choom scheduled this itself.
-                    self._execute_custom_heartbeat(
-                        task_id=task_id,
-                        choom_name=choom_name,
-                        prompt=prompt,
-                        respect_quiet=False,
-                    )
+                    if is_room:
+                        # Re-enter the ROOM directly (NOT a heartbeat): the orchestrator
+                        # gives the Choom the room transcript, persists her turn, lets the
+                        # other sisters greet her, and pings the owner. Use the ORIGINAL
+                        # prompt as her opening line — no heartbeat "waking up" framing
+                        # (that framing is what left her confused/behind before).
+                        self.choom.trigger_room_followup(
+                            entry.get("room_id"),
+                            entry.get("choom_id"),
+                            entry.get("prompt") or "",
+                        )
+                    else:
+                        # Private 1:1 followup — reuse the heartbeat delivery path.
+                        # respect_quiet=False because the Choom scheduled this itself.
+                        self._execute_custom_heartbeat(
+                            task_id=task_id,
+                            choom_name=choom_name,
+                            prompt=prompt,
+                            respect_quiet=False,
+                        )
                 except Exception as exec_err:
                     logger.error(f"self_followup fire failed for {entry.get('id')}: {exec_err}")
                     fire_status = "error"

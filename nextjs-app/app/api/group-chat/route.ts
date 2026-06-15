@@ -207,6 +207,7 @@ export async function POST(request: NextRequest) {
               participantNames,
               projectFolder: room.projectFolder,
               roomTopic,
+              roomId: room.id,
               settings,
               timeoutMs: TURN_TIMEOUT_MS,
               send,

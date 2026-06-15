@@ -36,6 +36,8 @@ export interface SkillHandlerContext {
   // Request-scope flags (propagated from route.ts ToolContext)
   suppressNotifications?: boolean;
   isHeartbeat?: boolean;
+  // Room this group turn is in (so schedule_room_followup knows the current room)
+  groupRoomId?: string;
 
   // Skill-specific context (injected by registry)
   skillDoc: string;

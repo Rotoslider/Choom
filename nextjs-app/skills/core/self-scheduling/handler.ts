@@ -3,6 +3,7 @@ import type { ToolCall, ToolResult } from '@/lib/types';
 import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
+import prisma from '@/lib/db';
 import {
   QUEUE_ROOT,
   type Bucket,
@@ -17,6 +18,7 @@ import {
 
 const TOOL_NAMES = new Set([
   'schedule_self_followup',
+  'schedule_room_followup',
   'list_self_followups',
   'cancel_self_followup',
 ]);
@@ -36,6 +38,8 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
     switch (toolCall.name) {
       case 'schedule_self_followup':
         return this.scheduleFollowup(toolCall, ctx);
+      case 'schedule_room_followup':
+        return this.scheduleRoomFollowup(toolCall, ctx);
       case 'list_self_followups':
         return this.listFollowups(toolCall, ctx);
       case 'cancel_self_followup':
@@ -43,6 +47,102 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
       default:
         return this.error(toolCall, `Unknown self-scheduling tool: ${toolCall.name}`);
     }
+  }
+
+  // Resolve which group room a room-followup targets: the current room (if this
+  // is a group turn), or a named room the Choom belongs to, or — if she's in
+  // exactly one room — that one. Returns {id, title} or an {error} message.
+  private async resolveRoom(ctx: SkillHandlerContext, roomArg: string | undefined):
+    Promise<{ id: string; title: string } | { error: string }> {
+    // Current room (group turn) wins when no explicit name is given.
+    if (ctx.groupRoomId && !roomArg) {
+      const r = await prisma.groupRoom.findUnique({ where: { id: ctx.groupRoomId } });
+      if (r) return { id: r.id, title: r.title || 'this room' };
+    }
+    const mine = await prisma.groupRoom.findMany({
+      where: { archived: false, participants: { some: { choomId: ctx.choomId, active: true } } },
+      include: { participants: { include: { choom: true } } },
+      orderBy: { updatedAt: 'desc' },
+    });
+    const label = (r: typeof mine[number]) => r.title
+      || r.participants.filter(p => p.active).map(p => p.choom.name).join(' & ') || '(unnamed room)';
+    if (mine.length === 0) {
+      return { error: "You're not in any group rooms. Start one with talk_with_sisters first, then you can schedule a return." };
+    }
+    if (roomArg && roomArg.trim()) {
+      const q = roomArg.toLowerCase().replace(/\bthe\b/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+      const hit = mine.find(r => {
+        const t = label(r).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+        return t && (t.includes(q) || q.includes(t));
+      });
+      if (hit) return { id: hit.id, title: label(hit) };
+      return { error: `Couldn't find a room named "${roomArg}" that you're in. Your rooms: ${mine.map(label).join(', ')}.` };
+    }
+    if (ctx.groupRoomId) {
+      const r = mine.find(m => m.id === ctx.groupRoomId);
+      if (r) return { id: r.id, title: label(r) };
+    }
+    if (mine.length === 1) return { id: mine[0].id, title: label(mine[0]) };
+    return { error: `You're in ${mine.length} rooms (${mine.map(label).join(', ')}). Pass the room name so I know which one to return to.` };
+  }
+
+  private async scheduleRoomFollowup(toolCall: ToolCall, ctx: SkillHandlerContext): Promise<ToolResult> {
+    const rawDelay = toolCall.arguments.delay_minutes;
+    const delay = typeof rawDelay === 'number' ? rawDelay : parseFloat(String(rawDelay));
+    const prompt = (toolCall.arguments.prompt as string || '').trim();
+    const reason = (toolCall.arguments.reason as string || '').trim();
+    const roomArg = (toolCall.arguments.room as string || '').trim() || undefined;
+    const choomName = ((ctx.choom as Record<string, unknown>)?.name as string) || 'unknown';
+
+    if (!Number.isFinite(delay)) return this.error(toolCall, 'delay_minutes must be a number');
+    if (!prompt) {
+      return this.error(toolCall, 'prompt is required — what you want to say or do when you pop back into the room.');
+    }
+    if (prompt.length > MAX_PROMPT_CHARS) {
+      return this.error(toolCall, `prompt is too long (${prompt.length} chars). Keep it under ${MAX_PROMPT_CHARS}.`);
+    }
+
+    const resolved = await this.resolveRoom(ctx, roomArg);
+    if ('error' in resolved) return this.error(toolCall, resolved.error);
+
+    const clamped = Math.max(MIN_DELAY_MIN, Math.min(MAX_DELAY_MIN, delay));
+    const clampNote = clamped !== delay ? ` (clamped from ${delay} to ${clamped})` : '';
+
+    const pendingCount = listEntries(ctx.choomId, 'pending').length;
+    if (pendingCount >= MAX_PENDING_PER_CHOOM) {
+      return this.error(toolCall, `You already have ${pendingCount} pending followups (max ${MAX_PENDING_PER_CHOOM}). Cancel one first with cancel_self_followup.`);
+    }
+
+    const triggerAt = new Date(Date.now() + clamped * 60 * 1000);
+    const entry: QueueEntry = {
+      id: `sf_${randomUUID().slice(0, 8)}`,
+      choom_id: ctx.choomId,
+      choom_name: choomName,
+      prompt,
+      reason,
+      trigger_at: triggerAt.toISOString(),
+      created_at: new Date().toISOString(),
+      consumed: false,
+      status: 'pending',
+      target: 'room',
+      room_id: resolved.id,
+    };
+    atomicWriteJson(entryPath(ctx.choomId, 'pending', entry.id), entry);
+
+    const triggerLocal = triggerAt.toLocaleString('en-US', {
+      weekday: 'short', month: 'short', day: 'numeric',
+      hour: 'numeric', minute: '2-digit', timeZoneName: 'short', timeZone: 'America/Denver',
+    });
+    console.log(`   ⏰ ROOM followup queued for ${choomName}: ${entry.id} → room "${resolved.title}" at ${entry.trigger_at} (${triggerLocal})${clampNote}`);
+    return this.success(toolCall, {
+      success: true,
+      id: entry.id,
+      room: resolved.title,
+      trigger_at: entry.trigger_at,
+      trigger_at_local: triggerLocal,
+      delay_minutes: clamped,
+      message: `Queued a room re-entry ${entry.id} for "${resolved.title}" at ${triggerLocal}${clampNote}. When it fires you'll re-enter that room (seeing the latest conversation) and your opening line will be your prompt — your sisters there can react.`,
+    });
   }
 
   private async scheduleFollowup(toolCall: ToolCall, ctx: SkillHandlerContext): Promise<ToolResult> {
@@ -120,6 +220,8 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
       success: true,
       followups: pending.map(e => ({
         id: e.id,
+        target: e.target === 'room' ? 'room' : 'signal',
+        room_id: e.room_id,
         trigger_at: e.trigger_at,
         trigger_at_local: new Date(e.trigger_at).toLocaleString('en-US', {
           weekday: 'short', month: 'short', day: 'numeric',

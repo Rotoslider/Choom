@@ -1115,6 +1115,9 @@ interface ToolContext {
   // worker is allowed to write into the delegator's own selfies_ folder, since
   // the artifacts it produces belong to the delegator's task.
   delegatorSlug?: string;
+  // Room this turn is happening in (group turns only) — lets schedule_room_followup
+  // know which room to return to.
+  groupRoomId?: string;
 }
 
 // ============================================================================
@@ -3456,6 +3459,7 @@ async function executeToolCallViaSkills(
     activeProjectFolder: ctx.activeProjectFolder,
     suppressNotifications: ctx.suppressNotifications,
     isHeartbeat: ctx.isHeartbeat,
+    groupRoomId: ctx.groupRoomId,
     skillDoc: skill.fullDoc,
     getReference: (fileName: string) => registry.getLevel3Reference(skill.metadata.name, fileName),
   };
@@ -3541,6 +3545,7 @@ export async function POST(request: NextRequest) {
     const groupParticipantNames: string[] = Array.isArray(body.groupParticipantNames) ? body.groupParticipantNames : [];
     const groupProjectFolder: string | undefined = body.groupProjectFolder || undefined;
     const groupRoomTopic: string | undefined = (typeof body.groupRoomTopic === 'string' && body.groupRoomTopic.trim()) ? body.groupRoomTopic.trim() : undefined;
+    const groupRoomId: string | undefined = (typeof body.groupRoomId === 'string' && body.groupRoomId.trim()) ? body.groupRoomId.trim() : undefined;
     const groupRecentImages: string[] = Array.isArray(body.groupRecentImages) ? body.groupRecentImages : [];
 
     if (!choomId || !chatId || !message) {
@@ -4017,13 +4022,17 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
         'create_plan', 'execute_plan', 'adjust_plan',
         'heartbeat_complete', 'talk_with_sisters',
       ]);
-      // Self-scheduling is stripped for DELEGATION (a worker shouldn't queue
-      // detached ticks instead of returning a result) but ALLOWED in group turns:
-      // a Choom in a room may legitimately want to schedule a followup to pop back
-      // in later. The followup fires later as a heartbeat (not a group turn), where
-      // talk_with_sisters IS available, so she can rejoin the room then.
+      // In a GROUP turn, schedule_self_followup is the wrong tool (it fires as a
+      // private 1:1 heartbeat) — strip it so the Choom uses schedule_room_followup,
+      // which actually re-enters the room. list/cancel + schedule_room_followup stay.
+      if (isGroupTurn) {
+        stripTools.add('schedule_self_followup');
+      }
+      // A DELEGATED worker shouldn't queue detached ticks of ANY kind — strip all
+      // self-scheduling so it returns a result instead.
       if (isDelegation) {
         stripTools.add('schedule_self_followup');
+        stripTools.add('schedule_room_followup');
         stripTools.add('list_self_followups');
         stripTools.add('cancel_self_followup');
       }
@@ -4620,6 +4629,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           isHeartbeat: !!isHeartbeat,
           activeProjectFolder: detectedProject?.folder,
           isDelegation: !!isDelegation,
+          groupRoomId,
           delegatorSlug: typeof delegatorName === 'string' && delegatorName
             ? delegatorName.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
             : undefined,
@@ -4845,8 +4855,9 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           // system message steering the LLM to the correct tool. This prevents the LLM
           // from calling get_calendar_events when the user says "remind me" etc.
           let intentToolHint = '';
-          if (/\b(?:set|schedule|make|create|queue|put in)\b[^.!?\n]{0,24}?\bfollow[\s-]?up\b|\bremind\s+yourself\b|\bself[\s-]?follow[\s-]?up\b|\bfollow[\s-]?up\s+with\s+yourself\b|\b(?:set|make)\s+(?:a\s+)?reminder\s+for\s+yourself\b/i.test(msgLower)) {
-            intentToolHint = 'schedule_self_followup';
+          if (/\b(?:set|schedule|make|create|queue|put in)\b[^.!?\n]{0,24}?\bfollow[\s-]?up\b|\bremind\s+yourself\b|\bself[\s-]?follow[\s-]?up\b|\bfollow[\s-]?up\s+with\s+yourself\b|\b(?:set|make)\s+(?:a\s+)?reminder\s+for\s+yourself\b|\b(?:come|pop|check|circle|head)\s+back\s+(?:in(?:to)?|to)\s+(?:the\s+)?(?:room|lounge|chat)\b/i.test(msgLower)) {
+            // In a room → return-to-room tool; in 1:1 → private self-followup.
+            intentToolHint = isGroupTurn ? 'schedule_room_followup' : 'schedule_self_followup';
           } else if (/\b(?:remind me|set (?:a )?reminder)\b/i.test(msgLower)) {
             intentToolHint = 'create_reminder';
           } else if (/\b(?:check (?:the |my )?(?:calendar|schedule)|what(?:'?s| is) on (?:my )?(?:calendar|schedule|for )?(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this week|next week)?|(?:any |do i have (?:any )?|what )(?:appointments?|meetings?|events?)|(?:am i |are we )(?:free|busy|available)|(?:what(?:'?s| is| do i have) )(?:scheduled|planned|coming up)|(?:anything )(?:on |scheduled )(?:for )?(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this week|next week)|when (?:is|was|did) (?:my |the )?(?:next|last) |when (?:is|was) the last time i |when did i (?:last )?(?:go|get|have|see|do|visit|fill|take))\b/i.test(msgLower)) {
@@ -4871,20 +4882,17 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           // chats keep proactive forcing on strong intent (smaller context, and the
           // historical behavior the user relies on). The intentToolHint guidance below
           // still steers tool choice everywhere WITHOUT forcing.
-          // In a group turn, force ONLY for a SPECIFIC actionable intent (e.g. the
-          // owner asks a Choom in the room to "set a followup") — never on the broad
-          // strongToolIntent that a transcript trips by accident. This was unsafe
-          // before (forcing made qwen return empty → silence), but the
-          // reasoning_content salvage above now guarantees we never go silent: worst
-          // case the prose is salvaged and the Choom just talks. So a targeted force
-          // is safe again, and it's what makes an in-room tool request actually fire.
-          const allowToolForcing = !isGroupTurn || !!intentToolHint;
-          forceToolCall = (strongToolIntent || !!intentToolHint) && activeTools.length > 0 && allowToolForcing;
+          // Never force tool_choice on a GROUP turn — rooms are conversational and
+          // forcing destabilizes this model. 1:1 keeps proactive forcing on strong
+          // intent (small context, historically reliable). The intentToolHint below
+          // still steers tool choice everywhere WITHOUT forcing.
+          const allowToolForcing = !isGroupTurn;
+          forceToolCall = strongToolIntent && activeTools.length > 0 && allowToolForcing;
           if (forceToolCall) {
             traceBuilder.setForceToolCall();
             console.log(`   ⚡ ${choomTag} Tool intent detected — using tool_choice='required' on first iteration${intentToolHint ? ` (hint: ${intentToolHint})` : ''}`);
-          } else if (strongToolIntent && isGroupTurn) {
-            console.log(`   💬 ${choomTag} Group turn — not forcing tool_choice (no specific actionable intent)`);
+          } else if ((strongToolIntent || intentToolHint) && isGroupTurn) {
+            console.log(`   💬 ${choomTag} Group turn — not forcing tool_choice (conversational)`);
           }
           if (intentToolHint && activeTools.length > 0) {
             currentMessages.push({

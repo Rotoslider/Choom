@@ -415,6 +415,43 @@ class ChoomClient:
         logger.info(f"Group room {room_id}: {spoke} speaker(s) replied")
         return spoke
 
+    def trigger_room_followup(self, room_id: str, initiator_choom_id: str, message: str) -> int:
+        """Fire a scheduled ROOM re-entry: the Choom (as initiator) posts `message`
+        into the room and her sisters react. The orchestrator gives her the room
+        transcript, persists everything, and pings the owner — so here we just drain
+        the stream (no Signal delivery; the owner ping + /rooms UI handle awareness).
+        Returns the number of speakers that replied."""
+        payload = {
+            "roomId": room_id,
+            "initiatorChoomId": initiator_choom_id,
+            "message": message,
+            "settings": self._build_shared_settings(),
+        }
+        response = self._make_request(
+            "POST", "/api/group-chat", json=payload, stream=True, timeout=(10, 600)
+        )
+        spoke = 0
+        for line in response.iter_lines(chunk_size=8192):
+            if not line:
+                continue
+            line = line.decode('utf-8')
+            if not line.startswith('data: '):
+                continue
+            try:
+                data = json.loads(line[6:])
+            except json.JSONDecodeError:
+                continue
+            etype = data.get('type')
+            if etype == 'speaker_done' and data.get('content'):
+                spoke += 1
+            elif etype == 'error':
+                logger.error(f"Room-followup group error: {data.get('error')}")
+                raise Exception(data.get('error', 'Unknown group error'))
+            elif etype == 'done':
+                break
+        logger.info(f"Room-followup re-entry in room {room_id}: {spoke} speaker(s) replied")
+        return spoke
+
     def send_message(self, choom_name: str, message: str, settings: Optional[Dict] = None, fresh_chat: bool = False, no_tools: bool = False, max_iterations: Optional[int] = None, is_heartbeat: bool = False, task_model_override: Optional[Dict] = None) -> ChatResponse:
         """
         Send a message to a Choom and get the response

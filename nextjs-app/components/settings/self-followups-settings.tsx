@@ -19,6 +19,8 @@ interface QueueEntry {
   fired_at?: string;
   cancelled_at?: string;
   status?: FollowupStatus;
+  target?: 'signal' | 'room';
+  room_id?: string;
 }
 
 interface EditState {
@@ -189,7 +191,7 @@ export function SelfFollowupsSettings() {
             {pending.map((e) => (
               <li
                 key={e.id}
-                className="flex items-start gap-3 p-3 border rounded-lg bg-card"
+                className={`flex items-start gap-3 p-3 border rounded-lg bg-card${e.target === 'room' ? ' border-l-4 border-l-violet-500' : ''}`}
               >
                 <div className="flex-1 min-w-0">
                   {editingId === e.id ? (
@@ -226,6 +228,11 @@ export function SelfFollowupsSettings() {
                     <>
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-sm font-medium">{e.choom_name}</span>
+                        {e.target === 'room' ? (
+                          <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-violet-500/15 text-violet-400 font-medium">
+                            Room
+                          </span>
+                        ) : null}
                         <span className="text-xs text-muted-foreground">
                           {formatTime(e.trigger_at)} ({timeUntil(e.trigger_at)})
                         </span>

@@ -33,6 +33,11 @@ export interface QueueEntry {
   cancelled_at?: string;
   updated_at?: string;
   status?: Bucket;
+  // Where this followup fires. Absent/'signal' = the original 1:1 heartbeat →
+  // Signal path (the existing behavior; all legacy entries default to this).
+  // 'room' = re-enter a group room (room_id) via the group-chat orchestrator.
+  target?: 'signal' | 'room';
+  room_id?: string;
 }
 
 export function safeChoomId(choomId: string): string {
