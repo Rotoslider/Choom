@@ -162,6 +162,18 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
       return this.error(toolCall, `prompt is too long (${prompt.length} chars). Keep it under ${MAX_PROMPT_CHARS}.`);
     }
 
+    // Wrong-tool guardrail: schedule_self_followup fires into your PRIVATE 1:1 /
+    // Signal — NOT a room. If the prompt is clearly about returning to a group
+    // room, the Choom meant schedule_room_followup; redirect so she actually
+    // re-enters the room instead of landing in 1:1. (These two tools look alike
+    // and get mixed up.)
+    if (/\b(?:pop|hop|jump|head|come|get|step)\s+(?:back\s+)?(?:in(?:to)?|to)\b[^.!?]{0,30}\b(?:room|lounge|group\s*chat)\b|\bback (?:in|into) (?:the )?(?:room|lounge|group\s*chat)\b|\bthis room\b|\bthe (?:tune )?lounge\b|\bgroup chat\b|\brejoin\b/i.test(prompt)) {
+      return this.error(
+        toolCall,
+        'This reads as wanting to RETURN TO A GROUP ROOM, but schedule_self_followup fires into your PRIVATE 1:1/Signal space — it will NOT put you back in the room. Use schedule_room_followup(delay_minutes, prompt, room) instead so you actually re-enter the room and your sisters can react.'
+      );
+    }
+
     const clamped = Math.max(MIN_DELAY_MIN, Math.min(MAX_DELAY_MIN, delay));
     const clampNote = clamped !== delay ? ` (clamped from ${delay} to ${clamped})` : '';
 
