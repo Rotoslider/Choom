@@ -352,7 +352,7 @@ class ChoomClient:
 
         return default_settings
 
-    def send_group_message(self, room_id: str, message: str, on_speaker, owner_name: str = "Donny") -> int:
+    def send_group_message(self, room_id: str, message: str, on_speaker, owner_name: str = None) -> int:
         """Send a message into a group room and stream each Choom's reply.
 
         Calls the Next.js /api/group-chat orchestrator and invokes
@@ -367,8 +367,12 @@ class ChoomClient:
             "roomId": room_id,
             "message": message,
             "settings": default_settings,
-            "ownerName": owner_name,
         }
+        # Only pin an owner name if the caller passed one; otherwise let the server
+        # resolve it from the Settings UI (bridge-config.json) / env, so the single
+        # configured name is honored on the Signal path too.
+        if owner_name:
+            payload["ownerName"] = owner_name
 
         response = self._make_request(
             "POST", "/api/group-chat", json=payload, stream=True, timeout=(10, 600)

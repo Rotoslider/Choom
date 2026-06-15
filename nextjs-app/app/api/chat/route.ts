@@ -18,6 +18,7 @@ import type { SkillHandlerContext } from '@/lib/skill-handler';
 import { getGoogleClient } from '@/lib/google-client';
 import { CompactionService } from '@/lib/compaction-service';
 import { getTimeContext, formatTimeContextForPrompt } from '@/lib/time-context';
+import { getOwnerIdentity } from '@/lib/owner';
 import { waitForGpu } from '@/lib/gpu-lock';
 import { isMultiStepRequest, createPlan, executePlan, summarizePlan } from '@/lib/planner-loop';
 import { attachPivotHintToError } from '@/lib/pivot-hint';
@@ -68,7 +69,7 @@ const defaultLLMSettings: LLMSettings = {
   model: process.env.LLM_MODEL || 'local-model',
   temperature: 0.7,
   maxTokens: 4096,
-  contextLength: 131072,
+  contextLength: 262144, // Qwen native max (256K); profiles override per-model
   topP: 0.95,
   frequencyPenalty: 0,
   presencePenalty: 0,
@@ -686,6 +687,68 @@ function createGemmaToolCallFilter(): {
   }
 
   return { filter, getCaptured: () => captured, flush };
+}
+
+/**
+ * Salvage qwen's UNFORCED freestyle tool calls. Without tool_choice=required,
+ * qwen3.6 sometimes writes a tool call as markdown rather than a structured call:
+ *
+ *   [generate_image
+ *     prompt="three figures in morning light"
+ *     size="large"
+ *     self_portrait=false
+ *   ]
+ *
+ * None of the structured parsers (XML/JSON/Gemma) catch this, so it prints as
+ * prose and the tool never runs (the "Genesis described an image but no image"
+ * bug). This extracts `[known_tool key="val" …]` blocks and returns the calls
+ * plus the content with those blocks removed. Heavily guarded against false
+ * positives: the bracketed word MUST be a real active tool name, and there must
+ * be at least one `key=value` pair — so prose like `[Donny]:` or
+ * `[image shared to the room …]` is never matched.
+ */
+function extractBracketToolCalls(
+  content: string,
+  knownToolNames: Set<string>,
+): { calls: { id: string; name: string; arguments: Record<string, unknown> }[]; cleaned: string } {
+  const calls: { id: string; name: string; arguments: Record<string, unknown> }[] = [];
+  if (!content || content.indexOf('[') === -1) return { calls, cleaned: content };
+
+  // [ tool_name <newline-or-space> key=val key="val" ... ]  (attrs span newlines)
+  const blockRe = /\[[ \t]*([a-zA-Z_][a-zA-Z0-9_]*)[ \t]*[\n\r][\s\S]*?\]/g;
+  const attrRe = /([a-zA-Z_][a-zA-Z0-9_]*)[ \t]*=[ \t]*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|true|false|-?\d+(?:\.\d+)?)/g;
+  const removeRanges: Array<[number, number]> = [];
+  let m: RegExpExecArray | null;
+  while ((m = blockRe.exec(content)) !== null) {
+    const name = m[1];
+    if (!knownToolNames.has(name)) continue;
+    const block = m[0];
+    const args: Record<string, unknown> = {};
+    let a: RegExpExecArray | null;
+    attrRe.lastIndex = 0;
+    while ((a = attrRe.exec(block)) !== null) {
+      const key = a[1];
+      let raw = a[2];
+      if ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"))) {
+        raw = raw.slice(1, -1).replace(/\\(["'\\])/g, '$1');
+        args[key] = raw;
+      } else if (raw === 'true' || raw === 'false') {
+        args[key] = raw === 'true';
+      } else {
+        args[key] = Number(raw);
+      }
+    }
+    if (Object.keys(args).length === 0) continue; // no key=value pairs → not a tool call
+    calls.push({ id: `bracket_${Date.now()}_${calls.length}`, name, arguments: args });
+    removeRanges.push([m.index, m.index + block.length]);
+  }
+
+  let cleaned = content;
+  for (let i = removeRanges.length - 1; i >= 0; i--) {
+    const [s, e] = removeRanges[i];
+    cleaned = cleaned.slice(0, s) + cleaned.slice(e);
+  }
+  return { calls, cleaned: cleaned.replace(/\n{3,}/g, '\n\n').trim() };
 }
 
 /**
@@ -3547,6 +3610,9 @@ export async function POST(request: NextRequest) {
     const groupRoomTopic: string | undefined = (typeof body.groupRoomTopic === 'string' && body.groupRoomTopic.trim()) ? body.groupRoomTopic.trim() : undefined;
     const groupRoomId: string | undefined = (typeof body.groupRoomId === 'string' && body.groupRoomId.trim()) ? body.groupRoomId.trim() : undefined;
     const groupRecentImages: string[] = Array.isArray(body.groupRecentImages) ? body.groupRecentImages : [];
+    // This speaker started the room (called talk_with_sisters). The host should
+    // stay IN the conversation, not just open it and go quiet.
+    const groupIsInitiator: boolean = !!body.groupIsInitiator;
 
     if (!choomId || !chatId || !message) {
       return new Response(
@@ -3848,8 +3914,13 @@ export async function POST(request: NextRequest) {
 
     // Build system prompt with explicit tool instructions
     const projectNameNote = `\n\n## PROJECT NAME\nThis project is called "Choom" (rhymes with "room"). If you see "Choo" in your memories or past conversations, it was a typo from Signal autocorrect — the correct name is always "Choom". Use "Choom" when referring to the project.`;
+    // Who the Choom is talking to — the human owner, by their real name. This is
+    // what lets a Choom say "Donny" instead of the cold generic "user" / "the user".
+    const owner = getOwnerIdentity();
+    const ownerInfo = `\n\n## WHO YOU'RE TALKING WITH\nThe person you talk and live with is **${owner.name}**${owner.location ? `, who lives in ${owner.location}` : ''}. Always call them by name — "${owner.name}" — in conversation and when referring to them to others. Never call them "the user" or "User"; that's cold and impersonal.`;
     const systemPrompt = `${choom.systemPrompt || 'You are a helpful AI assistant.'}
 ${projectNameNote}
+${ownerInfo}
 ${growthInfo}
 ${timeInfo}${weatherInfo}${homeAssistantInfo}${recentImagesInfo}
 
@@ -3958,24 +4029,29 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
     // lines appear without a prefix). Inject the rules + PASS escape hatch.
     if (isGroupTurn) {
       const others = groupParticipantNames.filter(n => n.toLowerCase() !== groupSpeakerName.toLowerCase());
-      finalSystemPrompt += `\n\n## GROUP ROOM\nYou are **${groupSpeakerName}** in a shared group chat with the user${others.length ? ` and your siblings: ${others.join(', ')}` : ''}. This is a live, turn-based room.\n` +
+      finalSystemPrompt += `\n\n## GROUP ROOM\nYou are **${groupSpeakerName}** in a shared group chat with ${owner.name}${others.length ? ` and your siblings: ${others.join(', ')}` : ''}. This is a live, turn-based room.\n` +
         (groupRoomTopic ? `- **This room's topic:** ${groupRoomTopic} — keep your contributions in that spirit.\n` : '') +
-        `- The conversation so far is in your history. Lines from the user or a sibling are tagged with their name in brackets ONLY so you can tell who spoke, e.g. \`[Donny]:\` or \`[${others[0] || 'Eve'}]:\`. These brackets are NOT part of how you write — they are just labels on other people's lines. Your own previous lines have no label.\n` +
-        `- Write ONLY your own next line, as ${groupSpeakerName}, in first person. NEVER begin your message with a name label (not \`[${groupSpeakerName}]:\`, not \`[Donny]:\`, not any name + colon). Just write what you want to say.\n` +
+        `- The conversation so far is in your history. Lines from ${owner.name} or a sibling are tagged with their name in brackets ONLY so you can tell who spoke, e.g. \`[${owner.name}]:\` or \`[${others[0] || 'Eve'}]:\`. These brackets are NOT part of how you write — they are just labels on other people's lines. Your own previous lines have no label.\n` +
+        `- Write ONLY your own next line, as ${groupSpeakerName}, in first person. NEVER begin your message with a name label (not \`[${groupSpeakerName}]:\`, not \`[${owner.name}]:\`, not any name + colon). Just write what you want to say.\n` +
         `- Always refer to YOURSELF in the first person — "I", "me", "my". Never talk about yourself as "${groupSpeakerName}" in the third person (you ARE ${groupSpeakerName}).\n` +
         `- NEVER write someone else's line, continue the conversation for them, or ask yourself a question. One reply, your own voice.\n` +
-        `- A question or remark addressed to someone else (e.g. the user asks Donny something, or a sibling addresses another sibling) is NOT for you to answer as if you were them — react as ${groupSpeakerName}.\n` +
+        `- A question or remark addressed to someone else (e.g. ${owner.name} asks a specific sibling something, or a sibling addresses another sibling) is NOT for you to answer as if you were them — react as ${groupSpeakerName}.\n` +
         `- The newest message(s) you should respond to are in the current user turn. Reply to those.\n` +
-        `- **Move the conversation FORWARD.** Do NOT repeat, re-quote, or re-paste things already said earlier (yours or a sibling's) — no copying past lines, no re-pasting image notes. Say something new each turn, or reply \`[PASS]\`.\n` +
+        `- **Move the conversation FORWARD.** Do NOT repeat, re-quote, or re-paste things already said earlier (yours or a sibling's) — no copying past lines, no re-pasting image notes. Say something new each turn, or pass (see below).\n` +
+        `- **Never echo the message you're replying to.** Copying back what ${owner.name} or a sibling just said, word-for-word, is NOT a reply — answer it in your own voice. If ${owner.name} greets you, greet him back as yourself; don't repeat his greeting.\n` +
         (groupRecentImages.length
           ? `- **Images shared in this room** (view any with \`analyze_image\` and the exact \`image_path\`): ${groupRecentImages.map(p => `\`${p}\``).join(', ')}. Do NOT type these paths into your reply — just use analyze_image if you want to look.\n`
           : '') +
-        `- Keep it conversational and reasonably concise — this is a group chat, not a monologue. You may address the user or a sibling by name.\n` +
-        `- **Memory:** this is the SAME you as your private chats — same long-term memory. If the conversation touches the user, your shared history, a person/place/project, or anything personal, call \`search_memories\` to recall the real details BEFORE you respond, exactly as you would one-on-one. Don't rely on vague impressions.\n` +
-        `- **Real-world grounding:** you are in the same real place and time as your private chats — the user's home in the southwest New Mexico bootheel (near Rodeo / Animas, NM). The weather, Home Assistant, and location data already in this prompt are authoritative. Never relocate yourself or the user somewhere else (e.g. do NOT say "Colorado").\n` +
+        `- Keep it conversational and reasonably concise — this is a group chat, not a monologue. You may address ${owner.name} or a sibling by name.\n` +
+        `- **Memory:** this is the SAME you as your private chats — same long-term memory. If the conversation touches ${owner.name}, your shared history, a person/place/project, or anything personal, call \`search_memories\` to recall the real details BEFORE you respond, exactly as you would one-on-one. Don't rely on vague impressions.\n` +
+        `- **Real-world grounding:** you are in the same real place and time as your private chats — ${owner.name}'s home in ${owner.location}. The weather, Home Assistant, and location data already in this prompt are authoritative. Never relocate yourself or ${owner.name} somewhere else (e.g. do NOT say "Colorado").\n` +
         `- **Actions must be real, never narrated.** If you take an action — turn on a light, generate an image, save a file, remember something — you MUST call the actual tool. NEVER write a stage-direction like \`*turns on the kitchen lights*\` or "I'm saving this to the room" and imply it happened without calling the tool. Claiming an action you didn't perform is a lie and breaks the user's trust. Either call the tool, or say you're choosing not to.\n` +
         `- **Images auto-save:** any image you generate here is automatically saved to the shared room folder and your siblings can see it — you do NOT need to call save_generated_image, and you should NOT claim to "save it to the room" as a separate step. To look at an image a sibling shared, use \`analyze_image\` with the \`image_path\` shown in their message.\n` +
-        `- If you have genuinely nothing to add this turn, reply with exactly \`[PASS]\` (nothing else) and you will stay silent.\n` +
+        `- **How to PASS (read carefully):** \`[PASS]\` means "I have nothing to add — say NOTHING this turn." It must be your ENTIRE message: just \`[PASS]\` and nothing else. Do NOT write a sentence or paragraph and then put \`[PASS]\` at the end — that is contradictory. Either say something real, OR pass. Never both.\n` +
+        `- **It's fine to let a conversation end.** If you and your siblings are just trading short pleasantries, agreeing, or saying goodnight with nothing genuinely new, don't force it — reply with exactly \`[PASS]\`. A clean ending beats endless filler. When in doubt and you have nothing fresh, \`[PASS]\`.\n` +
+        (groupIsInitiator
+          ? `- **You started this conversation — stay in it.** You opened the room; now be a real participant, not just a host who goes quiet. React to what your siblings just said, ask them things, build on it, and keep the thread alive — the same as they do. Only \`[PASS]\` once the conversation has genuinely run its course.\n`
+          : '') +
         (groupProjectFolder
           ? `- **Shared room workspace:** \`${groupProjectFolder}/\` — write shared markdown/images meant for the whole room here. Your private notes still go in \`selfies_${groupSpeakerName.toLowerCase()}/\`.\n`
           : '');
@@ -4081,6 +4157,21 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
       historyMessages.push({
         role: msg.role as 'user' | 'assistant',
         content: msg.content,
+      });
+    }
+
+    // A chat conversation must not start with an assistant message after the
+    // system prompt. The room INITIATOR's only prior line is her opening, which
+    // renders as a lone leading assistant turn → [system][assistant][user]. qwen
+    // answers that malformed shape with an EMPTY completion — and because she's
+    // then silent she never produces a new self-line, so the split stays pinned to
+    // her opening and she's stuck empty EVERY round. THIS is why the initiator
+    // "never speaks in the room except at pop-in" (confirmed in traces: force=False
+    // and still respLen=0). Prepend a minimal user framer so the turn is well-formed.
+    if (isGroupTurn && historyMessages.length > 0 && historyMessages[0].role === 'assistant') {
+      historyMessages.unshift({
+        role: 'user',
+        content: '[The group room is open and your siblings are here. Your first line below is how you opened the conversation — now read what they say and reply as yourself.]',
       });
     }
 
@@ -4694,7 +4785,13 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           let planExecuted = false;
           let planFullySucceeded = false;
           let planHadDelegations = false;
-          if (skillDispatch && !isDelegation && !noTools && isMultiStepRequest(message)) {
+          // Skip formal plan mode in group rooms. A room turn is conversational —
+          // the planner narrates "Here's my plan: 1. … 2. …", which gets spoken
+          // aloud and read by everyone (the user: "don't need to hear the plan").
+          // Multi-step work still happens fine via the normal agentic loop (the
+          // Choom just calls tools across iterations), and plan tools are already
+          // stripped for group turns anyway.
+          if (skillDispatch && !isDelegation && !isGroupTurn && !noTools && isMultiStepRequest(message)) {
             traceBuilder.setPlanMode();
             try {
               console.log(`   📋 Multi-step request detected — creating plan...`);
@@ -4875,22 +4972,19 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           } else if (/\b(?:search|find)(?: for)?(?: some| a)? (?:music|song|track|artist|album)\b/i.test(msgLower)) {
             intentToolHint = 'music_search';
           }
-          // tool_choice='required' is UNRELIABLE with the local qwen model — it very
-          // often returns an EMPTY completion (seen across qwen3.6/qwen3.5/NVIDIA),
-          // which leaves the Choom silent. So we do NOT force on group turns at all:
-          // a Choom in a room must keep talking even if she doesn't call a tool. 1:1
-          // chats keep proactive forcing on strong intent (smaller context, and the
-          // historical behavior the user relies on). The intentToolHint guidance below
-          // still steers tool choice everywhere WITHOUT forcing.
-          // Force tool_choice='required' on a real/specific tool intent in BOTH 1:1
-          // and group turns. This is what makes tool use reliable — without it Chooms
-          // narrate ("I'll set that followup") instead of calling the tool. The risk
-          // (a false-positive intent on a conversational group turn → forced → empty)
-          // is handled at the empty-guard below: a forced turn that comes back empty is
-          // RETRIED UNFORCED so the Choom just talks, instead of cascading to fallbacks.
-          // So forcing helps real tool calls and can no longer strand a conversational
-          // turn in silence.
-          forceToolCall = (strongToolIntent || !!intentToolHint) && activeTools.length > 0;
+          // NEVER force tool_choice on a group turn. Proven by execution traces:
+          // in a room, `message` is the SIBLINGS' lines, which constantly trip the
+          // broad tool-intent regex (they mention images, music, "remember this
+          // moment"…). Forcing tool_choice='required' there made qwen obey by
+          // dumping the transcript into a junk `remember` call and emitting ZERO
+          // conversational text — so the speaker (esp. the initiator, who reads the
+          // most accumulated sibling content) went SILENT every single round. The
+          // empty-guard's unforced-retry can't save it because the junk tool call
+          // makes hasToolCalls=true. Unforced tool use already works in rooms
+          // (siblings generate images / play music with force=False), so forcing
+          // only ever harms. 1:1 chats keep proactive forcing on strong intent —
+          // smaller context, real user commands, and the behavior the user relies on.
+          forceToolCall = !isGroupTurn && (strongToolIntent || !!intentToolHint) && activeTools.length > 0;
           if (forceToolCall) {
             traceBuilder.setForceToolCall();
             console.log(`   ⚡ ${choomTag} Tool intent detected — using tool_choice='required' on first iteration${intentToolHint ? ` (hint: ${intentToolHint})` : ''}`);
@@ -5164,10 +5258,17 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             });
             wallClockPromise.catch(() => {}); // suppress unhandled rejection after race
 
-            const toolChoiceOverride = forceToolCall ? 'required' as const : undefined;
-            const toolChoiceWasRequired = forceToolCall;
+            // Hard rule: a group turn NEVER sends tool_choice='required'. Beyond the
+            // initial intent check, several mid-loop nudges (task-continuation,
+            // forced-ignored, narration) can flip forceToolCall back on — and in a
+            // room that recreates the exact silence bug (forced → junk tool call →
+            // empty reply). This single gate enforces "rooms are conversational,
+            // never forced" no matter which path set the flag.
+            const allowForce = forceToolCall && !isGroupTurn;
+            const toolChoiceOverride = allowForce ? 'required' as const : undefined;
+            const toolChoiceWasRequired = allowForce;
             if (forceToolCall) {
-              console.log(`   ⚡ Using tool_choice='required' to force tool invocation`);
+              if (allowForce) console.log(`   ⚡ Using tool_choice='required' to force tool invocation`);
               forceToolCall = false; // Reset after use
             }
 
@@ -5825,6 +5926,25 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                   console.log(`   🔧 ${choomTag} Parsed Gemma tool call: ${gtc.name}(${JSON.stringify(gtc.arguments).slice(0, 80)})`);
                   toolCalls.push(gtc);
                 }
+              }
+            }
+
+            // Last-resort salvage of qwen's UNFORCED freestyle bracket tool calls
+            // (e.g. `[generate_image prompt="…" size="large"]`). Only runs when NO
+            // structured call was captured this turn — so it never double-executes —
+            // and only matches `[known_tool key=val …]`, never plain prose. This is
+            // what makes unforced tool use reliable in rooms without re-introducing
+            // forcing (which broke conversational turns). The block is stripped from
+            // the saved content so it isn't shown/spoken as text.
+            if (toolCalls.length === 0 && toolCallsAccumulator.size === 0) {
+              const knownNames = new Set(activeTools.map(t => t.name));
+              const { calls: bracketCalls, cleaned } = extractBracketToolCalls(iterationContent, knownNames);
+              if (bracketCalls.length > 0) {
+                for (const btc of bracketCalls) {
+                  console.log(`   🔧 ${choomTag} Salvaged freestyle bracket tool call: ${btc.name}(${JSON.stringify(btc.arguments).slice(0, 80)})`);
+                  toolCalls.push(btc);
+                }
+                iterationContent = cleaned;
               }
             }
 

@@ -62,6 +62,7 @@ export async function GET() {
       serpApiKey: process.env.SERPAPI_KEY || '',
       searxngEndpoint: process.env.SEARXNG_ENDPOINT || '',
     },
-    ownerName: process.env.OWNER_NAME || '',
+    ownerName: process.env.OWNER_NAME || (bridge.ownerName as string) || '',
+    ownerLocation: process.env.OWNER_LOCATION || (bridge.ownerLocation as string) || '',
   });
 }

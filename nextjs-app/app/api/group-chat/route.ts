@@ -8,14 +8,34 @@ import {
   type GroupTranscriptEntry,
   type GroupSend,
 } from '@/lib/group-chat-runner';
+import { getOwnerIdentity } from '@/lib/owner';
 
 const baseUrl = process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
-const DEFAULT_OWNER_NAME = 'Donny';
 const TURN_TIMEOUT_MS = 300000; // per-speaker wait ceiling
+
+// ── Per-room run lock (in-process) ─────────────────────────────────────────
+// Every orchestration — whether kicked off from the web /rooms page, a Choom's
+// talk_with_sisters tool, or a Signal "group:" turn — funnels through THIS route
+// in the single Next.js server process. A module-level lock therefore stops the
+// same room from running twice at once. This is exactly the bug that hit the
+// first live test: a Choom's heartbeat fired while the user had also triggered
+// talk_with_sisters, so the room ran in full TWICE. Keyed by roomId.
+const runningRooms = new Map<string, number>(); // roomId -> startedAt (ms)
+const lastRunAt = new Map<string, number>();     // roomId -> finishedAt (ms)
+const RUN_LOCK_STALE_MS = 15 * 60 * 1000; // auto-release a crashed/abandoned run
+// A Choom-initiated run (heartbeat / self-wakeup) within this window of the last
+// run on the same room is treated as an accidental duplicate and skipped — covers
+// the case where the second trigger lands just AFTER the first finishes.
+const INITIATOR_COOLDOWN_MS = 90 * 1000;
 // Only the most recent N messages are fed to each speaker as context. Keeps a
 // long-lived "lounge" room from bloating the local model's context window (and
 // the room itself persists fully on disk + in the UI regardless).
-const TRANSCRIPT_WINDOW = 50;
+// Recent messages fed to each speaker. Kept deliberately modest: a long room of
+// verbose turns blew past 200k tokens at 50, which degraded the small local model
+// (qwen3.6-35b-a3b) into losing its own identity (speaking as a sibling) and
+// echoing. The room persists fully on disk regardless — this only bounds what the
+// model sees per turn. ~24 keeps several rounds of continuity without the bloat.
+const TRANSCRIPT_WINDOW = 24;
 
 // Auto-save an image a Choom generated into the shared room folder so it
 // persists with the conversation and siblings can analyze_image it. Returns the
@@ -80,7 +100,7 @@ export async function POST(request: NextRequest) {
   const roomId = body.roomId as string;
   const message = body.message as string;
   const settings = body.settings;
-  const ownerName = (body.ownerName as string) || DEFAULT_OWNER_NAME;
+  const ownerName = (body.ownerName as string)?.trim() || getOwnerIdentity().name;
   const imageUrl = (body.imageUrl as string) || null; // optional user-shared image (data URL)
   // Keep-going: run more rounds over the existing transcript WITHOUT a new user
   // message (the "Keep going" button). roundsOverride caps how many.
@@ -118,6 +138,36 @@ export async function POST(request: NextRequest) {
 
   const participantNames = activeParticipants.map(p => p.choom.name);
   const initiator = initiatorChoomId ? activeParticipants.find(p => p.choomId === initiatorChoomId) : null;
+
+  // ── Acquire the per-room run lock (prevents the same room running twice) ──
+  const nowMs = Date.now();
+  const runningSince = runningRooms.get(roomId);
+  if (runningSince && nowMs - runningSince < RUN_LOCK_STALE_MS) {
+    return new Response(
+      JSON.stringify({ busy: true, error: 'A conversation is already in progress in this room.' }),
+      { status: 409, headers: { 'Content-Type': 'application/json' } },
+    );
+  }
+  // A Choom-initiated run that lands right after a previous one finished is almost
+  // certainly an accidental duplicate (e.g. a heartbeat echoing a just-run task).
+  const isInitiatorRun = !!initiatorChoomId && !continueRun;
+  if (isInitiatorRun) {
+    const finishedAt = lastRunAt.get(roomId);
+    if (finishedAt && nowMs - finishedAt < INITIATOR_COOLDOWN_MS) {
+      return new Response(
+        JSON.stringify({ busy: true, skipped: true, error: 'This room just had a conversation moments ago — skipping the duplicate.' }),
+        { status: 409, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
+  }
+  runningRooms.set(roomId, nowMs);
+  let lockReleased = false;
+  const releaseLock = () => {
+    if (lockReleased) return;
+    lockReleased = true;
+    runningRooms.delete(roomId);
+    lastRunAt.set(roomId, Date.now());
+  };
 
   // Persist the opening message. Keep-going adds none; an initiating Choom's
   // opening is saved as that Choom's line; otherwise it's the user's line.
@@ -171,9 +221,16 @@ export async function POST(request: NextRequest) {
           send({ type: 'user_saved', messageId: userMsg.id, authorName: ownerName, content: message, imageUrl });
         }
 
+        // Round cap. Keep-going honors its explicit override. A Choom-initiated
+        // run honors the `rounds` the initiator asked for (round 0 = siblings
+        // react to her opening, then `rounds` more full rounds) instead of the
+        // room's large auto-rounds ceiling — convergence (below) usually ends it
+        // sooner. Owner-driven web runs keep the room's autoRounds behavior.
         const maxRounds = continueRun
           ? Math.max(1, roundsOverride ?? room.autoRounds)
-          : 1 + Math.max(0, room.autoRounds);
+          : initiator
+            ? 1 + Math.max(1, roundsOverride ?? 3)
+            : 1 + Math.max(0, room.autoRounds);
         // Settle gap between consecutive turns: every Choom usually shares one
         // local model, so firing back-to-back large-context requests at the same
         // LM Studio endpoint can make it return an empty completion (KV-cache
@@ -184,6 +241,10 @@ export async function POST(request: NextRequest) {
           // Round 0 honors mentions; auto-rounds include all active participants.
           const speakers = round === 0 ? firstRoundSpeakers : activeParticipants;
           let anySpoke = false;
+          // Speakers who contributed real content AND did NOT signal they're done
+          // (no trailing [PASS]). When a whole round produces zero of these, the
+          // conversation has wound down — stop instead of looping filler.
+          let stillEngaged = 0;
 
           for (const p of speakers) {
             if (cancelled) break;
@@ -198,7 +259,7 @@ export async function POST(request: NextRequest) {
               round,
             });
 
-            const result = await runSpeakerTurn({
+            const turnOpts = {
               baseUrl,
               choomId: p.choomId,
               speakerName: p.choom.name,
@@ -208,10 +269,30 @@ export async function POST(request: NextRequest) {
               projectFolder: room.projectFolder,
               roomTopic,
               roomId: room.id,
+              isInitiator: !!initiator && p.choomId === initiator.choomId,
               settings,
               timeoutMs: TURN_TIMEOUT_MS,
               send,
-            });
+            };
+            let result = await runSpeakerTurn(turnOpts);
+
+            // One-shot anti-echo retry: the model parroted the prompt verbatim
+            // (the classic first-responder-echoes-the-greeting failure). Re-run the
+            // turn once with a corrective directive so the Choom actually responds,
+            // instead of saving a parrot or going silent. `retry: true` tells the
+            // live view to reset its display + drop the parrot's queued audio.
+            if (result.parroted && !cancelled) {
+              console.log(`   🔁 [${p.choom.name}] Echoed the prompt — retrying once with anti-echo directive`);
+              send({
+                type: 'speaker_start',
+                speakerChoomId: p.choomId,
+                speakerName: p.choom.name,
+                avatarUrl: p.choom.avatarUrl || null,
+                round,
+                retry: true,
+              });
+              result = await runSpeakerTurn({ ...turnOpts, antiEcho: true });
+            }
 
             if (result.error) {
               send({ type: 'speaker_error', speakerChoomId: p.choomId, speakerName: p.choom.name, error: result.error });
@@ -248,6 +329,7 @@ export async function POST(request: NextRequest) {
             // (and later rounds) see what was just said.
             transcript.push({ authorChoomId: p.choomId, authorName: p.choom.name, content: savedContent });
             anySpoke = true;
+            if (!result.windingDown) stillEngaged++;
 
             // First real reply of a Choom-initiated run → ping Donny via Signal so
             // he knows the room lit up and can join. Fire-and-forget; never blocks.
@@ -281,6 +363,11 @@ export async function POST(request: NextRequest) {
           send({ type: 'round_complete', round });
           // Converged: nobody had anything to add this round → stop early.
           if (!anySpoke) break;
+          // Wound down: everyone who spoke this round signaled they're done
+          // (passed, or ended with [PASS]). Don't drag it through more rounds of
+          // one-liners. Round 0 is the opening reaction, so only apply from
+          // round 1 onward (gives the initiator at least one full round back).
+          if (round >= 1 && stillEngaged === 0) break;
         }
 
         await prisma.groupRoom.update({ where: { id: roomId }, data: { updatedAt: new Date() } });
@@ -288,12 +375,14 @@ export async function POST(request: NextRequest) {
       } catch (err) {
         send({ type: 'error', error: (err as Error).message });
       } finally {
+        releaseLock();
         try { controller.close(); } catch { /* already closed */ }
       }
     },
     cancel() {
       // Client disconnected (Stop, or sent a new message to jump in).
       cancelled = true;
+      releaseLock();
     },
   });
 

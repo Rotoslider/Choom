@@ -706,7 +706,7 @@ class ScheduledTaskManager:
             # route.ts pre-injection regexes and forged a fake "[System: Use analyze_image...]"
             # directive into the user turn. Keep this prompt to pre-fetched structured data only.
             now = datetime.now()
-            owner_name = os.getenv('OWNER_NAME', 'Donny')
+            owner_name = (load_task_config().get('ownerName') or os.getenv('OWNER_NAME') or 'Donny')
             prompt = f"""Good morning! It's {now.strftime('%A, %B %d')}. Give {owner_name} a brief, loving morning update using ONLY the data below. Do not invent anything.
 
 Weather: {weather_text}
@@ -774,7 +774,7 @@ Include a warm greeting, the weather summary (mention if wind under 5mph is good
             weather = weather_data.get('weather', {})
 
             now = datetime.now()
-            owner_name = os.getenv('OWNER_NAME', 'Donny')
+            owner_name = (load_task_config().get('ownerName') or os.getenv('OWNER_NAME') or 'Donny')
             parts = [f"Good morning, {owner_name}! It's {now.strftime('%A, %B %d')}."]
 
             if weather:

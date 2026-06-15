@@ -2,6 +2,7 @@ import type { TTSSettings, VisemeTimeline } from './types';
 import { isSentenceEnd, stripForTTS } from './utils';
 import { log } from './log-store';
 import { analyzeAudioForVisemes } from './audio-viseme-analyzer';
+import { withAudioLock } from './audio-lock';
 
 interface QueueEntry {
   audio: HTMLAudioElement;
@@ -247,8 +248,9 @@ export class StreamingTTS {
     }
 
     try {
-      // Wait for audio to finish with backup trigger
-      await new Promise<void>((resolve) => {
+      // Hold the global audio lock while this clip plays so a group-room voice
+      // can't play over a 1:1 reply (and vice versa) — across tabs too.
+      await withAudioLock(() => new Promise<void>((resolve) => {
         let hasResolved = false;
 
         const finish = () => {
@@ -269,7 +271,7 @@ export class StreamingTTS {
         };
 
         audio.play().catch(finish);
-      });
+      }));
 
       // Tiny delay to prevent audio glitches
       await new Promise((resolve) => setTimeout(resolve, 20));

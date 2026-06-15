@@ -14,7 +14,7 @@ import { useAppStore } from '@/lib/store';
 import { cn } from '@/lib/utils';
 
 export function AppearanceSettings() {
-  const { settings, updateAppearanceSettings } = useAppStore();
+  const { settings, updateAppearanceSettings, updateOwnerSettings } = useAppStore();
   const appearance = settings.appearance;
 
   const themeOptions = [
@@ -25,6 +25,38 @@ export function AppearanceSettings() {
 
   return (
     <div className="space-y-6">
+      {/* Your identity — what the Chooms call you */}
+      <div className="space-y-3">
+        <div>
+          <h3 className="text-sm font-medium mb-1">Your Name</h3>
+          <p className="text-xs text-muted-foreground">
+            What your Chooms call you everywhere — in chats, group rooms, and Signal.
+            Leave blank to use the server default. Without this they fall back to the
+            cold generic word &ldquo;user.&rdquo;
+          </p>
+        </div>
+        <input
+          type="text"
+          value={settings.ownerName || ''}
+          onChange={(e) => updateOwnerSettings({ ownerName: e.target.value })}
+          placeholder="e.g. Donny"
+          className="w-full px-3 py-2 rounded-md border border-border bg-background text-sm"
+        />
+        <label className="text-sm font-medium">Your Location</label>
+        <input
+          type="text"
+          value={settings.ownerLocation || ''}
+          onChange={(e) => updateOwnerSettings({ ownerLocation: e.target.value })}
+          placeholder="e.g. the southwest New Mexico bootheel (near Rodeo / Animas, NM)"
+          className="w-full px-3 py-2 rounded-md border border-border bg-background text-sm"
+        />
+        <p className="text-xs text-muted-foreground">
+          Used to ground the Chooms in your real place (shown in group-room context).
+        </p>
+      </div>
+
+      <div className="border-t border-border" />
+
       <div>
         <h3 className="text-sm font-medium mb-4">Appearance</h3>
         <p className="text-xs text-muted-foreground mb-4">

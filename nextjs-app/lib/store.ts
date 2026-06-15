@@ -26,7 +26,7 @@ const defaultSettings: AppSettings = {
     model: 'local-model',
     temperature: 0.7,
     maxTokens: 4096,
-    contextLength: 131072,
+    contextLength: 262144,
     topP: 0.95,
     frequencyPenalty: 0,
     presencePenalty: 0,
@@ -116,6 +116,8 @@ const defaultSettings: AppSettings = {
     enabled: true,
     endpoint: 'http://127.0.0.1:8020',
   },
+  ownerName: '',
+  ownerLocation: '',
 };
 
 const defaultServiceHealth: ServiceHealth = {
@@ -214,6 +216,7 @@ interface AppState {
   updateVisionSettings: (settings: Partial<AppSettings['vision']>) => void;
   updateHomeAssistantSettings: (ha: Partial<HomeAssistantSettings>) => void;
   updateAvatarSettings: (avatar: Partial<AvatarSettings>) => void;
+  updateOwnerSettings: (owner: Partial<Pick<AppSettings, 'ownerName' | 'ownerLocation'>>) => void;
   updateProvidersSettings: (providers: LLMProviderConfig[]) => void;
   updateModelProfiles: (profiles: LLMModelProfile[]) => void;
   updateVisionProfiles: (profiles: VisionModelProfile[]) => void;
@@ -287,6 +290,10 @@ function syncSettingsToBridgeConfig(settings: AppSettings) {
             id: p.id, name: p.name, type: p.type, endpoint: p.endpoint,
             apiKey: p.apiKey, models: p.models,
           })),
+          // Owner identity — written top-level so server-side getOwnerIdentity()
+          // and the Python bridge both read the same name the user set here.
+          ownerName: settings.ownerName || null,
+          ownerLocation: settings.ownerLocation || null,
         }),
       });
     } catch (e) {
@@ -482,6 +489,10 @@ export const useAppStore = create<AppState>()(
           settings: { ...state.settings, avatar: { ...state.settings.avatar, ...avatar } },
         }));
       },
+      updateOwnerSettings: (owner) => {
+        set((state) => ({ settings: { ...state.settings, ...owner } }));
+        syncSettingsToBridgeConfig(get().settings);
+      },
       updateProvidersSettings: (providers) => {
         set((state) => ({
           settings: { ...state.settings, providers },
@@ -578,6 +589,10 @@ export const useAppStore = create<AppState>()(
             searxngEndpoint: maybe(s.search.searxngEndpoint, '', sd.search?.searxngEndpoint as string),
           };
 
+          // Owner identity (name + location from the server's .env / bridge config)
+          updated.ownerName = maybe(s.ownerName || '', '', (sd as Record<string, unknown>).ownerName as string);
+          updated.ownerLocation = maybe(s.ownerLocation || '', '', (sd as Record<string, unknown>).ownerLocation as string);
+
           if (!changed) return state;
           return { settings: updated };
         }),
@@ -624,8 +639,8 @@ export const useAppStore = create<AppState>()(
           for (const key of Object.keys(defaultSettings) as (keyof AppSettings)[]) {
             const dv = defaultSettings[key];
             const pv = persistedSettings[key];
-            if (pv && typeof dv === 'object' && !Array.isArray(dv)) {
-              (mergedSettings as unknown as Record<string, unknown>)[key] = { ...dv, ...pv };
+            if (pv && typeof dv === 'object' && !Array.isArray(dv) && typeof pv === 'object' && !Array.isArray(pv)) {
+              (mergedSettings as unknown as Record<string, unknown>)[key] = { ...(dv as object), ...(pv as object) };
             } else if (pv !== undefined) {
               (mergedSettings as unknown as Record<string, unknown>)[key] = pv;
             }

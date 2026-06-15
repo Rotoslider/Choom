@@ -143,6 +143,10 @@ export interface AppSettings {
   providers?: LLMProviderConfig[];
   modelProfiles?: LLMModelProfile[];
   visionProfiles?: VisionModelProfile[];
+  // Human owner identity — the user's name and location, used everywhere a Choom
+  // would otherwise say the generic word "user" (1:1 prompt, group rooms, Signal).
+  ownerName?: string;
+  ownerLocation?: string;
 }
 
 export interface AvatarSettings {

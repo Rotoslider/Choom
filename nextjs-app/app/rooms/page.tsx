@@ -164,8 +164,17 @@ export default function RoomsPage() {
             // genuinely new (lastTimestampRef advances during live turns) → no
             // double-speak. RoomTTSQueue serializes per voice and honors mute.
             const names = [...choomsRef.current.map(c => c.name), 'Donny', 'You'];
+            // Only SPEAK genuinely-live turns. A message older than this window is
+            // backlog (you opened a room whose conversation already happened) — it's
+            // still shown on screen, but speaking it would dump stale audio at you,
+            // which is the "Aloy's intro played at the end" confusion. The per-turn
+            // ceiling is 300s, so 6 min covers a slow-but-live turn without replaying
+            // history.
+            const SPEAK_FRESHNESS_MS = 6 * 60 * 1000;
             for (const m of newMsgs) {
               if (m.role !== 'assistant' || !m.authorChoomId || !m.content?.trim()) continue;
+              const age = Date.now() - new Date(m.createdAt).getTime();
+              if (age > SPEAK_FRESHNESS_MS) continue; // stale backlog — display only, don't speak
               const clean = stripLeadingName(
                 m.content.replace(/\n*_?\[image shared to the room[\s\S]*?\]_?/gi, '').trim(),
                 names,
@@ -179,7 +188,7 @@ export default function RoomsPage() {
           }
         }
       } catch { /* ignore poll errors */ }
-    }, 12000);
+    }, 4000); // fast poll → background room audio stays close to real-time, not 12s batches
     return () => clearInterval(interval);
   }, [currentRoomId]);
 
@@ -229,7 +238,10 @@ export default function RoomsPage() {
           try { data = JSON.parse(line.slice(6)); } catch { continue; }
           switch (data.type) {
             case 'speaker_start':
-              setActiveSpeaker({ name: data.speakerName as string, choomId: data.speakerChoomId as string, status: 'thinking…' });
+              // Anti-echo retry: drop the parrot's already-queued/playing audio so
+              // only the corrected response is spoken.
+              if (data.retry) ttsRef.current?.stop();
+              setActiveSpeaker({ name: data.speakerName as string, choomId: data.speakerChoomId as string, status: data.retry ? 'rephrasing…' : 'thinking…' });
               setStreamingText('');
               ttsBufRef.current = '';
               lastTtsRef.current = '';

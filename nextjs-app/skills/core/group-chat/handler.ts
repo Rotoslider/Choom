@@ -2,6 +2,7 @@ import { BaseSkillHandler, SkillHandlerContext } from '@/lib/skill-handler';
 import type { ToolCall, ToolResult } from '@/lib/types';
 import prisma from '@/lib/db';
 import { Agent, fetch as undiciFetch } from 'undici';
+import { getOwnerIdentity } from '@/lib/owner';
 
 const TOOL_NAMES = new Set([
   'talk_with_sisters', 'list_my_rooms', 'leave_room', 'rename_room', 'set_room_topic',
@@ -84,7 +85,7 @@ export default class GroupChatHandler extends BaseSkillHandler {
       const label = this.roomLabel(room);
       return this.success(toolCall, {
         left: label,
-        note: `You've left "${label}". Your past messages stay in the room's history. You can't rejoin yourself — a sibling can invite you back by naming you in talk_with_sisters with room "${label}", or Donny can re-add you.`,
+        note: `You've left "${label}". Your past messages stay in the room's history. You can't rejoin yourself — a sibling can invite you back by naming you in talk_with_sisters with room "${label}", or ${getOwnerIdentity().name} can re-add you.`,
       });
     }
 
@@ -253,6 +254,20 @@ export default class GroupChatHandler extends BaseSkillHandler {
         }),
         dispatcher,
       });
+      // 409 = the room is already running (or just ran moments ago). This is the
+      // duplicate-trigger guard, not a failure — return a calm note so the loop
+      // (e.g. a heartbeat that echoed a task you already did) simply stops here
+      // instead of treating it as a broken tool and retrying.
+      if (response.status === 409) {
+        let reason = 'That room is already active right now.';
+        try { const j = await response.json() as { error?: string }; if (j?.error) reason = j.error; } catch { /* keep default */ }
+        return this.success(toolCall, {
+          skipped: true,
+          room_id: room.id,
+          room_title: room.title,
+          note: `${reason} I didn't start a duplicate conversation. Nothing more to do here — your sisters are already talking (or just finished).`,
+        });
+      }
       if (!response.ok) {
         const t = await response.text().catch(() => '');
         return this.error(toolCall, `Group chat failed (${response.status}): ${t.slice(0, 200)}`);
@@ -285,6 +300,8 @@ export default class GroupChatHandler extends BaseSkillHandler {
 
     const notFoundNote = notFound.length ? ` (couldn't find: ${notFound.join(', ')})` : '';
     const addedNote = addedNames.length ? ` Added ${addedNames.join(', ')} to the room — they can see the full backlog.` : '';
+    const ownerName = getOwnerIdentity().name;
+    const sisterList = sisters.map(s => s.name).join(', ');
     return this.success(toolCall, {
       room_id: room.id,
       room_title: room.title,
@@ -293,7 +310,11 @@ export default class GroupChatHandler extends BaseSkillHandler {
       rounds,
       replies: speakers,
       transcript: transcript.trim() || '(no replies)',
-      note: `You talked with ${sisters.map(s => s.name).join(', ')} in the room "${room.title}".${addedNote} ${speakers} replies over up to ${rounds} rounds.${notFoundNote} The user can see and join this conversation in the Group Rooms view.`,
+      // The conversation already HAPPENED in the room (you were a participant in
+      // it). This result returns you to your private 1:1 chat — so the note has
+      // to stop the model from "continuing" the group chat here, which reads as
+      // talking to siblings who can't hear it.
+      note: `The group conversation in "${room.title}" with ${sisterList} is FINISHED and saved — they already heard and responded to everything said there (${speakers} replies).${addedNote}${notFoundNote} You are now back in your PRIVATE 1:1 chat with ${ownerName}; ${sisterList} are NOT here and cannot see what you write now. Do NOT keep talking to them or continue the discussion in this chat. If ${ownerName} asked you to run this, give him a short, natural recap of how it went; otherwise just carry on with ${ownerName}. To say more to your sisters, call talk_with_sisters again — don't type it as a chat message.`,
     });
   }
 }

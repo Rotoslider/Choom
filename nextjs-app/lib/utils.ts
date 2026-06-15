@@ -149,6 +149,9 @@ export function stripForTTS(text: string): string {
     // Remove JSON tool-call arrays: [{"name":"...","parameters":{...}}]
     // Safety net for blocks that slip past the streaming filter
     .replace(/\[\s*\{[^}]*"name"\s*:\s*"[^"]+"\s*,\s*"(?:parameters|arguments)"\s*:\s*\{[\s\S]*?\}\s*\}\s*\]/g, '')
+    // Remove the group-room [PASS] marker (incl. *[PASS]* / [pass.]) — it's a
+    // control signal, the user doesn't need to hear "pass" spoken every turn.
+    .replace(/\*{0,2}\s*\[\s*pass\s*[.!]*\s*\]\s*\*{0,2}/gi, '')
     // Remove [think]...[/think] blocks (case insensitive)
     .replace(/\[think\][\s\S]*?\[\/think\]/gi, '')
     // Remove <think>...</think> blocks (case insensitive)

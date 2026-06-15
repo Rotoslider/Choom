@@ -472,15 +472,24 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
 
       const imageBuffer = Buffer.from(base64Data, 'base64');
 
+      // Models routinely pass a save_path with NO extension (or a non-image one),
+      // which the workspace rejects with `Extension "" not allowed`. Generated
+      // images are PNG, so default to .png when no image extension is present.
+      let normalizedPath = savePath.trim();
+      const lower = normalizedPath.toLowerCase();
+      if (!WORKSPACE_IMAGE_EXTENSIONS.some(e => lower.endsWith(e))) {
+        normalizedPath = normalizedPath.replace(/\.+$/, '') + '.png';
+      }
+
       // Write to workspace with image extensions allowed
       const ws = new WorkspaceService(WORKSPACE_ROOT, MAX_IMAGE_FILE_SIZE_KB, WORKSPACE_ALL_EXTENSIONS);
-      const result = await ws.writeFileBuffer(savePath, imageBuffer, WORKSPACE_ALL_EXTENSIONS);
+      const result = await ws.writeFileBuffer(normalizedPath, imageBuffer, WORKSPACE_ALL_EXTENSIONS);
 
       ctx.sessionFileCount.created++;
-      ctx.send({ type: 'file_created', path: savePath });
+      ctx.send({ type: 'file_created', path: normalizedPath });
 
-      console.log(`   💾 Saved generated image: ${imageId} → ${savePath} (${(imageBuffer.length / 1024).toFixed(1)}KB)`);
-      return this.success(toolCall, { success: true, message: result, path: savePath, sizeKB: Math.round(imageBuffer.length / 1024) });
+      console.log(`   💾 Saved generated image: ${imageId} → ${normalizedPath} (${(imageBuffer.length / 1024).toFixed(1)}KB)`);
+      return this.success(toolCall, { success: true, message: result, path: normalizedPath, sizeKB: Math.round(imageBuffer.length / 1024) });
     } catch (err) {
       console.error('   ❌ Save generated image error:', err instanceof Error ? err.message : err);
       return this.error(toolCall, `Failed to save image: ${err instanceof Error ? err.message : 'Unknown error'}`);
