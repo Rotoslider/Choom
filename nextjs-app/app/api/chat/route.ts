@@ -4882,20 +4882,18 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           // chats keep proactive forcing on strong intent (smaller context, and the
           // historical behavior the user relies on). The intentToolHint guidance below
           // still steers tool choice everywhere WITHOUT forcing.
-          // Force tool_choice='required' on a real tool request — but ONLY in 1:1.
-          // In a GROUP turn the `message` is conversational transcript (sibling lines,
-          // including chatter ABOUT tools/followups), so intent detection false-positives
-          // and forcing makes qwen return a GENUINELY empty completion (0 tokens, nothing
-          // even in reasoning_content → the salvage can't help) → fallback cascade. Rooms
-          // are conversational; the model calls tools fine UNFORCED (observed: "rarely
-          // forgot a tool"). So: force in 1:1, never in group. (Verified by logs: forced
-          // group turns empty out; forced 1:1 turns work.)
-          forceToolCall = (strongToolIntent || !!intentToolHint) && activeTools.length > 0 && !isGroupTurn;
+          // Force tool_choice='required' on a real/specific tool intent in BOTH 1:1
+          // and group turns. This is what makes tool use reliable — without it Chooms
+          // narrate ("I'll set that followup") instead of calling the tool. The risk
+          // (a false-positive intent on a conversational group turn → forced → empty)
+          // is handled at the empty-guard below: a forced turn that comes back empty is
+          // RETRIED UNFORCED so the Choom just talks, instead of cascading to fallbacks.
+          // So forcing helps real tool calls and can no longer strand a conversational
+          // turn in silence.
+          forceToolCall = (strongToolIntent || !!intentToolHint) && activeTools.length > 0;
           if (forceToolCall) {
             traceBuilder.setForceToolCall();
             console.log(`   ⚡ ${choomTag} Tool intent detected — using tool_choice='required' on first iteration${intentToolHint ? ` (hint: ${intentToolHint})` : ''}`);
-          } else if ((strongToolIntent || intentToolHint) && isGroupTurn) {
-            console.log(`   💬 ${choomTag} Group turn — not forcing tool_choice (conversational)`);
           }
           if (intentToolHint && activeTools.length > 0) {
             currentMessages.push({
@@ -5005,6 +5003,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           let consecutiveNoToolIters = 0;
           let fallbackActivated = false; // Set when a fallback model takes over mid-request
           let retriedCurrentFallback = false; // Guard: only retry a timed-out fallback once
+          let relaxedToolChoice = false; // Guard: only drop forced tool_choice once per request (on a forced-empty turn)
 
           while (iteration < maxIterations) {
             iteration++;
@@ -5403,6 +5402,18 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                   send({ type: 'content', content: iterationContent });
                 }
                 console.log(`   💬 ${choomTag} Salvaged reply from reasoning_content channel (${iterationContent.length} chars) — not an empty response`);
+              } else if (!iterationContent.trim() && !hasToolCalls && toolChoiceWasRequired && !relaxedToolChoice) {
+                // A FORCED tool call came back genuinely empty (no content, no tool call,
+                // nothing in reasoning_content). The model wanted to converse, not call a
+                // tool — typical on a group conversational turn where the intent was a
+                // false positive. Drop forcing and re-run THIS turn UNFORCED so she can
+                // speak, instead of cascading to fallback models (which also empty under
+                // forcing). This is what lets us keep forcing for real tool requests
+                // without group conversational turns going silent.
+                relaxedToolChoice = true;
+                forceToolCall = false;
+                console.log(`   🔁 ${choomTag} Forced call returned empty — retrying this turn WITHOUT tool_choice=required (letting the Choom converse)`);
+                continue;
               } else if (!iterationContent.trim() && !hasToolCalls && fallbackAttempt < fallbackConfigs.length) {
                 throw new Error('Empty response from model (0 characters, no tool calls)');
               }
