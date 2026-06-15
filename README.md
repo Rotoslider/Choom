@@ -225,7 +225,7 @@ Hardcoded fallback in `store.ts` and API routes:
 
 ### Layer 2 - Settings Panel
 
-User-configurable at `/settings`. Persisted in localStorage through Zustand with a custom deep-merge function (prevents nested keys from being wiped on app updates; explicitly preserves optional top-level arrays like `providers`, `modelProfiles`, `visionProfiles`). Weather, search, image, and Home Assistant settings are synced to `bridge-config.json` for Signal parity. Providers are also synced for bridge-side LLM resolution. Seventeen sections:
+User-configurable at `/settings`. Persisted in localStorage through Zustand with a custom deep-merge function (prevents nested keys from being wiped on app updates; explicitly preserves optional top-level arrays like `providers`, `modelProfiles`, `visionProfiles`). Weather, search, image, Home Assistant, and owner-identity (your name/location) settings are synced to `bridge-config.json` for Signal parity. Providers are also synced for bridge-side LLM resolution. Seventeen sections:
 
 1. **LLM** - endpoint, model, temperature, context length, max tokens, and **Model Profiles** (per-model parameter defaults with built-in profiles for ~18 models + custom user profiles)
 2. **Audio** - TTS/STT endpoints, voice, language, VAD sensitivity
@@ -242,7 +242,7 @@ User-configurable at `/settings`. Persisted in localStorage through Zustand with
 13. **YouTube DL** - YouTube music channel management, max videos per channel, per-channel enable/disable, Run Now trigger
 14. **Automations** - visual multi-step task builder with cron/interval scheduling, Choom targeting, and template variables
 15. **Smart Home** - Home Assistant connection (URL, access token), entity filter, system prompt injection, cache TTL, entity browser
-16. **Theme** - light/dark, accent color, font size
+16. **Theme** - light/dark, accent color, font size, and **your identity** (your name & location) — what the Chooms call you everywhere (1:1 chats, group rooms, Signal) instead of the cold generic "user"; synced to `bridge-config.json` so the Python bridge/heartbeats use it too
 17. **Model Profiles** - (subsection of LLM settings) built-in defaults for NVIDIA Build models (Nemotron Ultra 253B, Mistral Large 3 675B, DeepSeek V3.2, Kimi K2.5, Kimi K2, Qwen 3.5 397B, Qwen 3 Next 80B, GLM-5, Llama 405B, Llama 3.3 70B, Mistral Nemotron), Anthropic (Claude Sonnet 4, Haiku 4.5, Opus 4.6), OpenAI (GPT-4.1, GPT-4.1 Mini, GPT-4o, o3-mini), and vision models (GPT-4o, Claude Sonnet 4, Claude Haiku 4.5, Qwen 3.5 397B, Qwen 3 VL 30B)
 
 ### Layer 3 - Per-Choom Overrides
@@ -394,7 +394,7 @@ Hybrid SQLite + ChromaDB storage via a Python HTTP server on port 8100.
   - **Workspace**: Ask the Choom to review images in a project folder (auto-detected with file listing injection)
 
 ### Workspace Tools
-- `workspace_write_file` / `workspace_read_file` / `workspace_list_files`
+- `workspace_write_file` / `workspace_read_file` / `workspace_list_files` (recursive — shows files nested in subfolders with directly-usable paths, so a Choom finds an existing file instead of making a duplicate)
 - `workspace_create_folder` / `workspace_delete_file`
 - `workspace_create_project` - Create a new project folder with `.choom-project.json` metadata, assigned Choom, and description. Appears in the Projects tab in Settings
 - `workspace_rename_project` - Rename a project folder and update its `.choom-project.json` metadata (path traversal protected, duplicate name detection)
