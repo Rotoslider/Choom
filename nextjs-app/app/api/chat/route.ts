@@ -4871,13 +4871,20 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           // chats keep proactive forcing on strong intent (smaller context, and the
           // historical behavior the user relies on). The intentToolHint guidance below
           // still steers tool choice everywhere WITHOUT forcing.
-          const allowToolForcing = !isGroupTurn;
-          forceToolCall = strongToolIntent && activeTools.length > 0 && allowToolForcing;
+          // In a group turn, force ONLY for a SPECIFIC actionable intent (e.g. the
+          // owner asks a Choom in the room to "set a followup") — never on the broad
+          // strongToolIntent that a transcript trips by accident. This was unsafe
+          // before (forcing made qwen return empty → silence), but the
+          // reasoning_content salvage above now guarantees we never go silent: worst
+          // case the prose is salvaged and the Choom just talks. So a targeted force
+          // is safe again, and it's what makes an in-room tool request actually fire.
+          const allowToolForcing = !isGroupTurn || !!intentToolHint;
+          forceToolCall = (strongToolIntent || !!intentToolHint) && activeTools.length > 0 && allowToolForcing;
           if (forceToolCall) {
             traceBuilder.setForceToolCall();
             console.log(`   ⚡ ${choomTag} Tool intent detected — using tool_choice='required' on first iteration${intentToolHint ? ` (hint: ${intentToolHint})` : ''}`);
-          } else if ((strongToolIntent || intentToolHint) && isGroupTurn) {
-            console.log(`   💬 ${choomTag} Group turn — not forcing tool_choice (conversational; forcing empties this model)`);
+          } else if (strongToolIntent && isGroupTurn) {
+            console.log(`   💬 ${choomTag} Group turn — not forcing tool_choice (no specific actionable intent)`);
           }
           if (intentToolHint && activeTools.length > 0) {
             currentMessages.push({
