@@ -72,6 +72,8 @@ export default function RoomsPage() {
   const [messages, setMessages] = useState<RoomMessage[]>([]);
   const [createOpen, setCreateOpen] = useState(false);
   const [managingMembers, setManagingMembers] = useState(false);
+  const [editingRoomId, setEditingRoomId] = useState<string | null>(null);
+  const [editRoomTitle, setEditRoomTitle] = useState('');
   const [signalRoomId, setSignalRoomId] = useState<string | null>(null);
   // Per-speaker live state during a turn
   const [activeSpeaker, setActiveSpeaker] = useState<{ name: string; choomId: string; status: string } | null>(null);
@@ -378,15 +380,21 @@ export default function RoomsPage() {
     setSignalRoomId(id);
   }, []);
 
-  const handleRenameRoom = useCallback(async (id: string, current: string) => {
-    const name = prompt('Rename this room:', current)?.trim();
-    if (!name || name === current) return;
+  const startRenameRoom = useCallback((id: string, current: string) => {
+    setEditingRoomId(id);
+    setEditRoomTitle(current);
+  }, []);
+
+  const saveRenameRoom = useCallback(async (id: string) => {
+    const name = editRoomTitle.trim();
+    setEditingRoomId(null);
+    if (!name) return;
     setRooms(prev => prev.map(r => r.id === id ? { ...r, title: name } : r));
     await fetch(`/api/group-chats/${id}`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title: name }),
     });
-  }, []);
+  }, [editRoomTitle]);
 
   const handleDeleteRoom = useCallback(async (id: string) => {
     if (!confirm('Delete this room and its transcript?')) return;
@@ -439,46 +447,66 @@ export default function RoomsPage() {
             {rooms.length === 0 && (
               <p className="text-sm text-muted-foreground p-4 text-center">No rooms yet. Click + to create one.</p>
             )}
-            {rooms.map(room => (
+            {rooms.map(room => {
+              const roomName = room.title || room.participants.map(p => p.choom.name).join(', ');
+              return (
               <div
                 key={room.id}
                 className={cn(
-                  'group flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer hover:bg-muted/50',
+                  // grid [1fr_auto]: the content column flexes/truncates, the kebab
+                  // lives in the `auto` column so it can NEVER be pushed off-screen
+                  // by a long room name (the bug from the 1:1 sidebar, relearned).
+                  'group grid grid-cols-[1fr_auto] items-start gap-1 px-3 py-2 rounded-lg cursor-pointer hover:bg-muted/50',
                   currentRoomId === room.id && 'bg-primary/10 border border-primary/30'
                 )}
-                onClick={() => setCurrentRoomId(room.id)}
+                onClick={() => editingRoomId !== room.id && setCurrentRoomId(room.id)}
               >
-                <div className="flex -space-x-2 shrink-0">
-                  {room.participants.slice(0, 3).map(p => (
-                    <AvatarDisplay key={p.id} name={p.choom.name} avatarUrl={p.choom.avatarUrl} size="sm" />
-                  ))}
-                  {room.participants.length > 3 && (
-                    <span className="flex items-center justify-center h-6 w-6 rounded-full bg-muted text-[10px] font-medium ring-2 ring-background">
-                      +{room.participants.length - 3}
-                    </span>
+                <div className="min-w-0 overflow-hidden">
+                  {/* Row 1: avatars (up to 6 on one line) */}
+                  <div className="flex -space-x-2 mb-1">
+                    {room.participants.slice(0, 6).map(p => (
+                      <AvatarDisplay key={p.id} name={p.choom.name} avatarUrl={p.choom.avatarUrl} size="sm" />
+                    ))}
+                    {room.participants.length > 6 && (
+                      <span className="flex items-center justify-center h-6 w-6 rounded-full bg-muted text-[10px] font-medium ring-2 ring-background">
+                        +{room.participants.length - 6}
+                      </span>
+                    )}
+                  </div>
+                  {/* Row 2: room name (inline-editable) */}
+                  {editingRoomId === room.id ? (
+                    <Input
+                      value={editRoomTitle}
+                      onChange={(e) => setEditRoomTitle(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') saveRenameRoom(room.id);
+                        if (e.key === 'Escape') setEditingRoomId(null);
+                      }}
+                      onBlur={() => saveRenameRoom(room.id)}
+                      onClick={(e) => e.stopPropagation()}
+                      className="h-6 text-sm px-1"
+                      autoFocus
+                    />
+                  ) : (
+                    <p className="text-sm font-medium truncate" title={roomName}>{roomName}</p>
                   )}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium truncate">
-                    {room.title || room.participants.map(p => p.choom.name).join(', ')}
-                  </p>
+                  {/* Row 3: counts */}
                   <p className="text-xs text-muted-foreground truncate">
                     {room.participants.length} chooms
                     {room._count ? ` · ${room._count.messages} msgs` : ''}
                     {room._count && room._count.messages > 300 ? ' ⚠️' : ''}
                   </p>
                 </div>
-                {/* Room actions — kebab menu (always reachable, never squeezed by
-                    the avatars/name; replaces the hover-only delete button). */}
+                {/* Room actions — kebab in the un-squeezable auto column. */}
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0 text-muted-foreground"
+                    <Button variant="ghost" size="icon" className="h-6 w-6 text-muted-foreground"
                       onClick={(e) => e.stopPropagation()} title="Room actions">
                       <MoreVertical className="h-4 w-4" />
                     </Button>
                   </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleRenameRoom(room.id, room.title || room.participants.map(p => p.choom.name).join(', ')); }}>
+                  <DropdownMenuContent align="end" className="w-40">
+                    <DropdownMenuItem onClick={(e) => { e.stopPropagation(); startRenameRoom(room.id, roomName); }}>
                       <Pencil className="h-4 w-4 mr-2" /> Rename
                     </DropdownMenuItem>
                     <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleArchiveRoom(room.id); }}>
@@ -491,7 +519,8 @@ export default function RoomsPage() {
                   </DropdownMenuContent>
                 </DropdownMenu>
               </div>
-            ))}
+              );
+            })}
           </div>
         </ScrollArea>
       </aside>

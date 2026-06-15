@@ -260,21 +260,24 @@ export default class WorkspaceFilesHandler extends BaseSkillHandler {
       const dirPath = stripMisplacedSharedPrefix(this.sanitizePath((toolCall.arguments.path as string) || ''));
 
       const ws = new WorkspaceService(WORKSPACE_ROOT, WORKSPACE_MAX_FILE_SIZE_KB, WORKSPACE_ALLOWED_EXTENSIONS);
-      const entries = await ws.listFiles(dirPath);
+      // Recursive so files nested in subfolders are visible (prevents the
+      // "didn't see my journal in journals/, made a new one" duplication). Paths
+      // are root-relative and directly usable in read/write tools.
+      const { entries, truncated } = await ws.listFilesRecursive(dirPath);
 
       const formatted = entries.length === 0
         ? '(empty directory)'
         : entries.map(e => {
             if (e.type === 'directory') {
-              return `\uD83D\uDCC1 ${e.name}/`;
+              return `\uD83D\uDCC1 ${e.path}/`;
             }
             const sizeStr = e.size < 1024
               ? `${e.size}B`
               : `${(e.size / 1024).toFixed(1)}KB`;
-            return `\uD83D\uDCC4 ${e.name} (${sizeStr})`;
-          }).join('\n');
+            return `\uD83D\uDCC4 ${e.path} (${sizeStr})`;
+          }).join('\n') + (truncated ? '\n\u2026 (more entries not shown \u2014 list a subfolder to see the rest)' : '');
 
-      console.log(`   📂 Workspace list: ${dirPath || '/'} (${entries.length} entries)`);
+      console.log(`   📂 Workspace list (recursive): ${dirPath || '/'} (${entries.length} entries${truncated ? ', truncated' : ''})`);
       return this.success(toolCall, { success: true, entries, formatted });
     } catch (err) {
       console.error('   ❌ Workspace list error:', err instanceof Error ? err.message : err);

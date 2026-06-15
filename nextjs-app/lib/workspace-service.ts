@@ -238,6 +238,41 @@ export class WorkspaceService {
     }
   }
 
+  /**
+   * Recursively list a directory tree (files AND folders), returning root-
+   * relative paths (directly usable in read/write tools). A plain one-level list
+   * hides files that live in
+   * subfolders — so a Choom that earlier made `journals/journal.md` lists the
+   * folder, doesn't see the file, and creates a duplicate. This surfaces the
+   * whole tree (capped) so existing files are found. Depth- and count-bounded to
+   * keep the result token-cheap.
+   */
+  async listFilesRecursive(
+    relativePath: string = '',
+    maxDepth: number = 4,
+    maxEntries: number = 300,
+  ): Promise<{ entries: Array<{ path: string; type: 'file' | 'directory'; size: number }>; truncated: boolean }> {
+    const out: Array<{ path: string; type: 'file' | 'directory'; size: number }> = [];
+    let truncated = false;
+    const walk = async (absRel: string, depth: number): Promise<void> => {
+      if (out.length >= maxEntries) { truncated = true; return; }
+      let entries: FileEntry[];
+      try { entries = await this.listFiles(absRel); } catch { return; }
+      for (const e of entries) {
+        if (out.length >= maxEntries) { truncated = true; return; }
+        // Root-relative path → directly usable in read/write tools, no ambiguity
+        // about which folder it lives in.
+        const childAbs = absRel ? `${absRel}/${e.name}` : e.name;
+        out.push({ path: childAbs, type: e.type, size: e.size });
+        if (e.type === 'directory' && depth < maxDepth) {
+          await walk(childAbs, depth + 1);
+        }
+      }
+    };
+    await walk(relativePath, 1);
+    return { entries: out, truncated };
+  }
+
   /** Extract text from a PDF file using pdftotext */
   async readPdfText(relativePath: string, pages?: { start?: number; end?: number }): Promise<string> {
     const fullPath = this.resolveSafe(relativePath);
