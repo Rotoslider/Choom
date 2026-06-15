@@ -157,6 +157,24 @@ export default function RoomsPage() {
               const merged = [...prev, ...newMsgs.filter(m => !seen.has(m.id))];
               return merged;
             });
+            // Speak background-arrived Choom messages — a room-followup re-entry, a
+            // Signal "group:" turn, or another device's turn. The live SSE path only
+            // speaks turns YOU trigger here; without this, background room activity
+            // appears on screen silently. These are fetched with `since=` so they're
+            // genuinely new (lastTimestampRef advances during live turns) → no
+            // double-speak. RoomTTSQueue serializes per voice and honors mute.
+            const names = [...choomsRef.current.map(c => c.name), 'Donny', 'You'];
+            for (const m of newMsgs) {
+              if (m.role !== 'assistant' || !m.authorChoomId || !m.content?.trim()) continue;
+              const clean = stripLeadingName(
+                m.content.replace(/\n*_?\[image shared to the room[\s\S]*?\]_?/gi, '').trim(),
+                names,
+              );
+              if (clean) {
+                const voice = choomsRef.current.find(c => c.id === m.authorChoomId)?.voiceId || null;
+                ttsRef.current?.enqueue(clean, voice);
+              }
+            }
             lastTimestampRef.current = newMsgs[newMsgs.length - 1].createdAt;
           }
         }
