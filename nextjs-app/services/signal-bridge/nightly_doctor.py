@@ -100,23 +100,26 @@ def load_traces(date_str: Optional[str] = None, lookback_days: int = 1) -> List[
     return traces
 
 
-def load_historical_reports(lookback_days: int = 7, exclude_today: bool = True) -> List[Dict[str, Any]]:
+def load_historical_reports(lookback_days: int = 7, anchor_date: Optional[str] = None) -> List[Dict[str, Any]]:
     """Load previously-generated report JSONs for week-over-week trending.
 
-    Skips today's report by default so the baseline isn't contaminated with
-    the current day's numbers. Returns newest-first.
+    Walks BACKWARD from `anchor_date` (the day being reported on) and excludes
+    the anchor itself, so the baseline is the days BEFORE it and is never
+    contaminated by the report we're about to (re)write. Returns newest-first.
     """
     if not REPORTS_DIR.exists():
         return []
 
-    today_str = datetime.now().strftime("%Y-%m-%d")
+    try:
+        anchor = datetime.strptime(anchor_date, "%Y-%m-%d") if anchor_date else datetime.now()
+    except (ValueError, TypeError):
+        anchor = datetime.now()
     reports = []
-    # Walk back N days looking for report-YYYY-MM-DD.json
+    # Walk back N days looking for report-YYYY-MM-DD.json (i starts at 1 → skips
+    # the anchor day itself).
     for i in range(1, lookback_days + 2):  # +2 for slight buffer
-        d = datetime.now() - timedelta(days=i)
+        d = anchor - timedelta(days=i)
         ds = d.strftime("%Y-%m-%d")
-        if exclude_today and ds == today_str:
-            continue
         report_file = REPORTS_DIR / f"report-{ds}.json"
         if not report_file.exists():
             continue
@@ -611,9 +614,9 @@ def format_report(report: Dict[str, Any]) -> str:
     """Format the analysis report as a human-readable string for Signal."""
     total = report["total_requests"]
     if total == 0:
-        return "Nightly Doctor: No traces found for today. System may be idle or trace logging not active."
+        return f"Nightly Doctor: No traces found for {report.get('date') or 'the reported day'}. System may be idle or trace logging not active."
 
-    lines = [f"Nightly Doctor Report ({datetime.now().strftime('%Y-%m-%d')})"]
+    lines = [f"Nightly Doctor Report ({report.get('date') or datetime.now().strftime('%Y-%m-%d')})"]
     lines.append(f"{'=' * 40}")
 
     # Overview
@@ -745,14 +748,27 @@ def format_report(report: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def run_diagnostics(lookback_days: int = 1) -> str:
-    """Main entry point: load traces, analyze, add WoW trends, format report."""
-    traces = load_traces(lookback_days=lookback_days)
+def run_diagnostics(lookback_days: int = 1, report_date: Optional[str] = None) -> str:
+    """Main entry point: load traces, analyze, add WoW trends, format report.
+
+    Reports on a single COMPLETED local day. The doctor runs in the early morning
+    to review the day that just ended, so when no explicit `report_date` is given
+    we review YESTERDAY before noon (when "today" has barely any traces yet) and
+    TODAY later in the day (so a 22:00 schedule still reviews the day's activity).
+    The report is named for the day it COVERS, not the day it runs.
+    """
+    if report_date is None:
+        now = datetime.now()
+        base = now - timedelta(days=1) if now.hour < 12 else now
+        report_date = base.strftime("%Y-%m-%d")
+
+    traces = load_traces(date_str=report_date)
     report = analyze_traces(traces)
+    report["date"] = report_date  # the day this report COVERS (for header + naming)
 
     # Attach 7-day trend comparison (if historical reports exist)
     try:
-        history = load_historical_reports(lookback_days=7, exclude_today=True)
+        history = load_historical_reports(lookback_days=7, anchor_date=report_date)
         report["trends"] = compute_trends(report, history)
     except Exception as e:
         logger.warning(f"Failed to compute trends: {e}")
@@ -769,7 +785,7 @@ def run_diagnostics(lookback_days: int = 1) -> str:
     # Also save the raw report as JSON for historical analysis
     report_dir = TRACES_DIR / "reports"
     report_dir.mkdir(parents=True, exist_ok=True)
-    report_file = report_dir / f"report-{datetime.now().strftime('%Y-%m-%d')}.json"
+    report_file = report_dir / f"report-{report_date}.json"
     try:
         with open(report_file, "w") as f:
             # default=str handles sets, datetimes, etc. that may slip through
