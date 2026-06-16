@@ -689,6 +689,93 @@ function createGemmaToolCallFilter(): {
   return { filter, getCaptured: () => captured, flush };
 }
 
+// Find the index of the brace/bracket that closes the one at `start`, respecting
+// strings and escapes. Returns -1 if unbalanced.
+function matchBalanced(s: string, start: number, open: string, close: string): number {
+  let depth = 0, inStr = false, esc = false;
+  for (let i = start; i < s.length; i++) {
+    const c = s[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === '\\') esc = true;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') inStr = true;
+    else if (c === open) depth++;
+    else if (c === close) { depth--; if (depth === 0) return i; }
+  }
+  return -1;
+}
+
+/**
+ * Salvage MISTRAL tool calls that leaked as TEXT. When LM Studio's Mistral chat
+ * template doesn't convert them to structured `tool_calls`, the model's native
+ * token sequence prints verbatim, e.g.:
+ *
+ *   [TOOL_CALLS]generate_image<SPECIAL_32>{"prompt":"…","self_portrait":true}
+ *   [TOOL_CALLS][{"name":"get_weather","arguments":{}}]   (array form)
+ *
+ * Neither survives the XML/JSON/Gemma/bracket parsers (the `[TOOL_CALLS]` /
+ * `<SPECIAL_n>` wrapper breaks them), so the tool never runs. This extracts both
+ * shapes (validating the name against the active tool list) and returns the calls
+ * plus the content with those spans removed.
+ */
+function extractMistralToolCalls(
+  content: string,
+  knownToolNames: Set<string>,
+): { calls: { id: string; name: string; arguments: Record<string, unknown> }[]; cleaned: string } {
+  const calls: { id: string; name: string; arguments: Record<string, unknown> }[] = [];
+  if (!content || content.indexOf('[TOOL_CALLS]') === -1) return { calls, cleaned: content };
+  const removeRanges: Array<[number, number]> = [];
+  const marker = /\[TOOL_CALLS\]\s*/g;
+  let m: RegExpExecArray | null;
+  while ((m = marker.exec(content)) !== null) {
+    const i = m.index + m[0].length;
+    // Array form: [TOOL_CALLS][{"name":…,"arguments":…}, …]
+    if (content[i] === '[') {
+      const end = matchBalanced(content, i, '[', ']');
+      if (end > i) {
+        try {
+          const arr = JSON.parse(content.slice(i, end + 1));
+          if (Array.isArray(arr)) {
+            let any = false;
+            for (const it of arr) {
+              if (it && typeof it.name === 'string' && knownToolNames.has(it.name)) {
+                calls.push({ id: `mistraltc_${Date.now()}_${calls.length}`, name: it.name, arguments: (it.arguments || it.parameters || {}) as Record<string, unknown> });
+                any = true;
+              }
+            }
+            if (any) { removeRanges.push([m.index, end + 1]); continue; }
+          }
+        } catch { /* fall through */ }
+      }
+    }
+    // Name form: [TOOL_CALLS]tool_name<SPECIAL_n>{json}  (special tokens optional)
+    const nameMatch = /^([a-zA-Z_]\w*)\s*(?:<[^>\n]*>\s*|\[ARGS\]\s*)*/.exec(content.slice(i));
+    if (nameMatch) {
+      const name = nameMatch[1];
+      const j = i + nameMatch[0].length;
+      if (content[j] === '{' && knownToolNames.has(name)) {
+        const end = matchBalanced(content, j, '{', '}');
+        if (end > j) {
+          try {
+            const args = JSON.parse(content.slice(j, end + 1)) as Record<string, unknown>;
+            calls.push({ id: `mistraltc_${Date.now()}_${calls.length}`, name, arguments: args });
+            removeRanges.push([m.index, end + 1]);
+          } catch { /* not valid JSON args */ }
+        }
+      }
+    }
+  }
+  let cleaned = content;
+  for (let k = removeRanges.length - 1; k >= 0; k--) {
+    const [s, e] = removeRanges[k];
+    cleaned = cleaned.slice(0, s) + cleaned.slice(e);
+  }
+  return { calls, cleaned: cleaned.replace(/\n{3,}/g, '\n\n').trim() };
+}
+
 /**
  * Salvage qwen's UNFORCED freestyle tool calls. Without tool_choice=required,
  * qwen3.6 sometimes writes a tool call as markdown rather than a structured call:
@@ -5943,13 +6030,23 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             // the saved content so it isn't shown/spoken as text.
             if (toolCalls.length === 0 && toolCallsAccumulator.size === 0) {
               const knownNames = new Set(activeTools.map(t => t.name));
-              const { calls: bracketCalls, cleaned } = extractBracketToolCalls(iterationContent, knownNames);
-              if (bracketCalls.length > 0) {
-                for (const btc of bracketCalls) {
-                  console.log(`   🔧 ${choomTag} Salvaged freestyle bracket tool call: ${btc.name}(${JSON.stringify(btc.arguments).slice(0, 80)})`);
-                  toolCalls.push(btc);
+              // Mistral leaked-as-text form first ([TOOL_CALLS]name<SPECIAL_n>{…}).
+              const { calls: mistralCalls, cleaned: mCleaned } = extractMistralToolCalls(iterationContent, knownNames);
+              if (mistralCalls.length > 0) {
+                for (const mtc of mistralCalls) {
+                  console.log(`   🔧 ${choomTag} Salvaged Mistral [TOOL_CALLS] text: ${mtc.name}(${JSON.stringify(mtc.arguments).slice(0, 80)})`);
+                  toolCalls.push(mtc);
                 }
-                iterationContent = cleaned;
+                iterationContent = mCleaned;
+              } else {
+                const { calls: bracketCalls, cleaned } = extractBracketToolCalls(iterationContent, knownNames);
+                if (bracketCalls.length > 0) {
+                  for (const btc of bracketCalls) {
+                    console.log(`   🔧 ${choomTag} Salvaged freestyle bracket tool call: ${btc.name}(${JSON.stringify(btc.arguments).slice(0, 80)})`);
+                    toolCalls.push(btc);
+                  }
+                  iterationContent = cleaned;
+                }
               }
             }
 

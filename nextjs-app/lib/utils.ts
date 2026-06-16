@@ -152,6 +152,9 @@ export function stripForTTS(text: string): string {
     // Remove the group-room [PASS] marker (incl. *[PASS]* / [pass.]) — it's a
     // control signal, the user doesn't need to hear "pass" spoken every turn.
     .replace(/\*{0,2}\s*\[\s*pass\s*[.!]*\s*\]\s*\*{0,2}/gi, '')
+    // Remove Mistral tool-call text that leaked past the parser ([TOOL_CALLS]…)
+    // so it isn't read aloud — the actual call is salvaged & executed server-side.
+    .replace(/\[TOOL_CALLS\][\s\S]*/i, '')
     // Remove [think]...[/think] blocks (case insensitive)
     .replace(/\[think\][\s\S]*?\[\/think\]/gi, '')
     // Remove <think>...</think> blocks (case insensitive)
