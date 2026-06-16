@@ -3613,6 +3613,11 @@ export async function POST(request: NextRequest) {
     // This speaker started the room (called talk_with_sisters). The host should
     // stay IN the conversation, not just open it and go quiet.
     const groupIsInitiator: boolean = !!body.groupIsInitiator;
+    // ActivityLog chatId for this request. For group turns, tag rows with the
+    // GROUP ROOM id (not the hidden per-participant scratch chat) so they're
+    // attributable to the room — drives a per-room Activity Log and keeps group
+    // activity out of any 1:1 chat's log.
+    const logChatId: string = (isGroupTurn && groupRoomId) ? groupRoomId : chatId;
 
     if (!choomId || !chatId || !message) {
       return new Response(
@@ -4208,7 +4213,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             data: { compactionSummary: compactionResult.newSummary },
           });
           console.log(`   🗜️  Compaction: ${compactionResult.messagesDropped} msgs folded into summary (~${compactionResult.tokensBeforeCompaction.toLocaleString()} → ~${compactionResult.tokensAfterCompaction.toLocaleString()} tokens)`);
-          serverLog(choomId, chatId, 'info', 'system', 'Context Compaction',
+          serverLog(choomId, logChatId, 'info', 'system', 'Context Compaction',
             `${compactionResult.messagesDropped} messages summarized`,
             { tokensBefore: compactionResult.tokensBeforeCompaction, tokensAfter: compactionResult.tokensAfterCompaction,
               messagesDropped: compactionResult.messagesDropped });
@@ -4743,7 +4748,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           const initialMsgContent = currentMessages.map(m => m.content).join('');
           const approxInitialTokens = Math.ceil(initialMsgContent.length / 4);
           console.log(`\n💬 Chat Request [${choom.name}] | ${currentMessages.length} msgs | ~${approxInitialTokens.toLocaleString()} tokens`);
-          serverLog(choomId, chatId, 'info', 'llm', 'LLM Request', `${llmSettings.model}: ${message.slice(0, 100)}`,
+          serverLog(choomId, logChatId, 'info', 'llm', 'LLM Request', `${llmSettings.model}: ${message.slice(0, 100)}`,
             { model: llmSettings.model, endpoint: llmSettings.endpoint, userMessage: message, messageCount: currentMessages.length, approxTokens: approxInitialTokens });
 
           // Send compaction event to UI if compaction was performed
@@ -4817,7 +4822,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
 
                   // Send tool call event
                   send({ type: 'tool_call', toolCall });
-                  serverLog(choomId, chatId, 'info', 'system', `Plan Tool: ${toolCall.name}`,
+                  serverLog(choomId, logChatId, 'info', 'system', `Plan Tool: ${toolCall.name}`,
                     `Arguments: ${JSON.stringify(toolCall.arguments).slice(0, 200)}`,
                     { toolName: toolCall.name, arguments: toolCall.arguments });
 
@@ -6382,7 +6387,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             // Execute a single tool call and handle post-execution bookkeeping
             const executeAndProcess = async (tc: { id: string; name: string; arguments: Record<string, unknown> }, isParallel = false): Promise<ToolResult> => {
               send({ type: 'tool_call', toolCall: tc });
-              serverLog(choomId, chatId, 'info', 'system', `Tool Call: ${tc.name}`,
+              serverLog(choomId, logChatId, 'info', 'system', `Tool Call: ${tc.name}`,
                 `Arguments: ${JSON.stringify(tc.arguments).slice(0, 200)}`,
                 { toolName: tc.name, arguments: tc.arguments });
 
@@ -6563,7 +6568,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               } else {
                 resultDetails.result = result.result;
               }
-              serverLog(choomId, chatId, result.error ? 'error' : 'success', 'system',
+              serverLog(choomId, logChatId, result.error ? 'error' : 'success', 'system',
                 `Tool Result: ${result.name}`, result.error || 'Success', resultDetails);
 
               // Project metadata tracking
@@ -7019,7 +7024,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           }
 
           const elapsed = Date.now() - requestStartTime;
-          serverLog(choomId, chatId, 'success', 'llm', 'LLM Response',
+          serverLog(choomId, logChatId, 'success', 'llm', 'LLM Response',
             `${llmSettings.model} (${fullContent.length} chars, ${iteration} iteration${iteration > 1 ? 's' : ''})`,
             { model: llmSettings.model, charCount: fullContent.length, iterations: iteration, fullResponse: fullContent.slice(0, 2000),
               toolCallCount: allToolCalls.length, toolNames: allToolCalls.map(t => t.name) },

@@ -64,6 +64,10 @@ export async function DELETE(request: NextRequest, { params }: { params: Promise
     if (scratchIds.length) {
       await prisma.chat.deleteMany({ where: { id: { in: scratchIds } } });
     }
+    // Remove ActivityLog rows for this room (group turns are tagged with the room
+    // id) and any stragglers tagged with the now-deleted scratch chats. ActivityLog
+    // has no FK relation, so these would otherwise be orphaned forever.
+    await prisma.activityLog.deleteMany({ where: { chatId: { in: [id, ...scratchIds] } } });
     await prisma.groupRoom.delete({ where: { id } });
     return NextResponse.json({ success: true });
   } catch (error) {

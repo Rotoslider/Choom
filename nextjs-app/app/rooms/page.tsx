@@ -2,8 +2,10 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, Plus, Users, Trash2, Loader2, Smartphone, Square, Minus, Play, Download, Archive, X, MoreVertical, Pencil } from 'lucide-react';
+import { ArrowLeft, Plus, Users, Trash2, Loader2, Smartphone, Square, Minus, Play, Download, Archive, X, MoreVertical, Pencil, ScrollText } from 'lucide-react';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
+import { LogPanel } from '@/components/logs/log-panel';
+import { useLogStore } from '@/lib/log-store';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -74,6 +76,7 @@ export default function RoomsPage() {
   const [managingMembers, setManagingMembers] = useState(false);
   const [editingRoomId, setEditingRoomId] = useState<string | null>(null);
   const [editRoomTitle, setEditRoomTitle] = useState('');
+  const [roomLogsOpen, setRoomLogsOpen] = useState(false);
   const [signalRoomId, setSignalRoomId] = useState<string | null>(null);
   // Per-speaker live state during a turn
   const [activeSpeaker, setActiveSpeaker] = useState<{ name: string; choomId: string; status: string } | null>(null);
@@ -89,7 +92,12 @@ export default function RoomsPage() {
   // message — while RoomTTSQueue still serializes so voices never overlap.
   const ttsBufRef = useRef('');
   const ttsVoiceRef = useRef<string | null>(null);
-  const lastTtsRef = useRef(''); // last sentence enqueued — dedup looping models
+  // Every sentence already sent to TTS this speaker turn (normalized). The live
+  // stream is raw, un-deduped tokens — a looping model repeats a line several
+  // times (often non-adjacently), and adjacent-only dedup let it be SPOKEN 3×
+  // even though the saved text is paragraph-deduped server-side. Tracking the
+  // full set kills non-adjacent repeats too.
+  const ttsSpokenRef = useRef<Set<string>>(new Set());
   const streamRawRef = useRef(''); // raw accumulation for the live display
   const firstChunkRef = useRef(true); // first TTS chunk of a speaker may carry a "Name:" label
   const choomsRef = useRef<Choom[]>([]);
@@ -143,6 +151,23 @@ export default function RoomsPage() {
     if (currentRoomId) loadMessages(currentRoomId);
     else setMessages([]);
   }, [currentRoomId, loadMessages]);
+
+  // Point the activity-log store at the CURRENT ROOM. This does two things:
+  // (1) any STT/TTS the user triggers here is tagged with the room id, not the
+  // stale 1:1 chat id that was leaking group speech into the main chat's log;
+  // (2) loads this room's activity (group turns are server-tagged with the room
+  // id) so the room's Activity Log panel can show it.
+  useEffect(() => {
+    const { setContext, loadLogs, clearLogs } = useLogStore.getState();
+    if (currentRoomId) {
+      setContext(null, currentRoomId);
+      loadLogs(undefined, currentRoomId);
+    } else {
+      setContext(null, null);
+      clearLogs();
+    }
+    return () => { useLogStore.getState().setContext(null, null); };
+  }, [currentRoomId]);
 
   // Poll for cross-device (Signal) updates while idle in a room
   useEffect(() => {
@@ -247,7 +272,7 @@ export default function RoomsPage() {
               setActiveSpeaker({ name: data.speakerName as string, choomId: data.speakerChoomId as string, status: data.retry ? 'rephrasing…' : 'thinking…' });
               setStreamingText('');
               ttsBufRef.current = '';
-              lastTtsRef.current = '';
+              ttsSpokenRef.current.clear();
               streamRawRef.current = '';
               firstChunkRef.current = true;
               ttsVoiceRef.current = choomsRef.current.find(c => c.id === data.speakerChoomId)?.voiceId || null;
@@ -268,9 +293,10 @@ export default function RoomsPage() {
                 // strip it so the audio doesn't speak the name (final text already is).
                 let sentence = ttsBufRef.current.trim();
                 if (firstChunkRef.current) { sentence = stripLeadingName(sentence, names); firstChunkRef.current = false; }
-                if (sentence && sentence !== lastTtsRef.current) {
+                const key = sentence.toLowerCase().replace(/\s+/g, ' ').trim();
+                if (sentence && !ttsSpokenRef.current.has(key)) {
+                  ttsSpokenRef.current.add(key);
                   ttsRef.current?.enqueue(sentence, ttsVoiceRef.current);
-                  lastTtsRef.current = sentence;
                 }
                 ttsBufRef.current = '';
               }
@@ -284,7 +310,9 @@ export default function RoomsPage() {
               // and leading-name-stripped if this is the only/first chunk).
               let tail = ttsBufRef.current.trim();
               if (firstChunkRef.current) { tail = stripLeadingName(tail, [...choomsRef.current.map(c => c.name), 'Donny', 'You']); firstChunkRef.current = false; }
-              if (tail && tail !== lastTtsRef.current) {
+              const tailKey = tail.toLowerCase().replace(/\s+/g, ' ').trim();
+              if (tail && !ttsSpokenRef.current.has(tailKey)) {
+                ttsSpokenRef.current.add(tailKey);
                 ttsRef.current?.enqueue(tail, ttsVoiceRef.current);
               }
               ttsBufRef.current = '';
@@ -578,6 +606,11 @@ export default function RoomsPage() {
                 title="Manage members — remove a Choom from this room (they keep their history and can be invited back)">
                 <Users className="h-4 w-4" />
               </Button>
+              <Button variant={roomLogsOpen ? 'default' : 'ghost'} size="icon" className="h-8 w-8"
+                onClick={() => { if (currentRoomId) useLogStore.getState().loadLogs(undefined, currentRoomId); setRoomLogsOpen(v => !v); }}
+                title="Activity log — tool calls, TTS/STT and responses for this room">
+                <ScrollText className="h-4 w-4" />
+              </Button>
               <Button variant="ghost" size="icon" className="h-8 w-8"
                 onClick={() => handleArchiveRoom(currentRoom.id)}
                 title="Archive this room (hide it but keep the history)">
@@ -667,6 +700,11 @@ export default function RoomsPage() {
         chooms={chooms}
         onCreated={(room) => { setRooms(prev => [room, ...prev]); setCurrentRoomId(room.id); }}
       />
+
+      {/* Activity log for the current room (tool calls, TTS/STT, responses) —
+          reuses the 1:1 LogPanel, which reads the store context we point at the
+          room above. */}
+      {roomLogsOpen && currentRoom && <LogPanel onClose={() => setRoomLogsOpen(false)} />}
     </div>
   );
 }
