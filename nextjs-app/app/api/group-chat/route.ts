@@ -9,6 +9,7 @@ import {
   type GroupSend,
 } from '@/lib/group-chat-runner';
 import { getOwnerIdentity } from '@/lib/owner';
+import { getRoomCreatorModel } from '@/lib/group-model-config';
 
 const baseUrl = process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
 const TURN_TIMEOUT_MS = 300000; // per-speaker wait ceiling
@@ -141,6 +142,14 @@ export async function POST(request: NextRequest) {
   if (activeParticipants.length === 0) {
     return new Response(JSON.stringify({ error: 'Room has no active participants' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
   }
+
+  // Room-creator model pin: participants come back ordered by `order` asc, so
+  // activeParticipants[0] is the creator/host seat (the fragile first-responder).
+  // When a room-creator model is configured, that seat uses it; invited Chooms
+  // keep their own. Applied via route.ts's per-task override path (profile auto-
+  // applies for the chosen model).
+  const roomCreatorModel = getRoomCreatorModel();
+  const creatorChoomId = activeParticipants[0]?.choomId || null;
 
   // Pinned room topic (one-liner injected into every turn). Read via raw SQL so
   // it works without a Prisma client regeneration for the new `topic` column.
@@ -302,6 +311,9 @@ export async function POST(request: NextRequest) {
               roomTopic,
               roomId: room.id,
               isInitiator: !!initiator && p.choomId === initiator.choomId,
+              taskModelOverride: (roomCreatorModel && p.choomId === creatorChoomId)
+                ? { model: roomCreatorModel.model, provider_id: roomCreatorModel.providerId || undefined }
+                : undefined,
               settings,
               timeoutMs: TURN_TIMEOUT_MS,
               send,

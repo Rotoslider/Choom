@@ -257,6 +257,8 @@ function syncSettingsToBridgeConfig(settings: AppSettings) {
             simpleTasksModel: settings.llm.simpleTasksModel || null,
             simpleTasksProviderId: settings.llm.simpleTasksProviderId || null,
             simpleTasksEnabled: settings.llm.simpleTasksEnabled || false,
+            roomCreatorModel: settings.llm.roomCreatorModel || null,
+            roomCreatorProviderId: settings.llm.roomCreatorProviderId || null,
           },
           weather: settings.weather,
           search: settings.search,

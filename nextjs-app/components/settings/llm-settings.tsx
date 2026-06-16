@@ -98,6 +98,14 @@ export function LLMSettings() {
     enabled: !!llm.simpleTasksEnabled,
   });
 
+  // Live models for the room-creator (group host seat) picker.
+  const roomCreatorLive = useLiveModels({
+    providerId: llm.roomCreatorProviderId && llm.roomCreatorProviderId !== '_local' ? llm.roomCreatorProviderId : undefined,
+    providers,
+    localEndpoint: !llm.roomCreatorProviderId || llm.roomCreatorProviderId === '_local' ? llm.endpoint : undefined,
+    enabled: true,
+  });
+
   // Detect model changes and prompt to load profile
   useEffect(() => {
     if (llm.model !== prevModel && prevModel) {
@@ -579,6 +587,62 @@ export function LLMSettings() {
             </p>
           </div>
         )}
+      </div>
+
+      {/* ================================================================ */}
+      {/* Room Creator Model Section (group rooms) */}
+      {/* ================================================================ */}
+      <div className="border-t pt-4 space-y-3">
+        <div>
+          <h3 className="text-sm font-medium">Room Creator Model (Group)</h3>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            In group rooms, force the <strong>creator/host seat</strong> (the first speaker — the fragile one)
+            to use this model, regardless of that Choom&apos;s own default. Invited Chooms keep their own model,
+            so you can pin a reliable model on the host and mix models elsewhere for variety. Leave unset to use
+            each Choom&apos;s own model everywhere.
+          </p>
+        </div>
+        <div className="space-y-2 ml-1">
+          <div className="flex items-center gap-2">
+            <label className="text-xs text-muted-foreground w-16">Provider</label>
+            <select
+              value={llm.roomCreatorProviderId || '_local'}
+              onChange={(e) => {
+                const pid = e.target.value;
+                updateLLMSettings({
+                  roomCreatorProviderId: pid === '_local' ? undefined : pid,
+                  roomCreatorModel: '',
+                });
+              }}
+              className="bg-muted border border-border rounded px-2 py-1 text-sm flex-1"
+            >
+              <option value="_local">Local (LM Studio)</option>
+              {providers.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+          </div>
+          <div className="flex items-center gap-2">
+            <label className="text-xs text-muted-foreground w-16">Model</label>
+            {(() => {
+              const options = roomCreatorLive.models.map((m) => m.id);
+              const saved = llm.roomCreatorModel || '';
+              const stale = !!saved && options.length > 0 && !options.includes(saved);
+              return (
+                <select
+                  value={stale ? '' : saved}
+                  onChange={(e) => updateLLMSettings({ roomCreatorModel: e.target.value })}
+                  className="bg-muted border border-border rounded px-2 py-1 text-sm flex-1"
+                >
+                  <option value="">{stale ? `⚠ Saved: ${saved} (not available — pick one)` : '(use each Choom’s own model)'}</option>
+                  {options.map((m) => (
+                    <option key={m} value={m}>{m.split('/').pop()}</option>
+                  ))}
+                </select>
+              );
+            })()}
+          </div>
+        </div>
       </div>
 
       {/* ================================================================ */}

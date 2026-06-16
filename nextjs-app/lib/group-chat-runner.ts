@@ -201,13 +201,14 @@ export async function runSpeakerTurn(opts: {
   roomId?: string;
   isInitiator?: boolean;
   antiEcho?: boolean; // retry pass: steer the model away from echoing the prompt
+  taskModelOverride?: { model: string; provider_id?: string }; // host-seat model pin
   settings: unknown;
   timeoutMs: number;
   send: GroupSend;
 }): Promise<GroupSpeakerResult> {
   const {
     baseUrl, choomId, speakerName, scratchChatId, transcript,
-    participantNames, projectFolder, roomTopic, roomId, isInitiator, antiEcho, settings, timeoutMs, send,
+    participantNames, projectFolder, roomTopic, roomId, isInitiator, antiEcho, taskModelOverride, settings, timeoutMs, send,
   } = opts;
 
   // Split the transcript so `message` carries the REAL conversational content
@@ -287,6 +288,9 @@ export async function runSpeakerTurn(opts: {
           groupRoomId: roomId || undefined,
           groupRecentImages: recentImagePaths,
           groupIsInitiator: !!isInitiator,
+          // Host-seat model pin (room-creator override) — applied via route.ts's
+          // existing per-task override path, so the model's profile auto-applies.
+          taskModelOverride: taskModelOverride || undefined,
         }),
         signal: controller.signal,
         dispatcher: groupDispatcher,

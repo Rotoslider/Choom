@@ -177,6 +177,12 @@ export interface LLMSettings {
   simpleTasksModel?: string;
   simpleTasksProviderId?: string;
   simpleTasksEnabled?: boolean;
+  // Group-room creator model — when set, the room CREATOR (the first/host seat,
+  // which is the fragile first-responder) uses this model in group turns,
+  // regardless of her own default. Invited Chooms keep their own model. Lets you
+  // pin a reliable model on the host seat while mixing models for diversity.
+  roomCreatorModel?: string;
+  roomCreatorProviderId?: string;
 }
 
 export interface TTSSettings {
