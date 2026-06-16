@@ -273,6 +273,19 @@ export const BUILTIN_LLM_PROFILES: LLMModelProfile[] = [
     repetitionPenalty: 1.0,
     enableThinking: false,
   },
+  {
+    // LM Studio reports this id with an underscore after the org.
+    modelId: 'mistralai_mistral-small-3.2-24b-instruct-2506',
+    label: 'Mistral Small 3.2 24B',
+    builtIn: true,
+    temperature: 0.7,
+    topP: 0.95,
+    maxTokens: 4096,
+    // 128k native — WITHOUT this it falls back to 262144 and compaction never
+    // fires, so a multi-tool turn balloons past Mistral's window and truncates.
+    contextLength: 131072,
+    repetitionPenalty: 1.05, // gentle nudge against the repetition 3.1 was prone to
+  },
   // Anthropic models — do NOT set topP; Anthropic rejects requests with both
   // temperature and top_p. Temperature alone is their preferred default.
   {
