@@ -6099,7 +6099,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               // If tools were already called this request, check if model intends more work.
               // Models often narrate their next step ("Now let me update the file...")
               // before the loop breaks — losing the write-back, notification, etc.
-              if (allToolCalls.length > 0 && !(fallbackActivated && nudgeCount === 0)) {
+              if (allToolCalls.length > 0 && !(fallbackActivated && nudgeCount === 0) && !isGroupTurn) {
                 const lc = iterationContent.toLowerCase();
 
                 // Check 1: Model narrates its next step ("now let me update...")
@@ -6210,8 +6210,12 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               const suggestsAction = (isShortPreamble || endsWithActionIntent) &&
                 /\b(let me(?! know| share| tell| explain| describe| show you what| be )|i'll (?!be\b)|i will (?!be\b)|i can (?!help|assist)|i'?m going to|here(?:'s| is) (?:a |your |the )|checking|looking up|searching|analyzing|fetching|downloading|setting up|working on|now (?:i'll|let me|i need to)|fixing|updating|writing|correcting|applying)\b/.test(lowerContent);
 
+              // Skip narration→tool nudges in group rooms: a Choom conversing
+              // ("I'm not going to send a notification") is not a half-finished
+              // task, and nudging her to "call the tool NOW" turns into a loop she
+              // argues with ("the system keeps asking me to send a notification").
               const suggestsToolUse = describesToolAction || suggestsAction;
-              if (nudgeCount < 2 && suggestsToolUse && activeTools.length > 0) {
+              if (nudgeCount < 2 && suggestsToolUse && activeTools.length > 0 && !isGroupTurn) {
                 nudgeCount++;
                 traceBuilder.recordNudge('tool_use');
                 // Build a dynamic tool hint based on what the LLM seems to be describing
