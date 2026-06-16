@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import prisma from '@/lib/db';
 import { WORKSPACE_ROOT } from '@/lib/config';
+import { getOwnerIdentity } from '@/lib/owner';
 
 // GET /api/group-chats - List rooms (newest first)
 export async function GET(request: NextRequest) {
@@ -79,6 +80,14 @@ export async function POST(request: NextRequest) {
       data: { projectFolder },
       include: { participants: { include: { choom: true }, orderBy: { order: 'asc' } } },
     });
+
+    // Provenance: the owner created this room from the /rooms UI.
+    await prisma.activityLog.create({
+      data: {
+        choomId: null, chatId: room.id, level: 'info', category: 'system',
+        title: 'Room created', message: `Created by ${getOwnerIdentity().name}.`,
+      },
+    }).catch(() => { /* logging is best-effort */ });
 
     return NextResponse.json(updated, { status: 201 });
   } catch (error) {

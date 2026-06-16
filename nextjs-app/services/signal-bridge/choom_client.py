@@ -367,6 +367,7 @@ class ChoomClient:
             "roomId": room_id,
             "message": message,
             "settings": default_settings,
+            "triggerSource": "signal",
         }
         # Only pin an owner name if the caller passed one; otherwise let the server
         # resolve it from the Settings UI (bridge-config.json) / env, so the single
@@ -430,6 +431,7 @@ class ChoomClient:
             "initiatorChoomId": initiator_choom_id,
             "message": message,
             "settings": self._build_shared_settings(),
+            "triggerSource": "room_followup",
         }
         response = self._make_request(
             "POST", "/api/group-chat", json=payload, stream=True, timeout=(10, 600)

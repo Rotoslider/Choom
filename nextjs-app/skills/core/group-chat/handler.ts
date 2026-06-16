@@ -233,6 +233,15 @@ export default class GroupChatHandler extends BaseSkillHandler {
         fs.mkdirSync(path.join(WORKSPACE_ROOT, projectFolder), { recursive: true });
       } catch { /* folder is auto-created on first write anyway */ }
       room = (await prisma.groupRoom.update({ where: { id: created.id }, data: { projectFolder }, include: { participants: true } })) as unknown as RoomWithParticipants;
+      // Provenance: record who created the room and in what context, in the
+      // room's ActivityLog (visible via the room's Activity Log button).
+      await prisma.activityLog.create({
+        data: {
+          choomId: caller.id, chatId: room.id, level: 'info', category: 'system',
+          title: 'Room created',
+          message: `Created by ${caller.name} ${ctx.isHeartbeat ? 'during a heartbeat' : 'from a 1:1 chat'}.`,
+        },
+      }).catch(() => { /* logging is best-effort */ });
     }
 
     // Run the conversation by calling the orchestrator with us as the initiator.
@@ -251,6 +260,7 @@ export default class GroupChatHandler extends BaseSkillHandler {
           initiatorChoomId: caller.id,
           rounds,
           settings: ctx.settings,
+          triggerSource: ctx.isHeartbeat ? 'heartbeat' : 'chat',
         }),
         dispatcher,
       });

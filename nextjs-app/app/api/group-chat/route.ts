@@ -88,6 +88,20 @@ function detectMentions(message: string, participants: Array<{ choomId: string; 
   return matched;
 }
 
+// Human-readable provenance for "how this room conversation started" — logged to
+// the room's ActivityLog so the owner can see the PATH each run took.
+function activationLabel(source: string | undefined | null, continueRun: boolean): string {
+  if (continueRun) return 'continued the conversation (keep going)';
+  switch (source) {
+    case 'heartbeat': return 'started a conversation during a heartbeat';
+    case 'room_followup': return 'returned via a scheduled room follow-up';
+    case 'chat': return 'started a conversation from a 1:1 chat';
+    case 'signal': return 'started a conversation from Signal';
+    case 'user': return 'opened the room';
+    default: return 'started a conversation';
+  }
+}
+
 export async function POST(request: NextRequest) {
   const encoder = new TextEncoder();
   let body: Record<string, unknown>;
@@ -168,6 +182,24 @@ export async function POST(request: NextRequest) {
     runningRooms.delete(roomId);
     lastRunAt.set(roomId, Date.now());
   };
+
+  // Provenance: record HOW a Choom-initiated run started (during a heartbeat, via
+  // a scheduled follow-up, or from a 1:1) in the room's ActivityLog, so the owner
+  // can see the path a room took to light up. Skipped for the owner's own messages
+  // (web/Signal) and keep-going — those aren't "how the room started", just chatter.
+  if (initiator && !continueRun) {
+    const triggerSource = (body.triggerSource as string) || 'chat';
+    void prisma.activityLog.create({
+      data: {
+        choomId: initiator.choomId,
+        chatId: roomId,
+        level: 'info',
+        category: 'system',
+        title: 'Room started',
+        message: `${initiator.choom.name} ${activationLabel(triggerSource, continueRun)}.`,
+      },
+    }).catch(() => { /* logging must never break the run */ });
+  }
 
   // Persist the opening message. Keep-going adds none; an initiating Choom's
   // opening is saved as that Choom's line; otherwise it's the user's line.
