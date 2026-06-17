@@ -542,10 +542,17 @@ export const useAppStore = create<AppState>()(
 
           // LLM
           const sd = serverDefaults;
+          const sdLlm = (sd.llm || {}) as Record<string, unknown>;
           updated.llm = {
             ...s.llm,
             endpoint: maybe(s.llm.endpoint, 'http://localhost:1234/v1', sd.llm?.endpoint as string),
             model: maybe(s.llm.model, 'local-model', sd.llm?.model as string),
+            // Optional routing overrides — inherit so a blank device never sends
+            // null and deletes the server's value.
+            simpleTasksModel: maybe(s.llm.simpleTasksModel || '', '', sdLlm.simpleTasksModel as string),
+            simpleTasksProviderId: maybe(s.llm.simpleTasksProviderId || '', '', sdLlm.simpleTasksProviderId as string),
+            roomCreatorModel: maybe(s.llm.roomCreatorModel || '', '', sdLlm.roomCreatorModel as string),
+            roomCreatorProviderId: maybe(s.llm.roomCreatorProviderId || '', '', sdLlm.roomCreatorProviderId as string),
           };
 
           // TTS
@@ -573,12 +580,16 @@ export const useAppStore = create<AppState>()(
           };
 
           // Vision
+          const sdVision = (sd.vision || {}) as Record<string, unknown>;
           updated.vision = {
             ...s.vision,
             endpoint: maybe(s.vision.endpoint, 'http://localhost:1234', sd.vision?.endpoint as string),
             model: maybe(s.vision.model, '', sd.vision?.model as string),
             maxTokens: maybe(s.vision.maxTokens, 1024, sd.vision?.maxTokens as number),
             temperature: maybe(s.vision.temperature, 0.3, sd.vision?.temperature as number),
+            // Cleared via null by the UI → inherit so a blank device can't delete them.
+            visionProviderId: maybe(s.vision.visionProviderId || '', '', sdVision.visionProviderId as string),
+            apiKey: maybe(s.vision.apiKey || '', '', sdVision.apiKey as string),
           };
 
           // Weather (API key + location)

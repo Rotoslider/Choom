@@ -42,6 +42,12 @@ export async function GET() {
     llm: {
       endpoint: process.env.LLM_ENDPOINT || (bLlm.endpoint as string) || 'http://localhost:1234/v1',
       model: process.env.LLM_MODEL || (bLlm.model as string) || 'local-model',
+      // Optional routing overrides — the UI clears these via null, so a remote
+      // device must inherit them or it'd send null and delete the server's.
+      simpleTasksModel: (bLlm.simpleTasksModel as string) || '',
+      simpleTasksProviderId: (bLlm.simpleTasksProviderId as string) || '',
+      roomCreatorModel: (bLlm.roomCreatorModel as string) || '',
+      roomCreatorProviderId: (bLlm.roomCreatorProviderId as string) || '',
     },
     tts: {
       endpoint: process.env.TTS_ENDPOINT || (bTts.endpoint as string) || 'http://localhost:8004',
@@ -61,6 +67,9 @@ export async function GET() {
       model: process.env.VISION_MODEL || (bVision.model as string) || '',
       maxTokens: (bVision.maxTokens as number) || 0,
       temperature: (bVision.temperature as number) || 0,
+      // Cleared via null by the UI → remote devices must inherit them too.
+      visionProviderId: (bVision.visionProviderId as string) || '',
+      apiKey: (bVision.apiKey as string) || '',
     },
     weather: {
       apiKey: process.env.OPENWEATHER_API_KEY || process.env.OPENWEATHERMAP_API_KEY || (bWeather.apiKey as string) || '',
