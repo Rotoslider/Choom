@@ -260,8 +260,17 @@ class SignalBridge:
 
             # Use active Choom if none specified in message
             if not choom_name:
-                choom_name = self._active_choom or config.DEFAULT_CHOOM_NAME
-                logger.info(f"No Choom name in message, using active Choom: {choom_name}")
+                # Cross-surface continuity: route to whichever Choom the owner
+                # most recently had a real conversation with on ANY surface (web
+                # OR Signal), ignoring heartbeats/self-followups. Falls back to
+                # the bridge-local active Choom, then the configured default.
+                recent = self.choom.get_recent_user_choom()
+                choom_name = recent or self._active_choom or config.DEFAULT_CHOOM_NAME
+                logger.info(
+                    f"No Choom name in message → routing to {choom_name} "
+                    f"(recent-user={recent or 'none'}, active={self._active_choom or 'none'})"
+                )
+                self._active_choom = choom_name
             else:
                 # User explicitly addressed a Choom - make it the active one
                 if choom_name != self._active_choom:
@@ -287,7 +296,9 @@ class SignalBridge:
                 # Presence Engine: check if user is responding to a recent heartbeat
                 self._check_heartbeat_response(choom_name)
 
-                response = self.choom.send_message(choom_name, cleaned_message)
+                # The owner typed this in Signal → stamp it as a genuine user turn
+                # so a later un-addressed message routes back to this Choom.
+                response = self.choom.send_message(choom_name, cleaned_message, user_initiated=True)
 
                 # Log response details for debugging
                 logger.info(f"Choom response - content length: {len(response.content)}, images: {len(response.images)}, tool_calls: {len(response.tool_calls)}")

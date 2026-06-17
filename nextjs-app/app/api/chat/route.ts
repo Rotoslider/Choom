@@ -3685,6 +3685,12 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const { choomId, chatId, message, settings, isDelegation, suppressNotifications, noTools, maxIterationsOverride, isHeartbeat, taskModelOverride, delegatorName } = body;
+    // True only when the OWNER actually typed this (web UI or an incoming Signal
+    // message) — NOT heartbeats, self-followups, cron, briefings, group, or
+    // delegation. Drives cross-surface routing: an un-addressed Signal message
+    // goes to whichever Choom the owner last genuinely talked to (see
+    // /api/chooms/recent-user — it reads Chat.lastUserMessageAt stamped below).
+    const userInitiated: boolean = !!body.userInitiated;
     // Group-room turn: the orchestrator (/api/group-chat) renders the shared
     // transcript from THIS Choom's point of view and passes it as groupMessages.
     // When set, we ignore the scratch chat's own history and use groupMessages,
@@ -3739,6 +3745,15 @@ export async function POST(request: NextRequest) {
     // Record GUI activity so heartbeat scheduler defers while we're chatting
     if (!isDelegation && !isGroupTurn) {
       recordGuiActivity(choom.name);
+    }
+
+    // Stamp this chat as the owner's most-recent genuine conversation, so an
+    // un-addressed Signal message routes back to this Choom (cross-surface
+    // continuity). Fire-and-forget; never block the turn on it.
+    if (userInitiated && !isHeartbeat && !isGroupTurn && !isDelegation) {
+      prisma.chat
+        .update({ where: { id: chatId }, data: { lastUserMessageAt: new Date() } })
+        .catch((e) => console.warn('lastUserMessageAt stamp failed:', e));
     }
 
     // Save user message. Skipped for group turns — the group orchestrator owns

@@ -157,6 +157,21 @@ class ChoomClient:
                 return choom
         return None
 
+    def get_recent_user_choom(self) -> Optional[str]:
+        """Return the NAME of the Choom the owner most recently had a genuine
+        conversation with on ANY surface (web or Signal). Powers cross-surface
+        routing: an un-addressed Signal message continues with whoever you were
+        last actually talking to. Heartbeats/self-followups/group/delegation do
+        NOT count. Returns None on error or if there's no tracked activity yet."""
+        try:
+            response = self._make_request("GET", "/api/chooms/recent-user")
+            data = response.json()
+            choom = data.get("choom")
+            return choom.get("name") if choom else None
+        except Exception as e:
+            logger.warning(f"get_recent_user_choom failed: {e}")
+            return None
+
     def get_or_create_chat(self, choom_id: str) -> str:
         """Resolve the Choom's CURRENT 1:1 chat for Signal — the most recently
         updated non-archived chat — so a Signal message CONTINUES whatever
@@ -482,7 +497,7 @@ class ChoomClient:
         logger.info(f"Room-followup re-entry in room {room_id}: {spoke} speaker(s) replied")
         return spoke
 
-    def send_message(self, choom_name: str, message: str, settings: Optional[Dict] = None, fresh_chat: bool = False, no_tools: bool = False, max_iterations: Optional[int] = None, is_heartbeat: bool = False, task_model_override: Optional[Dict] = None) -> ChatResponse:
+    def send_message(self, choom_name: str, message: str, settings: Optional[Dict] = None, fresh_chat: bool = False, no_tools: bool = False, max_iterations: Optional[int] = None, is_heartbeat: bool = False, task_model_override: Optional[Dict] = None, user_initiated: bool = False) -> ChatResponse:
         """
         Send a message to a Choom and get the response
 
@@ -552,6 +567,10 @@ class ChoomClient:
             payload["isHeartbeat"] = True
         if task_model_override:
             payload["taskModelOverride"] = task_model_override
+        if user_initiated:
+            # The owner typed this in Signal → stamp Chat.lastUserMessageAt so an
+            # un-addressed future message routes back to this Choom.
+            payload["userInitiated"] = True
 
         # Use streaming endpoint
         # timeout=(connect, read) — connect fast, read generous for LLM fallback retries

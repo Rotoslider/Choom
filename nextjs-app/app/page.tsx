@@ -641,6 +641,9 @@ export default function Home() {
           choomId: currentChoomId,
           chatId,
           message: content,
+          // The owner typed this in the web UI → stamp it as a genuine user turn
+          // so Signal can later continue with this Choom (cross-surface routing).
+          userInitiated: true,
           settings: {
             llm: settings.llm,
             memory: settings.memory,
