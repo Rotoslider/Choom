@@ -286,6 +286,18 @@ export const BUILTIN_LLM_PROFILES: LLMModelProfile[] = [
     contextLength: 131072,
     repetitionPenalty: 1.05, // gentle nudge against the repetition 3.1 was prone to
   },
+  {
+    // Verify this matches the id in your log's "RESOLVED: model=…" line; adjust if
+    // LM Studio reports it differently.
+    modelId: 'mistralai_devstral-small-2-24b-instruct-2512',
+    label: 'Devstral Small 2 24B',
+    builtIn: true,
+    temperature: 0.7,
+    topP: 0.95,
+    maxTokens: 4096,
+    contextLength: 262144, // 256k native — good for an agentic/coding Choom's big contexts
+    repetitionPenalty: 1.05,
+  },
   // Anthropic models — do NOT set topP; Anthropic rejects requests with both
   // temperature and top_p. Temperature alone is their preferred default.
   {
