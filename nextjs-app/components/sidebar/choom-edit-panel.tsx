@@ -553,6 +553,8 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave, onDelete }: 
   const [llmFallbackProvider1, setLlmFallbackProvider1] = useState('');
   const [llmFallbackModel2, setLlmFallbackModel2] = useState('');
   const [llmFallbackProvider2, setLlmFallbackProvider2] = useState('');
+  const [groupChatModel, setGroupChatModel] = useState('');
+  const [groupChatProvider, setGroupChatProvider] = useState('');
 
   // Image settings - now with two modes
   const [generalSettings, setGeneralSettings] = useState<ImageModeSettings>({ ...emptyModeSettings });
@@ -599,6 +601,8 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave, onDelete }: 
       setLlmFallbackProvider1(choom.llmFallbackProvider1 || (choom.llmFallbackModel1 ? '_local' : ''));
       setLlmFallbackModel2(choom.llmFallbackModel2 || '');
       setLlmFallbackProvider2(choom.llmFallbackProvider2 || (choom.llmFallbackModel2 ? '_local' : ''));
+      setGroupChatModel(choom.groupChatModel || '');
+      setGroupChatProvider(choom.groupChatProvider || (choom.groupChatModel ? '_local' : ''));
 
       // Parse image settings
       const imgSettings = choom.imageSettings;
@@ -623,6 +627,7 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave, onDelete }: 
   // Live model lists for fallback pickers. Each refetches when its provider/endpoint changes.
   const fb1Local = llmFallbackProvider1 === '_local' ? (llmEndpoint || settings.llm.endpoint) : undefined;
   const fb2Local = llmFallbackProvider2 === '_local' ? (llmEndpoint || settings.llm.endpoint) : undefined;
+  const groupLocal = groupChatProvider === '_local' ? (llmEndpoint || settings.llm.endpoint) : undefined;
   const fb1Live = useLiveModels({
     providerId: llmFallbackProvider1 && llmFallbackProvider1 !== '_none' && llmFallbackProvider1 !== '_local' ? llmFallbackProvider1 : undefined,
     providers: settings.providers || [],
@@ -634,6 +639,12 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave, onDelete }: 
     providers: settings.providers || [],
     localEndpoint: fb2Local,
     enabled: open && !!llmFallbackProvider2 && llmFallbackProvider2 !== '_none',
+  });
+  const groupLive = useLiveModels({
+    providerId: groupChatProvider && groupChatProvider !== '_none' && groupChatProvider !== '_local' ? groupChatProvider : undefined,
+    providers: settings.providers || [],
+    localEndpoint: groupLocal,
+    enabled: open && !!groupChatProvider && groupChatProvider !== '_none',
   });
 
   const fetchLocalModels = async (endpointOverride?: string, apiKeyOverride?: string) => {
@@ -771,6 +782,8 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave, onDelete }: 
         llmFallbackProvider1: (llmFallbackProvider1 && llmFallbackProvider1 !== '_local') ? llmFallbackProvider1 : null,
         llmFallbackModel2: llmFallbackModel2 || null,
         llmFallbackProvider2: (llmFallbackProvider2 && llmFallbackProvider2 !== '_local') ? llmFallbackProvider2 : null,
+        groupChatModel: groupChatModel || null,
+        groupChatProvider: (groupChatProvider && groupChatProvider !== '_local') ? groupChatProvider : null,
         imageSettings: (cleanedGeneral || selfPortraitWithCharacter) ? {
           general: cleanedGeneral,
           selfPortrait: selfPortraitWithCharacter,
@@ -1259,6 +1272,78 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave, onDelete }: 
                           >
                             <SelectTrigger className="h-8 text-xs">
                               <SelectValue placeholder={stale ? `⚠ Saved: ${llmFallbackModel2} (not available)` : 'Select model'} />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value={defaultSentinel}>{defaultLabel}</SelectItem>
+                              {options.map((m) => (
+                                <SelectItem key={m.id} value={m.id}>
+                                  <span className="flex items-center gap-2">
+                                    {m.loaded && <span className="inline-block h-2 w-2 rounded-full bg-green-500" title="Loaded in LM Studio" />}
+                                    {m.name}
+                                  </span>
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        );
+                      })()}
+                    </div>
+                  </div>
+
+                  <Separator />
+
+                  {/* Group Chat Model — used when this Choom is INVITED into a room she did NOT create */}
+                  <div className="space-y-3">
+                    <div>
+                      <h4 className="text-sm font-medium">Group Chat Model</h4>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Model used when this Choom is <span className="font-medium">invited</span> into a group room she didn&apos;t create. If it fails, her primary model and then her fallback models are tried, in that order. Leave as &ldquo;Use primary model&rdquo; to keep her normal model in group rooms. (The room creator&apos;s seat uses the room-creator model from LLM settings instead.)
+                      </p>
+                    </div>
+                    <div className="space-y-3 rounded-md border p-3">
+                      <Select
+                        value={groupChatProvider || '_none'}
+                        onValueChange={(v) => {
+                          if (v === '_none') {
+                            setGroupChatProvider('');
+                            setGroupChatModel('');
+                          } else if (v === '_local') {
+                            setGroupChatProvider('_local');
+                            setGroupChatModel('');
+                          } else {
+                            const provider = (settings.providers || []).find((p: LLMProviderConfig) => p.id === v);
+                            setGroupChatProvider(v);
+                            setGroupChatModel(provider?.models?.[0] || '');
+                          }
+                        }}
+                      >
+                        <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="_none">Use primary model (no override)</SelectItem>
+                          <SelectItem value="_local">Local (LM Studio / Ollama)</SelectItem>
+                          {(settings.providers || []).map((p: LLMProviderConfig) => (
+                            <SelectItem key={p.id} value={p.id}>
+                              {p.name}
+                              <span className="ml-2 text-xs text-muted-foreground">({p.type})</span>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {groupChatProvider && groupChatProvider !== '_none' && (() => {
+                        const options = groupLive.models;
+                        if (options.length === 0) {
+                          return <Input value={groupChatModel} onChange={(e) => setGroupChatModel(e.target.value)} placeholder="Model name (leave empty = none)" className="h-8 text-xs" />;
+                        }
+                        const stale = !!groupChatModel && !options.some((m) => m.id === groupChatModel);
+                        const defaultSentinel = groupChatProvider === '_local' ? '__default__' : '_default';
+                        const defaultLabel = groupChatProvider === '_local' ? 'Same as primary' : `Default (${options[0].name})`;
+                        return (
+                          <Select
+                            value={stale ? '' : (groupChatModel || defaultSentinel)}
+                            onValueChange={(v) => setGroupChatModel(v === defaultSentinel ? '' : v)}
+                          >
+                            <SelectTrigger className="h-8 text-xs">
+                              <SelectValue placeholder={stale ? `⚠ Saved: ${groupChatModel} (not available)` : 'Select model'} />
                             </SelectTrigger>
                             <SelectContent>
                               <SelectItem value={defaultSentinel}>{defaultLabel}</SelectItem>

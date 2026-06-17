@@ -70,6 +70,19 @@ export function formatTime(date: Date | string): string {
   });
 }
 
+// Like formatTime, but prefixed with zero-padded month-day (e.g. "06-17 3:21 PM").
+// Used on chat transcripts (1:1 + group rooms) where the date matters across days.
+export function formatDayTime(date: Date | string): string {
+  const d = new Date(date);
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  const time = d.toLocaleTimeString(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+  return `${month}-${day} ${time}`;
+}
+
 // ============================================================================
 // ID generation
 // ============================================================================

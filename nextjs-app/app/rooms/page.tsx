@@ -16,7 +16,7 @@ import { AvatarDisplay } from '@/components/common/avatar-display';
 import { InputArea, type ImageAttachment } from '@/components/chat/input-area';
 import { useAppStore } from '@/lib/store';
 import { RoomTTSQueue } from '@/lib/room-tts-queue';
-import { cn, isSentenceEnd } from '@/lib/utils';
+import { cn, isSentenceEnd, formatDayTime } from '@/lib/utils';
 import type { Choom } from '@/lib/types';
 
 interface Participant {
@@ -161,13 +161,14 @@ export default function RoomsPage() {
   // (2) loads this room's activity (group turns are server-tagged with the room
   // id) so the room's Activity Log panel can show it.
   useEffect(() => {
-    const { setContext, loadLogs, clearLogs } = useLogStore.getState();
+    const { setContext, loadLogs, clearView } = useLogStore.getState();
     if (currentRoomId) {
       setContext(null, currentRoomId);
       loadLogs(undefined, currentRoomId);
     } else {
       setContext(null, null);
-      clearLogs();
+      // No room selected: clear the VIEW only — never delete persisted logs.
+      clearView();
     }
     return () => { useLogStore.getState().setContext(null, null); };
   }, [currentRoomId]);
@@ -745,6 +746,7 @@ function RoomBubble({ msg, chooms }: { msg: RoomMessage; chooms: Choom[] }) {
       <div className={cn('flex-1 min-w-0', isUser && 'flex flex-col items-end')}>
         <p className={cn('text-sm font-medium mb-1', isUser ? 'text-muted-foreground' : 'text-primary')}>
           {msg.authorName}
+          <span className="ml-2 text-xs font-normal text-muted-foreground">{formatDayTime(msg.createdAt)}</span>
         </p>
         <div className={cn(
           'rounded-2xl px-4 py-2 inline-block max-w-full',

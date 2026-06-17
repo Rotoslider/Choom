@@ -278,14 +278,15 @@ export default function Home() {
 
   // Update activity log context and load persisted logs when choom/chat changes
   useEffect(() => {
-    const { setContext, loadLogs, clearLogs } = useLogStore.getState();
+    const { setContext, loadLogs, clearView } = useLogStore.getState();
     setContext(currentChoomId || null, currentChatId || null);
     if (currentChatId) {
       loadLogs(currentChoomId || undefined, currentChatId);
     } else if (currentChoomId) {
       loadLogs(currentChoomId);
     } else {
-      clearLogs();
+      // Empty context: clear the VIEW only — never delete persisted logs.
+      clearView();
     }
   }, [currentChoomId, currentChatId]);
 

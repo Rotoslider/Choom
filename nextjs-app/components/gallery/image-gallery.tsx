@@ -283,12 +283,22 @@ export function ImageGallery({
             className="max-w-[90vw] max-h-[90vh] overflow-y-auto flex flex-col items-center"
             onClick={(e) => e.stopPropagation()}
           >
-            {/* eslint-disable-next-line @next/next/no-img-element -- lightbox uses intrinsic object-contain sizing, not a fixed box */}
-            <img
-              src={imageFileUrl(selectedImage.id)}
-              alt={selectedImage.prompt}
-              className="max-w-full max-h-[70vh] object-contain rounded-lg"
-            />
+            {/* Downscaled, format-optimized preview via the Next image optimizer
+                (NOT the multi-MB original) so the lightbox opens fast on phones and
+                over remote/ngrok connections. `sizes="90vw"` requests a viewport-
+                appropriate variant; the Download button still fetches the full file. */}
+            <div className="relative w-[90vw] h-[70vh] flex-shrink-0">
+              <NextImage
+                key={selectedImage.id}
+                src={imageFileUrl(selectedImage.id)}
+                alt={selectedImage.prompt}
+                fill
+                sizes="90vw"
+                quality={80}
+                priority
+                className="object-contain rounded-lg"
+              />
+            </div>
             <div className="mt-4 text-center max-w-2xl flex-shrink-0 pb-4">
               <p className="text-white/90 text-sm">{selectedImage.prompt}</p>
               <p className="text-white/50 text-xs mt-1">

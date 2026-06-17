@@ -21,6 +21,8 @@ export interface Choom {
   llmFallbackProvider1: string | null;
   llmFallbackModel2: string | null;
   llmFallbackProvider2: string | null;
+  groupChatModel: string | null;
+  groupChatProvider: string | null;
   avatarMode: AvatarMode | null;
   avatar3dModelPath: string | null;
   avatar3dStatus: string | null;

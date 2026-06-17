@@ -47,6 +47,7 @@ interface LogState {
 interface LogActions {
   addLog: (entry: Omit<LogEntry, 'id' | 'timestamp'>) => void;
   clearLogs: () => void;
+  clearView: () => void;
   setOpen: (open: boolean) => void;
   toggleOpen: () => void;
   setFilter: (filter: Partial<LogState['filter']>) => void;
@@ -121,6 +122,11 @@ export const useLogStore = create<LogStore>((set, get) => ({
     }
     fetch(`/api/logs?${params}`, { method: 'DELETE' }).catch(() => {});
   },
+
+  // Clear only the in-memory view (does NOT delete persisted logs). Used when the
+  // selected choom/chat/room changes to an empty context — switching views must
+  // never wipe the database. (clearLogs() is the destructive, user-initiated path.)
+  clearView: () => set({ logs: [] }),
 
   setOpen: (open) => set({ isOpen: open }),
 

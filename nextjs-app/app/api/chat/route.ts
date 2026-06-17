@@ -801,38 +801,69 @@ function extractBracketToolCalls(
   const calls: { id: string; name: string; arguments: Record<string, unknown> }[] = [];
   if (!content || content.indexOf('[') === -1) return { calls, cleaned: content };
 
-  // [ tool_name <newline-or-space> key=val key="val" ... ]  (attrs span newlines)
-  const blockRe = /\[[ \t]*([a-zA-Z_][a-zA-Z0-9_]*)[ \t]*[\n\r][\s\S]*?\]/g;
+  // attrRe matches a single  key="val" | key='val' | key=true|false|number  pair.
   const attrRe = /([a-zA-Z_][a-zA-Z0-9_]*)[ \t]*=[ \t]*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|true|false|-?\d+(?:\.\d+)?)/g;
-  const removeRanges: Array<[number, number]> = [];
-  let m: RegExpExecArray | null;
-  while ((m = blockRe.exec(content)) !== null) {
-    const name = m[1];
-    if (!knownToolNames.has(name)) continue;
-    const block = m[0];
+  const parseAttrs = (segment: string): Record<string, unknown> => {
     const args: Record<string, unknown> = {};
-    let a: RegExpExecArray | null;
     attrRe.lastIndex = 0;
-    while ((a = attrRe.exec(block)) !== null) {
+    let a: RegExpExecArray | null;
+    while ((a = attrRe.exec(segment)) !== null) {
       const key = a[1];
-      let raw = a[2];
+      const raw = a[2];
       if ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"))) {
-        raw = raw.slice(1, -1).replace(/\\(["'\\])/g, '$1');
-        args[key] = raw;
+        args[key] = raw.slice(1, -1).replace(/\\(["'\\])/g, '$1');
       } else if (raw === 'true' || raw === 'false') {
         args[key] = raw === 'true';
       } else {
         args[key] = Number(raw);
       }
     }
+    return args;
+  };
+
+  const removeRanges: Array<[number, number]> = [];
+  let m: RegExpExecArray | null;
+
+  // Form A: [ tool_name <newline> key=val key="val" ... ]  — attrs INSIDE the
+  // brackets, may span newlines.
+  const blockRe = /\[[ \t]*([a-zA-Z_][a-zA-Z0-9_]*)[ \t]*[\n\r][\s\S]*?\]/g;
+  while ((m = blockRe.exec(content)) !== null) {
+    const name = m[1];
+    if (!knownToolNames.has(name)) continue;
+    const args = parseAttrs(m[0]);
     if (Object.keys(args).length === 0) continue; // no key=value pairs → not a tool call
     calls.push({ id: `bracket_${Date.now()}_${calls.length}`, name, arguments: args });
-    removeRanges.push([m.index, m.index + block.length]);
+    removeRanges.push([m.index, m.index + m[0].length]);
   }
 
+  // Form B: *[tool_name]* key="val" key="val" ...  — the tool name in brackets
+  // (optionally wrapped in markdown asterisks) followed by attrs OUTSIDE the
+  // brackets on the same line. This is how Qwen sometimes "speaks" a tool call
+  // inline, e.g.  *[remember]* title="…" content="…"  — without salvaging it,
+  // the raw syntax leaks into the delivered/spoken message instead of executing.
+  const labeledRe = /(\*{0,3})\[[ \t]*([a-zA-Z_][a-zA-Z0-9_]*)[ \t]*\]\1[ \t]*((?:[a-zA-Z_][a-zA-Z0-9_]*[ \t]*=[ \t]*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|true|false|-?\d+(?:\.\d+)?)[ \t,]*)+)/g;
+  while ((m = labeledRe.exec(content)) !== null) {
+    const name = m[2];
+    if (!knownToolNames.has(name)) continue;
+    const args = parseAttrs(m[3]);
+    if (Object.keys(args).length === 0) continue;
+    calls.push({ id: `label_${Date.now()}_${calls.length}`, name, arguments: args });
+    removeRanges.push([m.index, m.index + m[0].length]);
+  }
+
+  // Strip every matched span from the saved/spoken text. The two forms can
+  // interleave by position, so sort ascending and merge any overlap before
+  // removing back-to-front (keeps earlier indices valid; avoids corruption).
+  removeRanges.sort((p, q) => p[0] - q[0]);
+  const merged: Array<[number, number]> = [];
+  for (const r of removeRanges) {
+    const last = merged[merged.length - 1];
+    if (last && r[0] < last[1]) last[1] = Math.max(last[1], r[1]);
+    else merged.push([r[0], r[1]]);
+  }
   let cleaned = content;
-  for (let i = removeRanges.length - 1; i >= 0; i--) {
-    const [s, e] = removeRanges[i];
+  for (let i = merged.length - 1; i >= 0; i--) {
+    const [s, e] = merged[i];
     cleaned = cleaned.slice(0, s) + cleaned.slice(e);
   }
   return { calls, cleaned: cleaned.replace(/\n{3,}/g, '\n\n').trim() };
@@ -1238,7 +1269,12 @@ async function serverLog(
               details: details ? JSON.stringify(details) : null,
               duration: duration || null }
     });
-  } catch { /* don't let logging failures break chat */ }
+  } catch (e) {
+    // Never let logging failures break chat — but don't fail silently either,
+    // so a genuine write problem is visible in server logs instead of looking
+    // like an empty Activity Log.
+    console.warn(`   ⚠️  serverLog write failed (${category}/${title}):`, e instanceof Error ? e.message : e);
+  }
 }
 
 // ============================================================================

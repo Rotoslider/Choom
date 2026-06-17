@@ -5,7 +5,7 @@ import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/cjs/styles/prism';
 import { cn } from '@/lib/utils';
-import { formatTime } from '@/lib/utils';
+import { formatDayTime } from '@/lib/utils';
 import { User, Bot, Wrench } from 'lucide-react';
 import { FileReference } from './file-reference';
 import type { Message, ToolResult } from '@/lib/types';
@@ -393,7 +393,7 @@ export function MessageBubble({
 
         {/* Timestamp */}
         <span className="text-xs text-muted-foreground px-1">
-          {formatTime(message.createdAt)}
+          {formatDayTime(message.createdAt)}
         </span>
       </div>
     </div>

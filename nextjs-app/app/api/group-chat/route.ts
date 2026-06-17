@@ -311,9 +311,17 @@ export async function POST(request: NextRequest) {
               roomTopic,
               roomId: room.id,
               isInitiator: !!initiator && p.choomId === initiator.choomId,
+              // Model pin for this seat:
+              //  • Room creator → the global room-creator model (if configured).
+              //  • Invited (non-creator) Choom → her own per-Choom groupChatModel
+              //    (if set). Routed through taskModelOverride so route.ts prepends
+              //    her PRIMARY model as fallback #0 — chain becomes
+              //    groupChatModel → primary → fallback1 → fallback2.
               taskModelOverride: (roomCreatorModel && p.choomId === creatorChoomId)
                 ? { model: roomCreatorModel.model, provider_id: roomCreatorModel.providerId || undefined }
-                : undefined,
+                : (p.choomId !== creatorChoomId && p.choom.groupChatModel)
+                  ? { model: p.choom.groupChatModel, provider_id: p.choom.groupChatProvider || undefined }
+                  : undefined,
               settings,
               timeoutMs: TURN_TIMEOUT_MS,
               send,

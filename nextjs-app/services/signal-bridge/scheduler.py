@@ -2375,10 +2375,10 @@ Be practical. Only work on things that can actually be accomplished with the too
             if src.exists():
                 shutil.copy(str(src), str(snapshot_dir / name))
 
+        # presence + sibling_journal were retired in the pnpm migration (heartbeat
+        # rewrite); their dirs are stale, so they're no longer snapshotted.
         directories = [
-            (app_root / "data/presence", "presence"),
             (app_root / "data/self_followups", "self_followups"),
-            (Path("/home/nuc1/choom-projects/sibling_journal"), "sibling_journal"),
         ]
         for src_dir, name in directories:
             if src_dir.is_dir():
@@ -2452,10 +2452,10 @@ Be practical. Only work on things that can actually be accomplished with the too
                 (app_root / "services/signal-bridge/google_auth/credentials.json", "google_auth/credentials.json"),
                 (app_root / "services/signal-bridge/google_auth/token.json", "google_auth/token.json"),
             ]
+            # presence + sibling_journal retired in the pnpm migration — only the
+            # live self_followups state still needs off-site backup.
             bundle_dirs = [
-                (app_root / "data/presence", "presence"),
                 (app_root / "data/self_followups", "self_followups"),
-                (Path("/home/nuc1/choom-projects/sibling_journal"), "sibling_journal"),
             ]
 
             with tempfile.NamedTemporaryFile(suffix='.tar.gz', delete=False) as tmp:
