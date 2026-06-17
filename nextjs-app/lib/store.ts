@@ -160,6 +160,12 @@ interface AppState {
   // Settings
   settings: AppSettings;
 
+  // Cross-device config safety. Server is the source of truth: on load the
+  // device overwrites its own server-owned settings from the server. Off-site
+  // (ngrok) writes must be confirmed by the user before they hit the server.
+  isLocalConnection: boolean;
+  pendingServerSync: { changes: string[]; settings: AppSettings } | null;
+
   // Streaming state
   streamingContent: string;
   isStreaming: boolean;
@@ -225,7 +231,14 @@ interface AppState {
   updateModelProfiles: (profiles: LLMModelProfile[]) => void;
   updateVisionProfiles: (profiles: VisionModelProfile[]) => void;
   resetSettings: () => void;
-  mergeServerDefaults: (serverDefaults: Record<string, Record<string, unknown>>) => void;
+  // Server is source of truth: overwrite this device's server-owned settings
+  // with the server's on load (preserving per-device cosmetics). Sets
+  // isLocalConnection from the server's `local` flag.
+  applyServerSettings: (server: Record<string, unknown>) => void;
+  // Off-site write flow: confirm pushes the pending change to the server with
+  // the confirm header; discard drops it (server stays unchanged).
+  confirmServerSync: () => Promise<void>;
+  discardServerSync: () => void;
 
   // Actions - Streaming
   setStreamingContent: (content: string) => void;
@@ -241,67 +254,122 @@ interface AppState {
 }
 
 // ============================================================================
-// Bridge Config Sync - syncs weather/search/imageGen to bridge-config.json
+// Bridge Config Sync — pushes server-owned settings to bridge-config.json.
+// Server is the source of truth: from a LOCAL/LAN browser this writes directly;
+// from OFF-SITE (ngrok) it stages a pending change for the user to confirm
+// ("yes I'm sure") before it touches the server.
 // ============================================================================
 
 let _bridgeSyncTimer: ReturnType<typeof setTimeout> | null = null;
+
+// The server-owned slice of settings that lives in bridge-config.json. Per-
+// device cosmetics (appearance, avatar, stt input mode) are NOT here.
+function buildBridgePayload(settings: AppSettings): Record<string, unknown> {
+  return {
+    llm: {
+      model: settings.llm.model,
+      endpoint: settings.llm.endpoint,
+      simpleTasksModel: settings.llm.simpleTasksModel || null,
+      simpleTasksProviderId: settings.llm.simpleTasksProviderId || null,
+      simpleTasksEnabled: settings.llm.simpleTasksEnabled || false,
+      roomCreatorModel: settings.llm.roomCreatorModel || null,
+      roomCreatorProviderId: settings.llm.roomCreatorProviderId || null,
+    },
+    tts: { endpoint: settings.tts.endpoint, defaultVoice: settings.tts.defaultVoice || null },
+    stt: { endpoint: settings.stt.endpoint, language: settings.stt.language },
+    memory: settings.memory,
+    weather: settings.weather,
+    search: settings.search,
+    imageGen: {
+      endpoint: settings.imageGen.endpoint,
+      defaultCheckpoint: settings.imageGen.defaultCheckpoint,
+      defaultSampler: settings.imageGen.defaultSampler,
+      defaultScheduler: settings.imageGen.defaultScheduler,
+      defaultSteps: settings.imageGen.defaultSteps,
+      defaultCfgScale: settings.imageGen.defaultCfgScale,
+      defaultDistilledCfg: settings.imageGen.defaultDistilledCfg,
+      defaultWidth: settings.imageGen.defaultWidth,
+      defaultHeight: settings.imageGen.defaultHeight,
+      defaultNegativePrompt: settings.imageGen.defaultNegativePrompt,
+    },
+    // Optional fields as null so the server's deepMerge removes stale values
+    // (JSON.stringify strips undefined, which deepMerge would preserve).
+    vision: {
+      ...settings.vision,
+      visionProviderId: settings.vision.visionProviderId || null,
+      apiKey: settings.vision.apiKey || null,
+    },
+    visionProfiles: settings.visionProfiles || [],
+    modelProfiles: settings.modelProfiles || [],
+    homeAssistant: {
+      baseUrl: settings.homeAssistant.baseUrl,
+      accessToken: settings.homeAssistant.accessToken,
+      entityFilter: settings.homeAssistant.entityFilter,
+      cacheSeconds: settings.homeAssistant.cacheSeconds,
+    },
+    providers: settings.providers?.map(p => ({
+      id: p.id, name: p.name, type: p.type, endpoint: p.endpoint,
+      apiKey: p.apiKey, models: p.models,
+    })),
+    ownerName: settings.ownerName || null,
+    ownerLocation: settings.ownerLocation || null,
+  };
+}
+
+async function postBridgeConfig(payload: Record<string, unknown>, confirmRemote: boolean) {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (confirmRemote) headers['x-confirm-remote-write'] = 'yes';
+  return fetch('/api/bridge-config', { method: 'POST', headers, body: JSON.stringify(payload) });
+}
+
+// Which server-owned slices this push would actually CHANGE (for the off-site
+// confirm dialog), mirroring the server's blank-preserving deepMerge so we don't
+// flag a no-op blank as a change.
+async function computeServerChanges(payload: Record<string, unknown>): Promise<string[]> {
+  try {
+    const current = await (await fetch('/api/bridge-config')).json();
+    const changed: string[] = [];
+    for (const key of Object.keys(payload)) {
+      const merged = clientMergePreview(current[key], payload[key]);
+      if (JSON.stringify(current[key] ?? null) !== JSON.stringify(merged ?? null)) changed.push(key);
+    }
+    return changed;
+  } catch {
+    return Object.keys(payload);
+  }
+}
+
+// Pure mirror of the server deepMerge rules (no fs) for diff preview only.
+function clientMergePreview(cur: unknown, ov: unknown): unknown {
+  if (ov === null) return undefined; // deletes
+  if (typeof ov === 'string' && ov === '' && typeof cur === 'string' && cur !== '') return cur;
+  if (Array.isArray(ov) && ov.length === 0 && Array.isArray(cur) && cur.length > 0) return cur;
+  if (cur && typeof cur === 'object' && !Array.isArray(cur) && ov && typeof ov === 'object' && !Array.isArray(ov)) {
+    const out: Record<string, unknown> = { ...(cur as Record<string, unknown>) };
+    for (const k of Object.keys(ov as Record<string, unknown>)) {
+      const m = clientMergePreview((cur as Record<string, unknown>)[k], (ov as Record<string, unknown>)[k]);
+      if (m === undefined) delete out[k]; else out[k] = m;
+    }
+    return out;
+  }
+  return ov;
+}
 
 function syncSettingsToBridgeConfig(settings: AppSettings) {
   // Debounce: wait 2s after last change before syncing
   if (_bridgeSyncTimer) clearTimeout(_bridgeSyncTimer);
   _bridgeSyncTimer = setTimeout(async () => {
     try {
-      await fetch('/api/bridge-config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          llm: {
-            model: settings.llm.model,
-            endpoint: settings.llm.endpoint,
-            simpleTasksModel: settings.llm.simpleTasksModel || null,
-            simpleTasksProviderId: settings.llm.simpleTasksProviderId || null,
-            simpleTasksEnabled: settings.llm.simpleTasksEnabled || false,
-            roomCreatorModel: settings.llm.roomCreatorModel || null,
-            roomCreatorProviderId: settings.llm.roomCreatorProviderId || null,
-          },
-          weather: settings.weather,
-          search: settings.search,
-          imageGen: {
-            endpoint: settings.imageGen.endpoint,
-            defaultCheckpoint: settings.imageGen.defaultCheckpoint,
-            defaultSampler: settings.imageGen.defaultSampler,
-            defaultScheduler: settings.imageGen.defaultScheduler,
-            defaultSteps: settings.imageGen.defaultSteps,
-            defaultCfgScale: settings.imageGen.defaultCfgScale,
-            defaultDistilledCfg: settings.imageGen.defaultDistilledCfg,
-            defaultWidth: settings.imageGen.defaultWidth,
-            defaultHeight: settings.imageGen.defaultHeight,
-            defaultNegativePrompt: settings.imageGen.defaultNegativePrompt,
-          },
-          // Explicitly include optional fields as null so deepMerge removes stale values
-          // (JSON.stringify strips undefined, causing deepMerge to preserve old values)
-          vision: {
-            ...settings.vision,
-            visionProviderId: settings.vision.visionProviderId || null,
-            apiKey: settings.vision.apiKey || null,
-          },
-          visionProfiles: settings.visionProfiles || [],
-          homeAssistant: {
-            baseUrl: settings.homeAssistant.baseUrl,
-            accessToken: settings.homeAssistant.accessToken,
-            entityFilter: settings.homeAssistant.entityFilter,
-            cacheSeconds: settings.homeAssistant.cacheSeconds,
-          },
-          providers: settings.providers?.map(p => ({
-            id: p.id, name: p.name, type: p.type, endpoint: p.endpoint,
-            apiKey: p.apiKey, models: p.models,
-          })),
-          // Owner identity — written top-level so server-side getOwnerIdentity()
-          // and the Python bridge both read the same name the user set here.
-          ownerName: settings.ownerName || null,
-          ownerLocation: settings.ownerLocation || null,
-        }),
-      });
+      const payload = buildBridgePayload(settings);
+      // Off-site: NEVER write silently. Stage the change and let the user
+      // confirm it via the dialog (ServerSyncGuard).
+      if (!useAppStore.getState().isLocalConnection) {
+        const changes = await computeServerChanges(payload);
+        if (changes.length === 0) return; // nothing actually changes server-side
+        useAppStore.setState({ pendingServerSync: { changes, settings } });
+        return;
+      }
+      await postBridgeConfig(payload, false);
     } catch (e) {
       console.warn('Failed to sync settings to bridge config:', e);
     }
@@ -338,6 +406,11 @@ export const useAppStore = create<AppState>()(
 
       services: defaultServiceHealth,
       settings: defaultSettings,
+
+      // Assume local until the server's `local` flag says otherwise (set in
+      // applyServerSettings on load). Not persisted — re-evaluated each load.
+      isLocalConnection: true,
+      pendingServerSync: null,
 
       streamingContent: '',
       isStreaming: false,
@@ -522,121 +595,62 @@ export const useAppStore = create<AppState>()(
       },
       resetSettings: () => set({ settings: defaultSettings }),
 
-      // Merge server-side .env defaults into store for any values still at factory defaults.
-      // This allows remote browsers (e.g. via ngrok) to inherit the server's actual config
-      // without overwriting user customizations.
-      mergeServerDefaults: (serverDefaults) =>
+      // Server is the source of truth. On load, OVERWRITE this device's server-
+      // owned settings with the server's (skipping blank server values via the
+      // same blank-preserving merge). Per-device cosmetics (appearance, avatar,
+      // STT input mode) are preserved. This is what makes a stale/blank/off-site
+      // browser unable to silently win — it's corrected to the server every load.
+      applyServerSettings: (server) =>
         set((state) => {
           const s = state.settings;
-          const updated = { ...s };
-          let changed = false;
+          // clientMergePreview(device, server): server wins, but a blank/empty
+          // server value keeps the device's (so a partially-configured server
+          // can't blank the device, and vice-versa). undefined server slice =
+          // not tracked server-side → keep device's.
+          const merge = (deviceSlice: unknown, serverSlice: unknown) =>
+            serverSlice === undefined ? deviceSlice : clientMergePreview(deviceSlice, serverSlice);
 
-          // Helper: if current value matches factory default, replace with server value
-          const maybe = <T>(current: T, factoryDefault: T, serverValue: T): T => {
-            if (current === factoryDefault && serverValue && serverValue !== factoryDefault) {
-              changed = true;
-              return serverValue;
-            }
-            return current;
+          const updated: AppSettings = {
+            ...s,
+            llm: merge(s.llm, server.llm) as typeof s.llm,
+            tts: merge(s.tts, server.tts) as typeof s.tts,
+            stt: merge(s.stt, server.stt) as typeof s.stt,
+            imageGen: merge(s.imageGen, server.imageGen) as typeof s.imageGen,
+            memory: merge(s.memory, server.memory) as typeof s.memory,
+            vision: merge(s.vision, server.vision) as typeof s.vision,
+            weather: merge(s.weather, server.weather) as typeof s.weather,
+            search: merge(s.search, server.search) as typeof s.search,
+            homeAssistant: merge(s.homeAssistant, server.homeAssistant) as typeof s.homeAssistant,
+            providers: merge(s.providers, server.providers) as typeof s.providers,
+            visionProfiles: merge(s.visionProfiles, server.visionProfiles) as typeof s.visionProfiles,
+            modelProfiles: merge(s.modelProfiles, server.modelProfiles) as typeof s.modelProfiles,
+            ownerName: (merge(s.ownerName || '', server.ownerName) as string) || s.ownerName,
+            ownerLocation: (merge(s.ownerLocation || '', server.ownerLocation) as string) || s.ownerLocation,
+            // Per-device cosmetics — never server-authoritative.
+            appearance: s.appearance,
+            avatar: s.avatar,
           };
+          // STT interaction prefs stay per-device even though the STT endpoint is shared.
+          updated.stt = { ...updated.stt, inputMode: s.stt.inputMode, vadSensitivity: s.stt.vadSensitivity };
 
-          // LLM
-          const sd = serverDefaults;
-          const sdLlm = (sd.llm || {}) as Record<string, unknown>;
-          updated.llm = {
-            ...s.llm,
-            endpoint: maybe(s.llm.endpoint, 'http://localhost:1234/v1', sd.llm?.endpoint as string),
-            model: maybe(s.llm.model, 'local-model', sd.llm?.model as string),
-            // Optional routing overrides — inherit so a blank device never sends
-            // null and deletes the server's value.
-            simpleTasksModel: maybe(s.llm.simpleTasksModel || '', '', sdLlm.simpleTasksModel as string),
-            simpleTasksProviderId: maybe(s.llm.simpleTasksProviderId || '', '', sdLlm.simpleTasksProviderId as string),
-            roomCreatorModel: maybe(s.llm.roomCreatorModel || '', '', sdLlm.roomCreatorModel as string),
-            roomCreatorProviderId: maybe(s.llm.roomCreatorProviderId || '', '', sdLlm.roomCreatorProviderId as string),
-          };
-
-          // TTS
-          updated.tts = {
-            ...s.tts,
-            endpoint: maybe(s.tts.endpoint, 'http://localhost:8004', sd.tts?.endpoint as string),
-          };
-
-          // STT
-          updated.stt = {
-            ...s.stt,
-            endpoint: maybe(s.stt.endpoint, 'http://localhost:5000', sd.stt?.endpoint as string),
-          };
-
-          // Image Gen
-          updated.imageGen = {
-            ...s.imageGen,
-            endpoint: maybe(s.imageGen.endpoint, 'http://localhost:7860', sd.imageGen?.endpoint as string),
-          };
-
-          // Memory
-          updated.memory = {
-            ...s.memory,
-            endpoint: maybe(s.memory.endpoint, 'http://localhost:8100', sd.memory?.endpoint as string),
-          };
-
-          // Vision
-          const sdVision = (sd.vision || {}) as Record<string, unknown>;
-          updated.vision = {
-            ...s.vision,
-            endpoint: maybe(s.vision.endpoint, 'http://localhost:1234', sd.vision?.endpoint as string),
-            model: maybe(s.vision.model, '', sd.vision?.model as string),
-            maxTokens: maybe(s.vision.maxTokens, 1024, sd.vision?.maxTokens as number),
-            temperature: maybe(s.vision.temperature, 0.3, sd.vision?.temperature as number),
-            // Cleared via null by the UI → inherit so a blank device can't delete them.
-            visionProviderId: maybe(s.vision.visionProviderId || '', '', sdVision.visionProviderId as string),
-            apiKey: maybe(s.vision.apiKey || '', '', sdVision.apiKey as string),
-          };
-
-          // Weather (API key + location)
-          updated.weather = {
-            ...s.weather,
-            apiKey: maybe(s.weather.apiKey, '', sd.weather?.apiKey as string),
-            location: maybe(s.weather.location, '', sd.weather?.location as string),
-            latitude: maybe(s.weather.latitude, 0, sd.weather?.latitude as number),
-            longitude: maybe(s.weather.longitude, 0, sd.weather?.longitude as number),
-          };
-
-          // Search (API keys)
-          updated.search = {
-            ...s.search,
-            braveApiKey: maybe(s.search.braveApiKey, '', sd.search?.braveApiKey as string),
-            serpApiKey: maybe(s.search.serpApiKey, '', sd.search?.serpApiKey as string),
-            searxngEndpoint: maybe(s.search.searxngEndpoint, '', sd.search?.searxngEndpoint as string),
-          };
-
-          // Owner identity (name + location from the server's .env / bridge config)
-          updated.ownerName = maybe(s.ownerName || '', '', (sd as Record<string, unknown>).ownerName as string);
-          updated.ownerLocation = maybe(s.ownerLocation || '', '', (sd as Record<string, unknown>).ownerLocation as string);
-
-          // Home Assistant (URL + token live in bridge-config, not .env). Without
-          // this, a remote browser came up with a blank HA URL and then pushed
-          // that blank back, breaking HA for everyone. Now it inherits the real
-          // values like weather/search keys do.
-          const sdHa = ((sd as Record<string, unknown>).homeAssistant || {}) as Record<string, unknown>;
-          updated.homeAssistant = {
-            ...s.homeAssistant,
-            baseUrl: maybe(s.homeAssistant.baseUrl, '', sdHa.baseUrl as string),
-            accessToken: maybe(s.homeAssistant.accessToken, '', sdHa.accessToken as string),
-            entityFilter: maybe(s.homeAssistant.entityFilter || '', '', sdHa.entityFilter as string),
-          };
-
-          // Providers: a fresh store has none — adopt the server's configured
-          // list so a remote browser can see/use them (and never syncs an empty
-          // list back).
-          const sdProviders = (sd as Record<string, unknown>).providers;
-          if ((!s.providers || s.providers.length === 0) && Array.isArray(sdProviders) && sdProviders.length > 0) {
-            updated.providers = sdProviders as typeof s.providers;
-            changed = true;
-          }
-
-          if (!changed) return state;
-          return { settings: updated };
+          return { settings: updated, isLocalConnection: server.local !== false };
         }),
+
+      // Off-site write flow: push the staged change to the server WITH the
+      // confirm header (server requires it for remote writes), then clear.
+      confirmServerSync: async () => {
+        const pending = get().pendingServerSync;
+        if (!pending) return;
+        try {
+          await postBridgeConfig(buildBridgePayload(pending.settings), true);
+        } catch (e) {
+          console.warn('Confirm server sync failed:', e);
+        }
+        set({ pendingServerSync: null });
+      },
+      // Drop the staged change — the server stays unchanged. On next load this
+      // device re-adopts the server's values anyway.
+      discardServerSync: () => set({ pendingServerSync: null }),
 
       // Streaming actions
       setStreamingContent: (content) => set({ streamingContent: content }),

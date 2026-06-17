@@ -1,68 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { readFile, writeFile, copyFile, mkdir, readdir, unlink } from 'fs/promises';
-import { existsSync } from 'fs';
-import path from 'path';
-
-const CONFIG_PATH = path.join(process.cwd(), 'services/signal-bridge/bridge-config.json');
-
-const DEFAULT_CONFIG = {
-  tasks: {
-    morning_briefing: { enabled: true, time: '07:00' },
-    'weather_check_07:00': { enabled: true, time: '07:00' },
-    'weather_check_12:00': { enabled: true, time: '12:00' },
-    'weather_check_18:00': { enabled: true, time: '18:00' },
-    'aurora_check_12:00': { enabled: true, time: '12:00' },
-    'aurora_check_18:00': { enabled: true, time: '18:00' },
-    system_health: { enabled: true, interval_minutes: 30 },
-    yt_download: { enabled: false, time: '04:00' },
-    selfie_backup: { enabled: false, time: '04:00' },
-  },
-  yt_downloader: {
-    max_videos_per_channel: 3,
-    channels: [] as { id: string; url: string; name: string; enabled: boolean }[],
-  },
-  heartbeat: {
-    quiet_start: '21:00',
-    quiet_end: '06:00',
-  },
-};
-
-async function loadConfig() {
-  try {
-    if (existsSync(CONFIG_PATH)) {
-      const data = await readFile(CONFIG_PATH, 'utf-8');
-      const loaded = JSON.parse(data);
-      // Merge with defaults so missing top-level keys (tasks, heartbeat, etc.) are filled in
-      return deepMerge(DEFAULT_CONFIG as Record<string, unknown>, loaded as Record<string, unknown>);
-    }
-    // Create default config
-    await writeFile(CONFIG_PATH, JSON.stringify(DEFAULT_CONFIG, null, 2));
-    return DEFAULT_CONFIG;
-  } catch {
-    return DEFAULT_CONFIG;
-  }
-}
-
-const SNAPSHOT_DIR = path.join(process.cwd(), 'data/backups/bridge-config');
-const MAX_SNAPSHOTS = 10;
-
-async function snapshotConfig() {
-  if (!existsSync(CONFIG_PATH)) return;
-  try {
-    await mkdir(SNAPSHOT_DIR, { recursive: true });
-    const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    await copyFile(CONFIG_PATH, path.join(SNAPSHOT_DIR, `bridge-config_${ts}.json`));
-    const files = (await readdir(SNAPSHOT_DIR))
-      .filter((f) => f.startsWith('bridge-config_'))
-      .sort()
-      .reverse();
-    for (const old of files.slice(MAX_SNAPSHOTS)) {
-      await unlink(path.join(SNAPSHOT_DIR, old)).catch(() => {});
-    }
-  } catch (e) {
-    console.warn('Failed to snapshot bridge config:', e);
-  }
-}
+import { writeFile } from 'fs/promises';
+import {
+  CONFIG_PATH,
+  loadConfig,
+  snapshotConfig,
+  deepMerge,
+  isLocalRequest,
+} from '@/lib/bridge-config-store';
 
 // GET /api/bridge-config - Read bridge config
 export async function GET() {
@@ -79,14 +23,31 @@ export async function GET() {
 }
 
 // POST /api/bridge-config - Update bridge config
+//
+// Server is the source of truth. A write from OFF-SITE (e.g. ngrok) must be
+// explicitly confirmed by the user — the client resends with the
+// `x-confirm-remote-write` header after an "Are you sure?" dialog. Without it we
+// reject remote writes (HTTP 412) so a stale/blank off-site browser can never
+// silently change server config. Local/LAN writes are trusted.
 export async function POST(request: NextRequest) {
   try {
     const updates = await request.json();
-    const current = await loadConfig();
 
+    const local = isLocalRequest(request);
+    const confirmed = request.headers.get('x-confirm-remote-write') === 'yes';
+    if (!local && !confirmed) {
+      return NextResponse.json(
+        {
+          error: 'remote_write_requires_confirmation',
+          message: 'You are connected off-site. Confirm to change server settings.',
+        },
+        { status: 412 }
+      );
+    }
+
+    const current = await loadConfig();
     await snapshotConfig();
 
-    // Deep merge updates into current config
     const merged = deepMerge(current, updates);
     await writeFile(CONFIG_PATH, JSON.stringify(merged, null, 2));
 
@@ -98,37 +59,4 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
-}
-
-function deepMerge(base: Record<string, unknown>, override: Record<string, unknown>): Record<string, unknown> {
-  const result = { ...base };
-  for (const key of Object.keys(override)) {
-    const ov = override[key];
-    const cur = result[key];
-
-    if (ov === null) {
-      // null means "delete this key" — the ONLY way the UI intentionally clears
-      // a field (it sends `value || null`, never an empty string). So null is a
-      // deliberate clear; '' is just an unset/blank field on the client.
-      delete result[key];
-    } else if (typeof ov === 'string' && ov === '' && typeof cur === 'string' && cur !== '') {
-      // GENERAL GUARD: a blank string from a fresh/partial client (e.g. a phone
-      // or off-site browser whose store never had this value) must NEVER clobber
-      // a real server value. Intentional clears come through as null above. This
-      // replaced a hardcoded PROTECTED_KEYS list — every scalar is protected now.
-      // (preserve cur)
-    } else if (Array.isArray(ov) && ov.length === 0 && Array.isArray(cur) && cur.length > 0) {
-      // Likewise an empty array from a client that hasn't loaded the server's
-      // list (e.g. `providers`) must not wipe a populated one.
-      // (preserve cur)
-    } else if (
-      cur && typeof cur === 'object' && !Array.isArray(cur) &&
-      ov && typeof ov === 'object' && !Array.isArray(ov)
-    ) {
-      result[key] = deepMerge(cur as Record<string, unknown>, ov as Record<string, unknown>);
-    } else {
-      result[key] = ov;
-    }
-  }
-  return result;
 }

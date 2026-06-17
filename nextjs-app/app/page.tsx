@@ -34,7 +34,7 @@ export default function Home() {
     setStreamingContent,
     clearStreamingContent,
     updateServiceHealth,
-    mergeServerDefaults,
+    applyServerSettings,
     chooms,
     chats,
     messages,
@@ -290,16 +290,17 @@ export default function Home() {
   }, [currentChoomId, currentChatId]);
 
   // Sync server-side .env defaults into store on mount.
-  // Remote browsers (e.g. via ngrok) start with localhost defaults that can't reach
-  // services on the LAN. This fetches the server's actual config and merges it in
-  // for any values still at factory defaults, before health checks fire.
+  // Server is the source of truth. On load, fetch the server's config and
+  // OVERWRITE this device's server-owned settings with it (cosmetics preserved),
+  // before health checks fire. This corrects a stale/blank/off-site browser so it
+  // can never silently push bad values back. Also sets isLocalConnection.
   useEffect(() => {
     const syncDefaults = async () => {
       try {
         const res = await fetch('/api/settings/defaults');
         if (res.ok) {
-          const serverDefaults = await res.json();
-          mergeServerDefaults(serverDefaults);
+          const serverConfig = await res.json();
+          applyServerSettings(serverConfig);
         }
       } catch {
         // Non-critical — store keeps whatever it already has
@@ -307,7 +308,7 @@ export default function Home() {
       setServerDefaultsSynced(true);
     };
     syncDefaults();
-  }, [mergeServerDefaults]);
+  }, [applyServerSettings]);
 
   // Check service health periodically (waits for server defaults sync first)
   useEffect(() => {

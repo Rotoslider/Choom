@@ -22,6 +22,7 @@ import {
   Home,
   FileText,
   Menu,
+  History,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -45,6 +46,7 @@ import { HomeAssistantSettings } from '@/components/settings/homeassistant-setti
 import { AvatarSettingsPanel } from '@/components/settings/avatar-settings';
 import { SelfFollowupsSettings } from '@/components/settings/self-followups-settings';
 import { BridgeLogSettings } from '@/components/settings/bridge-log-settings';
+import { BackupSettings } from '@/components/settings/backup-settings';
 import { cn } from '@/lib/utils';
 import { useAppStore } from '@/lib/store';
 
@@ -67,6 +69,7 @@ type Section =
   | 'home-assistant'
   | 'avatar'
   | 'bridge-log'
+  | 'backup'
   | 'appearance';
 
 const sections: { id: Section; label: string; icon: React.ReactNode }[] = [
@@ -88,6 +91,7 @@ const sections: { id: Section; label: string; icon: React.ReactNode }[] = [
   { id: 'home-assistant', label: 'Smart Home', icon: <Home className="h-4 w-4" /> },
   { id: 'avatar', label: 'Avatar', icon: <Eye className="h-4 w-4" /> },
   { id: 'bridge-log', label: 'Logs', icon: <FileText className="h-4 w-4" /> },
+  { id: 'backup', label: 'Backup', icon: <History className="h-4 w-4" /> },
   { id: 'appearance', label: 'Theme', icon: <Palette className="h-4 w-4" /> },
 ];
 
@@ -195,6 +199,7 @@ export default function SettingsPage() {
             {activeSection === 'home-assistant' && <HomeAssistantSettings />}
             {activeSection === 'avatar' && <AvatarSettingsPanel />}
             {activeSection === 'bridge-log' && <BridgeLogSettings />}
+            {activeSection === 'backup' && <BackupSettings />}
             {activeSection === 'appearance' && <AppearanceSettings />}
           </div>
         </ScrollArea>

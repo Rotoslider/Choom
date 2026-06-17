@@ -1,15 +1,18 @@
 import { NextResponse } from 'next/server';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
+import { isLocalRequest } from '@/lib/bridge-config-store';
 
 /**
  * GET /api/settings/defaults
  *
- * Returns the server's configured settings from .env and bridge-config.json.
- * Remote browsers (e.g. via ngrok) use this to bootstrap their localStorage with
- * the correct values instead of localhost defaults that only work on the LAN.
+ * Returns the server's EFFECTIVE config (whole server-owned slices from
+ * bridge-config.json, with .env taking priority) plus a `local` flag.
  *
- * Priority: .env values > bridge-config.json values > hardcoded defaults
+ * The client treats the server as the source of truth: on load it OVERWRITES its
+ * own server-owned settings with these (preserving per-device cosmetics). So a
+ * stale/blank/off-site browser is corrected to the server every load and can
+ * never silently win. Priority: .env > bridge-config.json > hardcoded.
  */
 
 function loadBridgeConfig(): Record<string, unknown> {
@@ -22,75 +25,67 @@ function loadBridgeConfig(): Record<string, unknown> {
   return {};
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   const bridge = loadBridgeConfig();
-  const bVision = (bridge.vision || {}) as Record<string, unknown>;
-  const bTts = (bridge.tts || {}) as Record<string, unknown>;
-  const bLlm = (bridge.llm || {}) as Record<string, unknown>;
-  const bImage = (bridge.imageGen || {}) as Record<string, unknown>;
-  const bWeather = (bridge.weather || {}) as Record<string, unknown>;
-  const bSearch = (bridge.search || {}) as Record<string, unknown>;
-  const bHa = (bridge.homeAssistant || {}) as Record<string, unknown>;
-  const bProviders = Array.isArray(bridge.providers) ? bridge.providers : [];
+  const obj = (k: string) => (bridge[k] || {}) as Record<string, unknown>;
+  const bVision = obj('vision');
+  const bTts = obj('tts');
+  const bStt = obj('stt');
+  const bLlm = obj('llm');
+  const bImage = obj('imageGen');
+  const bMemory = obj('memory');
+  const bWeather = obj('weather');
+  const bSearch = obj('search');
+  const bHa = obj('homeAssistant');
 
-  // Priority: .env > bridge-config.json > hardcoded. bridge-config.json is the
-  // cross-device source of truth (the Settings UI writes to it), so a browser
-  // logging in from another machine inherits the SAME values that are actually
-  // in effect — not blanks. (Previously most fields read only from .env, so a
-  // remote login came up empty for anything configured via the UI.)
+  // Whole slices so the client can overwrite server-owned settings wholesale.
+  // .env wins for the few fields it can set; otherwise the bridge value (what
+  // the UI last saved) is the truth.
   return NextResponse.json({
+    local: isLocalRequest(request),
     llm: {
+      ...bLlm,
       endpoint: process.env.LLM_ENDPOINT || (bLlm.endpoint as string) || 'http://localhost:1234/v1',
       model: process.env.LLM_MODEL || (bLlm.model as string) || 'local-model',
-      // Optional routing overrides — the UI clears these via null, so a remote
-      // device must inherit them or it'd send null and delete the server's.
-      simpleTasksModel: (bLlm.simpleTasksModel as string) || '',
-      simpleTasksProviderId: (bLlm.simpleTasksProviderId as string) || '',
-      roomCreatorModel: (bLlm.roomCreatorModel as string) || '',
-      roomCreatorProviderId: (bLlm.roomCreatorProviderId as string) || '',
     },
     tts: {
+      ...bTts,
       endpoint: process.env.TTS_ENDPOINT || (bTts.endpoint as string) || 'http://localhost:8004',
-      defaultVoice: (bTts.defaultVoice as string) || '',
     },
     stt: {
-      endpoint: process.env.STT_ENDPOINT || 'http://localhost:5000',
+      ...bStt,
+      endpoint: process.env.STT_ENDPOINT || (bStt.endpoint as string) || 'http://localhost:5000',
     },
     imageGen: {
+      ...bImage,
       endpoint: process.env.IMAGE_GEN_ENDPOINT || (bImage.endpoint as string) || 'http://localhost:7860',
     },
     memory: {
-      endpoint: process.env.MEMORY_ENDPOINT || 'http://localhost:8100',
+      ...bMemory,
+      endpoint: process.env.MEMORY_ENDPOINT || (bMemory.endpoint as string) || 'http://localhost:8100',
     },
     vision: {
+      ...bVision,
       endpoint: process.env.VISION_ENDPOINT || (bVision.endpoint as string) || 'http://localhost:1234',
       model: process.env.VISION_MODEL || (bVision.model as string) || '',
-      maxTokens: (bVision.maxTokens as number) || 0,
-      temperature: (bVision.temperature as number) || 0,
-      // Cleared via null by the UI → remote devices must inherit them too.
-      visionProviderId: (bVision.visionProviderId as string) || '',
-      apiKey: (bVision.apiKey as string) || '',
     },
     weather: {
+      ...bWeather,
       apiKey: process.env.OPENWEATHER_API_KEY || process.env.OPENWEATHERMAP_API_KEY || (bWeather.apiKey as string) || '',
-      location: process.env.DEFAULT_WEATHER_LOCATION || (bWeather.location as string) || '',
-      latitude: parseFloat(process.env.DEFAULT_WEATHER_LAT || '') || (bWeather.latitude as number) || 0,
-      longitude: parseFloat(process.env.DEFAULT_WEATHER_LON || '') || (bWeather.longitude as number) || 0,
     },
     search: {
+      ...bSearch,
       braveApiKey: process.env.BRAVE_API_KEY || (bSearch.braveApiKey as string) || '',
       serpApiKey: process.env.SERPAPI_KEY || (bSearch.serpApiKey as string) || '',
-      searxngEndpoint: process.env.SEARXNG_ENDPOINT || (bSearch.searxngEndpoint as string) || '',
     },
-    // Home Assistant — was entirely missing here, so remote browsers never
-    // inherited the URL/token and would push a blank baseUrl back, breaking HA.
     homeAssistant: {
+      ...bHa,
       baseUrl: process.env.HOME_ASSISTANT_URL || (bHa.baseUrl as string) || '',
       accessToken: process.env.HOME_ASSISTANT_TOKEN || (bHa.accessToken as string) || '',
-      entityFilter: (bHa.entityFilter as string) || '',
-      cacheSeconds: (bHa.cacheSeconds as number) || 30,
     },
-    providers: bProviders,
+    providers: Array.isArray(bridge.providers) ? bridge.providers : [],
+    visionProfiles: Array.isArray(bridge.visionProfiles) ? bridge.visionProfiles : [],
+    modelProfiles: Array.isArray(bridge.modelProfiles) ? bridge.modelProfiles : [],
     ownerName: process.env.OWNER_NAME || (bridge.ownerName as string) || '',
     ownerLocation: process.env.OWNER_LOCATION || (bridge.ownerLocation as string) || '',
   });

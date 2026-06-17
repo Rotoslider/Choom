@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { useAppStore } from '@/lib/store';
 import { CommandPalette } from '@/components/memories/command-palette';
+import { ServerSyncGuard } from '@/components/settings/server-sync-guard';
 
 export function Providers({ children }: { children: React.ReactNode }) {
   const [mounted, setMounted] = useState(false);
@@ -44,6 +45,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
     <TooltipProvider>
       {children}
       <CommandPalette />
+      <ServerSyncGuard />
     </TooltipProvider>
   );
 }
