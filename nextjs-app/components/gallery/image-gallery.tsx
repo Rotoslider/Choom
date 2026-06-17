@@ -354,6 +354,30 @@ export function ImageGallery({
               </Button>
             </div>
           </div>
+
+          {/* Prefetch the neighbouring images using the SAME optimized variant the
+              lightbox requests (same <NextImage sizes>), so paging with the arrows
+              or swipe is instant once warmed. Hidden + loading="eager" forces the
+              load now even though it's off-screen. */}
+          {images.length > 1 && (
+            <div aria-hidden className="sr-only">
+              {[selectedIndex - 1, selectedIndex + 1]
+                .map((i) => (i + images.length) % images.length)
+                .filter((i, idx, arr) => i !== selectedIndex && arr.indexOf(i) === idx)
+                .map((i) => (
+                  <NextImage
+                    key={`prefetch-${images[i].id}`}
+                    src={imageFileUrl(images[i].id)}
+                    alt=""
+                    width={16}
+                    height={16}
+                    sizes="90vw"
+                    quality={80}
+                    loading="eager"
+                  />
+                ))}
+            </div>
+          )}
         </div>
       )}
     </>
