@@ -100,7 +100,13 @@ export async function POST(request: NextRequest) {
   }
 }
 
-const PROTECTED_KEYS = new Set(['apiKey', 'accessToken', 'braveApiKey', 'serpApiKey', 'client_secret']);
+// Keys whose existing non-empty value must NEVER be clobbered by an empty
+// string from a syncing client. This guards against a device with a fresh/
+// partial settings store (e.g. the phone over ngrok, which has no HA URL or API
+// keys) wiping good server config just by opening Settings. `baseUrl` (the Home
+// Assistant URL) is here because exactly that happened — the token was protected
+// but the URL wasn't, so a blank URL from another browser broke HA.
+const PROTECTED_KEYS = new Set(['apiKey', 'accessToken', 'braveApiKey', 'serpApiKey', 'client_secret', 'baseUrl']);
 
 function deepMerge(base: Record<string, unknown>, override: Record<string, unknown>): Record<string, unknown> {
   const result = { ...base };
