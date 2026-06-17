@@ -69,51 +69,75 @@ export async function snapshotConfig(label = ''): Promise<void> {
   }
 }
 
+// The daily 5am full backup keeps a copy of bridge-config.json per day under
+// data/backups/daily/YYYY-MM-DD/. That's the reliable everyday trail (it runs
+// regardless of whether settings changed), so the Restore panel surfaces it
+// ALONGSIDE the pre-write snapshots.
+export const DAILY_DIR = path.join(process.cwd(), 'data/backups/daily');
+
 export interface SnapshotInfo {
-  file: string;
-  takenAt: string; // ISO
-  label: string;
+  id: string;          // restore handle: a snapshot filename OR "daily/YYYY-MM-DD"
+  takenAt: string;     // ISO-ish
+  label: string;       // 'pre-restore', 'daily', etc.
+  source: 'snapshot' | 'daily';
   sizeBytes: number;
 }
 
 export async function listSnapshots(): Promise<SnapshotInfo[]> {
-  if (!existsSync(SNAPSHOT_DIR)) return [];
   const { stat } = await import('fs/promises');
-  const files = (await readdir(SNAPSHOT_DIR)).filter((f) => f.startsWith('bridge-config_') && f.endsWith('.json'));
   const infos: SnapshotInfo[] = [];
-  for (const f of files) {
-    let takenAt = '';
-    let label = '';
-    // New format: bridge-config_2026-06-16T22-32-56[_label].json
-    const m = f.match(/^bridge-config_(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})(?:_(.+))?\.json$/);
-    // Old format: bridge-config_20260614_154635.json
-    const o = f.match(/^bridge-config_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})\.json$/);
-    if (m) {
-      takenAt = `${m[1]}T${m[2]}:${m[3]}:${m[4]}`;
-      label = m[5] || '';
-    } else if (o) {
-      takenAt = `${o[1]}-${o[2]}-${o[3]}T${o[4]}:${o[5]}:${o[6]}`;
+
+  // Pre-write snapshots (fire only when settings change).
+  if (existsSync(SNAPSHOT_DIR)) {
+    const files = (await readdir(SNAPSHOT_DIR)).filter((f) => f.startsWith('bridge-config_') && f.endsWith('.json'));
+    for (const f of files) {
+      let takenAt = '';
+      let label = '';
+      const m = f.match(/^bridge-config_(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})(?:_(.+))?\.json$/);
+      const o = f.match(/^bridge-config_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})\.json$/);
+      if (m) { takenAt = `${m[1]}T${m[2]}:${m[3]}:${m[4]}`; label = m[5] || ''; }
+      else if (o) { takenAt = `${o[1]}-${o[2]}-${o[3]}T${o[4]}:${o[5]}:${o[6]}`; }
+      let sizeBytes = 0;
+      try { sizeBytes = (await stat(path.join(SNAPSHOT_DIR, f))).size; } catch { /* ignore */ }
+      infos.push({ id: f, takenAt, label, source: 'snapshot', sizeBytes });
     }
-    let sizeBytes = 0;
-    try { sizeBytes = (await stat(path.join(SNAPSHOT_DIR, f))).size; } catch { /* ignore */ }
-    infos.push({ file: f, takenAt, label, sizeBytes });
   }
-  // newest first, by parsed timestamp (filename formats differ across versions)
+
+  // Daily full-backup copies of bridge-config.json (one per day).
+  if (existsSync(DAILY_DIR)) {
+    const days = (await readdir(DAILY_DIR)).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d));
+    for (const day of days) {
+      const f = path.join(DAILY_DIR, day, 'bridge-config.json');
+      if (!existsSync(f)) continue;
+      let sizeBytes = 0;
+      try { sizeBytes = (await stat(f)).size; } catch { /* ignore */ }
+      infos.push({ id: `daily/${day}`, takenAt: `${day}T05:00:00`, label: 'daily', source: 'daily', sizeBytes });
+    }
+  }
+
+  // newest first, by parsed timestamp
   return infos.sort((a, b) => (b.takenAt || '').localeCompare(a.takenAt || ''));
 }
 
-// Restore a snapshot file onto bridge-config.json. Snapshots the CURRENT config
-// first (labeled 'pre-restore') so a restore is itself undoable.
-export async function restoreSnapshot(file: string): Promise<{ ok: boolean; error?: string }> {
-  // Guard against path traversal — only a plain snapshot filename is allowed.
-  if (!/^bridge-config_[\w.\-:]+\.json$/.test(file) || file.includes('/') || file.includes('..')) {
-    return { ok: false, error: 'Invalid snapshot filename' };
+// Resolve a restore handle (a pre-write snapshot filename or "daily/YYYY-MM-DD")
+// to an absolute path, guarding against traversal.
+function resolveRestoreSource(id: string): string | null {
+  const daily = id.match(/^daily\/(\d{4}-\d{2}-\d{2})$/);
+  if (daily) return path.join(DAILY_DIR, daily[1], 'bridge-config.json');
+  if (/^bridge-config_[\w.\-:]+\.json$/.test(id) && !id.includes('/') && !id.includes('..')) {
+    return path.join(SNAPSHOT_DIR, id);
   }
-  const src = path.join(SNAPSHOT_DIR, file);
-  if (!existsSync(src)) return { ok: false, error: 'Snapshot not found' };
+  return null;
+}
+
+// Restore a snapshot/daily backup onto bridge-config.json. Snapshots the CURRENT
+// config first (labeled 'pre-restore') so a restore is itself undoable.
+export async function restoreSnapshot(id: string): Promise<{ ok: boolean; error?: string }> {
+  const src = resolveRestoreSource(id);
+  if (!src) return { ok: false, error: 'Invalid backup id' };
+  if (!existsSync(src)) return { ok: false, error: 'Backup not found' };
   try {
-    // Validate it parses before we overwrite anything.
-    JSON.parse(await readFile(src, 'utf-8'));
+    JSON.parse(await readFile(src, 'utf-8')); // validate before overwriting
     await snapshotConfig('pre-restore');
     await copyFile(src, CONFIG_PATH);
     return { ok: true };
@@ -154,39 +178,24 @@ export function deepMerge(base: Record<string, unknown>, override: Record<string
   return result;
 }
 
-// Decide whether a request originates from the home machine/LAN (trusted) or
-// from off-site (e.g. ngrok) where settings writes must be confirmed. We trust:
-// localhost, and RFC-1918 private ranges. Anything else (an ngrok hostname or a
-// public client IP) is treated as remote.
+// Only the NUC itself — reached via localhost — is trusted to change server
+// config without confirmation. The NUC IS the server, so it's the one machine
+// that should edit freely. Every OTHER device (Mac/phone on the LAN hitting the
+// NUC's IP, or off-site via ngrok) must confirm, so they can never break config
+// by accident. Decided by the Host header: localhost = the NUC; an IP or a
+// hostname = some other device.
 export function isLocalRequest(req: Request): boolean {
-  // Forwarded-* headers are set by ngrok/proxies for off-site clients. Their
-  // presence with a non-private client IP is the strongest "remote" signal.
   const xfHost = req.headers.get('x-forwarded-host') || '';
   const host = (req.headers.get('host') || '').toLowerCase();
   const hostName = (xfHost || host).split(':')[0].toLowerCase();
 
-  // ngrok / public hostname → remote
-  if (hostName && !isLocalHostname(hostName)) return false;
+  const isLoopbackHost = hostName === 'localhost' || hostName === '127.0.0.1' || hostName === '::1';
+  if (!isLoopbackHost) return false;
 
-  // If a forwarded-for chain exists, the left-most entry is the real client.
+  // A proxy forwarding a non-loopback client onto localhost is NOT really local.
   const xff = req.headers.get('x-forwarded-for') || '';
-  const clientIp = xff.split(',')[0].trim();
-  if (clientIp && !isPrivateIp(clientIp)) return false;
+  const clientIp = xff.split(',')[0].trim().replace(/^::ffff:/, '');
+  if (clientIp && clientIp !== '127.0.0.1' && clientIp !== '::1') return false;
 
   return true;
-}
-
-function isLocalHostname(h: string): boolean {
-  if (h === 'localhost' || h === '127.0.0.1' || h === '::1' || h.endsWith('.local')) return true;
-  return isPrivateIp(h);
-}
-
-function isPrivateIp(ip: string): boolean {
-  // strip IPv6-mapped prefix
-  const v = ip.replace(/^::ffff:/, '');
-  if (v === '127.0.0.1' || v === '::1' || v === 'localhost') return true;
-  if (/^10\./.test(v)) return true;
-  if (/^192\.168\./.test(v)) return true;
-  if (/^172\.(1[6-9]|2\d|3[01])\./.test(v)) return true;
-  return false;
 }

@@ -6,9 +6,10 @@ import { useAppStore } from '@/lib/store';
 import { History, RotateCcw, RefreshCw, AlertTriangle, Check } from 'lucide-react';
 
 interface SnapshotInfo {
-  file: string;
+  id: string;
   takenAt: string;
   label: string;
+  source: 'snapshot' | 'daily';
   sizeBytes: number;
 }
 
@@ -37,7 +38,7 @@ export function BackupSettings() {
       const data = await res.json();
       const list: SnapshotInfo[] = data.snapshots || [];
       setSnapshots(list);
-      setSelected((cur) => cur || (list[0]?.file ?? ''));
+      setSelected((cur) => cur || (list[0]?.id ?? ''));
     } catch {
       setMsg({ kind: 'err', text: 'Could not load backups.' });
     } finally {
@@ -69,7 +70,7 @@ export function BackupSettings() {
     if (!selected) return;
     setBusy(true); setMsg(null);
     try {
-      const res = await post({ action: 'restore', file: selected });
+      const res = await post({ action: 'restore', id: selected });
       if (!res.ok) throw new Error((await res.json()).error || 'Restore failed');
       await refreshFromServer();
       await load();
@@ -103,8 +104,9 @@ export function BackupSettings() {
           <History className="h-5 w-5" /> Backup &amp; Restore
         </h2>
         <p className="text-sm text-muted-foreground mt-1">
-          The server saves a snapshot of its settings before every change (newest 10 kept).
-          Roll back here if something gets changed by mistake.
+          Two trails: a <strong>daily</strong> full backup (5am) and a <strong>pre-change</strong>
+          snapshot taken right before any settings edit. Roll back to either if
+          something gets changed by mistake.
         </p>
       </div>
 
@@ -133,8 +135,8 @@ export function BackupSettings() {
               className="flex-1 rounded-md border border-border bg-background px-3 py-2 text-sm"
             >
               {snapshots.map((s) => (
-                <option key={s.file} value={s.file}>
-                  {prettyTime(s.takenAt)}{s.label ? ` — ${s.label.replace(/-/g, ' ')}` : ''}
+                <option key={s.id} value={s.id}>
+                  {prettyTime(s.takenAt)} — {s.source === 'daily' ? 'daily backup' : (s.label.replace(/-/g, ' ') || 'pre-change snapshot')}
                 </option>
               ))}
             </select>

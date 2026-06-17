@@ -41,8 +41,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: true });
     }
 
-    if (body.action === 'restore' && typeof body.file === 'string') {
-      const res = await restoreSnapshot(body.file);
+    if (body.action === 'restore' && typeof body.id === 'string') {
+      const res = await restoreSnapshot(body.id);
       if (!res.ok) return NextResponse.json({ error: res.error }, { status: 400 });
       return NextResponse.json({ ok: true });
     }
