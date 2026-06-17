@@ -100,42 +100,34 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// Keys whose existing non-empty value must NEVER be clobbered by an empty
-// string from a syncing client. This guards against a device with a fresh/
-// partial settings store (e.g. the phone over ngrok, which has no HA URL or API
-// keys) wiping good server config just by opening Settings. `baseUrl` (the Home
-// Assistant URL) is here because exactly that happened — the token was protected
-// but the URL wasn't, so a blank URL from another browser broke HA.
-const PROTECTED_KEYS = new Set(['apiKey', 'accessToken', 'braveApiKey', 'serpApiKey', 'client_secret', 'baseUrl']);
-
 function deepMerge(base: Record<string, unknown>, override: Record<string, unknown>): Record<string, unknown> {
   const result = { ...base };
   for (const key of Object.keys(override)) {
-    // null means "delete this key" — prevents stale values from persisting
-    // when the UI clears a field (e.g. switching vision provider to Local)
-    if (override[key] === null) {
+    const ov = override[key];
+    const cur = result[key];
+
+    if (ov === null) {
+      // null means "delete this key" — the ONLY way the UI intentionally clears
+      // a field (it sends `value || null`, never an empty string). So null is a
+      // deliberate clear; '' is just an unset/blank field on the client.
       delete result[key];
+    } else if (typeof ov === 'string' && ov === '' && typeof cur === 'string' && cur !== '') {
+      // GENERAL GUARD: a blank string from a fresh/partial client (e.g. a phone
+      // or off-site browser whose store never had this value) must NEVER clobber
+      // a real server value. Intentional clears come through as null above. This
+      // replaced a hardcoded PROTECTED_KEYS list — every scalar is protected now.
+      // (preserve cur)
+    } else if (Array.isArray(ov) && ov.length === 0 && Array.isArray(cur) && cur.length > 0) {
+      // Likewise an empty array from a client that hasn't loaded the server's
+      // list (e.g. `providers`) must not wipe a populated one.
+      // (preserve cur)
     } else if (
-      PROTECTED_KEYS.has(key) &&
-      typeof override[key] === 'string' &&
-      override[key] === '' &&
-      typeof result[key] === 'string' &&
-      result[key] !== ''
+      cur && typeof cur === 'object' && !Array.isArray(cur) &&
+      ov && typeof ov === 'object' && !Array.isArray(ov)
     ) {
-      // Never overwrite a real secret/key with an empty string
-    } else if (
-      result[key] &&
-      typeof result[key] === 'object' &&
-      !Array.isArray(result[key]) &&
-      typeof override[key] === 'object' &&
-      !Array.isArray(override[key])
-    ) {
-      result[key] = deepMerge(
-        result[key] as Record<string, unknown>,
-        override[key] as Record<string, unknown>
-      );
+      result[key] = deepMerge(cur as Record<string, unknown>, ov as Record<string, unknown>);
     } else {
-      result[key] = override[key];
+      result[key] = ov;
     }
   }
   return result;

@@ -26,11 +26,22 @@ export async function GET() {
   const bridge = loadBridgeConfig();
   const bVision = (bridge.vision || {}) as Record<string, unknown>;
   const bTts = (bridge.tts || {}) as Record<string, unknown>;
+  const bLlm = (bridge.llm || {}) as Record<string, unknown>;
+  const bImage = (bridge.imageGen || {}) as Record<string, unknown>;
+  const bWeather = (bridge.weather || {}) as Record<string, unknown>;
+  const bSearch = (bridge.search || {}) as Record<string, unknown>;
+  const bHa = (bridge.homeAssistant || {}) as Record<string, unknown>;
+  const bProviders = Array.isArray(bridge.providers) ? bridge.providers : [];
 
+  // Priority: .env > bridge-config.json > hardcoded. bridge-config.json is the
+  // cross-device source of truth (the Settings UI writes to it), so a browser
+  // logging in from another machine inherits the SAME values that are actually
+  // in effect — not blanks. (Previously most fields read only from .env, so a
+  // remote login came up empty for anything configured via the UI.)
   return NextResponse.json({
     llm: {
-      endpoint: process.env.LLM_ENDPOINT || 'http://localhost:1234/v1',
-      model: process.env.LLM_MODEL || 'local-model',
+      endpoint: process.env.LLM_ENDPOINT || (bLlm.endpoint as string) || 'http://localhost:1234/v1',
+      model: process.env.LLM_MODEL || (bLlm.model as string) || 'local-model',
     },
     tts: {
       endpoint: process.env.TTS_ENDPOINT || (bTts.endpoint as string) || 'http://localhost:8004',
@@ -40,7 +51,7 @@ export async function GET() {
       endpoint: process.env.STT_ENDPOINT || 'http://localhost:5000',
     },
     imageGen: {
-      endpoint: process.env.IMAGE_GEN_ENDPOINT || 'http://localhost:7860',
+      endpoint: process.env.IMAGE_GEN_ENDPOINT || (bImage.endpoint as string) || 'http://localhost:7860',
     },
     memory: {
       endpoint: process.env.MEMORY_ENDPOINT || 'http://localhost:8100',
@@ -52,16 +63,25 @@ export async function GET() {
       temperature: (bVision.temperature as number) || 0,
     },
     weather: {
-      apiKey: process.env.OPENWEATHER_API_KEY || process.env.OPENWEATHERMAP_API_KEY || '',
-      location: process.env.DEFAULT_WEATHER_LOCATION || '',
-      latitude: parseFloat(process.env.DEFAULT_WEATHER_LAT || '0') || 0,
-      longitude: parseFloat(process.env.DEFAULT_WEATHER_LON || '0') || 0,
+      apiKey: process.env.OPENWEATHER_API_KEY || process.env.OPENWEATHERMAP_API_KEY || (bWeather.apiKey as string) || '',
+      location: process.env.DEFAULT_WEATHER_LOCATION || (bWeather.location as string) || '',
+      latitude: parseFloat(process.env.DEFAULT_WEATHER_LAT || '') || (bWeather.latitude as number) || 0,
+      longitude: parseFloat(process.env.DEFAULT_WEATHER_LON || '') || (bWeather.longitude as number) || 0,
     },
     search: {
-      braveApiKey: process.env.BRAVE_API_KEY || '',
-      serpApiKey: process.env.SERPAPI_KEY || '',
-      searxngEndpoint: process.env.SEARXNG_ENDPOINT || '',
+      braveApiKey: process.env.BRAVE_API_KEY || (bSearch.braveApiKey as string) || '',
+      serpApiKey: process.env.SERPAPI_KEY || (bSearch.serpApiKey as string) || '',
+      searxngEndpoint: process.env.SEARXNG_ENDPOINT || (bSearch.searxngEndpoint as string) || '',
     },
+    // Home Assistant — was entirely missing here, so remote browsers never
+    // inherited the URL/token and would push a blank baseUrl back, breaking HA.
+    homeAssistant: {
+      baseUrl: process.env.HOME_ASSISTANT_URL || (bHa.baseUrl as string) || '',
+      accessToken: process.env.HOME_ASSISTANT_TOKEN || (bHa.accessToken as string) || '',
+      entityFilter: (bHa.entityFilter as string) || '',
+      cacheSeconds: (bHa.cacheSeconds as number) || 30,
+    },
+    providers: bProviders,
     ownerName: process.env.OWNER_NAME || (bridge.ownerName as string) || '',
     ownerLocation: process.env.OWNER_LOCATION || (bridge.ownerLocation as string) || '',
   });

@@ -602,6 +602,27 @@ export const useAppStore = create<AppState>()(
           updated.ownerName = maybe(s.ownerName || '', '', (sd as Record<string, unknown>).ownerName as string);
           updated.ownerLocation = maybe(s.ownerLocation || '', '', (sd as Record<string, unknown>).ownerLocation as string);
 
+          // Home Assistant (URL + token live in bridge-config, not .env). Without
+          // this, a remote browser came up with a blank HA URL and then pushed
+          // that blank back, breaking HA for everyone. Now it inherits the real
+          // values like weather/search keys do.
+          const sdHa = ((sd as Record<string, unknown>).homeAssistant || {}) as Record<string, unknown>;
+          updated.homeAssistant = {
+            ...s.homeAssistant,
+            baseUrl: maybe(s.homeAssistant.baseUrl, '', sdHa.baseUrl as string),
+            accessToken: maybe(s.homeAssistant.accessToken, '', sdHa.accessToken as string),
+            entityFilter: maybe(s.homeAssistant.entityFilter || '', '', sdHa.entityFilter as string),
+          };
+
+          // Providers: a fresh store has none — adopt the server's configured
+          // list so a remote browser can see/use them (and never syncs an empty
+          // list back).
+          const sdProviders = (sd as Record<string, unknown>).providers;
+          if ((!s.providers || s.providers.length === 0) && Array.isArray(sdProviders) && sdProviders.length > 0) {
+            updated.providers = sdProviders as typeof s.providers;
+            changed = true;
+          }
+
           if (!changed) return state;
           return { settings: updated };
         }),
