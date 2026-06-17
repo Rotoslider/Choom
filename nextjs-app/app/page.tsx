@@ -39,7 +39,7 @@ export default function Home() {
     chats,
     messages,
     settings,
-    activeProjectByChat,
+    setActiveProject,
   } = useAppStore();
 
   // Track whether server defaults have been synced (avoids health checks with wrong endpoints)
@@ -255,6 +255,8 @@ export default function Home() {
           const chat = chats.find((c) => c.id === currentChatId);
           if (chat) {
             setCurrentChatData(chat);
+            // Sync the header dropdown to this chat's persisted project pin.
+            setActiveProject(currentChatId, chat.activeProjectFolder || '');
           }
         }
       } catch (error) {
@@ -629,8 +631,6 @@ export default function Home() {
         body: JSON.stringify({
           choomId: currentChoomId,
           chatId,
-          // Project pinned for this chat via the header dropdown ('' = auto/selfies).
-          activeProject: (chatId && activeProjectByChat[chatId]) || undefined,
           message: content,
           settings: {
             llm: settings.llm,
@@ -672,6 +672,14 @@ export default function Home() {
 
           try {
             const data: StreamingChatChunk = JSON.parse(line.slice(6));
+
+            // A turn that named a project ("we're working in X") pins it and
+            // tells us here — update the header dropdown live.
+            const pd = data as unknown as { type?: string; chatId?: string; folder?: string };
+            if (pd.type === 'project_set' && pd.chatId) {
+              setActiveProject(pd.chatId, pd.folder || '');
+              continue;
+            }
 
             switch (data.type) {
               case 'content':

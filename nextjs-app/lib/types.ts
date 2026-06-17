@@ -34,6 +34,7 @@ export interface Chat {
   title: string | null;
   choomId: string;
   archived: boolean;
+  activeProjectFolder?: string | null;
   createdAt: Date;
   updatedAt: Date;
   messages?: Message[];

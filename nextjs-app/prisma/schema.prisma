@@ -44,6 +44,7 @@ model Chat {
   messages          Message[]
   archived          Boolean   @default(false)
   compactionSummary String?
+  activeProjectFolder String? // Project this chat is pinned to (set by dropdown or "we're working in X"); null = selfies default
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 }

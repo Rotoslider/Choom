@@ -3708,7 +3708,10 @@ export async function POST(request: NextRequest) {
     // Active project pinned for THIS chat via the header dropdown. When set, it
     // overrides auto-detection for the whole chat; when unset, the Choom auto-
     // detects from the message and otherwise defaults to her own selfies folder.
-    const activeProjectOverride: string | undefined = (typeof body.activeProject === 'string' && body.activeProject.trim()) ? body.activeProject.trim() : undefined;
+    // Set when this turn pins a NEW project to the chat (the user named one in the
+    // message) — emitted to the web header once the SSE `send` exists, so its
+    // dropdown reflects the change. Persistence itself happens on the Chat row.
+    let autoSetProjectInfo: { folder: string; name: string } | null = null;
 
     if (!choomId || !chatId || !message) {
       return new Response(
@@ -4413,25 +4416,23 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
         return matches[0];
       };
 
-      // First: check current message for project name
+      // (b) Did the CURRENT message explicitly name a project? ("we're working in
+      // X") — if so, PIN it to this chat (persisted on the Chat row) so it sticks
+      // for every later message, on web AND on Signal. Then notify the web header
+      // so its dropdown updates (autoSetProjectInfo, emitted once `send` exists).
       detectedProject = findBestMatch(msgLowerForProject);
-
-      // Second: if not in current message (e.g. user said "continue"),
-      // scan recent chat history for the most recently referenced project
-      if (!detectedProject && chat.messages.length > 0) {
-        const recentMessages = chat.messages.slice(-10).reverse();
-        for (const msg of recentMessages) {
-          const msgContent = (msg.content || '').toLowerCase().replace(/[_\s]+/g, ' ');
-          detectedProject = findBestMatch(msgContent);
-          if (detectedProject) break;
+      if (detectedProject) {
+        const chatPinned = (chat as { activeProjectFolder?: string | null }).activeProjectFolder;
+        if (chatPinned !== detectedProject.folder) {
+          await prisma.chat.update({ where: { id: chatId }, data: { activeProjectFolder: detectedProject.folder } }).catch(() => {});
+          autoSetProjectInfo = { folder: detectedProject.folder, name: detectedProject.metadata.name || detectedProject.folder };
+          console.log(`   📌 ${choom.name} — pinned project "${detectedProject.folder}" to this chat (named in message)`);
         }
-      }
-
-      // (c) A project pinned via the chat-header dropdown OVERRIDES auto-detection
-      // for the whole chat. If the pinned project no longer exists, we fall to the
-      // selfies default below.
-      if (activeProjectOverride) {
-        detectedProject = allProjects.find(p => p.folder === activeProjectOverride) || null;
+      } else {
+        // No project named now → use the project pinned on this chat (set earlier
+        // by the header dropdown or a previous "we're working in X").
+        const chatPinned = (chat as { activeProjectFolder?: string | null }).activeProjectFolder;
+        if (chatPinned) detectedProject = allProjects.find(p => p.folder === chatPinned) || null;
       }
       // (a) No more "assigned home project" fallback. When no project is active,
       // the Choom defaults to her own selfies_ folder (handled in the else branch
@@ -4744,6 +4745,13 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             streamClosed = true; // Mark closed so subsequent sends skip silently
           }
         };
+
+        // If this turn pinned a new project (named in the message), tell the web
+        // header so its "Working in" dropdown updates live. (Signal ignores it; the
+        // project is already persisted on the chat for the next message.)
+        if (autoSetProjectInfo) {
+          send({ type: 'project_set', chatId, folder: autoSetProjectInfo.folder, name: autoSetProjectInfo.name });
+        }
 
         let fullContent = '';
         let allToolCalls: ToolCall[] = [];

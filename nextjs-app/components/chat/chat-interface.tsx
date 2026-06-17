@@ -175,7 +175,15 @@ export function ChatInterface({
                 <span className="text-xs text-muted-foreground hidden sm:inline">Working in</span>
                 <select
                   value={activeProject}
-                  onChange={(e) => setActiveProject(currentChatId, e.target.value)}
+                  onChange={(e) => {
+                    const folder = e.target.value;
+                    setActiveProject(currentChatId, folder); // immediate local view
+                    // Persist on the chat so it survives reloads AND applies on Signal.
+                    fetch(`/api/chats/${currentChatId}`, {
+                      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ activeProjectFolder: folder }),
+                    }).catch(() => {});
+                  }}
                   className="bg-muted border border-border rounded px-2 py-1 text-xs max-w-[12rem] truncate"
                 >
                   <option value="">Selfies (default)</option>

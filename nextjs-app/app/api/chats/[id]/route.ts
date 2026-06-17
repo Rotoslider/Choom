@@ -43,13 +43,15 @@ export async function PUT(
   try {
     const { id } = await params;
     const body = await request.json();
-    const { title, archived } = body;
+    const { title, archived, activeProjectFolder } = body;
 
     const chat = await prisma.chat.update({
       where: { id },
       data: {
         ...(title !== undefined && { title }),
         ...(archived !== undefined && { archived }),
+        // '' clears the pin (back to selfies default); a folder pins it.
+        ...(activeProjectFolder !== undefined && { activeProjectFolder: activeProjectFolder || null }),
       },
     });
 
