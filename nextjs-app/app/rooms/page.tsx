@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, Plus, Users, Trash2, Loader2, Smartphone, Square, Minus, Play, Download, Archive, X, MoreVertical, Pencil, ScrollText } from 'lucide-react';
+import { ArrowLeft, Plus, Users, Trash2, Loader2, Smartphone, Square, Minus, Play, Download, Archive, X, MoreVertical, Pencil, ScrollText, Menu } from 'lucide-react';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
 import { LogPanel } from '@/components/logs/log-panel';
 import { useLogStore } from '@/lib/log-store';
@@ -77,6 +77,9 @@ export default function RoomsPage() {
   const [editingRoomId, setEditingRoomId] = useState<string | null>(null);
   const [editRoomTitle, setEditRoomTitle] = useState('');
   const [roomLogsOpen, setRoomLogsOpen] = useState(false);
+  // On phones the room list is an overlay (toggled via the header menu button);
+  // on md+ it's a static column that's always visible.
+  const [roomListOpen, setRoomListOpen] = useState(false);
   const [signalRoomId, setSignalRoomId] = useState<string | null>(null);
   // Per-speaker live state during a turn
   const [activeSpeaker, setActiveSpeaker] = useState<{ name: string; choomId: string; status: string } | null>(null);
@@ -459,8 +462,22 @@ export default function RoomsPage() {
 
   return (
     <div className="flex h-screen bg-background">
-      {/* Room list column */}
-      <aside className="w-[280px] border-r border-border flex flex-col">
+      {/* Mobile backdrop for the room-list overlay */}
+      {roomListOpen && (
+        <div
+          className="fixed inset-0 z-30 bg-black/50 md:hidden"
+          onClick={() => setRoomListOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+      {/* Room list column — static on md+, slide-in overlay on phones */}
+      <aside
+        className={cn(
+          'w-[280px] border-r border-border flex flex-col bg-card',
+          'fixed inset-y-0 left-0 z-40 transition-transform duration-300 md:static md:z-auto md:translate-x-0',
+          roomListOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
+        )}
+      >
         <div className="flex items-center justify-between px-4 py-4 border-b border-border">
           <Button variant="ghost" size="icon" onClick={() => router.push('/')}>
             <ArrowLeft className="h-5 w-5" />
@@ -487,7 +504,7 @@ export default function RoomsPage() {
                   'group grid grid-cols-[1fr_auto] items-start gap-1 px-3 py-2 rounded-lg cursor-pointer hover:bg-muted/50',
                   currentRoomId === room.id && 'bg-primary/10 border border-primary/30'
                 )}
-                onClick={() => editingRoomId !== room.id && setCurrentRoomId(room.id)}
+                onClick={() => { if (editingRoomId !== room.id) { setCurrentRoomId(room.id); setRoomListOpen(false); } }}
               >
                 <div className="min-w-0 overflow-hidden">
                   {/* Row 1: avatars (up to 6 on one line) */}
@@ -557,7 +574,11 @@ export default function RoomsPage() {
       <main className="flex-1 flex flex-col min-w-0">
         {currentRoom ? (
           <>
-            <div className="px-6 py-3 border-b border-border flex items-center gap-3">
+            <div className="px-3 sm:px-6 py-3 border-b border-border flex items-center gap-2 sm:gap-3 flex-wrap">
+              <Button variant="ghost" size="icon" className="h-8 w-8 md:hidden shrink-0"
+                onClick={() => setRoomListOpen(true)} title="Rooms">
+                <Menu className="h-5 w-5" />
+              </Button>
               <div className="flex -space-x-2">
                 {currentRoom.participants.filter(p => p.active).map(p => (
                   <AvatarDisplay key={p.id} name={p.choom.name} avatarUrl={p.choom.avatarUrl} size="sm" />
@@ -636,7 +657,7 @@ export default function RoomsPage() {
             )}
 
             <ScrollArea className="flex-1">
-              <div className="max-w-3xl mx-auto px-6 py-4 space-y-4">
+              <div className="max-w-3xl mx-auto px-3 sm:px-6 py-4 space-y-4">
                 {messages.map(m => (
                   <RoomBubble key={m.id} msg={m} chooms={chooms} />
                 ))}
@@ -685,10 +706,14 @@ export default function RoomsPage() {
             />
           </>
         ) : (
-          <div className="flex-1 flex items-center justify-center text-muted-foreground">
+          <div className="flex-1 flex items-center justify-center text-muted-foreground p-6">
             <div className="text-center">
               <Users className="h-12 w-12 mx-auto mb-3 opacity-40" />
               <p>Select a room or create one to start a group chat.</p>
+              <Button variant="outline" size="sm" className="mt-4 gap-2 md:hidden"
+                onClick={() => setRoomListOpen(true)}>
+                <Menu className="h-4 w-4" /> Browse rooms
+              </Button>
             </div>
           </div>
         )}
