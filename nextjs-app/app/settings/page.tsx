@@ -21,6 +21,7 @@ import {
   Workflow,
   Home,
   FileText,
+  Menu,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -93,6 +94,8 @@ const sections: { id: Section; label: string; icon: React.ReactNode }[] = [
 export default function SettingsPage() {
   const router = useRouter();
   const [activeSection, setActiveSection] = useState<Section>('llm');
+  // On phones the settings nav is a slide-in overlay; on md+ it's a static column.
+  const [navOpen, setNavOpen] = useState(false);
   const { chooms, setChooms } = useAppStore();
 
   useEffect(() => {
@@ -106,8 +109,22 @@ export default function SettingsPage() {
 
   return (
     <div className="min-h-screen bg-background flex">
-      {/* Left navigation sidebar */}
-      <aside className="w-56 border-r border-border bg-card flex flex-col flex-shrink-0">
+      {/* Mobile backdrop for the nav overlay */}
+      {navOpen && (
+        <div
+          className="fixed inset-0 z-30 bg-black/50 md:hidden"
+          onClick={() => setNavOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+      {/* Left navigation sidebar — static on md+, slide-in overlay on phones */}
+      <aside
+        className={cn(
+          'w-56 border-r border-border bg-card flex flex-col flex-shrink-0',
+          'fixed inset-y-0 left-0 z-40 transition-transform duration-300 md:static md:z-auto md:translate-x-0',
+          navOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
+        )}
+      >
         <div className="p-4 border-b border-border">
           <Button
             variant="ghost"
@@ -125,7 +142,7 @@ export default function SettingsPage() {
           {sections.map((section) => (
             <button
               key={section.id}
-              onClick={() => setActiveSection(section.id)}
+              onClick={() => { setActiveSection(section.id); setNavOpen(false); }}
               className={cn(
                 'w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors',
                 activeSection === section.id
@@ -146,9 +163,18 @@ export default function SettingsPage() {
       </aside>
 
       {/* Main content area */}
-      <main className="flex-1 min-h-screen">
+      <main className="flex-1 min-h-screen min-w-0">
+        {/* Mobile top bar: menu button + current section label */}
+        <div className="md:hidden flex items-center gap-2 border-b border-border px-3 py-2 sticky top-0 z-20 bg-background/95 backdrop-blur-sm">
+          <Button variant="ghost" size="icon" className="h-9 w-9" onClick={() => setNavOpen(true)}>
+            <Menu className="h-5 w-5" />
+          </Button>
+          <span className="font-semibold">
+            {sections.find((s) => s.id === activeSection)?.label ?? 'Settings'}
+          </span>
+        </div>
         <ScrollArea className="h-screen">
-          <div className="max-w-3xl mx-auto p-8">
+          <div className="max-w-3xl mx-auto p-4 sm:p-8">
             {activeSection === 'llm' && <LLMSettings />}
             {activeSection === 'audio' && <AudioSettings />}
             {activeSection === 'image' && <ImageSettings />}

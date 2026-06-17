@@ -326,7 +326,7 @@ export function ProjectsSettings() {
                         />
                       </div>
 
-                      <div className="grid grid-cols-2 gap-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div className="space-y-2">
                           <label className="text-xs font-medium">Status</label>
                           <Select
@@ -370,7 +370,7 @@ export function ProjectsSettings() {
 
                       {/* LLM Provider Override */}
                       {providers.length > 0 && (
-                        <div className="grid grid-cols-2 gap-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                           <div className="space-y-2">
                             <label className="text-xs font-medium">LLM Provider</label>
                             <Select
