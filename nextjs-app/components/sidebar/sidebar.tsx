@@ -87,6 +87,16 @@ export function Sidebar({
         </Button>
       )}
 
+      {/* Mobile backdrop — on phones the open sidebar overlays the chat; tap
+          outside to close it. Hidden on md+ where the sidebar pushes content. */}
+      {ui.isSidebarOpen && (
+        <div
+          className="fixed inset-0 z-30 bg-black/50 md:hidden"
+          onClick={toggleSidebar}
+          aria-hidden="true"
+        />
+      )}
+
       {/* Sidebar */}
       <aside
         className={cn(

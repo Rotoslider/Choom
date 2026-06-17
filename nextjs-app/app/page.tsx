@@ -40,7 +40,16 @@ export default function Home() {
     messages,
     settings,
     setActiveProject,
+    setSidebarOpen,
   } = useAppStore();
+
+  // Start with the sidebar collapsed on phones so the chat is full-width on load
+  // (it's an overlay there; tap the menu button to open it).
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.innerWidth < 768) {
+      setSidebarOpen(false);
+    }
+  }, [setSidebarOpen]);
 
   // Track whether server defaults have been synced (avoids health checks with wrong endpoints)
   const [serverDefaultsSynced, setServerDefaultsSynced] = useState(false);
@@ -959,8 +968,10 @@ export default function Home() {
       {/* Main content */}
       <main
         className={cn(
-          'flex-1 transition-all duration-300',
-          ui.isSidebarOpen ? 'ml-[280px]' : 'ml-0'
+          'flex-1 min-w-0 transition-all duration-300',
+          // On phones the sidebar OVERLAYS (with a backdrop), so the chat stays
+          // full-width; only push the content on md+ screens.
+          ui.isSidebarOpen ? 'md:ml-[280px] ml-0' : 'ml-0'
         )}
       >
         <ChatInterface
