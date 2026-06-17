@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useState, useRef } from 'react';
+import React, { useCallback, useState, useRef, useEffect } from 'react';
 import { MessageList } from './message-list';
 import { InputArea, ImageAttachment } from './input-area';
 import { AvatarDisplay } from '../common/avatar-display';
@@ -61,7 +61,23 @@ export function ChatInterface({
   liveAvatarRef,
 }: ChatInterfaceProps) {
   const [isLoading, setIsLoading] = useState(false);
-  const { currentChoom, services, ui, isStreaming, setActiveLiveChoomId, settings } = useAppStore();
+  const { currentChoom, currentChatId, activeProjectByChat, setActiveProject, services, ui, isStreaming, setActiveLiveChoomId, settings } = useAppStore();
+
+  // Projects for the chat-header "working in" dropdown.
+  const [projects, setProjects] = useState<Array<{ folder: string; name?: string }>>([]);
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/projects')
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data) => {
+        if (cancelled) return;
+        const list = Array.isArray(data) ? data : (data?.projects || []);
+        setProjects(list.map((p: { folder: string; metadata?: { name?: string } }) => ({ folder: p.folder, name: p.metadata?.name })));
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [currentChoom?.id]);
+  const activeProject = currentChatId ? (activeProjectByChat[currentChatId] || '') : '';
   const avatarEnabled = settings.avatar?.enabled ?? true;
   const choomAvatarMode = (currentChoom?.avatarMode as 'off' | 'live' | 'desktop' | null) || 'off';
   const showLiveTab = avatarEnabled && choomAvatarMode === 'live';
@@ -150,6 +166,25 @@ export function ChatInterface({
                 </p>
               )}
             </div>
+
+            {/* "Working in" project selector for this chat. Default (empty) = the
+                Choom's own selfies folder + auto-detect; pick a project to pin it
+                for the whole chat. */}
+            {currentChoom && currentChatId && (
+              <div className="flex items-center gap-1.5 shrink-0" title="Project this chat works in — defaults to the Choom's selfies folder">
+                <span className="text-xs text-muted-foreground hidden sm:inline">Working in</span>
+                <select
+                  value={activeProject}
+                  onChange={(e) => setActiveProject(currentChatId, e.target.value)}
+                  className="bg-muted border border-border rounded px-2 py-1 text-xs max-w-[12rem] truncate"
+                >
+                  <option value="">Selfies (default)</option>
+                  {projects.map((p) => (
+                    <option key={p.folder} value={p.folder}>{p.name || p.folder}</option>
+                  ))}
+                </select>
+              </div>
+            )}
 
             {/* Tab switcher — only show when Choom is in 'live' avatar mode */}
             {currentChoom && showLiveTab && (

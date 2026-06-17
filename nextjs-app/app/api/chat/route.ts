@@ -3705,6 +3705,10 @@ export async function POST(request: NextRequest) {
     // attributable to the room — drives a per-room Activity Log and keeps group
     // activity out of any 1:1 chat's log.
     const logChatId: string = (isGroupTurn && groupRoomId) ? groupRoomId : chatId;
+    // Active project pinned for THIS chat via the header dropdown. When set, it
+    // overrides auto-detection for the whole chat; when unset, the Choom auto-
+    // detects from the message and otherwise defaults to her own selfies folder.
+    const activeProjectOverride: string | undefined = (typeof body.activeProject === 'string' && body.activeProject.trim()) ? body.activeProject.trim() : undefined;
 
     if (!choomId || !chatId || !message) {
       return new Response(
@@ -4423,24 +4427,16 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
         }
       }
 
-      // Third: if still no project detected, fall back to this Choom's assigned
-      // home project (if any). This prevents Chooms (like Eve) from creating
-      // fresh top-level folders every time they need to save a file when no
-      // project is explicitly named. The fallback is marked as a DEFAULT so
-      // the model knows it can still choose a different project if asked.
-      let isAssignedFallback = false;
-      if (!detectedProject) {
-        const choomNameLower = choom.name.toLowerCase();
-        const assignedProjects = allProjects.filter(
-          p => (p.metadata.assignedChoom || '').toLowerCase() === choomNameLower
-        );
-        if (assignedProjects.length > 0) {
-          // Prefer most recently modified (listProjects already sorts by lastModified desc)
-          detectedProject = assignedProjects[0];
-          isAssignedFallback = true;
-          console.log(`   🏠 ${choom.name} has no explicit project — falling back to assigned home project "${detectedProject.folder}"`);
-        }
+      // (c) A project pinned via the chat-header dropdown OVERRIDES auto-detection
+      // for the whole chat. If the pinned project no longer exists, we fall to the
+      // selfies default below.
+      if (activeProjectOverride) {
+        detectedProject = allProjects.find(p => p.folder === activeProjectOverride) || null;
       }
+      // (a) No more "assigned home project" fallback. When no project is active,
+      // the Choom defaults to her own selfies_ folder (handled in the else branch
+      // below) — unrelated chats no longer inherit someone's last project.
+      const isAssignedFallback = false;
 
       // Inject project context so LLM uses the exact folder name
       if (detectedProject) {
@@ -4463,8 +4459,13 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
         currentMessages[0].content += `\nYou have ${projMaxIter} thinking rounds available. Each round can include multiple parallel tool calls — calling 5 tools in one round only uses 1 round, not 5. Do not stop early thinking you are running out of rounds.`;
         console.log(`   📂 Project "${detectedProject.folder}" ${isAssignedFallback ? 'assigned as home (fallback)' : 'detected'} — injecting context (maxIterations: ${projMaxIter})`);
       } else {
-        // No project detected — use default limit
-        currentMessages[0].content += `\nYou have ${MAX_ITERATIONS} thinking rounds available. Each round can include multiple parallel tool calls — calling 5 tools in one round only uses 1 round, not 5. Do not stop early thinking you are running out of rounds.`;
+        // (a) No active project → default to the Choom's OWN selfies_ folder (her
+        // personal space), with choom_commons for cross-Choom work. This replaces
+        // the old "assigned home project" fallback that leaked a forced project
+        // into unrelated chats.
+        const selfiesFolder = `selfies_${choom.name.toLowerCase()}`;
+        currentMessages[0].content += `\n\n## YOUR WORKSPACE\nYour default workspace is \`${selfiesFolder}/\` — your own personal folder. When you save a file without a project being named, save it inside \`${selfiesFolder}/\` (e.g. \`${selfiesFolder}/notes/today.md\`). Do NOT create a new top-level folder for everyday work — if the user wants a dedicated project they'll name one (or pick it from the chat's project menu).\n\n**Shared folder — \`choom_commons/\`** (NOT inside your selfies folder): where ALL cross-Choom communication happens — letters, notes, delegation handoffs, shared drafts, research. Each sibling has a folder (e.g. \`choom_commons/for_eve/\`, \`choom_commons/for_aloy/\`); shared drafts go in \`choom_commons/drafts/\`. Write content FOR a sibling in their folder. You may NEVER write into another Choom's \`selfies_*/\` folder. Your \`growth_journal.md\` lives in \`${selfiesFolder}/growth_journal.md\`.\n\nYou have ${MAX_ITERATIONS} thinking rounds available. Each round can include multiple parallel tool calls — calling 5 tools in one round only uses 1 round, not 5.`;
+        console.log(`   🪪 ${choom.name} — no active project; default workspace ${selfiesFolder}/`);
       }
     } catch { /* ignore project detection errors */ }
 

@@ -141,6 +141,9 @@ interface AppState {
   currentChoomId: string | null;
   currentChatId: string | null;
   currentChoom: Choom | null;
+  // Active project pinned per chat (chatId → project folder). Empty/absent =
+  // "auto": detect from the message, else default to the Choom's selfies folder.
+  activeProjectByChat: Record<string, string>;
   currentChat: Chat | null;
 
   // Cached data
@@ -168,6 +171,7 @@ interface AppState {
   // Actions - Context
   setCurrentChoom: (id: string | null) => void;
   setCurrentChat: (id: string | null) => void;
+  setActiveProject: (chatId: string, folder: string) => void;
   setCurrentChoomData: (choom: Choom | null) => void;
   setCurrentChatData: (chat: Chat | null) => void;
 
@@ -315,6 +319,7 @@ export const useAppStore = create<AppState>()(
       currentChoomId: null,
       currentChatId: null,
       currentChoom: null,
+      activeProjectByChat: {},
       currentChat: null,
 
       chooms: [],
@@ -343,6 +348,8 @@ export const useAppStore = create<AppState>()(
       // Context actions
       setCurrentChoom: (id) => set({ currentChoomId: id }),
       setCurrentChat: (id) => set({ currentChatId: id }),
+      setActiveProject: (chatId, folder) =>
+        set((state) => ({ activeProjectByChat: { ...state.activeProjectByChat, [chatId]: folder } })),
       setCurrentChoomData: (choom) => set({ currentChoom: choom }),
       setCurrentChatData: (chat) => set({ currentChat: chat }),
 
@@ -624,6 +631,7 @@ export const useAppStore = create<AppState>()(
       partialize: (state) => ({
         currentChoomId: state.currentChoomId,
         currentChatId: state.currentChatId,
+        activeProjectByChat: state.activeProjectByChat,
         settings: state.settings,
         ui: {
           isSidebarOpen: state.ui.isSidebarOpen,
@@ -661,6 +669,7 @@ export const useAppStore = create<AppState>()(
           ...currentState,
           currentChoomId: (persisted.currentChoomId as string) ?? currentState.currentChoomId,
           currentChatId: (persisted.currentChatId as string) ?? currentState.currentChatId,
+          activeProjectByChat: (persisted.activeProjectByChat as Record<string, string>) ?? currentState.activeProjectByChat,
           settings: mergedSettings,
           ui: mergedUI,
         };

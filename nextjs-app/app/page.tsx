@@ -39,6 +39,7 @@ export default function Home() {
     chats,
     messages,
     settings,
+    activeProjectByChat,
   } = useAppStore();
 
   // Track whether server defaults have been synced (avoids health checks with wrong endpoints)
@@ -628,6 +629,8 @@ export default function Home() {
         body: JSON.stringify({
           choomId: currentChoomId,
           chatId,
+          // Project pinned for this chat via the header dropdown ('' = auto/selfies).
+          activeProject: (chatId && activeProjectByChat[chatId]) || undefined,
           message: content,
           settings: {
             llm: settings.llm,
