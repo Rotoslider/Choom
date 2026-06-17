@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import NextImage from 'next/image';
 import { X, Download, Trash2, ChevronLeft, ChevronRight, Image as ImageIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -142,6 +142,26 @@ export function ImageGallery({
     setSelectedImage(images[newIndex]);
   }, [images, selectedIndex]);
 
+  // Swipe-to-navigate on touch devices (phone lightbox). Records the touch
+  // origin and, on release, navigates when the gesture is a clear horizontal
+  // swipe — the natural way to page through images on a phone.
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
+  const onTouchStart = (e: React.TouchEvent) => {
+    const t = e.touches[0];
+    touchStartRef.current = { x: t.clientX, y: t.clientY };
+  };
+  const onTouchEnd = (e: React.TouchEvent) => {
+    const start = touchStartRef.current;
+    touchStartRef.current = null;
+    if (!start || images.length < 2) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - start.x;
+    const dy = t.clientY - start.y;
+    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) {
+      navigateImage(dx < 0 ? 'next' : 'prev');
+    }
+  };
+
   // Keyboard navigation in lightbox
   useEffect(() => {
     if (!selectedImage) return;
@@ -234,60 +254,55 @@ export function ImageGallery({
         </DialogContent>
       </Dialog>
 
-      {/* Lightbox */}
+      {/* Lightbox — flex column (top bar / image row / bottom bar) so the nav
+          arrows live BESIDE the image and can never be covered by it, and the
+          actions sit in their own bar away from the image/swipe tap zones.
+          Phone-friendly: large tap targets + swipe-to-navigate. */}
       {selectedImage && (
-        <div
-          className="fixed inset-0 z-[100] bg-black/90 flex items-center justify-center"
-          onClick={closeLightbox}
-        >
-          {/* Close button */}
-          <Button
-            variant="ghost"
-            size="icon"
-            className="absolute top-4 right-4 text-white hover:bg-white/20 z-10"
-            onClick={closeLightbox}
-          >
-            <X className="h-6 w-6" />
-          </Button>
+        <div className="fixed inset-0 z-[100] bg-black/95 flex flex-col">
+          {/* Top bar: counter + close */}
+          <div className="flex items-center justify-between px-3 py-2 flex-shrink-0">
+            <span className="text-white/70 text-sm tabular-nums">
+              {selectedIndex + 1} / {images.length}
+            </span>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="text-white bg-white/10 hover:bg-white/20 h-11 w-11 rounded-full"
+              onClick={closeLightbox}
+              aria-label="Close"
+            >
+              <X className="h-6 w-6" />
+            </Button>
+          </div>
 
-          {/* Navigation buttons */}
-          {images.length > 1 && (
-            <>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="absolute left-4 top-1/2 -translate-y-1/2 text-white hover:bg-white/20 h-12 w-12"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  navigateImage('prev');
-                }}
-              >
-                <ChevronLeft className="h-8 w-8" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="absolute right-4 top-1/2 -translate-y-1/2 text-white hover:bg-white/20 h-12 w-12"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  navigateImage('next');
-                }}
-              >
-                <ChevronRight className="h-8 w-8" />
-              </Button>
-            </>
-          )}
-
-          {/* Image */}
+          {/* Image row: prev | image | next. Arrows are flex siblings (not absolute
+              overlays), so the image can't sit on top of them. Tapping the dark area
+              closes; swiping the image navigates. */}
           <div
-            className="max-w-[90vw] max-h-[90vh] overflow-y-auto flex flex-col items-center"
-            onClick={(e) => e.stopPropagation()}
+            className="flex-1 flex items-stretch min-h-0"
+            onClick={closeLightbox}
+            onTouchStart={onTouchStart}
+            onTouchEnd={onTouchEnd}
           >
-            {/* Downscaled, format-optimized preview via the Next image optimizer
-                (NOT the multi-MB original) so the lightbox opens fast on phones and
-                over remote/ngrok connections. `sizes="90vw"` requests a viewport-
-                appropriate variant; the Download button still fetches the full file. */}
-            <div className="relative w-[90vw] h-[70vh] flex-shrink-0">
+            {images.length > 1 && (
+              <button
+                type="button"
+                className="flex-shrink-0 flex items-center justify-center px-1 sm:px-3 text-white active:bg-white/15"
+                onClick={(e) => { e.stopPropagation(); navigateImage('prev'); }}
+                aria-label="Previous image"
+              >
+                <ChevronLeft className="h-9 w-9 drop-shadow-lg" />
+              </button>
+            )}
+
+            <div
+              className="relative flex-1 min-w-0 my-2"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Downscaled, format-optimized preview via the Next image optimizer
+                  (NOT the multi-MB original) so the lightbox opens fast on phones and
+                  over remote/ngrok connections. Download fetches the full file. */}
               <NextImage
                 key={selectedImage.id}
                 src={imageFileUrl(selectedImage.id)}
@@ -296,40 +311,48 @@ export function ImageGallery({
                 sizes="90vw"
                 quality={80}
                 priority
-                className="object-contain rounded-lg"
+                className="object-contain"
               />
             </div>
-            <div className="mt-4 text-center max-w-2xl flex-shrink-0 pb-4">
-              <p className="text-white/90 text-sm">{selectedImage.prompt}</p>
-              <p className="text-white/50 text-xs mt-1">
-                {formatDateTime(selectedImage.createdAt)}
-              </p>
-              <div className="mt-3 flex justify-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="bg-white/10 border-white/20 text-white hover:bg-white/20"
-                  onClick={(e) => handleDownload(selectedImage, e)}
-                >
-                  <Download className="h-4 w-4 mr-2" />
-                  Download
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="bg-red-500/20 border-red-500/30 text-red-400 hover:bg-red-500/30"
-                  onClick={(e) => handleDelete(selectedImage.id, e)}
-                >
-                  <Trash2 className="h-4 w-4 mr-2" />
-                  Delete
-                </Button>
-              </div>
-            </div>
+
+            {images.length > 1 && (
+              <button
+                type="button"
+                className="flex-shrink-0 flex items-center justify-center px-1 sm:px-3 text-white active:bg-white/15"
+                onClick={(e) => { e.stopPropagation(); navigateImage('next'); }}
+                aria-label="Next image"
+              >
+                <ChevronRight className="h-9 w-9 drop-shadow-lg" />
+              </button>
+            )}
           </div>
 
-          {/* Image counter */}
-          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 text-white/70 text-sm">
-            {selectedIndex + 1} / {images.length}
+          {/* Bottom bar: prompt + actions, separated from the image/nav tap zones */}
+          <div className="flex-shrink-0 px-4 pt-2 pb-4 bg-black/40 max-h-[30vh] overflow-y-auto">
+            <p className="text-white/90 text-sm text-center break-words">{selectedImage.prompt}</p>
+            <p className="text-white/50 text-xs mt-1 text-center">
+              {formatDateTime(selectedImage.createdAt)}
+            </p>
+            <div className="mt-3 flex justify-center gap-3">
+              <Button
+                variant="outline"
+                size="sm"
+                className="bg-white/10 border-white/20 text-white hover:bg-white/20"
+                onClick={(e) => handleDownload(selectedImage, e)}
+              >
+                <Download className="h-4 w-4 mr-2" />
+                Download
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="bg-red-500/20 border-red-500/30 text-red-400 hover:bg-red-500/30"
+                onClick={(e) => handleDelete(selectedImage.id, e)}
+              >
+                <Trash2 className="h-4 w-4 mr-2" />
+                Delete
+              </Button>
+            </div>
           </div>
         </div>
       )}
