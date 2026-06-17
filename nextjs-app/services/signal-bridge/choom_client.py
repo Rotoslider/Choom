@@ -158,18 +158,42 @@ class ChoomClient:
         return None
 
     def get_or_create_chat(self, choom_id: str) -> str:
-        """Get existing chat or create a new one for Signal conversations"""
-        # Check if we have an active chat for this Choom
-        if choom_id in self.chats:
-            # Verify chat still exists
-            try:
-                response = self._make_request("GET", f"/api/chats/{self.chats[choom_id]}")
-                return self.chats[choom_id]
-            except:
-                # Chat doesn't exist anymore, create new one
-                pass
+        """Resolve the Choom's CURRENT 1:1 chat for Signal — the most recently
+        updated non-archived chat — so a Signal message CONTINUES whatever
+        conversation is active (the one you had open on the web, or a heartbeat
+        the Choom just sent you), instead of a separate Signal-only thread that
+        loses all context.
 
-        # Create a new chat for Signal
+        Group chats stay in their own world: each participant's group scratch
+        chat is archived (and titled '[group scratch]'), so it's filtered out by
+        the API's archived=false default AND the title guard below — it can never
+        hijack the Signal thread, even while a Choom is mid-jump into a group room
+        from a 1:1 or a heartbeat. (Group `group:` Signal messages use a separate
+        send_group_message path and never reach here.)
+
+        Creates a fresh chat only if the Choom genuinely has no 1:1 chat yet.
+        """
+        try:
+            # API returns non-archived chats ordered most-recent-first.
+            response = self._make_request("GET", f"/api/chats?choomId={choom_id}")
+            chats = response.json()
+            if isinstance(chats, list):
+                for chat in chats:
+                    title = chat.get("title") or ""
+                    # Skip internal work threads that aren't your conversation:
+                    # group scratch chats and per-task delegation chats. (Group
+                    # scratch is also archived; delegation chats are not, so the
+                    # title guard is the real protection there.)
+                    if "[group scratch]" in title or title.startswith("[Delegation]"):
+                        continue
+                    chat_id = chat.get("id")
+                    if chat_id:
+                        self.chats[choom_id] = chat_id
+                        return chat_id
+        except Exception as e:
+            logger.warning(f"get_or_create_chat: could not list chats for {choom_id}, creating a new one: {e}")
+
+        # No existing 1:1 chat → create one for Signal.
         response = self._make_request(
             "POST",
             "/api/chats",
@@ -183,7 +207,7 @@ class ChoomClient:
         chat_id = data.get("id") or data.get("chat", {}).get("id")
         self.chats[choom_id] = chat_id
 
-        logger.info(f"Created new chat {chat_id} for Choom {choom_id}")
+        logger.info(f"Created new chat {chat_id} for Choom {choom_id} (no existing 1:1 chat)")
         return chat_id
 
     def get_recent_conversations(self, choom_name: str, since_hours: int = 24, max_messages: int = 40) -> str:
