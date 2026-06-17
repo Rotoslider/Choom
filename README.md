@@ -17,7 +17,7 @@ All 113 tools are organized into 27 modular **skills** with progressive disclosu
 - **Image Generation**: Stable Diffusion Forge integration with selfie mode, LoRA support, and LLM-guided sizing
 - **Text-to-Speech**: Streaming TTS via Chatterbox/Fatterbox with per-Choom voice selection
 - **Speech-to-Text**: Whisper-based transcription with push-to-talk, toggle, and VAD modes
-- **Signal Bridge**: Two-way messaging through Signal, including voice transcription, image delivery, and image forwarding for vision analysis. **Continuous conversation across surfaces**: a Signal message continues the Choom's most-recently-active 1:1 chat — the one you had open on the web, or a heartbeat she just sent — instead of starting a fresh, context-less thread. Group scratch chats (archived) and per-task delegation chats are excluded, so jumping into a group room or a delegation and back never hijacks your 1:1 thread; `group:` Signal messages route to the shared room on their own path
+- **Signal Bridge**: Two-way messaging through Signal, including voice transcription, image delivery, and image forwarding for vision analysis. **Continuous conversation across surfaces**: a Signal message continues the Choom's most-recently-active 1:1 chat — the one you had open on the web, or a heartbeat she just sent — instead of starting a fresh, context-less thread. **Cross-surface routing**: an un-addressed Signal message (no name) goes to whichever Choom you most recently had a *genuine* conversation with on **any** surface, web or Signal — so chatting with Eve on the web then texting carries the thread to Eve. Heartbeats and self-followups are ignored for this (they can't hijack who answers); name a Choom to switch. Group scratch chats (archived) and per-task delegation chats are excluded, so jumping into a group room or a delegation and back never hijacks your 1:1 thread; `group:` Signal messages route to the shared room on their own path
 - **Smart Home (Home Assistant)**: Full integration with Home Assistant for reading sensors, controlling lights/switches/climate, viewing history trends, and ambient home awareness. Three-layer environmental awareness: system prompt injection (every LLM call knows the current home state), heartbeat monitoring (periodic checks with intelligent reasoning), and conditional automations (trigger actions based on sensor thresholds). Includes an Entity Browser in Settings and works from both the web UI and Signal. See the [Smart Home Guide](#smart-home-home-assistant-1) for setup and usage
 - **Scheduled Tasks**: Cron-driven morning briefings, weather checks, aurora forecasts, health heartbeats, and YouTube music downloads. Custom heartbeats support **per-task model routing** — assign a fast/cheap model to simple tasks (selfies, reminders) while keeping the Choom's primary model for complex work
 - **Google Integration**: Full Google Workspace access — Calendar (CRUD), Tasks, Sheets, Docs, Drive, Gmail (read/send/draft/search/archive/reply), Contacts (search/lookup), and YouTube (search/video details/channel info/playlists) — 35 tools via OAuth2
@@ -48,6 +48,9 @@ All 113 tools are organized into 27 modular **skills** with progressive disclosu
 
 ![Token Usage Dashboard](docs/screenshots/Token-Usage.png)
 
+- **Mobile-Friendly Web UI**: The web app is responsive for phone use (e.g. over ngrok while traveling). The chat input stacks into a full-width box + tool row on phones; the main sidebar, the `/rooms` room list, and the `/settings` nav all become tap-to-close overlays instead of pushing content off-screen; settings panels stack their columns. A `device-width` viewport and `allowedDevOrigins` (LAN subnet) make a phone on the local network load the dev server correctly
+- **Cross-Device Settings Safety**: The server (the box running Choom) is the single source of truth for config. On load, every browser **adopts the server's settings**, overwriting its own — so a stale/blank/off-site device can never silently push bad values back (this previously broke Home Assistant when a phone's empty config synced over the good one). Per-device cosmetics (theme, font size, animations, avatar, mic input mode) stay local. **Only the server itself (via localhost) may change config freely** — any other device (LAN Mac/phone, or off-site via ngrok) gets a **"Change server settings? — [Cancel] / [Yes, I'm sure]"** confirmation, enforced server-side. A blank value or empty list can never overwrite a real one. See [Cross-Device Settings & Safety](#cross-device-settings--safety)
+- **Backup & Restore**: A daily 5am full backup snapshots `bridge-config.json`, the `.env` files, credentials, and `self_followups/` to `data/backups/daily/<date>/`, and a pre-change snapshot is taken before every settings write. **Settings → Backup** lists both trails (newest first) with one-click restore (which itself snapshots first, so it's undoable) and reset-to-defaults
 - **Weather**: OpenWeatherMap integration with caching
 
 ## Project Structure
@@ -225,7 +228,7 @@ Hardcoded fallback in `store.ts` and API routes:
 
 ### Layer 2 - Settings Panel
 
-User-configurable at `/settings`. Persisted in localStorage through Zustand with a custom deep-merge function (prevents nested keys from being wiped on app updates; explicitly preserves optional top-level arrays like `providers`, `modelProfiles`, `visionProfiles`). Weather, search, image, Home Assistant, and owner-identity (your name/location) settings are synced to `bridge-config.json` for Signal parity. Providers are also synced for bridge-side LLM resolution. Seventeen sections:
+User-configurable at `/settings`. The server is the source of truth: server-owned settings live in `bridge-config.json`, every browser adopts them on load, and off-site/LAN devices must confirm changes — see [Cross-Device Settings & Safety](#cross-device-settings--safety). Per-device cosmetics (theme, font, animations, avatar, mic input mode) stay in each browser's localStorage. Eighteen sections:
 
 1. **LLM** - endpoint, model, temperature, context length, max tokens, and **Model Profiles** (per-model parameter defaults with built-in profiles for ~18 models + custom user profiles)
 2. **Audio** - TTS/STT endpoints, voice, language, VAD sensitivity
@@ -242,8 +245,9 @@ User-configurable at `/settings`. Persisted in localStorage through Zustand with
 13. **YouTube DL** - YouTube music channel management, max videos per channel, per-channel enable/disable, Run Now trigger
 14. **Automations** - visual multi-step task builder with cron/interval scheduling, Choom targeting, and template variables
 15. **Smart Home** - Home Assistant connection (URL, access token), entity filter, system prompt injection, cache TTL, entity browser
-16. **Theme** - light/dark, accent color, font size, and **your identity** (your name & location) — what the Chooms call you everywhere (1:1 chats, group rooms, Signal) instead of the cold generic "user"; synced to `bridge-config.json` so the Python bridge/heartbeats use it too
-17. **Model Profiles** - (subsection of LLM settings) built-in defaults for NVIDIA Build models (Nemotron Ultra 253B, Mistral Large 3 675B, DeepSeek V3.2, Kimi K2.5, Kimi K2, Qwen 3.5 397B, Qwen 3 Next 80B, GLM-5, Llama 405B, Llama 3.3 70B, Mistral Nemotron), Anthropic (Claude Sonnet 4, Haiku 4.5, Opus 4.6), OpenAI (GPT-4.1, GPT-4.1 Mini, GPT-4o, o3-mini), and vision models (GPT-4o, Claude Sonnet 4, Claude Haiku 4.5, Qwen 3.5 397B, Qwen 3 VL 30B)
+16. **Backup** - daily + pre-change config backups with one-click restore (itself undoable) and reset-to-defaults; see [Cross-Device Settings & Safety](#cross-device-settings--safety)
+17. **Theme** - light/dark, accent color, font size, and **your identity** (your name & location) — what the Chooms call you everywhere (1:1 chats, group rooms, Signal) instead of the cold generic "user"; synced to `bridge-config.json` so the Python bridge/heartbeats use it too
+18. **Model Profiles** - (subsection of LLM settings) built-in defaults for NVIDIA Build models (Nemotron Ultra 253B, Mistral Large 3 675B, DeepSeek V3.2, Kimi K2.5, Kimi K2, Qwen 3.5 397B, Qwen 3 Next 80B, GLM-5, Llama 405B, Llama 3.3 70B, Mistral Nemotron), Anthropic (Claude Sonnet 4, Haiku 4.5, Opus 4.6), OpenAI (GPT-4.1, GPT-4.1 Mini, GPT-4o, o3-mini), and vision models (GPT-4o, Claude Sonnet 4, Claude Haiku 4.5, Qwen 3.5 397B, Qwen 3 VL 30B)
 
 ### Layer 3 - Per-Choom Overrides
 
@@ -284,6 +288,59 @@ Settings Hierarchy for "MyChoom":
   RESOLVED: model=nvidia/llama-3.1-nemotron-ultra-253b-v1, endpoint=https://integrate.api.nvidia.com/v1
   📋 Model profile applied: "Nemotron Ultra 253B" (temp=0.6, topP=0.95, topK=40, thinking=on)
 ```
+
+## Cross-Device Settings & Safety
+
+The web Settings store (per-browser `localStorage`) syncs the server-owned slice
+of settings to `services/signal-bridge/bridge-config.json` — the cross-process
+source of truth the web app, the Python bridge, heartbeats, and Signal all read.
+Because every device has its own browser store, a second device with stale or
+blank values used to be able to silently overwrite good server config (this is
+what once blanked the Home Assistant URL when a phone's empty config synced over
+it). Three coordinated guards close that off:
+
+### 1. Server is the source of truth (server wins on load)
+
+On load, every browser fetches `/api/settings/defaults` (the server's *effective*
+config — `bridge-config.json` with `.env` taking priority) and **overwrites its
+own server-owned settings** with it (`applyServerSettings` in `lib/store.ts`). A
+stale, blank, or off-site browser is corrected to the server every load, so it
+never holds bad values to push back. **Per-device cosmetics are preserved** and
+never server-authoritative: theme, accent, font size, animations, avatar prefs,
+and STT input mode / VAD sensitivity. Server-owned slices: `llm`, `tts`, `stt`
+(endpoint/lang), `memory`, `imageGen`, `vision`, `weather`, `search`,
+`homeAssistant`, `providers`, `visionProfiles`, `modelProfiles`, owner identity.
+
+### 2. Only the server itself may change config without confirmation
+
+`isLocalRequest()` (in `lib/bridge-config-store.ts`) trusts **only the box
+running Choom, reached via `localhost`**. Every other device — a Mac/phone on the
+LAN hitting the server's IP, or off-site via ngrok — is untrusted. A config write
+from an untrusted origin must carry an `x-confirm-remote-write: yes` header;
+`POST /api/bridge-config` (and the snapshot/restore route) reject it otherwise
+(HTTP 412). In the UI, an untrusted settings change stages a pending diff and
+`ServerSyncGuard` pops a **"Change server settings? — [Cancel] / [Yes, I'm
+sure]"** dialog listing exactly which slices would change. Local edits on the
+server stay friction-free.
+
+### 3. Blank/empty can never clobber, and everything is backed up
+
+The server-side `deepMerge` refuses to let a blank string or empty array
+overwrite a real value — only an explicit `null` clears a field (the UI's
+deliberate-clear path sends `value || null`, never `''`). And two backup trails
+feed **Settings → Backup**:
+
+- **Daily full backup** (5am cron) → `data/backups/daily/<date>/` — copies
+  `bridge-config.json`, the `.env` files, credentials, `token.json`, and
+  `self_followups/` (custom heartbeats). Runs every day regardless of edits.
+- **Pre-change snapshot** → `data/backups/bridge-config/` — taken right before
+  any settings write (last 10 kept).
+
+The Backup panel lists both (newest first) with one-click restore — which
+snapshots the current config first, so a restore is itself undoable — plus
+reset-to-defaults. Adding a new synced setting? Add it to `buildBridgePayload`
+(store), `/api/settings/defaults`, and `applyServerSettings`; the blank-clobber
+guard and backups cover it automatically.
 
 ## Image Generation
 
@@ -1408,7 +1465,10 @@ SQLite via Prisma ORM. (dev.db)
 
 ### Configuration
 - `GET /api/bridge-config` - Read Signal bridge config
-- `POST /api/bridge-config` - Update Signal bridge config (weather/search/imageGen/homeAssistant synced from settings)
+- `POST /api/bridge-config` - Update Signal bridge config (server-owned settings synced from the UI; blank/empty values can't clobber real ones; **off-site/LAN writes require the `x-confirm-remote-write: yes` header** or return HTTP 412)
+- `GET /api/settings/defaults` - The server's effective config (`bridge-config.json` over `.env`) that every browser adopts on load, plus a `local` flag (true only on the server via localhost)
+- `GET /api/bridge-config/snapshots` - List config backups (daily + pre-change), newest first
+- `POST /api/bridge-config/snapshots` - Restore a backup (`{action:'restore', id}`) or reset to defaults (`{action:'restore-defaults'}`); snapshots current config first so it's undoable
 
 ### Logs & Reminders
 - `GET /api/logs` - Activity logs (filterable by choomId, chatId, category, level)
