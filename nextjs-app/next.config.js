@@ -6,6 +6,9 @@ const nextConfig = {
   // hydrates ("loading" forever). The wildcard covers the whole 192.168.1.x
   // subnet so it keeps working if a device's IP changes.
   allowedDevOrigins: ['192.168.1.23', '192.168.1.*'],
+  // Hide the floating dev-build "N" badge — on phones it sits right over the
+  // message input. (Dev-only indicator; has no effect on the app itself.)
+  devIndicators: false,
   serverExternalPackages: ['@prisma/client', 'pdfkit', 'sharp'],
   images: {
     remotePatterns: [

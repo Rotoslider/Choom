@@ -2,7 +2,7 @@
 
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import NextImage from 'next/image';
-import { Send, Mic, Image as ImageIcon, Square, Volume2, VolumeX, StopCircle, RotateCcw, Paperclip, X } from 'lucide-react';
+import { Send, Mic, Square, Volume2, VolumeX, StopCircle, RotateCcw, Paperclip, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
@@ -38,7 +38,6 @@ export function InputArea({
   onSend,
   onStop,
   onRegenerate,
-  onImageRequest,
   disabled = false,
   placeholder = 'Type a message...',
   canRegenerate = false,
@@ -207,7 +206,7 @@ export function InputArea({
 
   return (
     <TooltipProvider>
-      <div className="border-t border-border bg-card/50 backdrop-blur-sm p-4">
+      <div className="border-t border-border bg-card/50 backdrop-blur-sm p-2 sm:p-4">
         <div className="max-w-4xl mx-auto">
           {/* Attachment preview */}
           {attachment && (
@@ -248,7 +247,7 @@ export function InputArea({
           )}
 
           <div
-            className="relative flex items-end gap-2"
+            className="relative flex flex-col gap-2 sm:flex-row sm:items-end"
             onDrop={handleDrop}
             onDragOver={handleDragOver}
           >
@@ -287,8 +286,9 @@ export function InputArea({
               )}
             </div>
 
-            {/* Action buttons */}
-            <div className="flex items-center gap-1">
+            {/* Action buttons — full-width tool row under the box on phones,
+                inline to the right of the box on desktop */}
+            <div className="flex items-center gap-1 justify-end w-full sm:w-auto">
               {/* TTS Mute/Unmute toggle */}
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -354,24 +354,6 @@ export function InputArea({
                 </TooltipContent>
               </Tooltip>
 
-              {/* Image generation */}
-              {onImageRequest && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={onImageRequest}
-                      disabled={disabled || isStreaming || ui.isGeneratingImage}
-                      className="text-muted-foreground hover:text-foreground"
-                    >
-                      <ImageIcon className="h-5 w-5" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>Generate Selfie</TooltipContent>
-                </Tooltip>
-              )}
-
               {/* Regenerate button - show when there's a last message and not streaming */}
               {canRegenerate && onRegenerate && !isStreaming && (
                 <Tooltip>
@@ -428,7 +410,7 @@ export function InputArea({
 
           {/* Keyboard shortcut hints */}
           <div className="flex items-center justify-between mt-2 text-xs text-muted-foreground/50">
-            <span>Press Enter to send, Shift+Enter for new line, paste/drop images</span>
+            <span className="hidden sm:inline">Press Enter to send, Shift+Enter for new line, paste/drop images</span>
             {isStreaming && (
               <span className="text-primary-400 animate-pulse">
                 AI is responding...

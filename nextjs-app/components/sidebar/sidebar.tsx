@@ -123,8 +123,8 @@ export function Sidebar({
           </Button>
         </div>
 
-        {/* Choom list */}
-        <div className="flex-shrink-0" style={{ height: '35%' }}>
+        {/* Choom list — a bit shorter on phones to leave room for chats */}
+        <div className="flex-shrink-0 h-[28%] md:h-[35%]">
           <ChoomList
             chooms={chooms}
             selectedId={currentChoomId}
@@ -149,8 +149,9 @@ export function Sidebar({
           />
         </div>
 
-        {/* Footer */}
-        <div className="flex-shrink-0 border-t border-border p-3">
+        {/* Footer nav — capped + scrollable so a short phone screen still shows
+            the chat list above it instead of pushing it off-screen */}
+        <div className="flex-shrink-0 max-h-[42%] overflow-y-auto border-t border-border p-3">
           {/* Service status summary */}
           <button
             onClick={onOpenHealth}
