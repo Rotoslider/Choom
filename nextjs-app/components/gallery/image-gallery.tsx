@@ -309,7 +309,7 @@ export function ImageGallery({
                 alt={selectedImage.prompt}
                 fill
                 sizes="90vw"
-                quality={80}
+                quality={75}
                 priority
                 className="object-contain"
               />
@@ -372,7 +372,7 @@ export function ImageGallery({
                     width={16}
                     height={16}
                     sizes="90vw"
-                    quality={80}
+                    quality={75}
                     loading="eager"
                   />
                 ))}
