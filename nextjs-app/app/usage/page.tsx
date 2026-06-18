@@ -12,6 +12,7 @@ import {
   MessageSquare,
   Wrench,
   DollarSign,
+  Scissors,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -44,6 +45,7 @@ interface BreakdownEntry {
   completion: number;
   total: number;
   requests: number;
+  saved?: number;
 }
 
 interface UsageStats {
@@ -51,6 +53,7 @@ interface UsageStats {
   totalPromptTokens: number;
   totalCompletionTokens: number;
   totalTokens: number;
+  totalSavedTokens: number;
   totalDurationMs: number;
   totalIterations: number;
   totalToolCalls: number;
@@ -210,6 +213,7 @@ export default function UsagePage() {
           completion: v.completion,
           total: v.total,
           requests: v.requests,
+          saved: v.saved || 0,
         }))
     : [];
 
@@ -354,6 +358,14 @@ export default function UsagePage() {
                   value={formatTokens(stats.totalTokens)}
                   sub={`${formatTokens(stats.totalPromptTokens)} in / ${formatTokens(stats.totalCompletionTokens)} out`}
                 />
+                {stats.totalSavedTokens > 0 && (
+                  <StatCard
+                    icon={<Scissors className="h-4 w-4 text-teal-500" />}
+                    label="Tokens Saved"
+                    value={formatTokens(stats.totalSavedTokens)}
+                    sub={`${Math.round((100 * stats.totalSavedTokens) / (stats.totalTokens + stats.totalSavedTokens))}% of context trimmed`}
+                  />
+                )}
                 <StatCard
                   icon={<MessageSquare className="h-4 w-4 text-blue-500" />}
                   label="Requests"
@@ -406,6 +418,8 @@ export default function UsagePage() {
                       />
                       <Area type="monotone" dataKey="prompt" stackId="1" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.3} name="Prompt" />
                       <Area type="monotone" dataKey="completion" stackId="1" stroke="#22c55e" fill="#22c55e" fillOpacity={0.3} name="Completion" />
+                      {/* Counterfactual — NOT stacked (it's tokens we DIDN'T send) */}
+                      <Area type="monotone" dataKey="saved" stroke="#14b8a6" fill="#14b8a6" fillOpacity={0.12} strokeDasharray="4 2" name="Saved (est.)" />
                       <Legend />
                     </AreaChart>
                   </ResponsiveContainer>

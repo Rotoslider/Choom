@@ -180,6 +180,10 @@ export interface LLMSettings {
   simpleTasksModel?: string;
   simpleTasksProviderId?: string;
   simpleTasksEnabled?: boolean;
+  // Tool-output context compression (freshness-tiered): keeps the freshest tool
+  // result full but trims stale re-sends of large tool payloads in the agentic
+  // loop. Deterministic, relevance/error-preserving. Off by default.
+  compressToolOutputs?: boolean;
   // Group-room creator model — when set, the room CREATOR (the first/host seat,
   // which is the fragile first-responder) uses this model in group turns,
   // regardless of her own default. Invited Chooms keep their own model. Lets you

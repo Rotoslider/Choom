@@ -17,6 +17,7 @@ import { getSkillRegistry } from '@/lib/skill-registry';
 import type { SkillHandlerContext } from '@/lib/skill-handler';
 import { getGoogleClient } from '@/lib/google-client';
 import { CompactionService } from '@/lib/compaction-service';
+import { compressStaleToolResult } from '@/lib/tool-output-compressor';
 import { getTimeContext, formatTimeContextForPrompt } from '@/lib/time-context';
 import { getOwnerIdentity } from '@/lib/owner';
 import { waitForGpu } from '@/lib/gpu-lock';
@@ -5063,6 +5064,17 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           // Token usage accumulator — captures usage from each LLM call across iterations
           let totalPromptTokens = 0;
           let totalCompletionTokens = 0;
+          // Freshness-tiered tool-output compression: when on, stale tool results
+          // already in the transcript are trimmed before each re-send (the fresh
+          // batch stays full). savedChars accumulates the context bytes trimmed.
+          const compressToolOutputs = !!(clientLLMSettings as Record<string, unknown>)?.compressToolOutputs;
+          // compressionSavedChars is the CUMULATIVE counterfactual: a compressed
+          // message keeps saving on every later iteration it's re-sent, so we add
+          // the live trimmed-byte total once per LLM call (top of the loop) rather
+          // than once at compression time. liveTrimmedChars = bytes currently
+          // trimmed from the transcript.
+          let compressionSavedChars = 0;
+          let liveTrimmedChars = 0;
 
           // Proactive tool_choice='required': if the user message has strong tool intent,
           // force the LLM to call a tool on the first iteration instead of narrating.
@@ -5253,6 +5265,12 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
 
           while (iteration < maxIterations) {
             iteration++;
+
+            // Count this call's compression benefit: the prompt we're about to
+            // send is smaller than the uncompressed counterfactual by every byte
+            // currently trimmed from the transcript. Adding it once per call (not
+            // once per trim) captures the savings on EVERY re-send.
+            if (compressToolOutputs) compressionSavedChars += liveTrimmedChars;
 
             // Reset per-batch image gen counter each iteration — the cap is "5 per batch",
             // not "5 per request". A Choom can generate 5 images, save them, do other work,
@@ -6987,6 +7005,23 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               })),
             });
 
+            // Freshness-tiered compression: before adding THIS iteration's full
+            // results, trim the prior tool results still in the transcript. The
+            // model already acted on them, so re-sending the full payload every
+            // iteration just burns context (and buries small local models). The
+            // freshest batch (pushed below) stays full; error outputs and
+            // already-trimmed messages are left untouched.
+            if (compressToolOutputs) {
+              for (const msg of currentMessages) {
+                if (msg.role === 'tool' && typeof (msg as { content?: unknown }).content === 'string') {
+                  const { content: trimmed, savedChars } = compressStaleToolResult((msg as { content: string }).content);
+                  if (savedChars > 0) {
+                    (msg as { content: string }).content = trimmed;
+                    liveTrimmedChars += savedChars;
+                  }
+                }
+              }
+            }
             for (const tr of iterationResults) {
               let resultForLLM = tr.result;
               if (tr.name === 'generate_image' && tr.result && typeof tr.result === 'object') {
@@ -7188,7 +7223,8 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           serverLog(choomId, logChatId, 'success', 'llm', 'LLM Response',
             `${llmSettings.model} (${fullContent.length} chars, ${iteration} iteration${iteration > 1 ? 's' : ''})`,
             { model: llmSettings.model, charCount: fullContent.length, iterations: iteration, fullResponse: fullContent.slice(0, 2000),
-              toolCallCount: allToolCalls.length, toolNames: allToolCalls.map(t => t.name) },
+              toolCallCount: allToolCalls.length, toolNames: allToolCalls.map(t => t.name),
+              ...(compressionSavedChars > 0 ? { compressionSavedTokens: Math.round(compressionSavedChars / 4) } : {}) },
             elapsed);
 
           // Record token usage (fire-and-forget — don't block the response)
@@ -7220,6 +7256,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 promptTokens: finalPromptTokens,
                 completionTokens: finalCompletionTokens,
                 totalTokens: totalTok,
+                savedTokens: Math.round(compressionSavedChars / 4),
                 iterations: iteration,
                 toolCalls: allToolCalls.length,
                 toolNames: allToolCalls.length > 0 ? JSON.stringify(allToolCalls.map(t => t.name)) : null,
@@ -7229,6 +7266,9 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             }).catch(err => console.warn('[TokenUsage] Write failed:', err instanceof Error ? err.message : err));
             if (totalTok > 0) {
               console.log(`   📊 ${choomTag} Tokens: ${finalPromptTokens.toLocaleString()} prompt + ${finalCompletionTokens.toLocaleString()} completion = ${totalTok.toLocaleString()} total${isEstimated ? ' (estimated)' : ''}`);
+            }
+            if (compressionSavedChars > 0) {
+              console.log(`   🗜️  ${choomTag} Tool-output compression saved ~${Math.round(compressionSavedChars / 4).toLocaleString()} tokens (${compressionSavedChars.toLocaleString()} chars trimmed from stale re-sends)`);
             }
           }
 
@@ -7253,6 +7293,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             iteration,
             maxIterations,
             status: iteration >= maxIterations ? 'max_iterations' : 'complete',
+            savedTokens: Math.round(compressionSavedChars / 4),
           });
         } catch (error) {
           console.error('   ❌ Chat error:', error instanceof Error ? error.message : error);

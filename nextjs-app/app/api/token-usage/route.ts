@@ -76,12 +76,13 @@ export async function GET(req: NextRequest) {
       let totalDuration = 0;
       let totalIterations = 0;
       let totalToolCalls = 0;
+      let totalSaved = 0;
 
       const byChoom: Record<string, { name: string; prompt: number; completion: number; total: number; requests: number }> = {};
       const byModel: Record<string, { prompt: number; completion: number; total: number; requests: number }> = {};
       const byProvider: Record<string, { prompt: number; completion: number; total: number; requests: number }> = {};
       const bySource: Record<string, { prompt: number; completion: number; total: number; requests: number }> = {};
-      const daily: Record<string, { prompt: number; completion: number; total: number; requests: number }> = {};
+      const daily: Record<string, { prompt: number; completion: number; total: number; requests: number; saved: number }> = {};
 
       for (const e of entries) {
         totalPrompt += e.promptTokens;
@@ -90,6 +91,7 @@ export async function GET(req: NextRequest) {
         totalDuration += e.durationMs || 0;
         totalIterations += e.iterations;
         totalToolCalls += e.toolCalls;
+        totalSaved += e.savedTokens || 0;
 
         // By Choom
         if (!byChoom[e.choomId]) byChoom[e.choomId] = { name: e.choomName, prompt: 0, completion: 0, total: 0, requests: 0 };
@@ -121,11 +123,12 @@ export async function GET(req: NextRequest) {
 
         // Daily
         const dayKey = e.timestamp.toISOString().slice(0, 10);
-        if (!daily[dayKey]) daily[dayKey] = { prompt: 0, completion: 0, total: 0, requests: 0 };
+        if (!daily[dayKey]) daily[dayKey] = { prompt: 0, completion: 0, total: 0, requests: 0, saved: 0 };
         daily[dayKey].prompt += e.promptTokens;
         daily[dayKey].completion += e.completionTokens;
         daily[dayKey].total += e.totalTokens;
         daily[dayKey].requests++;
+        daily[dayKey].saved += e.savedTokens || 0;
       }
 
       return NextResponse.json({
@@ -135,6 +138,7 @@ export async function GET(req: NextRequest) {
           totalPromptTokens: totalPrompt,
           totalCompletionTokens: totalCompletion,
           totalTokens,
+          totalSavedTokens: totalSaved,
           totalDurationMs: totalDuration,
           totalIterations,
           totalToolCalls,

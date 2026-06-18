@@ -523,6 +523,27 @@ export function LLMSettings() {
       </div>
 
       {/* ================================================================ */}
+      {/* Tool-Output Compression Section */}
+      {/* ================================================================ */}
+      <div className="border-t pt-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-medium">Compress tool outputs (experimental)</h3>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Trims stale tool results that get re-sent on every agentic-loop step — the freshest result
+              stays full, older copies are shrunk (errors kept verbatim, originals never altered on disk).
+              Cuts context on tool-heavy turns and helps smaller local models stay focused. Track the
+              savings on the <a href="/usage" className="underline">Usage</a> page.
+            </p>
+          </div>
+          <Switch
+            checked={llm.compressToolOutputs || false}
+            onCheckedChange={(checked) => updateLLMSettings({ compressToolOutputs: checked })}
+          />
+        </div>
+      </div>
+
+      {/* ================================================================ */}
       {/* Simple Tasks Model Section */}
       {/* ================================================================ */}
       <div className="border-t pt-4 space-y-3">

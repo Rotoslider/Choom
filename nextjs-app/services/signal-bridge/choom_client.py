@@ -334,6 +334,7 @@ class ChoomClient:
                 "simpleTasksModel": llm_cfg.get("simpleTasksModel"),
                 "simpleTasksProviderId": llm_cfg.get("simpleTasksProviderId"),
                 "simpleTasksEnabled": llm_cfg.get("simpleTasksEnabled", False),
+                "compressToolOutputs": llm_cfg.get("compressToolOutputs", False),
             },
             "memory": {
                 "endpoint": config.MEMORY_ENDPOINT,
