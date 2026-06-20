@@ -30,12 +30,12 @@ interface WithinTurnResult {
 }
 
 /** Estimate tokens from text using chars/4 heuristic */
-function estimateTokens(text: string): number {
+export function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
 /** Estimate tokens for a single message */
-function messageTokens(msg: ChatMessage): number {
+export function messageTokens(msg: ChatMessage): number {
   let tokens = estimateTokens(msg.content || '');
   if (msg.tool_calls) {
     for (const tc of msg.tool_calls) {
@@ -48,7 +48,7 @@ function messageTokens(msg: ChatMessage): number {
 }
 
 /** Estimate tokens for tool definitions */
-function toolSchemaTokens(tools: ToolDefinition[]): number {
+export function toolSchemaTokens(tools: ToolDefinition[]): number {
   if (!tools || tools.length === 0) return 0;
   let total = 0;
   for (const t of tools) {

@@ -8,6 +8,7 @@
 // folder-ownership guard all work unchanged.
 
 import { Agent, fetch as undiciFetch } from 'undici';
+import { describeRoomImages } from './room-image-describe';
 
 // Dedicated dispatcher: disable undici's body/headers timeouts so a slow local
 // model with gaps between iterations doesn't kill the SSE stream. Our own
@@ -99,6 +100,20 @@ export function extractImagePaths(transcript: GroupTranscriptEntry[]): string[] 
   return seen;
 }
 
+// Replace each "[image shared to the room … image_path="P" …]" note with a short
+// INLINE description of what the image shows (when we have one), instead of just
+// deleting it. This puts the image's contents right in the message the speaker is
+// answering — so a converged/weak model can't skip the system-prompt image block
+// and then fabricate the contents (the "Aloy saw a cabin, not the lake" bug).
+// Falls back to a neutral "[shared an image]" when undescribed.
+export function inlineImageDescriptions(content: string, descriptions: Record<string, string>): string {
+  return (content || '').replace(IMG_NOTE_RE, (note) => {
+    const m = /analyze_image image_path="([^"]+)"/i.exec(note);
+    const desc = m?.[1] ? descriptions[m[1]] : undefined;
+    return desc ? `\n[shared an image — it shows: ${desc}]` : '\n[shared an image]';
+  }).trim();
+}
+
 // Drop paragraphs that exactly repeat an earlier paragraph in the SAME response
 // (weak models sometimes regurgitate whole past turns several times in one go).
 export function dedupeParagraphs(content: string): string {
@@ -119,6 +134,53 @@ export function dedupeParagraphs(content: string): string {
 function normalizeForDup(s: string): string {
   return stripImageNotes(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
 }
+
+// ── Convergence detection ────────────────────────────────────────────────────
+// Homogeneous (or just looping) rooms collapse into a shared low-entropy "mood"
+// attractor — everyone mirrors the last line's tone + vocabulary until each turn
+// adds nothing ("eyes closed, the hum, we are one"). We detect it cheaply (no LLM)
+// by mutual word-set overlap across the last few turns: high overlap = mirroring.
+function contentWordSet(s: string): Set<string> {
+  // Content words only (len > 3) so shared function words ("the", "and") and the
+  // bracketed frames don't inflate the signal.
+  return new Set(normalizeForDup(s).replace(/[^\p{L}\s]/gu, ' ').split(/\s+/).filter(w => w.length > 3));
+}
+// Convergence score: the fraction of the recent vocabulary that RECURS across at
+// least half the turns. A looping room keeps rephrasing one shared mood, so a big
+// slice of its word types are echoed turn-to-turn; genuine on-topic talk shares a
+// few topic nouns but far fewer word TYPES (tested: converged ~0.30, focused
+// on-topic ~0.08, multi-topic ~0.00). Cheap, no LLM. Returns 0 with < 3 turns.
+export function convergenceScore(contents: string[], window = 5): number {
+  const recent = contents.map(c => c || '').filter(c => normalizeForDup(c).length > 20).slice(-window);
+  if (recent.length < 3) return 0;
+  const sets = recent.map(contentWordSet);
+  const df = new Map<string, number>();
+  for (const set of sets) for (const w of set) df.set(w, (df.get(w) || 0) + 1);
+  if (df.size === 0) return 0;
+  const need = Math.max(2, Math.ceil(recent.length * 0.5)); // echoed in ≥ half the turns
+  let recurring = 0;
+  for (const c of df.values()) if (c >= need) recurring++;
+  return recurring / df.size;
+}
+// True when the room has collapsed into a mirrored mood. Threshold ~0.2 sits well
+// above focused on-topic talk (~0.08) and below clear convergence (~0.30); tunable.
+// Logs the score each call so real-room values can be tuned from the dev terminal.
+export function detectConvergence(contents: string[], window = 5, threshold = 0.2): boolean {
+  const score = convergenceScore(contents, window);
+  if (score > 0.1) console.log(`   🌀 convergence score=${score.toFixed(3)} (trips at ${threshold})`);
+  return score >= threshold;
+}
+
+// Hidden, per-speaker disruptors injected for ONE round when convergence trips.
+// Each speaker gets a DIFFERENT one (rotated by index) so they can't all mirror
+// the same instruction — and they're concrete actions, not "be more original"
+// (which just becomes the next thing they agree about). NOT shown in the transcript.
+export const DIVERGENCE_DIRECTIVES: string[] = [
+  "The room is sliding into one repetitive mood — break it. DISAGREE with or complicate the last thing said; take a genuinely different stance in your own voice. Don't echo the shared feeling.",
+  "The room is looping. Introduce something NEW and concrete — a specific memory, fact, plan, or real-world observation (Donny, the house, a project, the date/weather). Change the texture; don't mirror the others.",
+  "The room is going in circles. CHANGE THE SUBJECT to something grounded and specific, or ask Donny or a sibling a direct, concrete question that moves things forward. Don't continue the current mood.",
+  "The room is echoing itself. Name something real and unresolved, or push back hard. Say the thing only YOU would say — and avoid the exact words and rhythm everyone else is using right now.",
+];
 
 // True when `content` adds nothing new — either it repeats one of this speaker's
 // OWN recent turns (verbatim or fully contained), or it PARROTS another speaker's
@@ -202,13 +264,14 @@ export async function runSpeakerTurn(opts: {
   isInitiator?: boolean;
   antiEcho?: boolean; // retry pass: steer the model away from echoing the prompt
   taskModelOverride?: { model: string; provider_id?: string }; // host-seat model pin
+  divergenceDirective?: string; // convergence breaker for this turn (hidden, per-speaker)
   settings: unknown;
   timeoutMs: number;
   send: GroupSend;
 }): Promise<GroupSpeakerResult> {
   const {
     baseUrl, choomId, speakerName, scratchChatId, transcript,
-    participantNames, projectFolder, roomTopic, roomId, isInitiator, antiEcho, taskModelOverride, settings, timeoutMs, send,
+    participantNames, projectFolder, roomTopic, roomId, isInitiator, antiEcho, taskModelOverride, divergenceDirective, settings, timeoutMs, send,
   } = opts;
 
   // Split the transcript so `message` carries the REAL conversational content
@@ -235,10 +298,17 @@ export async function runSpeakerTurn(opts: {
   const historyPart = transcript.slice(0, splitIdx + 1);
   const newPart = transcript.slice(splitIdx + 1);
   const povMessages = renderPov(historyPart, choomId);
-  // The new content the speaker must react to (all from others → labelled,
-  // with image-share notes stripped so they aren't parroted).
+  // Describe each shared image ONCE (cached across speakers/rounds) so the
+  // description can be inlined where the speaker actually reads it. The first
+  // speaker pays the vision call; the rest read it from cache. Failures → {}.
+  const recentImagePaths = extractImagePaths(transcript).slice(-6);
+  const imageDescriptions = recentImagePaths.length ? await describeRoomImages(recentImagePaths) : {};
+  // The new content the speaker must react to (all from others → labelled). A
+  // shared-image note is REPLACED inline with what the image shows, so a weak or
+  // converged model can't ignore the buried system-prompt block and then invent
+  // the contents — the real description sits in the message it's answering.
   const newContent = newPart
-    .map(m => ({ name: m.authorName, c: stripImageNotes(m.content) }))
+    .map(m => ({ name: m.authorName, c: inlineImageDescriptions(m.content, imageDescriptions) }))
     .filter(m => m.c.trim())
     .map(m => `[${m.name}]: ${m.c}`)
     .join('\n\n');
@@ -254,14 +324,20 @@ export async function runSpeakerTurn(opts: {
   if (!newContent) {
     message = '[The room is quiet — continue the conversation as yourself if you have something to add, otherwise reply [PASS].]';
   } else {
-    const frame = antiEcho
-      ? `[You are ${speakerName} — NOT anyone else. Your last attempt went wrong (you echoed a line, spoke as another sibling, or replied to the wrong thing). Read the messages below and reply as ${speakerName}, in your OWN fresh words, first person, to what's being asked/said RIGHT NOW.]`
-      : `[You are ${speakerName}. Reply as ${speakerName} — first person, your own words — to what's happening RIGHT NOW in the latest messages below; if a question is being asked, answer THAT. Do NOT drift back to an earlier topic, repeat your previous point, speak as another sibling, or copy a line back.]`;
+    // Convergence breaker takes precedence: when the room is detected looping, this
+    // speaker gets a hidden, single-bracket frame LEADING with her own disruptor
+    // (different per speaker) so it sits right where she reads — and the response
+    // frame-strip still removes it if echoed. Otherwise the normal/antiEcho frame.
+    const frame = divergenceDirective
+      ? `[You are ${speakerName}. ${divergenceDirective} Reply as ${speakerName} — first person, your own words, to what's happening RIGHT NOW below.]`
+      : antiEcho
+        ? `[You are ${speakerName} — NOT anyone else. Your last attempt went wrong (you echoed a line, spoke as another sibling, or replied to the wrong thing). Read the messages below and reply as ${speakerName}, in your OWN fresh words, first person, to what's being asked/said RIGHT NOW.]`
+        : `[You are ${speakerName}. Reply as ${speakerName} — first person, your own words — to what's happening RIGHT NOW in the latest messages below; if a question is being asked, answer THAT. Do NOT drift back to an earlier topic, repeat your previous point, speak as another sibling, or copy a line back.]`;
     message = `${frame}\n\n${newContent}`;
   }
-  // Clean, non-prose list of images shared in this room (most recent last) so
-  // siblings can analyze_image them without us embedding copyable path notes.
-  const recentImagePaths = extractImagePaths(transcript).slice(-6);
+  // recentImagePaths + imageDescriptions computed above (needed for inline
+  // description in newContent); still passed to the route for its system-prompt
+  // "Images shared in this room" reference block.
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -287,6 +363,7 @@ export async function runSpeakerTurn(opts: {
           groupRoomTopic: roomTopic || undefined,
           groupRoomId: roomId || undefined,
           groupRecentImages: recentImagePaths,
+          groupImageDescriptions: imageDescriptions,
           groupIsInitiator: !!isInitiator,
           // Host-seat model pin (room-creator override) — applied via route.ts's
           // existing per-task override path, so the model's profile auto-applies.
@@ -378,6 +455,10 @@ export async function runSpeakerTurn(opts: {
     finalContent = finalContent.split(/\[\s*your turn\b/i)[0].trim();
     // Drop a trailing fabricated "[Name]:" line — model starting a sibling's turn.
     finalContent = finalContent.replace(/\n+\[[^\]\n]{1,40}\]\s*[:：]\s*$/i, '').trim();
+    // Strip an echoed leading POV frame ("[You are X. Reply as X — …]" or the
+    // antiEcho variant) — weak models sometimes parrot their own instruction prompt
+    // back as the reply. It must never reach the room transcript, TTS, or Signal.
+    finalContent = finalContent.replace(/^\s*\[\s*you are\s+[^\]]*\]\s*/i, '').trim();
     // Strip any leading "[Name]:" / "OwnName:" label the model parroted from the
     // transcript format (prevents identity confusion compounding across rounds).
     finalContent = stripSpeakerPrefix(finalContent, [...participantNames, 'Donny', 'You']);

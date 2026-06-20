@@ -156,9 +156,37 @@ export function splitIntoSentences(text: string): string[] {
     .filter((s) => s.length > 0);
 }
 
+// Spell clock times as words so chatterbox doesn't read "6:26 AM" as a number
+// ("six thousand twenty-six"). "6:26 AM" → "six twenty six AM",
+// "6:00 AM" → "six o'clock AM", "6:05 AM" → "six oh five AM".
+const TTS_ONES = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen'];
+const TTS_TENS = ['', '', 'twenty', 'thirty', 'forty', 'fifty'];
+function twoDigitWords(n: number): string {
+  if (n < 20) return TTS_ONES[n];
+  const t = Math.floor(n / 10), o = n % 10;
+  return o === 0 ? TTS_TENS[t] : `${TTS_TENS[t]} ${TTS_ONES[o]}`;
+}
+export function normalizeTimesForSpeech(text: string): string {
+  // HH:MM with optional AM/PM. Lookarounds reject mid-number / HH:MM:SS so ratios,
+  // scores, and second-precision timestamps are left alone.
+  return (text || '').replace(
+    /(?<![\d:])(\d{1,2}):([0-5]\d)(?:\s*([ap]\.?\s?m\.?))?(?![\d:])/gi,
+    (full: string, h: string, m: string, ampm?: string) => {
+      const hour = parseInt(h, 10), minute = parseInt(m, 10);
+      if (hour > 23 || minute > 59) return full;
+      const hourWord = ampm ? (hour % 12 === 0 ? 'twelve' : twoDigitWords(hour % 12)) : twoDigitWords(hour);
+      let spoken = minute === 0 ? `${hourWord} o'clock`
+        : minute < 10 ? `${hourWord} oh ${TTS_ONES[minute]}`
+        : `${hourWord} ${twoDigitWords(minute)}`;
+      if (ampm) spoken += ' ' + ampm.replace(/[.\s]/g, '').toUpperCase();
+      return spoken;
+    },
+  );
+}
+
 // Strip content that shouldn't be spoken (URLs, code blocks, think tags)
 export function stripForTTS(text: string): string {
-  return text
+  return normalizeTimesForSpeech(text
     // Remove JSON tool-call arrays: [{"name":"...","parameters":{...}}]
     // Safety net for blocks that slip past the streaming filter
     .replace(/\[\s*\{[^}]*"name"\s*:\s*"[^"]+"\s*,\s*"(?:parameters|arguments)"\s*:\s*\{[\s\S]*?\}\s*\}\s*\]/g, '')
@@ -207,7 +235,7 @@ export function stripForTTS(text: string): string {
     .replace(new RegExp('[\\u{1F600}-\\u{1F64F}\\u{1F300}-\\u{1F5FF}\\u{1F680}-\\u{1F6FF}\\u{1F1E0}-\\u{1F1FF}\\u{2600}-\\u{26FF}\\u{2700}-\\u{27BF}\\u{FE00}-\\u{FE0F}\\u{1F900}-\\u{1F9FF}\\u{1FA00}-\\u{1FA6F}\\u{1FA70}-\\u{1FAFF}\\u{200D}\\u{20E3}\\u{E0020}-\\u{E007F}]', 'gu'), '')
     // Clean up extra whitespace
     .replace(/\s+/g, ' ')
-    .trim();
+    .trim());
 }
 
 // ============================================================================

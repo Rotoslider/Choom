@@ -16,8 +16,44 @@ import { loadCoreSkills, loadCustomSkills } from '@/lib/skill-loader';
 import { getSkillRegistry } from '@/lib/skill-registry';
 import type { SkillHandlerContext } from '@/lib/skill-handler';
 import { getGoogleClient } from '@/lib/google-client';
-import { CompactionService } from '@/lib/compaction-service';
+import { CompactionService, estimateTokens, messageTokens, toolSchemaTokens } from '@/lib/compaction-service';
 import { compressStaleToolResult } from '@/lib/tool-output-compressor';
+
+// Diagnostic: when a request's context is large, log WHERE the tokens are going
+// (system prompt vs tool schemas vs which conversation messages) and warn if it's
+// near the model's context window (silent input truncation). Pure logging — no
+// behavior change. Returns the accurate total (incl. tool_calls + tool schemas)
+// so callers can replace the old content-only estimate that under-reported badly.
+function contextBreakdown(
+  tag: string,
+  messages: Array<{ role: string; content?: string | null; tool_calls?: unknown }>,
+  tools: Array<{ name: string; description: string; parameters: unknown }>,
+  contextLength: number,
+  logThreshold = 60000,
+): number {
+  const toolTok = toolSchemaTokens(tools as Parameters<typeof toolSchemaTokens>[0]);
+  const byRole: Record<string, number> = { system: 0, user: 0, assistant: 0, tool: 0 };
+  const perMsg = messages.map((m, i) => {
+    const t = messageTokens(m as Parameters<typeof messageTokens>[0]);
+    byRole[m.role] = (byRole[m.role] || 0) + t;
+    return { i, role: m.role, t, preview: (m.content || '').replace(/\s+/g, ' ').slice(0, 55) };
+  });
+  const msgTok = perMsg.reduce((a, b) => a + b.t, 0);
+  const total = toolTok + msgTok;
+  if (total >= logThreshold) {
+    const top = [...perMsg].sort((a, b) => b.t - a.t).slice(0, 5);
+    console.log(
+      `   📐 ${tag} ~${total.toLocaleString()} tok = tools ${toolTok.toLocaleString()}(${tools.length}) + ` +
+      `system ${byRole.system.toLocaleString()} + user ${byRole.user.toLocaleString()} + ` +
+      `assistant ${byRole.assistant.toLocaleString()} + tool-results ${byRole.tool.toLocaleString()}`,
+    );
+    console.log(`   📐 ${tag} biggest: ` + top.map(m => `#${m.i}[${m.role} ${m.t.toLocaleString()}t "${m.preview}…"]`).join('  '));
+    if (contextLength > 0 && total > contextLength * 0.95) {
+      console.warn(`   ✂️  ${tag} TRUNCATION RISK: ~${total.toLocaleString()} tok ≥ 95% of contextLength ${contextLength.toLocaleString()} — the server will silently drop oldest messages. Lower contextLength or trim the task's reads.`);
+    }
+  }
+  return total;
+}
 import { getTimeContext, formatTimeContextForPrompt } from '@/lib/time-context';
 import { getOwnerIdentity } from '@/lib/owner';
 import { waitForGpu } from '@/lib/gpu-lock';
@@ -3740,6 +3776,12 @@ export async function POST(request: NextRequest) {
     const groupRoomTopic: string | undefined = (typeof body.groupRoomTopic === 'string' && body.groupRoomTopic.trim()) ? body.groupRoomTopic.trim() : undefined;
     const groupRoomId: string | undefined = (typeof body.groupRoomId === 'string' && body.groupRoomId.trim()) ? body.groupRoomId.trim() : undefined;
     const groupRecentImages: string[] = Array.isArray(body.groupRecentImages) ? body.groupRecentImages : [];
+    // { imagePath: description } — server-side vision describes each shared image
+    // once so every speaker is TOLD what it shows (no fabricating, no per-Choom
+    // analyze_image needed). Empty when vision is unavailable/failed.
+    const groupImageDescriptions: Record<string, string> = (body.groupImageDescriptions && typeof body.groupImageDescriptions === 'object' && !Array.isArray(body.groupImageDescriptions))
+      ? body.groupImageDescriptions as Record<string, string>
+      : {};
     // This speaker started the room (called talk_with_sisters). The host should
     // stay IN the conversation, not just open it and go quiet.
     const groupIsInitiator: boolean = !!body.groupIsInitiator;
@@ -4191,7 +4233,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
         `- **Move the conversation FORWARD.** Do NOT repeat, re-quote, or re-paste things already said earlier (yours or a sibling's) — no copying past lines, no re-pasting image notes. Say something new each turn, or pass (see below).\n` +
         `- **Never echo the message you're replying to.** Copying back what ${owner.name} or a sibling just said, word-for-word, is NOT a reply — answer it in your own voice. If ${owner.name} greets you, greet him back as yourself; don't repeat his greeting.\n` +
         (groupRecentImages.length
-          ? `- **Images shared in this room** (view any with \`analyze_image\` and the exact \`image_path\`): ${groupRecentImages.map(p => `\`${p}\``).join(', ')}. Do NOT type these paths into your reply — just use analyze_image if you want to look.\n`
+          ? `- **Images shared in this room** — you already know what each shows (described below), so react to the actual image; never invent its contents. Only call \`analyze_image\` with the exact \`image_path\` if you need finer detail. Do NOT type these paths into your reply.\n${groupRecentImages.map(p => `    • \`${p}\`${groupImageDescriptions[p] ? ` — shows: ${groupImageDescriptions[p]}` : ' — (not yet described; use analyze_image to look)'}`).join('\n')}\n`
           : '') +
         `- Keep it conversational and reasonably concise — this is a group chat, not a monologue. You may address ${owner.name} or a sibling by name.\n` +
         `- **Memory:** this is the SAME you as your private chats — same long-term memory. If the conversation touches ${owner.name}, your shared history, a person/place/project, or anything personal, call \`search_memories\` to recall the real details BEFORE you respond, exactly as you would one-on-one. Don't rely on vague impressions.\n` +
@@ -4324,6 +4366,24 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
         role: 'user',
         content: '[The group room is open and your siblings are here. Your first line below is how you opened the conversation — now read what they say and reply as yourself.]',
       });
+    }
+
+    // Per-model context window: a model's profile (built-in or user) contextLength
+    // overrides the global slider when the resolved model isn't the global default —
+    // so a RAM-capped local model (e.g. a Mac group seat loaded at 32K in LM Studio)
+    // compacts and truncates against ITS real window, not the 256K global. Resolved
+    // HERE, BEFORE the compaction budget below — otherwise cross-turn compaction
+    // would budget against the wrong (global) context and overflow a small model.
+    // Mirrors the guard at "Profile application:" so behavior matches the API-call path.
+    {
+      const _globalModel = (clientLLMSettings as Record<string, unknown>)?.model as string || defaultLLMSettings.model;
+      if (llmSettings.model !== _globalModel) {
+        const _ctxProfile = findLLMProfile(llmSettings.model, (settings?.modelProfiles as LLMModelProfile[]) || []);
+        if (_ctxProfile?.contextLength !== undefined) {
+          llmSettings.contextLength = _ctxProfile.contextLength;
+          console.log(`   📏 ${choom.name} per-model context: ${llmSettings.model} → ${llmSettings.contextLength.toLocaleString()} (profile override of global)`);
+        }
+      }
     }
 
     // Cross-turn compaction: summarize old messages if history exceeds token budget
@@ -4893,9 +4953,8 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             isHeartbeat: !!isHeartbeat,
             maxIterations,
           });
-          const initialMsgContent = currentMessages.map(m => m.content).join('');
-          const approxInitialTokens = Math.ceil(initialMsgContent.length / 4);
-          console.log(`\n💬 Chat Request [${choom.name}] | ${currentMessages.length} msgs | ~${approxInitialTokens.toLocaleString()} tokens`);
+          const approxInitialTokens = contextBreakdown(`[${choom.name}] initial`, currentMessages, activeTools, llmSettings.contextLength || 0);
+          console.log(`\n💬 Chat Request [${choom.name}] | ${currentMessages.length} msgs | ~${approxInitialTokens.toLocaleString()} tokens (msgs+tools)`);
           serverLog(choomId, logChatId, 'info', 'llm', 'LLM Request', `${llmSettings.model}: ${message.slice(0, 100)}`,
             { model: llmSettings.model, endpoint: llmSettings.endpoint, userMessage: message, messageCount: currentMessages.length, approxTokens: approxInitialTokens });
 
@@ -5061,6 +5120,13 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           // ================================================================
           let iteration = 0;
           let nudgeCount = 0; // Track how many times we've nudged (max 5)
+          // Group rooms suppress ALL nudges (they cause argumentative loops). But the
+          // one real failure owners hit is a Choom who AFFIRMATIVELY narrates "I'll
+          // generate an image" / "I'll remember that" and then never calls the tool —
+          // the action silently never happens. Allow exactly ONE gentle, opt-out nudge
+          // per group turn for just those high-confidence cases. Bounded so it can't
+          // loop or go silent (no tool_choice forcing). See use below.
+          let groupToolNudgeUsed = false;
           // Token usage accumulator — captures usage from each LLM call across iterations
           let totalPromptTokens = 0;
           let totalCompletionTokens = 0;
@@ -6231,7 +6297,13 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             // substantive answers containing incidental action words ("search", "analyze").
             if (toolCalls.length === 0 && allToolCalls.length === 0 && iterationContent.length < 800) {
               const availableToolNames = new Set(activeTools.map(t => t.name));
-              const extracted = extractToolCallFromText(iterationContent, message, availableToolNames);
+              const rawExtracted = extractToolCallFromText(iterationContent, message, availableToolNames);
+              // In a group turn `message` is the POV framing prompt, so the text→remember
+              // heuristic would store the frame itself as a "memory" (it uses userMessage
+              // as the content). Never auto-extract remember in a room — it's always junk.
+              // (Real structured remember calls still run; only this heuristic is suppressed,
+              // and the preFlight guard above catches anything that slips through.)
+              const extracted = (isGroupTurn && rawExtracted?.name === 'remember') ? null : rawExtracted;
               if (extracted) {
                 console.log(`   🧲 ${choomTag} Extracted tool call from text: ${extracted.name}(${JSON.stringify(extracted.arguments).slice(0, 80)})`);
                 toolCalls.push(extracted);
@@ -6390,6 +6462,36 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               // task, and nudging her to "call the tool NOW" turns into a loop she
               // argues with ("the system keeps asking me to send a notification").
               const suggestsToolUse = describesToolAction || suggestsAction;
+
+              // Group rooms: one targeted, opt-out nudge per turn for the only two
+              // tool misses owners actually hit — a Choom who SAYS she generated an
+              // image or remembered something but emitted no tool call (prose
+              // narration the structured-text salvage can't catch; and once she's
+              // already called search_memories, extractToolCallFromText is skipped
+              // too). Restricted to affirmative image/remember phrasing, negations
+              // excluded, fired at most once, and NO tool_choice forcing — forcing in
+              // rooms caused junk `remember` calls and silent speakers, so we only
+              // remind her and let her choose to call the tool or say she won't.
+              if (isGroupTurn && !groupToolNudgeUsed && activeTools.length > 0 && describesToolAction) {
+                const wantsImage = /(?:generat|creat|mak|produc|render|draw|design|craft)\w*\s+(?:\d+\s+)?(?:unique\s+|some\s+|a\s+|an\s+|the\s+|your\s+|my\s+|another\s+)?(?:\w+\s+)?(?:image|selfie|portrait|picture|photo|illustration|artwork)/i.test(lowerContent);
+                const wantsRemember = /(?:(?:i'?ll |i will |i'?m going to |let me |going to )\s*remember\b)|(?:(?:sav|stor|record|memoriz)\w*\s+(?:that|this|it)\b)/i.test(lowerContent);
+                const negated = /\b(?:not going to|won'?t|will not|do(?:es)?n'?t (?:need|have|want|plan) to|no need to|rather not|instead of|choosing not to|decided not to|can'?t|cannot|unable to)\b/i.test(lowerContent);
+                if ((wantsImage || wantsRemember) && !negated) {
+                  groupToolNudgeUsed = true;
+                  nudgeCount++;
+                  traceBuilder.recordNudge('tool_use');
+                  console.log(`   🔄 ${choomTag} Group tool nudge — affirmative ${wantsImage ? 'image' : 'remember'} narration without a tool call`);
+                  currentMessages.push({ role: 'assistant', content: iterationContent });
+                  currentMessages.push({
+                    role: 'user',
+                    content: wantsImage
+                      ? `[System] You described making or sharing an image but did NOT call generate_image. If you meant to create it, call generate_image NOW with a real prompt. If you didn't actually mean to make one, just say so in your own words — never claim you generated an image you didn't.`
+                      : `[System] You described remembering or saving something but did NOT call the remember tool. If it's worth keeping, call remember NOW. If it isn't, never mind — just don't claim you saved it.`,
+                  });
+                  continue;
+                }
+              }
+
               if (nudgeCount < 2 && suggestsToolUse && activeTools.length > 0 && !isGroupTurn) {
                 nudgeCount++;
                 traceBuilder.recordNudge('tool_use');
@@ -6482,6 +6584,25 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             const preFlightCheck = (tc: { id: string; name: string; arguments: Record<string, unknown> }): ToolResult | null => {
               const normalizedArgs = JSON.stringify(tc.arguments).toLowerCase();
               const dedupKey = `${tc.name}:${normalizedArgs}`;
+
+              // --- Memory-pollution guard: reject a `remember` whose content is the
+              // internal POV framing prompt or a copied room transcript. Weak models
+              // (and the text→remember extractor, which uses the userMessage as the
+              // content) sometimes dump the "[You are X. Reply as X …]" frame or a wall
+              // of "[Name]: …" lines into the long-term memory DB. That's never a real
+              // memory — skip it so the store isn't polluted. ---
+              if (tc.name === 'remember') {
+                const memContent = String((tc.arguments?.content ?? tc.arguments?.text ?? '')).trim();
+                const transcriptLines = (memContent.match(/\[[^\]\n]{1,40}\]\s*[:：]/g) || []).length;
+                const looksLikeFraming =
+                  /^\[?\s*you are\s+\w+\b[\s\S]{0,40}(?:reply as|not anyone else)/i.test(memContent) ||
+                  /RIGHT NOW in the latest messages/i.test(memContent) ||
+                  transcriptLines >= 2;
+                if (looksLikeFraming) {
+                  console.log(`   🧹 ${choomTag} Skipping remember — content is the POV framing / room transcript, not a real memory`);
+                  return { toolCallId: tc.id, name: 'remember', result: { success: false, message: 'Not saved — that was the conversation framing/transcript, not a real memory. Only call remember with a concise fact genuinely worth keeping.' } };
+                }
+              }
 
               // --- Deduplication: skip if same tool+args already executed ---
               if (!NO_DEDUP_TOOLS.has(tc.name)) {
@@ -7085,8 +7206,8 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               console.log(`   ⏸️  ${consecutiveFailures} consecutive failures — deferring strip, reflection ladder active (${reflectionNudgesUsed}/${MAX_REFLECTION_NUDGES} used)`);
             }
 
-            const approxTokens = Math.ceil(currentMessages.map(m => m.content || '').join('').length / 4);
-            console.log(`   🔧 ${choomTag} Next iteration | ${currentMessages.length} msgs | ~${approxTokens.toLocaleString()} tokens`);
+            const approxTokens = contextBreakdown(`${choomTag} iter ${iteration}`, currentMessages, activeTools, llmSettings.contextLength || 0);
+            console.log(`   🔧 ${choomTag} Next iteration | ${currentMessages.length} msgs | ~${approxTokens.toLocaleString()} tokens (msgs+tools)`);
           }
 
           // Assemble fullContent from all iterations, deduplicating repeated text.

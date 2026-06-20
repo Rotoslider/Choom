@@ -3,6 +3,7 @@ Choom API Client
 Handles communication with the Choom Next.js API
 """
 import os
+import re
 import requests
 import json
 import logging
@@ -335,6 +336,10 @@ class ChoomClient:
                 "simpleTasksProviderId": llm_cfg.get("simpleTasksProviderId"),
                 "simpleTasksEnabled": llm_cfg.get("simpleTasksEnabled", False),
                 "compressToolOutputs": llm_cfg.get("compressToolOutputs", False),
+                # Forward the context window so Signal/followup turns honor the
+                # Settings>LLM slider (compaction budget). Without this they fell back
+                # to the 262K default and ballooned huge prompts on long agentic runs.
+                "contextLength": llm_cfg.get("contextLength", 262144),
             },
             "memory": {
                 "endpoint": config.MEMORY_ENDPOINT,
@@ -378,6 +383,11 @@ class ChoomClient:
         providers_cfg = bridge_cfg.get("providers", [])
         if providers_cfg:
             default_settings["providers"] = providers_cfg
+        # Forward per-model profiles too, so a non-default model's profile context
+        # (and other params) apply on Signal/followup turns — not just on the web.
+        profiles_cfg = bridge_cfg.get("modelProfiles", [])
+        if profiles_cfg:
+            default_settings["modelProfiles"] = profiles_cfg
 
         vision_profiles_cfg = bridge_cfg.get("visionProfiles", [])
         if vision_profiles_cfg:
@@ -721,6 +731,47 @@ class ChoomClient:
             return {"error": str(e), "services": {}}
 
 
+# Spell clock times as words so chatterbox doesn't read "6:26 AM" as a number
+# ("six thousand twenty-six"). "6:26 AM" -> "six twenty six AM",
+# "6:00 AM" -> "six o'clock AM", "6:05 AM" -> "six oh five AM".
+_ONES = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight',
+         'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen',
+         'sixteen', 'seventeen', 'eighteen', 'nineteen']
+_TENS = ['', '', 'twenty', 'thirty', 'forty', 'fifty']
+# HH:MM with optional AM/PM. Lookarounds reject mid-number / HH:MM:SS so we don't
+# mangle ratios, scores, or timestamps with seconds.
+_TIME_RE = re.compile(r'(?<![\d:])(\d{1,2}):([0-5]\d)(?:\s*([ap]\.?\s?m\.?))?(?![\d:])',
+                      re.IGNORECASE)
+
+
+def _two_digit_words(n: int) -> str:
+    if n < 20:
+        return _ONES[n]
+    t, o = divmod(n, 10)
+    return _TENS[t] if o == 0 else f"{_TENS[t]} {_ONES[o]}"
+
+
+def normalize_times_for_speech(text: str) -> str:
+    def repl(m: 're.Match') -> str:
+        hour, minute, ampm = int(m.group(1)), int(m.group(2)), m.group(3)
+        if hour > 23 or minute > 59:
+            return m.group(0)  # not a real clock time — leave it
+        if ampm:
+            hour_word = 'twelve' if hour % 12 == 0 else _two_digit_words(hour % 12)
+        else:
+            hour_word = _two_digit_words(hour)
+        if minute == 0:
+            spoken = f"{hour_word} o'clock"
+        elif minute < 10:
+            spoken = f"{hour_word} oh {_ONES[minute]}"
+        else:
+            spoken = f"{hour_word} {_two_digit_words(minute)}"
+        if ampm:
+            spoken += ' ' + re.sub(r'[.\s]', '', ampm).upper()
+        return spoken
+    return _TIME_RE.sub(repl, text or '')
+
+
 class TTSClient:
     """Client for Text-to-Speech service"""
 
@@ -740,6 +791,7 @@ class TTSClient:
             Path to audio file or None on failure
         """
         try:
+            text = normalize_times_for_speech(text)
             response = requests.post(
                 f"{self.endpoint}/v1/audio/speech",
                 json={

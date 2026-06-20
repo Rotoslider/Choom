@@ -100,7 +100,7 @@ export default function SettingsPage() {
   const [activeSection, setActiveSection] = useState<Section>('llm');
   // On phones the settings nav is a slide-in overlay; on md+ it's a static column.
   const [navOpen, setNavOpen] = useState(false);
-  const { chooms, setChooms } = useAppStore();
+  const { chooms, setChooms, applyServerSettings } = useAppStore();
 
   useEffect(() => {
     if (chooms.length === 0) {
@@ -110,6 +110,19 @@ export default function SettingsPage() {
         .catch(console.error);
     }
   }, [chooms.length, setChooms]);
+
+  // Reconcile with the server's source-of-truth config on load — the SAME sync the
+  // main page does. Without this, opening /settings directly (or reloading on it,
+  // e.g. after a dev restart) showed only the hydrated localStorage values with no
+  // server correction, so server-owned fields like the LLM endpoint/model rendered
+  // BLANK even though bridge-config.json held the real values. Now every settings
+  // load pulls the authoritative config (cosmetics preserved by applyServerSettings).
+  useEffect(() => {
+    fetch('/api/settings/defaults')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((cfg) => { if (cfg) applyServerSettings(cfg); })
+      .catch(() => { /* non-critical — keep whatever the store already has */ });
+  }, [applyServerSettings]);
 
   return (
     <div className="min-h-screen bg-background flex">

@@ -175,7 +175,35 @@ class SignalBridge:
                     return
                 logger.info(f"Voice transcription result: '{message_text}'")
 
-            # Handle image attachments (not voice notes)
+            # Group room detection runs on the ORIGINAL message text — BEFORE the
+            # image-attachment handling below rewrites it. Image handling PREPENDS an
+            # "[User attached image …]" block to message_text, which shoves the
+            # "group:" prefix out of the leading position so the ^(group|room): regex
+            # stops matching — the message then silently falls through to the last 1:1
+            # chat (the "image + Group: went to Eve" bug). Detect group FIRST, and
+            # route any attached image INTO the room instead of a 1:1.
+            group_match = re.match(r'^\s*(?:group|room)\s*[:,]\s*(.*)$', message_text,
+                                   re.IGNORECASE | re.DOTALL) if message_text else None
+            if group_match:
+                group_text = group_match.group(1).strip()
+                if not is_voice and attachments:
+                    image_paths = self._handle_image_attachments(attachments)
+                    for img_path in image_paths:
+                        # Canonical room-image note: the web group flow's
+                        # extractImagePaths() matches `analyze_image image_path="…"`
+                        # and stripImageNotes() hides the "[image shared to the room …]"
+                        # wrapper from the displayed transcript so it isn't parroted.
+                        note = (f'_[image shared to the room by the owner — saved at '
+                                f'`{img_path}`. View it with analyze_image '
+                                f'image_path="{img_path}".]_')
+                        group_text = f"{group_text}\n\n{note}" if group_text else note
+                    if image_paths:
+                        logger.info(f"Attached {len(image_paths)} image(s) to group message")
+                if group_text:
+                    self._process_group_message(source, group_text)
+                return
+
+            # Handle image attachments for a 1:1 chat (not voice notes, not group)
             if not is_voice and attachments:
                 image_paths = self._handle_image_attachments(attachments)
                 if image_paths:
@@ -194,17 +222,6 @@ class SignalBridge:
 
             if not message_text:
                 logger.debug("Empty message, skipping")
-                return
-
-            # Group room: "group: ..." or "room: ..." routes into the shared
-            # multi-Choom room instead of a single Choom. Same room as the web app
-            # (shared DB) — switching phone↔computer keeps context.
-            group_match = re.match(r'^\s*(?:group|room)\s*[:,]\s*(.*)$', message_text,
-                                   re.IGNORECASE | re.DOTALL)
-            if group_match:
-                group_text = group_match.group(1).strip()
-                if group_text:
-                    self._process_group_message(source, group_text)
                 return
 
             # Help / list-commands — quick reference of what works over Signal.

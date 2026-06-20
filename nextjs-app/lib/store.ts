@@ -274,6 +274,14 @@ function buildBridgePayload(settings: AppSettings): Record<string, unknown> {
       simpleTasksEnabled: settings.llm.simpleTasksEnabled || false,
       roomCreatorModel: settings.llm.roomCreatorModel || null,
       roomCreatorProviderId: settings.llm.roomCreatorProviderId || null,
+      // Persist the tool-output compression toggle so it round-trips to
+      // bridge-config — otherwise the UI switch never reaches Signal turns (the
+      // Python bridge reads this flag from bridge-config, defaulting to off).
+      compressToolOutputs: settings.llm.compressToolOutputs || false,
+      // Persist the context-window slider too — the bridge reads it from here to
+      // set the compaction budget on Signal/followup turns (else it defaulted to
+      // 262K and prompts ballooned on long agentic runs).
+      contextLength: settings.llm.contextLength || null,
     },
     tts: { endpoint: settings.tts.endpoint, defaultVoice: settings.tts.defaultVoice || null },
     stt: { endpoint: settings.stt.endpoint, language: settings.stt.language },

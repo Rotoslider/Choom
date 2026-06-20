@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, Plus, Users, Trash2, Loader2, Smartphone, Square, Minus, Play, Download, Archive, X, MoreVertical, Pencil, ScrollText, Menu } from 'lucide-react';
+import { ArrowLeft, Plus, Users, Trash2, Loader2, Smartphone, Square, Minus, Play, Download, Archive, X, MoreVertical, Pencil, ScrollText, Menu, Crown } from 'lucide-react';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
 import { LogPanel } from '@/components/logs/log-panel';
 import { useLogStore } from '@/lib/log-store';
@@ -373,7 +373,13 @@ export default function RoomsPage() {
     }
     let messageContent = text.trim();
     if (attachment?.workspacePath) {
-      messageContent += `\n\n[System: the user shared an image saved at workspace path "${attachment.workspacePath}". Use the analyze_image tool with image_path to view it.]`;
+      // Canonical room-image note: extractImagePaths() in the orchestrator only
+      // matches `analyze_image image_path="…"`, and stripImageNotes() only hides
+      // notes starting with "[image shared to the room". The old "[System: …]"
+      // wording matched NEITHER — so the upload never reached groupRecentImages and
+      // the Chooms only pretended to see it. Use the format the rest of the pipeline
+      // recognizes so the path is surfaced to every speaker as a real shared image.
+      messageContent += `\n\n_[image shared to the room by the owner — saved at \`${attachment.workspacePath}\`. View it with analyze_image image_path="${attachment.workspacePath}".]_`;
     }
     setMessages(prev => [...prev, {
       id: `tmp-${Date.now()}`, role: 'user', authorChoomId: null,
@@ -458,6 +464,30 @@ export default function RoomsPage() {
     await fetch(`/api/group-chats/${roomId}`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ participants: remaining.map((p, i) => ({ choomId: p.choomId, order: i, active: true })) }),
+    });
+  }, [rooms]);
+
+  // Promote a Choom to room leader. "Leader" isn't a stored field — it's just the
+  // first participant by `order` (the host/first-responder seat that takes the
+  // room-creator model and speaks first each round). So promoting = moving that
+  // Choom to order 0 and re-indexing the rest, then PUTting the new participant set
+  // (the orchestrator reads orderBy: order asc on every run). The per-Choom
+  // groupChatModel applies to NON-leaders, which is why setting it on the leader
+  // had no effect — moving the leader seat is how you change that.
+  const handleMakeLeader = useCallback(async (roomId: string, choomId: string, name: string) => {
+    const room = rooms.find(r => r.id === roomId);
+    if (!room) return;
+    const active = room.participants.filter(p => p.active);
+    if (active[0]?.choomId === choomId) return; // already the leader
+    if (!confirm(`Make ${name} the room leader? They'll speak first each round and take the room-creator model seat (their own per-room model override no longer applies as leader).`)) return;
+    const reordered = [
+      ...active.filter(p => p.choomId === choomId),
+      ...active.filter(p => p.choomId !== choomId),
+    ].map((p, i) => ({ ...p, order: i }));
+    setRooms(prev => prev.map(r => r.id === roomId ? { ...r, participants: reordered } : r));
+    await fetch(`/api/group-chats/${roomId}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ participants: reordered.map((p, i) => ({ choomId: p.choomId, order: i, active: true })) }),
     });
   }, [rooms]);
 
@@ -642,18 +672,32 @@ export default function RoomsPage() {
 
             {managingMembers && (
               <div className="px-6 py-2 border-b border-border bg-muted/30 flex flex-wrap items-center gap-2">
-                <span className="text-xs text-muted-foreground mr-1">Members (click ✕ to remove):</span>
-                {currentRoom.participants.filter(p => p.active).map(p => (
-                  <span key={p.id} className="inline-flex items-center gap-1 rounded-full border border-border bg-background px-2 py-0.5 text-xs">
-                    {p.choom.name}
-                    <button
-                      onClick={() => handleRemoveParticipant(currentRoom.id, p.choomId, p.choom.name)}
-                      title={`Remove ${p.choom.name}`}
-                      className="text-muted-foreground hover:text-destructive">
-                      <X className="h-3 w-3" />
-                    </button>
-                  </span>
-                ))}
+                <span className="text-xs text-muted-foreground mr-1">Members — 👑 leader speaks first; click 👑 to promote, ✕ to remove:</span>
+                {currentRoom.participants.filter(p => p.active).map((p, idx) => {
+                  const isLeader = idx === 0;
+                  return (
+                    <span key={p.id} className={cn('inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs',
+                      isLeader ? 'border-primary/50 bg-primary/10' : 'border-border bg-background')}>
+                      {isLeader
+                        ? <Crown className="h-3 w-3 text-primary" />
+                        : (
+                          <button
+                            onClick={() => handleMakeLeader(currentRoom.id, p.choomId, p.choom.name)}
+                            title={`Make ${p.choom.name} the room leader`}
+                            className="text-muted-foreground hover:text-primary">
+                            <Crown className="h-3 w-3" />
+                          </button>
+                        )}
+                      {p.choom.name}
+                      <button
+                        onClick={() => handleRemoveParticipant(currentRoom.id, p.choomId, p.choom.name)}
+                        title={`Remove ${p.choom.name}`}
+                        className="text-muted-foreground hover:text-destructive">
+                        <X className="h-3 w-3" />
+                      </button>
+                    </span>
+                  );
+                })}
               </div>
             )}
 

@@ -289,10 +289,17 @@ export function LLMSettings() {
           // Always prefer the live-fetched `models` (from the provider's actual endpoint).
           // Fall back to the persisted `provider.models` cache only if the live fetch returned nothing.
           const selectedProvider = providers.find((p: LLMProviderConfig) => p.id === llm.llmProviderId);
-          const liveOptions: ModelOption[] = models.length > 0
+          const baseOptions: ModelOption[] = models.length > 0
             ? models
             : (selectedProvider?.models || []).map((m: string) => ({ id: m, name: m }));
-          const stale = !!llm.model && liveOptions.length > 0 && !liveOptions.some((m) => m.id === llm.model);
+          const stale = !!llm.model && baseOptions.length > 0 && !baseOptions.some((m) => m.id === llm.model);
+          // Always include the currently-saved model as an option, even when the live
+          // endpoint isn't serving it right now (e.g. it's not loaded in LM Studio).
+          // Otherwise the <Select> can't match its value and renders an empty box,
+          // which read as "the model setting is blank" on every load.
+          const liveOptions: ModelOption[] = stale
+            ? [{ id: llm.model, name: `${llm.model} (not loaded)` }, ...baseOptions]
+            : baseOptions;
           return liveOptions.length > 0 ? (
             <>
             <Select

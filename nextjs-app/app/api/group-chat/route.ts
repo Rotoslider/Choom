@@ -5,6 +5,8 @@ import prisma from '@/lib/db';
 import { WORKSPACE_ROOT } from '@/lib/config';
 import {
   runSpeakerTurn,
+  detectConvergence,
+  DIVERGENCE_DIRECTIVES,
   type GroupTranscriptEntry,
   type GroupSend,
 } from '@/lib/group-chat-runner';
@@ -278,6 +280,14 @@ export async function POST(request: NextRequest) {
         // churn). A short pause lets the server settle between speakers and cuts
         // down the spurious cloud fallbacks. Skipped before the very first turn.
         let priorTurnRan = false;
+        // ── Convergence breaker ──
+        // When the room collapses into a mirrored mood, run ONE round of hidden,
+        // per-speaker disruptors; if that doesn't break it, STOP rather than
+        // re-nudge (a repeated "be original" nudge just becomes the next thing they
+        // all agree on — the exact reloop we're avoiding).
+        let divergeThisRound = false;
+        let convergenceInterventions = 0;
+        const MAX_CONVERGENCE_INTERVENTIONS = 2;
         for (let round = 0; round < maxRounds && !cancelled; round++) {
           // Round 0 honors mentions; auto-rounds include all active participants.
           const speakers = round === 0 ? firstRoundSpeakers : activeParticipants;
@@ -287,7 +297,9 @@ export async function POST(request: NextRequest) {
           // conversation has wound down — stop instead of looping filler.
           let stillEngaged = 0;
 
+          let speakerIdx = -1;
           for (const p of speakers) {
+            speakerIdx++;
             if (cancelled) break;
             if (priorTurnRan) await new Promise(res => setTimeout(res, 800));
             priorTurnRan = true;
@@ -322,6 +334,11 @@ export async function POST(request: NextRequest) {
                 : (p.choomId !== creatorChoomId && p.choom.groupChatModel)
                   ? { model: p.choom.groupChatModel, provider_id: p.choom.groupChatProvider || undefined }
                   : undefined,
+              // Convergence breaker: a hidden, per-speaker disruptor for this one
+              // round (rotated by seat so they can't all mirror the same instruction).
+              divergenceDirective: divergeThisRound
+                ? DIVERGENCE_DIRECTIVES[speakerIdx % DIVERGENCE_DIRECTIVES.length]
+                : undefined,
               settings,
               timeoutMs: TURN_TIMEOUT_MS,
               send,
@@ -420,6 +437,29 @@ export async function POST(request: NextRequest) {
           // one-liners. Round 0 is the opening reaction, so only apply from
           // round 1 onward (gives the initiator at least one full round back).
           if (round >= 1 && stillEngaged === 0) break;
+
+          // ── Convergence breaker (round 1+) ──
+          if (round >= 1) {
+            const recentAssistant = transcript.filter(t => t.authorChoomId).map(t => t.content);
+            if (divergeThisRound) {
+              // We just ran per-speaker disruptors. If the room is STILL collapsed,
+              // it won't recover — end gracefully instead of looping on the breaker.
+              divergeThisRound = false;
+              if (detectConvergence(recentAssistant)) {
+                console.log(`   🌀 [${roomId}] Still converged after a divergence round — ending the run.`);
+                break;
+              }
+            } else if (detectConvergence(recentAssistant)) {
+              if (convergenceInterventions < MAX_CONVERGENCE_INTERVENTIONS) {
+                convergenceInterventions++;
+                divergeThisRound = true; // next round gets the hidden per-speaker disruptors
+                console.log(`   🌀 [${roomId}] Convergence detected (intervention ${convergenceInterventions}/${MAX_CONVERGENCE_INTERVENTIONS}) — injecting per-speaker divergence next round.`);
+              } else {
+                console.log(`   🌀 [${roomId}] Convergence persists after ${MAX_CONVERGENCE_INTERVENTIONS} interventions — ending the run.`);
+                break;
+              }
+            }
+          }
         }
 
         await prisma.groupRoom.update({ where: { id: roomId }, data: { updatedAt: new Date() } });
