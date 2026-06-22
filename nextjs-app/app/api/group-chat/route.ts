@@ -351,7 +351,7 @@ export async function POST(request: NextRequest) {
             // instead of saving a parrot or going silent. `retry: true` tells the
             // live view to reset its display + drop the parrot's queued audio.
             if (result.parroted && !cancelled) {
-              console.log(`   🔁 [${p.choom.name}] Echoed the prompt — retrying once with anti-echo directive`);
+              console.log(`   🔁 [${p.choom.name}] ${result.repeatReason === 'self' ? 'Repeated her own recent turn' : 'Echoed the prompt'} — retrying once with ${result.repeatReason === 'self' ? 'say-what\'s-different' : 'anti-echo'} directive`);
               send({
                 type: 'speaker_start',
                 speakerChoomId: p.choomId,
@@ -360,7 +360,7 @@ export async function POST(request: NextRequest) {
                 round,
                 retry: true,
               });
-              result = await runSpeakerTurn({ ...turnOpts, antiEcho: true });
+              result = await runSpeakerTurn({ ...turnOpts, antiEcho: true, antiEchoReason: result.repeatReason });
             }
 
             if (result.error) {

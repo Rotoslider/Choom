@@ -27,6 +27,9 @@ export interface GroupSpeakerResult {
   // was NOT already the anti-echo retry — signals the orchestrator to re-run the
   // turn once with a corrective directive instead of saving the parrot.
   parroted?: boolean;
+  // Why `parroted` fired: 'self' = re-said her own recent turn (retry asks for what's
+  // DIFFERENT now); 'parrot' = echoed another speaker / drifted (generic anti-echo).
+  repeatReason?: 'self' | 'parrot';
   // True when the speaker DID contribute real content but tacked a [PASS] on the
   // end (or otherwise signaled they're done). The content still counts — but the
   // orchestrator uses this to detect the room winding down so it stops cleanly
@@ -189,20 +192,41 @@ export const DIVERGENCE_DIRECTIVES: string[] = [
 // and echo the prompt. Conservative on purpose: own turns use exact/containment;
 // other speakers require an EXACT normalized match (so genuine agreement or
 // building on a theme is never silenced) — and only for substantial text.
-function isRepeatOrParrot(content: string, transcript: GroupTranscriptEntry[], choomId: string): boolean {
+function isRepeatOrParrot(content: string, transcript: GroupTranscriptEntry[], choomId: string): 'self' | 'parrot' | null {
   const normNew = normalizeForDup(content);
-  if (normNew.length < 40) return false;
-  const recent = transcript.slice(-8);
-  for (const t of recent) {
+  if (normNew.length < 40) return null;
+  const newWords = contentWordSet(content);
+  // OWN turns: compare across the FULL visible transcript, not just the last 8.
+  // A busy room pushes a prior reaction out of an 8-message slice — Eve's VERBATIM
+  // repeat sat exactly 9 turns back and slipped through. Flag exact match,
+  // containment, OR high word-overlap: a near-verbatim self-repeat that only swapped
+  // a sentence (Lissa re-said her whole reaction to a second, similar photo, changing
+  // just the opening line — ~96% the same words). Jaccard ≥ 0.8 catches that while a
+  // genuinely fresh reaction scores ~0.2, so new content is never silenced. When this
+  // trips, the caller re-runs ONCE with the anti-echo directive (fresh words), and
+  // only suppresses if the retry STILL repeats — so a rare false positive costs a
+  // retry, not silence.
+  for (const t of transcript) {
+    if (t.authorChoomId !== choomId) continue;
     const normOld = normalizeForDup(t.content);
     if (normOld.length < 40) continue;
-    if (t.authorChoomId === choomId) {
-      if (normOld === normNew || normOld.includes(normNew)) return true; // own repeat
-    } else if (normOld === normNew) {
-      return true; // parroting another speaker / the user verbatim
+    if (normOld === normNew || normOld.includes(normNew)) return 'self';
+    const oldWords = contentWordSet(t.content);
+    if (oldWords.size >= 8 && newWords.size >= 8) {
+      let inter = 0;
+      for (const w of newWords) if (oldWords.has(w)) inter++;
+      const union = newWords.size + oldWords.size - inter;
+      if (union > 0 && inter / union >= 0.8) return 'self';
     }
   }
-  return false;
+  // PARROT another speaker / the user verbatim — strict and LOCAL (last 8 only), so
+  // genuine agreement or building on a shared theme is never silenced.
+  for (const t of transcript.slice(-8)) {
+    if (t.authorChoomId === choomId) continue;
+    const normOld = normalizeForDup(t.content);
+    if (normOld.length >= 40 && normOld === normNew) return 'parrot';
+  }
+  return null;
 }
 
 // True when the reply claims to BE another participant ("I'm Eve", "I am Optic") —
@@ -263,6 +287,7 @@ export async function runSpeakerTurn(opts: {
   roomId?: string;
   isInitiator?: boolean;
   antiEcho?: boolean; // retry pass: steer the model away from echoing the prompt
+  antiEchoReason?: 'self' | 'parrot'; // why the retry: 'self' = repeated herself (ask for what's new)
   taskModelOverride?: { model: string; provider_id?: string }; // host-seat model pin
   divergenceDirective?: string; // convergence breaker for this turn (hidden, per-speaker)
   settings: unknown;
@@ -271,7 +296,7 @@ export async function runSpeakerTurn(opts: {
 }): Promise<GroupSpeakerResult> {
   const {
     baseUrl, choomId, speakerName, scratchChatId, transcript,
-    participantNames, projectFolder, roomTopic, roomId, isInitiator, antiEcho, taskModelOverride, divergenceDirective, settings, timeoutMs, send,
+    participantNames, projectFolder, roomTopic, roomId, isInitiator, antiEcho, antiEchoReason, taskModelOverride, divergenceDirective, settings, timeoutMs, send,
   } = opts;
 
   // Split the transcript so `message` carries the REAL conversational content
@@ -331,7 +356,9 @@ export async function runSpeakerTurn(opts: {
     const frame = divergenceDirective
       ? `[You are ${speakerName}. ${divergenceDirective} Reply as ${speakerName} — first person, your own words, to what's happening RIGHT NOW below.]`
       : antiEcho
-        ? `[You are ${speakerName} — NOT anyone else. Your last attempt went wrong (you echoed a line, spoke as another sibling, or replied to the wrong thing). Read the messages below and reply as ${speakerName}, in your OWN fresh words, first person, to what's being asked/said RIGHT NOW.]`
+        ? (antiEchoReason === 'self'
+            ? `[You are ${speakerName}. Your last reply almost exactly REPEATED something you already said in this room — same words, same beats. Do NOT say it again, even reworded. Whatever's in front of you now (a new image, a new line from someone) is DIFFERENT from before: name the specific thing that's different about THIS one and react only to THAT, in fresh words. If there is genuinely nothing new to add, reply [PASS] — silence beats repeating yourself.]`
+            : `[You are ${speakerName} — NOT anyone else. Your last attempt went wrong (you echoed a line, spoke as another sibling, or replied to the wrong thing). Read the messages below and reply as ${speakerName}, in your OWN fresh words, first person, to what's being asked/said RIGHT NOW.]`)
         : `[You are ${speakerName}. Reply as ${speakerName} — first person, your own words — to what's happening RIGHT NOW in the latest messages below; if a question is being asked, answer THAT. Do NOT drift back to an earlier topic, repeat your previous point, speak as another sibling, or copy a line back.]`;
     message = `${frame}\n\n${newContent}`;
   }
@@ -491,15 +518,20 @@ export async function runSpeakerTurn(opts: {
     //   • first attempt → flag `parroted` so the orchestrator re-runs the turn
     //     ONCE with the anti-echo directive (gives a real response, not silence).
     //   • the retry itself still echoed → suppress (stay quiet beats parroting).
-    if (result.content && !result.imageUrl &&
-        (isRepeatOrParrot(result.content, transcript, choomId) ||
-         spokeAsAnother(result.content, speakerName, participantNames))) {
+    const repeatKind = (result.content && !result.imageUrl)
+      ? isRepeatOrParrot(result.content, transcript, choomId)
+      : null;
+    const identityBleed = !!result.content && !result.imageUrl &&
+      spokeAsAnother(result.content, speakerName, participantNames);
+    if (repeatKind || identityBleed) {
       if (antiEcho) {
         result.passed = true;
         result.windingDown = false;
         result.content = '';
       } else {
         result.parroted = true;
+        // 'self' → tailored "say what's different" retry; parrot/bleed → generic.
+        result.repeatReason = repeatKind === 'self' ? 'self' : 'parrot';
       }
     }
     return result;
