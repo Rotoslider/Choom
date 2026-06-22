@@ -164,14 +164,29 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
 
     // Wrong-tool guardrail: schedule_self_followup fires into your PRIVATE 1:1 /
     // Signal — NOT a room. If the prompt is clearly about returning to a group
-    // room, the Choom meant schedule_room_followup; redirect so she actually
-    // re-enters the room instead of landing in 1:1. (These two tools look alike
-    // and get mixed up.)
-    if (/\b(?:pop|hop|jump|head|come|get|step)\s+(?:back\s+)?(?:in(?:to)?|to)\b[^.!?]{0,30}\b(?:room|lounge|group\s*chat)\b|\bback (?:in|into) (?:the )?(?:room|lounge|group\s*chat)\b|\bthis room\b|\bthe (?:tune )?lounge\b|\bgroup chat\b|\brejoin\b/i.test(prompt)) {
-      return this.error(
-        toolCall,
-        'This reads as wanting to RETURN TO A GROUP ROOM, but schedule_self_followup fires into your PRIVATE 1:1/Signal space — it will NOT put you back in the room. Use schedule_room_followup(delay_minutes, prompt, room) instead so you actually re-enter the room and your sisters can react.'
-      );
+    // room, the Choom meant schedule_room_followup. We AUTO-ROUTE rather than
+    // just erroring with advice: erroring made models (esp. local ones) re-hammer
+    // schedule_self_followup until the broken-tool cap disabled it — they never
+    // switched tools. In a group turn the room is already known (ctx.groupRoomId),
+    // so the redirect resolves trivially and just does the right thing. (These two
+    // tools look alike and get mixed up.)
+    const wantsRoom = /\b(?:pop|hop|jump|head|come|get|step)\s+(?:back\s+)?(?:in(?:to)?|to)\b[^.!?]{0,30}\b(?:room|lounge|group\s*chat)\b|\bback (?:in|into) (?:the )?(?:room|lounge|group\s*chat)\b|\bthis room\b|\bthe (?:tune )?lounge\b|\bgroup chat\b|\brejoin\b/i.test(prompt);
+    if (wantsRoom) {
+      console.log(`   🔀 ${choomName}: schedule_self_followup → schedule_room_followup (room-return intent auto-routed)`);
+      const roomResult = await this.scheduleRoomFollowup(toolCall, ctx);
+      // Annotate so the Choom learns the correct tool for next time, whether the
+      // routed call succeeded or failed (e.g. she's not actually in a room).
+      if (roomResult.result && typeof roomResult.result === 'object') {
+        const r = roomResult.result as Record<string, unknown>;
+        r.redirected_from = 'schedule_self_followup';
+        r.note = 'Your prompt was about returning to a group room, so this was auto-routed to schedule_room_followup (a room re-entry, not a private 1:1 followup). Call schedule_room_followup directly next time.';
+        if (typeof r.message === 'string') {
+          r.message = `(Auto-routed from schedule_self_followup → schedule_room_followup because your prompt was about a group room.) ${r.message}`;
+        }
+      } else if (roomResult.error) {
+        roomResult.error = `Tried to auto-route this to schedule_room_followup (your prompt was about a group room), but: ${roomResult.error} If you actually meant a PRIVATE 1:1 followup, reword the prompt without "room"/"lounge"/"group chat".`;
+      }
+      return roomResult;
     }
 
     const clamped = Math.max(MIN_DELAY_MIN, Math.min(MAX_DELAY_MIN, delay));

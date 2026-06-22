@@ -5120,13 +5120,22 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           // ================================================================
           let iteration = 0;
           let nudgeCount = 0; // Track how many times we've nudged (max 5)
-          // Group rooms suppress ALL nudges (they cause argumentative loops). But the
-          // one real failure owners hit is a Choom who AFFIRMATIVELY narrates "I'll
-          // generate an image" / "I'll remember that" and then never calls the tool —
-          // the action silently never happens. Allow exactly ONE gentle, opt-out nudge
-          // per group turn for just those high-confidence cases. Bounded so it can't
-          // loop or go silent (no tool_choice forcing). See use below.
+          // Group rooms suppress ALL nudges (they cause argumentative loops). The one
+          // real failure owners hit is a Choom who AFFIRMATIVELY narrates "I'll generate
+          // an image" / "I'll remember that" then never calls the tool — the action
+          // silently never happens, and re-nudging just makes her re-narrate. So instead
+          // of nagging, on exactly ONE retry per turn we FORCE that one tool: see
+          // `groupForcedTool` below. Plain `tool_choice='required'` is unsafe in rooms
+          // (qwen picks the wrong tool — junk `remember` of the transcript), so the retry
+          // narrows the tools array to JUST the intended tool and forces 'required' — the
+          // only tool it can call is the right one, and the model writes its own args
+          // (verified against LM Studio: named tool_choice 400s, single-tool+required is
+          // honored 3/3 with clean args). Bounded to once; an empty forced reply relaxes
+          // back to conversation via the toolChoiceWasRequired fallback.
           let groupToolNudgeUsed = false;
+          // When set (to a tool name), the NEXT iteration forces exactly that tool. Read
+          // and cleared (one-shot) where toolChoiceOverride is computed.
+          let groupForcedTool: string | null = null;
           // Token usage accumulator — captures usage from each LLM call across iterations
           let totalPromptTokens = 0;
           let totalCompletionTokens = 0;
@@ -5501,12 +5510,21 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             // empty reply). This single gate enforces "rooms are conversational,
             // never forced" no matter which path set the flag.
             const allowForce = forceToolCall && !isGroupTurn;
-            const toolChoiceOverride = allowForce ? 'required' as const : undefined;
-            const toolChoiceWasRequired = allowForce;
-            if (forceToolCall) {
+            // Group single-tool forced retry: the ONLY way a room ever forces. We narrow
+            // the tools array to the one tool the speaker narrated but didn't call, then
+            // force 'required' — so qwen can't pick a junk tool and must produce the real
+            // call (it writes its own args from context). One-shot; consumed here.
+            const groupForceActive = isGroupTurn && !!groupForcedTool && activeTools.some(t => t.name === groupForcedTool);
+            const iterationTools = groupForceActive ? activeTools.filter(t => t.name === groupForcedTool) : activeTools;
+            const toolChoiceOverride = (allowForce || groupForceActive) ? 'required' as const : undefined;
+            const toolChoiceWasRequired = allowForce || groupForceActive;
+            if (groupForceActive) {
+              console.log(`   ⚡ ${choomTag} Group forced single-tool retry → tools=[${groupForcedTool}] tool_choice='required'`);
+            } else if (forceToolCall) {
               if (allowForce) console.log(`   ⚡ Using tool_choice='required' to force tool invocation`);
-              forceToolCall = false; // Reset after use
             }
+            forceToolCall = false; // Reset after use
+            groupForcedTool = null; // one-shot: consumed this iteration
 
             // Think-block filter: strips <think>...</think> from reasoning models
             const thinkFilter = createThinkFilter();
@@ -5564,7 +5582,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 }
                 return false;
               };
-              for await (const chunk of llmClient.streamChat(currentMessages, activeTools, undefined, toolChoiceOverride, onConnected)) {
+              for await (const chunk of llmClient.streamChat(currentMessages, iterationTools, undefined, toolChoiceOverride, onConnected)) {
                 if (streamAbortedForRepetition) break;
                 if (!chunk.choices || !chunk.choices[0]) {
                   // Final usage-only chunks have no choices; capture below.
@@ -5889,7 +5907,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                     const fbToolCallXmlFilter = createToolCallXmlFilter();
                     const fbJsonToolCallFilter = createJsonToolCallFilter();
                     const fbStreamPromise = (async () => {
-                      for await (const chunk of fbClient.streamChat(currentMessages, activeTools, undefined, toolChoiceOverride, fbOnConnected)) {
+                      for await (const chunk of fbClient.streamChat(currentMessages, iterationTools, undefined, toolChoiceOverride, fbOnConnected)) {
                         const fbDeltaAny = chunk.choices?.[0]?.delta as { reasoning_content?: string } | undefined;
                         const fbHasContent = !!(chunk.choices?.[0]?.delta?.content || chunk.choices?.[0]?.delta?.tool_calls ||
                           (typeof fbDeltaAny?.reasoning_content === 'string' && fbDeltaAny.reasoning_content.length > 0));
@@ -6463,30 +6481,44 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               // argues with ("the system keeps asking me to send a notification").
               const suggestsToolUse = describesToolAction || suggestsAction;
 
-              // Group rooms: one targeted, opt-out nudge per turn for the only two
-              // tool misses owners actually hit — a Choom who SAYS she generated an
-              // image or remembered something but emitted no tool call (prose
-              // narration the structured-text salvage can't catch; and once she's
-              // already called search_memories, extractToolCallFromText is skipped
-              // too). Restricted to affirmative image/remember phrasing, negations
-              // excluded, fired at most once, and NO tool_choice forcing — forcing in
-              // rooms caused junk `remember` calls and silent speakers, so we only
-              // remind her and let her choose to call the tool or say she won't.
-              if (isGroupTurn && !groupToolNudgeUsed && activeTools.length > 0 && describesToolAction) {
-                const wantsImage = /(?:generat|creat|mak|produc|render|draw|design|craft)\w*\s+(?:\d+\s+)?(?:unique\s+|some\s+|a\s+|an\s+|the\s+|your\s+|my\s+|another\s+)?(?:\w+\s+)?(?:image|selfie|portrait|picture|photo|illustration|artwork)/i.test(lowerContent);
+              // Group rooms: one forced single-tool retry per turn for the tool misses
+              // owners actually hit — a Choom who SAYS she made an image / saved something
+              // but emitted no tool call. Nudging just makes her re-narrate ("oops, forgot
+              // the button"); instead we queue a forced retry of ONLY that tool
+              // (groupForcedTool → narrowed tools array + tool_choice='required' next
+              // iteration). The forced reply produces a real call with model-written args;
+              // an empty forced reply relaxes back to conversation (toolChoiceWasRequired
+              // fallback above). Fired at most once, negations excluded.
+              //
+              // NOT gated on describesToolAction — that needs affirmative PHRASING
+              // ("generate an image", "here's the image"), but Chooms also emit an image
+              // as a labeled block with no such phrase ("**Prompt:** … **Parameters:**
+              // size: large, aspect: landscape" — Eve, 2026-06-22). So we detect both the
+              // phrasing AND the STRUCTURAL signature of an image-prompt rendered as text:
+              // a "Prompt:" + "Style:" block, or both size+aspect named with generate_image's
+              // own enum values (both required → coder talk's stray "size: large" won't trip).
+              if (isGroupTurn && !groupToolNudgeUsed && activeTools.length > 0) {
+                const affirmativeImage = /(?:generat|creat|mak|produc|render|draw|design|craft)\w*\s+(?:\d+\s+)?(?:unique\s+|some\s+|a\s+|an\s+|the\s+|your\s+|my\s+|another\s+)?(?:\w+\s+)?(?:image|selfie|portrait|picture|photo|illustration|artwork)/i.test(lowerContent);
+                const hasSize = /\bsize\s*[:=]\s*"?(?:small|medium|large)\b/i.test(lowerContent);
+                const hasAspect = /\baspect\s*[:=]\s*"?(?:square|portrait(?:-tall)?|landscape|wide|tall)\b/i.test(lowerContent);
+                const promptStyleBlock = /(?:^|\n)\s*[*_`#> ]*\(?(?:image\s+)?prompt\)?\s*[*_`]*\s*[:：]/i.test(lowerContent)
+                  && /(?:^|\n|\s)\bstyle\s*[:：]/i.test(lowerContent);
+                const wantsImage = affirmativeImage || (hasSize && hasAspect) || promptStyleBlock;
                 const wantsRemember = /(?:(?:i'?ll |i will |i'?m going to |let me |going to )\s*remember\b)|(?:(?:sav|stor|record|memoriz)\w*\s+(?:that|this|it)\b)/i.test(lowerContent);
                 const negated = /\b(?:not going to|won'?t|will not|do(?:es)?n'?t (?:need|have|want|plan) to|no need to|rather not|instead of|choosing not to|decided not to|can'?t|cannot|unable to)\b/i.test(lowerContent);
-                if ((wantsImage || wantsRemember) && !negated) {
+                const target = wantsImage ? 'generate_image' : wantsRemember ? 'remember' : null;
+                if (target && !negated && activeTools.some(t => t.name === target)) {
                   groupToolNudgeUsed = true;
+                  groupForcedTool = target; // forces ONLY this tool on the next iteration
                   nudgeCount++;
                   traceBuilder.recordNudge('tool_use');
-                  console.log(`   🔄 ${choomTag} Group tool nudge — affirmative ${wantsImage ? 'image' : 'remember'} narration without a tool call`);
+                  console.log(`   🔁 ${choomTag} Group forced-tool retry queued → ${target} (affirmative ${wantsImage ? 'image' : 'remember'} narration, no tool call)`);
                   currentMessages.push({ role: 'assistant', content: iterationContent });
                   currentMessages.push({
                     role: 'user',
-                    content: wantsImage
-                      ? `[System] You described making or sharing an image but did NOT call generate_image. If you meant to create it, call generate_image NOW with a real prompt. If you didn't actually mean to make one, just say so in your own words — never claim you generated an image you didn't.`
-                      : `[System] You described remembering or saving something but did NOT call the remember tool. If it's worth keeping, call remember NOW. If it isn't, never mind — just don't claim you saved it.`,
+                    content: target === 'generate_image'
+                      ? `[System] You described making an image but did NOT actually call generate_image, so nothing was created. Call generate_image now with a real, detailed prompt.`
+                      : `[System] You described saving something to memory but did NOT actually call remember. Call remember now with the concise fact worth keeping.`,
                   });
                   continue;
                 }
@@ -6571,6 +6603,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               'search_contacts', 'get_contact',
               'search_youtube', 'get_video_details', 'get_channel_info', 'get_playlist_items',
               'list_self_followups',
+              'list_my_rooms', 'read_room',
             ]);
 
             const iterationResults: ToolResult[] = [];

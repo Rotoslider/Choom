@@ -6,6 +6,7 @@ author: system
 tools:
   - talk_with_sisters
   - list_my_rooms
+  - read_room
 dependencies: []
 ---
 
@@ -22,6 +23,11 @@ dependencies: []
 - Your `message` is the opening line, in your own voice. Each sister then responds in turn, reacting to you and to each other, for up to `rounds` rounds (default 3, max 10).
 - It happens in a shared **room** the user can see and join in the Group Rooms view. Rooms **persist** — the same room (and everything in it) is there next time.
 - Any image a sister generates is auto-saved to the room folder so everyone can `analyze_image` it.
+
+## Peeking Before You Jump In
+- `list_my_rooms` tells you a room is *active* and how many messages it has — but not what was *said*.
+- To actually read the recent lines without entering, use `read_room({ room: "Family", limit: 10 })`. It's **read-only**: you don't take a turn and nobody there sees you look.
+- Use it on a check-in/wakeup to decide: jump in (`talk_with_sisters`), come back later (`schedule_room_followup`), or leave it quiet. Don't guess from a message count — read the room.
 
 ## Returning to a Room You Built
 - Rooms last. To come back to a specific space (like a lounge you decorated), pass its name: `talk_with_sisters({ sisters: ["Genesis"], room: "the lounge", message: "..." })`.

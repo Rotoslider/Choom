@@ -4,7 +4,7 @@ A self-hosted AI companion framework with persistent memory, image generation, t
 
 Each AI persona ("Choom") can have its own LLM model, voice, image style, and memory space. Chooms are agentic — they autonomously chain tools across multi-step tasks, searching the web, writing files, generating images, running code, and managing your calendar without manual prompting between steps. **Chooms can also delegate tasks to each other** — an orchestrator Choom can assign research to one agent, coding to another, and image analysis to a third, then synthesize the results. They can also **hold live group conversations** — you and two-or-more Chooms in one shared, turn-based room, with cross-device continuity between the web app and Signal. Talk to them through the web UI or via Signal messages.
 
-All 113 tools are organized into 27 modular **skills** with progressive disclosure — the LLM only sees detailed documentation for skills relevant to the current request, saving ~3,400 tokens per message. Skills can be enabled/disabled, custom skills can be created via a visual builder, and external skills can be installed from GitHub with safety verification.
+All 115 tools are organized into 27 modular **skills** with progressive disclosure — the LLM only sees detailed documentation for skills relevant to the current request, saving ~3,400 tokens per message. Skills can be enabled/disabled, custom skills can be created via a visual builder, and external skills can be installed from GitHub with safety verification.
 
 ![Chat Interface](docs/screenshots/chat-interface.png)
 
@@ -21,7 +21,7 @@ All 113 tools are organized into 27 modular **skills** with progressive disclosu
 - **Smart Home (Home Assistant)**: Full integration with Home Assistant for reading sensors, controlling lights/switches/climate, viewing history trends, and ambient home awareness. Three-layer environmental awareness: system prompt injection (every LLM call knows the current home state), heartbeat monitoring (periodic checks with intelligent reasoning), and conditional automations (trigger actions based on sensor thresholds). Includes an Entity Browser in Settings and works from both the web UI and Signal. See the [Smart Home Guide](#smart-home-home-assistant-1) for setup and usage
 - **Scheduled Tasks**: Cron-driven morning briefings, weather checks, aurora forecasts, health heartbeats, and YouTube music downloads. Custom heartbeats support **per-task model routing** — assign a fast/cheap model to simple tasks (selfies, reminders) while keeping the Choom's primary model for complex work
 - **Google Integration**: Full Google Workspace access — Calendar (CRUD), Tasks, Sheets, Docs, Drive, Gmail (read/send/draft/search/archive/reply), Contacts (search/lookup), and YouTube (search/video details/channel info/playlists) — 35 tools via OAuth2
-- **Skills Architecture**: 113 tools organized into 27 modular skills with 3-level progressive disclosure — Level 1 (one-line summaries, always sent), Level 2 (full docs, injected on match), Level 3 (reference files, on demand). Custom skills via visual builder, external skills from GitHub with safety scanning. See the [Skills Guide](SKILLS-GUIDE.md) for details
+- **Skills Architecture**: 115 tools organized into 27 modular skills with 3-level progressive disclosure — Level 1 (one-line summaries, always sent), Level 2 (full docs, injected on match), Level 3 (reference files, on demand). Custom skills via visual builder, external skills from GitHub with safety scanning. See the [Skills Guide](SKILLS-GUIDE.md) for details
 - **Agentic Tool Loop**: Chooms autonomously execute up to 100 tool calls per turn (configurable per-Choom via `<!-- max_iterations: N -->`) — chaining memory lookups, web searches, image generation, file operations, calendar updates, and more in a single response. Includes automatic nudging (retries with `tool_choice=required` if the LLM describes a tool instead of calling it), tool call deduplication, parallel execution of read-only tools, and smart completion detection
 - **Planner Mode**: Complex multi-step requests (e.g., "research solar panels and write a comparison report") are automatically detected and broken into structured execution plans with real-time progress display, step-by-step watcher evaluation, and automatic retry/rollback on failure
 - **Automation Builder**: Visual drag-and-drop builder for creating scheduled task chains — combine any tools into multi-step automations with cron scheduling, interval triggers, template variables (`{{prev.result.field}}`), per-Choom targeting, and **conditional triggers** (weather, time range, day of week, calendar) with cooldown support. See the [Conditional Triggers Guide](CONDITIONAL-TRIGGERS.md) for details. Managed from Settings > Automations
@@ -98,9 +98,9 @@ nextjs-app/
       habits/route.ts               Habit tracker API (entries, stats, heatmap, categories)
       token-usage/route.ts          Token usage API (stats, filters, breakdowns)
   skills/
-    core/                           24 built-in skill modules (SKILL.md + tools.ts + handler.ts)
+    core/                           27 built-in skill modules (SKILL.md + tools.ts + handler.ts)
       choom-delegation/             3 tools (delegate_to_choom, list_team, get_delegation_result)
-      group-chat/                   5 tools (talk_with_sisters, list_my_rooms, leave_room, rename_room, set_room_topic — Choom-initiated group rooms)
+      group-chat/                   6 tools (talk_with_sisters, list_my_rooms, read_room, leave_room, rename_room, set_room_topic — Choom-initiated group rooms)
       memory-management/            9 tools (remember, search, update, delete, stats, etc.)
       image-generation/             1 tool (checkpoint switching, LoRA, self-portrait mode)
       web-searching/                1 tool (Brave/SerpAPI/SearXNG with auto-fallback)

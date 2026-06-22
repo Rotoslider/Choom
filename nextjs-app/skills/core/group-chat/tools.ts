@@ -39,6 +39,24 @@ export const tools: ToolDefinition[] = [
     },
   },
   {
+    name: 'read_room',
+    description:
+      "READ-ONLY peek at a group room's recent conversation — see who said what (and when) WITHOUT entering the room or taking a turn, so nobody there sees you looking. list_my_rooms only tells you a room is active and how many messages it has; this shows the actual recent lines so you can tell if there's NEW sibling activity worth responding to. Use it during a check-in or self-scheduled wakeup to decide whether to jump in (talk_with_sisters) or come back later (schedule_room_followup), or to just confirm it's quiet. Returns the latest ~10 messages by default.",
+    parameters: {
+      type: 'object',
+      properties: {
+        room: {
+          type: 'string',
+          description: 'The name of the room to read (e.g. "Family", "Tune Lounge"). Optional only if you\'re in exactly one room; otherwise required. Call list_my_rooms if unsure.',
+        },
+        limit: {
+          type: 'number',
+          description: 'How many of the most recent messages to return. Default 10, max 30.',
+        },
+      },
+    },
+  },
+  {
     name: 'leave_room',
     description:
       "Leave a group room you're in (removes only YOU — you can't remove anyone else). Your past messages stay in the room's history; you simply stop participating. A sibling can invite you back later, or the user can re-add you. Use this when you're done with a room or want to bow out of a conversation.",

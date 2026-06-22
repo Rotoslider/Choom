@@ -20,10 +20,13 @@ import { useAppStore } from '@/lib/store';
 import { cn } from '@/lib/utils';
 import type { Memory, MemoryType, MemoryStats, Choom } from '@/lib/types';
 
-type FilterType = 'all' | MemoryType;
+// 'goal' is a TAG, not a MemoryType — it filters via search_by_tags (goal,goals),
+// matching the goal-review cron. Kept distinct from the MemoryType filters below.
+type FilterType = 'all' | 'goal' | MemoryType;
 
 const FILTER_BUTTONS: { id: FilterType; label: string }[] = [
   { id: 'all', label: 'All' },
+  { id: 'goal', label: 'Goals' },
   { id: 'fact', label: 'Facts' },
   { id: 'conversation', label: 'Conversations' },
   { id: 'preference', label: 'Preferences' },
@@ -94,6 +97,13 @@ export default function MemoriesPage() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...headers },
           body: JSON.stringify({ action: 'search', query: q, limit: 50, companion_id: cid }),
+        });
+      } else if (t === 'goal') {
+        // Goals are tagged, not typed — match the goal-review cron (goal,goals).
+        res = await fetch('/api/memories', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...headers },
+          body: JSON.stringify({ action: 'search_by_tags', tags: 'goal,goals', limit: 100, companion_id: cid }),
         });
       } else if (t !== 'all') {
         // Filter by type

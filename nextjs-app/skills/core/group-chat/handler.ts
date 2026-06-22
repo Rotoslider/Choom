@@ -5,7 +5,7 @@ import { Agent, fetch as undiciFetch } from 'undici';
 import { getOwnerIdentity } from '@/lib/owner';
 
 const TOOL_NAMES = new Set([
-  'talk_with_sisters', 'list_my_rooms', 'leave_room', 'rename_room', 'set_room_topic',
+  'talk_with_sisters', 'list_my_rooms', 'read_room', 'leave_room', 'rename_room', 'set_room_topic',
 ]);
 const MAX_ROUNDS = 10;
 const dispatcher = new Agent({ bodyTimeout: 0, headersTimeout: 0 });
@@ -71,6 +71,46 @@ export default class GroupChatHandler extends BaseSkillHandler {
         note: rooms.length
           ? `You're in ${rooms.length} room(s). To return to one, call talk_with_sisters with room set to its name.`
           : "You're not in any group rooms yet. Start one with talk_with_sisters.",
+      });
+    }
+
+    // ── read_room: READ-ONLY peek at a room's recent messages. No entering, no ──
+    //    turn, no orchestrator call — just the latest lines so a Choom can decide
+    //    whether to jump in. Scoped to rooms the caller is an active member of.
+    if (toolCall.name === 'read_room') {
+      const { room, candidates } = await this.findMyRoom(caller.id, typeof args.room === 'string' ? args.room : undefined);
+      if (!room) {
+        if (candidates.length === 0) return this.error(toolCall, "You're not in any group rooms yet. Start one with talk_with_sisters.");
+        return this.error(toolCall, `Which room do you want to read? You're in: ${candidates.map(r => `"${this.roomLabel(r)}"`).join(', ')}. Pass the name as the "room" parameter.`);
+      }
+      const limit = Math.max(1, Math.min(30, typeof args.limit === 'number' ? args.limit : 10));
+      const recent = await prisma.groupMessage.findMany({
+        where: { roomId: room.id },
+        orderBy: { createdAt: 'desc' },
+        take: limit,
+      });
+      recent.reverse(); // oldest → newest for natural reading
+      const total = await prisma.groupMessage.count({ where: { roomId: room.id } });
+      const label = this.roomLabel(room);
+      const ownerName = getOwnerIdentity().name;
+      const messages = recent.map(m => {
+        const text = (m.content || '').replace(/\s+/g, ' ').trim();
+        return {
+          from: m.role === 'user' ? (m.authorName || ownerName) : (m.authorName || 'a sibling'),
+          said: text.length > 600 ? text.slice(0, 600) + '…' : text,
+          ...(m.imageUrl ? { shared_image: true } : {}),
+          at: m.createdAt,
+        };
+      });
+      return this.success(toolCall, {
+        room: label,
+        showing: recent.length,
+        total_messages: total,
+        last_active: room.updatedAt,
+        messages,
+        note: recent.length
+          ? `READ-ONLY peek at "${label}" — you did NOT enter or take a turn, and nobody there saw you look. If there's something new worth responding to, call talk_with_sisters with room "${label}" to jump in, or schedule_room_followup to come back later. If it's quiet or already settled, just leave it be — don't narrate that you "checked the room."`
+          : `"${label}" has no messages yet — nothing to read.`,
       });
     }
 
