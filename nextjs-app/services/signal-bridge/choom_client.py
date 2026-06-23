@@ -685,11 +685,13 @@ class ChoomClient:
             chat_id=chat_id,
         )
 
-    def get_weather(self, location: Optional[str] = None) -> Dict[str, Any]:
-        """Get current weather"""
+    def get_weather(self, location: Optional[str] = None, forecast: bool = False) -> Dict[str, Any]:
+        """Get current weather (and, when forecast=True, today/tomorrow forecast)"""
         params = {}
         if location:
             params['location'] = location
+        if forecast:
+            params['forecast'] = 'true'
 
         response = self._make_request("GET", "/api/weather", params=params)
         return response.json()
@@ -772,6 +774,30 @@ def normalize_times_for_speech(text: str) -> str:
     return _TIME_RE.sub(repl, text or '')
 
 
+def normalize_units_for_speech(text: str) -> str:
+    """Speak weather-ish quantities cleanly: 'mph' reads as letters in TTS, and nobody
+    needs tenths spoken aloud. Expand mph and drop decimals on speed / temperature /
+    humidity (round to whole numbers). Only touches a number glued to one of these
+    units, so prices/versions/other decimals elsewhere are left exactly as written."""
+    if not text:
+        return text
+    # "16.46 mph" / "16mph" -> "16 miles per hour" (expanded + rounded)
+    text = re.sub(r'(-?\d+(?:\.\d+)?)\s*mph\b',
+                  lambda m: f"{round(float(m.group(1)))} miles per hour", text, flags=re.I)
+    # bare "mph" with no number still reads as letters -> spell it out
+    text = re.sub(r'\bmph\b', 'miles per hour', text, flags=re.I)
+    # already-spelled "16.46 miles per hour" -> "16 miles per hour"
+    text = re.sub(r'(-?\d+(?:\.\d+)?)(\s*miles per hour\b)',
+                  lambda m: f"{round(float(m.group(1)))}{m.group(2)}", text, flags=re.I)
+    # temperature: "100.11°F" / "95.2 °C" / "72.5 degrees" -> drop decimals, keep unit
+    text = re.sub(r'(-?\d+(?:\.\d+)?)(\s*(?:°\s*[FC]?|degrees?\b))',
+                  lambda m: f"{round(float(m.group(1)))}{m.group(2)}", text, flags=re.I)
+    # humidity / percentages: "12.5%" / "12.5 percent" -> "12 percent"
+    text = re.sub(r'(-?\d+(?:\.\d+)?)\s*(?:%|percent\b)',
+                  lambda m: f"{round(float(m.group(1)))} percent", text, flags=re.I)
+    return text
+
+
 class TTSClient:
     """Client for Text-to-Speech service"""
 
@@ -792,6 +818,7 @@ class TTSClient:
         """
         try:
             text = normalize_times_for_speech(text)
+            text = normalize_units_for_speech(text)
             response = requests.post(
                 f"{self.endpoint}/v1/audio/speech",
                 json={

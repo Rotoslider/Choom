@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { stripForTTS } from '@/lib/utils';
 
 export const dynamic = 'force-dynamic';
 
@@ -61,6 +62,13 @@ export async function POST(request: NextRequest) {
     const ttsEndpoint = endpoint ?? process.env.TTS_ENDPOINT ?? 'http://localhost:8004';
     const selectedVoice = voice ?? 'sophie';
 
+    // Normalize for natural speech — expand "mph", drop decimals on weather values
+    // (temperature/wind/humidity), spell clock times. This is the only TTS path that
+    // didn't already clean its input; some callers (e.g. direct web playback) send raw
+    // text. stripForTTS is idempotent, so callers that pre-cleaned are unaffected. Fall
+    // back to the raw text if stripping leaves nothing speakable.
+    const spokenText = stripForTTS(text) || text;
+
     if (isTripped()) {
       const remainingMs = Math.max(0, trippedUntil - Date.now());
       return NextResponse.json({
@@ -71,14 +79,14 @@ export async function POST(request: NextRequest) {
       }, { status: 503 });
     }
 
-    console.log(`🔊 TTS Request: ${ttsEndpoint}/v1/audio/speech | Voice: ${selectedVoice} | Text: "${text.substring(0, 50)}..."`);
+    console.log(`🔊 TTS Request: ${ttsEndpoint}/v1/audio/speech | Voice: ${selectedVoice} | Text: "${spokenText.substring(0, 50)}..."`);
 
     const response = await fetch(`${ttsEndpoint}/v1/audio/speech`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: 'chatterbox',
-        input: text,
+        input: spokenText,
         voice: selectedVoice,
         response_format: 'wav',
         speed: speed ?? 1.0,

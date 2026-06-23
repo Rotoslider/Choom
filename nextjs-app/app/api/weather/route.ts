@@ -46,10 +46,26 @@ export async function GET(request: NextRequest) {
     const weather = await weatherService.getWeather();
     const formatted = weatherService.formatWeatherForPrompt(weather);
 
+    // Optional forecast (?forecast=true&days=N) — used by the morning briefing so
+    // the spoken update has today's high/low, not just current conditions. A
+    // forecast failure must NOT drop the current weather, so it's caught separately.
+    let forecast: Awaited<ReturnType<WeatherService['getForecast']>> | undefined;
+    let forecastFormatted: string | undefined;
+    if (searchParams.get('forecast') === 'true') {
+      const days = parseInt(searchParams.get('days') || '2') || 2;
+      try {
+        forecast = await weatherService.getForecast(undefined, days);
+        forecastFormatted = weatherService.formatForecastForPrompt(forecast);
+      } catch (e) {
+        console.error('Forecast fetch failed (current weather still returned):', e);
+      }
+    }
+
     return NextResponse.json({
       success: true,
       weather,
       formatted,
+      ...(forecast ? { forecast, forecastFormatted } : {}),
     });
   } catch (error) {
     console.error('Weather API error:', error);

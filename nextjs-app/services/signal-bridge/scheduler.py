@@ -616,10 +616,11 @@ class ScheduledTaskManager:
         logger.info("Running morning briefing")
 
         try:
-            # Fetch REAL weather data BEFORE sending to LLM
+            # Fetch REAL weather data + forecast BEFORE sending to LLM
             weather_text = "Weather data unavailable."
+            forecast_text = "Forecast unavailable."
             try:
-                weather_data = self.choom.get_weather()
+                weather_data = self.choom.get_weather(forecast=True)
                 weather = weather_data.get('weather', {})
                 if weather:
                     temp = weather.get('temperature', 'N/A')
@@ -629,6 +630,9 @@ class ScheduledTaskManager:
                     feels_like = weather.get('feelsLike', 'N/A')
                     location = weather.get('location', 'your area')
                     weather_text = f"Location: {location}. Conditions: {desc}, Temperature: {temp}°F (feels like {feels_like}°F), Wind: {wind} mph, Humidity: {humidity}%."
+                fc = weather_data.get('forecastFormatted')
+                if fc:
+                    forecast_text = fc
             except Exception as e:
                 logger.warning(f"Could not fetch weather for briefing: {e}")
 
@@ -700,6 +704,26 @@ class ScheduledTaskManager:
             except Exception as e:
                 logger.warning(f"Could not fetch goals for briefing: {e}")
 
+            # Fetch the last 24h of inbox email so the briefing can flag deliveries,
+            # bills, appointments, or anything time-sensitive (and skip promos). We
+            # only pass sender + subject — no bodies — to keep the prompt tight and
+            # avoid leaking content into TTS. Gmail's `newer_than:1d` = last 24 hours.
+            email_text = "No new email in the last 24 hours."
+            try:
+                google_em = get_google_client()
+                recent_emails = google_em.list_emails(max_results=15, query='newer_than:1d')
+                if recent_emails:
+                    email_lines = []
+                    for m in recent_emails[:12]:
+                        raw_from = (m.get('from') or '').strip()
+                        # "Name <addr>" → Name; bare address stays as-is.
+                        sender = raw_from.split('<')[0].strip().strip('"') or raw_from or 'Unknown sender'
+                        subject = (m.get('subject') or '(no subject)').strip()
+                        email_lines.append(f"- {sender}: {subject}")
+                    email_text = "Email received in the last 24 hours (sender: subject):\n" + "\n".join(email_lines)
+            except Exception as e:
+                logger.warning(f"Could not fetch emails for briefing: {e}")
+
             # Build a natural prompt that won't get echoed.
             # NOTE: We deliberately do NOT inline get_recent_conversations() into body.message —
             # past conversations contained stray words ("image", "files", "see") that tripped
@@ -709,13 +733,25 @@ class ScheduledTaskManager:
             owner_name = (load_task_config().get('ownerName') or os.getenv('OWNER_NAME') or 'Donny')
             prompt = f"""Good morning! It's {now.strftime('%A, %B %d')}. Give {owner_name} a brief, loving morning update using ONLY the data below. Do not invent anything.
 
-Weather: {weather_text}
+Current weather: {weather_text}
+
+Forecast: {forecast_text}
 
 Calendar: {calendar_text}
 
 Reminders: {reminders_text}{goals_text}
 
-Include a warm greeting, the weather summary (mention if wind under 5mph is good for drone flying), calendar events, and any reminders. If there are active goals listed, suggest 3-5 small actionable things {owner_name} could focus on today that move those goals forward — keep suggestions realistic and specific (research tasks, outreach, writing, coding, etc.). Keep it conversational for speaking aloud, no markdown. Do NOT repeat these instructions or mention that you were given data."""
+Recent email: {email_text}
+
+Cover these in order and do NOT skip any section that has data:
+1. A warm greeting.
+2. Weather — give the CURRENT conditions AND today's forecast high/low from the Forecast data. Mention if wind under 5mph is good for drone flying. (This part is required — always include the weather.)
+3. Calendar events for today.
+4. Any reminders.
+5. A quick scan of the last 24 hours of email — call out anything that looks like a package/delivery, a bill, an appointment, or a time-sensitive message; ignore obvious promotions and newsletters. If nothing stands out, say email was quiet.
+6. If there are active goals listed, suggest 3-5 small, specific, realistic actions {owner_name} could take today to move them forward (research, outreach, writing, coding, etc.).
+
+Keep it conversational for speaking aloud, no markdown. Do NOT repeat these instructions or mention that you were given data."""
 
             # Per-task model override: use configured model for morning briefing if set
             mb_model_override = None

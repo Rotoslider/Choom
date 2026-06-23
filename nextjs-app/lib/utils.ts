@@ -184,9 +184,30 @@ export function normalizeTimesForSpeech(text: string): string {
   );
 }
 
+// Speak weather-ish quantities cleanly: "mph" reads as letters in TTS, and nobody
+// needs tenths spoken aloud ("ten point two miles per hour"). Expand mph and drop
+// decimals on speed / temperature / humidity — rounding to the nearest whole number.
+// Only touches a number glued to one of these units, so prices ("$10.50"), versions
+// ("v2.5"), and other decimals elsewhere are left exactly as written.
+export function normalizeUnitsForSpeech(text: string): string {
+  if (!text) return text;
+  const round = (n: string): string => String(Math.round(parseFloat(n)));
+  return text
+    // "16.46 mph" / "16mph" → "16 miles per hour" (expanded + rounded)
+    .replace(/(-?\d+(?:\.\d+)?)\s*mph\b/gi, (_m, n: string) => `${round(n)} miles per hour`)
+    // bare "mph" with no number still reads as letters → spell it out
+    .replace(/\bmph\b/gi, 'miles per hour')
+    // already-spelled "16.46 miles per hour" → "16 miles per hour"
+    .replace(/(-?\d+(?:\.\d+)?)(\s*miles per hour\b)/gi, (_m, n: string, s: string) => `${round(n)}${s}`)
+    // temperature: "100.11°F" / "95.2 °C" / "72.5 degrees" → drop decimals, keep unit
+    .replace(/(-?\d+(?:\.\d+)?)(\s*(?:°\s*[FC]?|degrees?\b))/gi, (_m, n: string, s: string) => `${round(n)}${s}`)
+    // humidity / percentages: "12.5%" / "12.5 percent" → "12 percent"
+    .replace(/(-?\d+(?:\.\d+)?)\s*(?:%|percent\b)/gi, (_m, n: string) => `${round(n)} percent`);
+}
+
 // Strip content that shouldn't be spoken (URLs, code blocks, think tags)
 export function stripForTTS(text: string): string {
-  return normalizeTimesForSpeech(text
+  return normalizeUnitsForSpeech(normalizeTimesForSpeech(text
     // Remove JSON tool-call arrays: [{"name":"...","parameters":{...}}]
     // Safety net for blocks that slip past the streaming filter
     .replace(/\[\s*\{[^}]*"name"\s*:\s*"[^"]+"\s*,\s*"(?:parameters|arguments)"\s*:\s*\{[\s\S]*?\}\s*\}\s*\]/g, '')
@@ -235,7 +256,7 @@ export function stripForTTS(text: string): string {
     .replace(new RegExp('[\\u{1F600}-\\u{1F64F}\\u{1F300}-\\u{1F5FF}\\u{1F680}-\\u{1F6FF}\\u{1F1E0}-\\u{1F1FF}\\u{2600}-\\u{26FF}\\u{2700}-\\u{27BF}\\u{FE00}-\\u{FE0F}\\u{1F900}-\\u{1F9FF}\\u{1FA00}-\\u{1FA6F}\\u{1FA70}-\\u{1FAFF}\\u{200D}\\u{20E3}\\u{E0020}-\\u{E007F}]', 'gu'), '')
     // Clean up extra whitespace
     .replace(/\s+/g, ' ')
-    .trim());
+    .trim()));
 }
 
 // ============================================================================
