@@ -157,6 +157,10 @@ export const tools: ToolDefinition[] = [
           type: 'string',
           description: 'Optional workspace-relative path, must end in .jpg. Defaults to selfies_{choom}/{entity}_{YYYY-MM-DD_HH-mm}.jpg. Valid destinations: selfies_{slug}/ (personal, default) or choom_commons/ (shared with other Chooms). NEVER use sibling_journal/ — that folder is text-only and append-only; snapshots there cannot be deleted later. If omitted or misrouted, the tool will place it in your personal selfies folder.',
         },
+        settle_seconds: {
+          type: 'number',
+          description: 'Optional seconds to wait BEFORE capturing (1-20), to avoid a blurry/stale frame. NOT needed right after moving to a preset via ha_call_service — that already auto-waits ~10s. Use it if the camera just moved another way, is waking up, or a previous snapshot came back blurry (e.g. settle_seconds: 10).',
+        },
       },
       required: ['entity_id'],
     },

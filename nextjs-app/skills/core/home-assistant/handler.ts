@@ -447,21 +447,27 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
           let settleOverride: number | undefined;
           if (serviceData && 'settle_seconds' in serviceData) {
             const v = Number(serviceData.settle_seconds);
-            if (Number.isFinite(v)) settleOverride = Math.max(1, Math.min(15, v));
+            if (Number.isFinite(v)) settleOverride = Math.max(1, Math.min(20, v));
             delete serviceData.settle_seconds;
           }
 
           const result = await ha.callService(domain, service, entityId, serviceData, target);
 
-          // PTZ preset selectors are mechanical — the camera needs time to physically
-          // pan/tilt/zoom after the service call returns. Without a settle delay, the
-          // next ha_get_camera_snapshot catches the old frame. 6s covers full 180° pans
-          // with zoom changes on typical home PTZ cams. Caller can override via
-          // service_data.settle_seconds (clamped 1-15) for smaller moves.
+          // A PTZ move (preset SELECT or preset BUTTON) is mechanical AND the lens
+          // autofocuses after it stops — snapshotting too soon yields a blurry or
+          // stale frame. Block here for a settle window so the NEXT
+          // ha_get_camera_snapshot is sharp. Default 10s covers a full pan + refocus
+          // on typical home PTZ cams (6s was enough for the move but not the focus);
+          // override via service_data.settle_seconds (clamped 1-20) for small moves
+          // or slow lenses.
           const isPtzPreset = domain === 'select' && service === 'select_option'
             && (selectTargetEntity?.includes('ptz') || selectTargetEntity?.includes('preset'));
-          if (isPtzPreset) {
-            const settleSeconds = settleOverride !== undefined ? settleOverride : 6;
+          const pressedEntity = entityId || (typeof target?.entity_id === 'string' ? target.entity_id : undefined);
+          const isPresetButton = domain === 'button' && service === 'press'
+            && !!pressedEntity && /(ptz|preset)/i.test(pressedEntity);
+          const didMoveCamera = isPtzPreset || isPresetButton;
+          const settleSeconds = settleOverride !== undefined ? settleOverride : 10;
+          if (didMoveCamera) {
             await new Promise(resolve => setTimeout(resolve, settleSeconds * 1000));
           }
 
@@ -484,7 +490,7 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
                 service_called: `${domain}.${service}`,
                 moved_to: requested,
                 new_state: requested ?? newState,
-                note: `Camera moved to "${requested}". The select entity reports state "unknown" because Reolink/HA does not read the active preset back — this is NORMAL and does NOT mean the move failed. Do not re-select or call ha_get_state to "confirm"; trust this success. To see the new view, call ha_get_camera_snapshot.`,
+                note: `Camera moved to "${requested}" and I waited ${settleSeconds}s for it to settle and refocus. The select entity reports state "unknown" because Reolink/HA does not read the active preset back — this is NORMAL and does NOT mean the move failed. Do not re-select or call ha_get_state to "confirm"; trust this success. Now call ha_get_camera_snapshot for a sharp frame.`,
               });
             }
             return this.success(toolCall, {
@@ -501,8 +507,8 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
             service_called: `${domain}.${service}`,
             ...(target && { target }),
             affected_count: result.length,
-            note: isPtzPreset
-              ? `PTZ preset selected. Waited for camera to move — now safe to call ha_get_camera_snapshot to capture the new view. If the next snapshot still shows the wrong view, the move took longer than the default 6s settle; retry the same select_option call with service_data={"option":"<name>","settle_seconds":10} for large pans.`
+            note: didMoveCamera
+              ? `Camera preset selected. Waited ${settleSeconds}s for the camera to finish moving AND refocus — now safe to call ha_get_camera_snapshot for a sharp frame. If a snapshot still looks blurry or shows the old view, the move/focus took longer; redo this call with service_data={..., "settle_seconds":15} (max 20), or pass settle_seconds to ha_get_camera_snapshot itself.`
               : result.length === 0
                 ? 'Service call succeeded. No entity states returned (typical for global/fire-and-forget services like notify.*, tts.speak, scene.create, automation.trigger).'
                 : `Service call succeeded. ${result.length} entity state(s) updated.`,
@@ -663,6 +669,17 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
             );
           }
           const entityId = camResolved.entityId;
+
+          // Optional settle BEFORE capture — a backstop for blur/focus. A preset
+          // MOVE via ha_call_service already auto-waits ~10s, but pass settle_seconds
+          // here to wait when the camera was just moved another way, is waking from
+          // sleep, or a prior frame came back blurry. Clamped 1-20s.
+          const snapSettle = Number(args.settle_seconds);
+          if (Number.isFinite(snapSettle) && snapSettle > 0) {
+            const s = Math.max(1, Math.min(20, snapSettle));
+            console.log(`   ⏳ Camera snapshot settle: waiting ${s}s before capturing ${entityId}`);
+            await new Promise(r => setTimeout(r, s * 1000));
+          }
 
           const base = haSettings.baseUrl.replace(/\/+$/, '');
           const url = `${base}/api/camera_proxy/${entityId}`;
