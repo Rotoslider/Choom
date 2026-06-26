@@ -23,25 +23,91 @@ const TOOL_NAMES = new Set([
  * both because the REST API requires an object body. Parse transparently.
  */
 /**
- * Rank real HA entities by similarity to a guessed id, so a not-found error can
- * suggest the actual ids the model probably meant (ending the guess-and-retry
- * loop that drove most wasted iterations — Eve invented climate.mini_split,
- * sensor.garden_soil_moisture, camera.random_camera). Cheap token-overlap score
- * on entity_id + friendly_name; original HA order breaks ties. Returns all
- * entities unchanged if nothing looks similar (caller slices the head).
+ * Score real HA entities by similarity to a loose reference (token overlap on
+ * entity_id + friendly_name). Returns ALL entities sorted best-first with their
+ * score; original HA order breaks ties. The basis for both "did you mean…"
+ * suggestions and confident auto-resolution.
  */
-function rankEntityMatches(guessed: string, entities: HAEntity[]): HAEntity[] {
+function scoreEntities(ref: string, entities: HAEntity[]): Array<{ e: HAEntity; score: number }> {
   const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-  const gTokens = norm(guessed).split(/\s+/).filter(t => t.length > 1);
-  if (!gTokens.length) return entities;
-  const scored = entities.map((e, i) => {
-    const hay = norm(`${e.entity_id} ${String(e.attributes?.friendly_name || '')}`);
-    let score = 0;
-    for (const t of gTokens) if (hay.includes(t)) score++;
-    return { e, score, i };
-  });
-  if (!scored.some(s => s.score > 0)) return entities;
-  return scored.sort((a, b) => b.score - a.score || a.i - b.i).map(s => s.e);
+  const tokens = norm(ref).split(/\s+/).filter(t => t.length > 1);
+  return entities
+    .map((e, i) => {
+      const hay = norm(`${e.entity_id} ${String(e.attributes?.friendly_name || '')}`);
+      let score = 0;
+      for (const t of tokens) if (hay.includes(t)) score++;
+      return { e, score, i };
+    })
+    .sort((a, b) => b.score - a.score || a.i - b.i)
+    .map(({ e, score }) => ({ e, score }));
+}
+
+/** Rank entities best-first; returns all unchanged when nothing matches (caller slices the head). */
+function rankEntityMatches(guessed: string, entities: HAEntity[]): HAEntity[] {
+  const scored = scoreEntities(guessed, entities);
+  return scored.some(s => s.score > 0) ? scored.map(s => s.e) : entities;
+}
+
+/** Format an entity list compactly for a model-facing "pick one" message. */
+function entityListText(entities: HAEntity[], max = 12): string {
+  const head = entities.slice(0, max).map(e => {
+    const fn = String(e.attributes?.friendly_name || '');
+    return fn && fn !== e.entity_id ? `${e.entity_id} ("${fn}")` : e.entity_id;
+  }).join(', ');
+  return entities.length > max ? `${head}, …(+${entities.length - max} more)` : head;
+}
+
+/**
+ * Resolve a LOOSE entity reference ("garage", "mini split", "camera.garage") to a
+ * real entity_id, scoped to a domain so the model never needs the whole HA table.
+ * - exact id (case-insensitive)         → resolve
+ * - exactly one confident fuzzy match   → resolve (so sane names just work)
+ * - vague / zero / multiple matches     → return the scoped candidate list
+ * Conservative on purpose: ties never auto-resolve (so an action can't actuate the
+ * wrong device) — the caller surfaces the list and the model picks.
+ */
+async function resolveEntity(
+  ha: HomeAssistantService,
+  ref: string,
+  domain?: string,
+): Promise<{ entityId: string; resolvedFrom?: string } | { candidates: HAEntity[]; domain: string }> {
+  const refTrim = (ref || '').trim();
+  const dom = domain || (refTrim.includes('.') ? refTrim.split('.')[0] : undefined);
+  const entities = await ha.listStates(dom);
+  const exact = entities.find(e => e.entity_id.toLowerCase() === refTrim.toLowerCase());
+  if (exact) return { entityId: exact.entity_id };
+  if (!entities.length) return { candidates: [], domain: dom || '' };
+  const scored = scoreEntities(refTrim, entities);
+  const top = scored[0];
+  const topCount = scored.filter(s => s.score === top.score).length;
+  if (top.score > 0 && topCount === 1) return { entityId: top.e.entity_id, resolvedFrom: refTrim };
+  return { candidates: top.score > 0 ? scored.map(s => s.e) : entities, domain: dom || '' };
+}
+
+/**
+ * Find the PTZ/preset select entity that belongs to a given camera (so the model
+ * can address presets by CAMERA, not by knowing the select.*_ptz id). Matches the
+ * camera's name tokens against select.* entities that look like preset controls;
+ * falls back to the sole preset select if there's only one. Returns its options too.
+ */
+async function findCameraPresetSelect(
+  ha: HomeAssistantService,
+  cameraEntityId: string,
+): Promise<{ entity_id: string; options: string[] } | null> {
+  try {
+    const all = await ha.listStates();
+    const selects = all.filter(e => e.entity_id.startsWith('select.') && /ptz|preset/i.test(e.entity_id));
+    if (!selects.length) return null;
+    const cam = all.find(e => e.entity_id === cameraEntityId);
+    const camName = `${cameraEntityId.replace(/^camera\./, '')} ${String(cam?.attributes?.friendly_name || '')}`;
+    const best = scoreEntities(camName, selects)[0];
+    const chosen = best && best.score > 0 ? best.e : (selects.length === 1 ? selects[0] : null);
+    if (!chosen) return null;
+    const options = Array.isArray(chosen.attributes?.options) ? chosen.attributes.options as string[] : [];
+    return { entity_id: chosen.entity_id, options };
+  } catch {
+    return null;
+  }
 }
 
 function coerceServiceData(raw: unknown): Record<string, unknown> | undefined {
@@ -96,10 +162,34 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
     try {
       switch (toolCall.name) {
         case 'ha_get_state': {
-          const entityId = args.entity_id as string;
-          if (!entityId) return this.error(toolCall, 'entity_id is required');
+          const ref = args.entity_id as string;
+          if (!ref) return this.error(toolCall, 'entity_id is required');
 
-          const entity = await ha.getState(entityId);
+          // Accept loose references ("garage", "mini split") — try the exact id
+          // first (fast path, exact ids cost one call), and only on a 404 fall
+          // back to scoped resolution: confident match → use it; else hand back
+          // the domain's real entities so she picks instead of guessing again.
+          let entity: HAEntity;
+          let resolvedFrom = '';
+          try {
+            entity = await ha.getState(ref);
+          } catch (e) {
+            const m = e instanceof Error ? e.message : String(e);
+            if (!/HA API 404\b/.test(m)) throw e;
+            const r = await resolveEntity(ha, ref);
+            if ('entityId' in r) {
+              entity = await ha.getState(r.entityId);
+              resolvedFrom = ref;
+            } else {
+              return this.error(
+                toolCall,
+                `Entity "${ref}" doesn't exist — don't guess ids.${r.candidates.length
+                  ? ` Real ${r.domain ? `${r.domain} ` : ''}entities on THIS system: ${entityListText(r.candidates)}. Use one of these exact ids.`
+                  : ` Call ha_list_entities(${r.domain ? `domain="${r.domain}"` : ''}) to discover them.`}`,
+              );
+            }
+          }
+          const entityId = entity.entity_id;
           const name = String(entity.attributes.friendly_name || entityId);
           const unit = String(entity.attributes.unit_of_measurement || '');
           const stateStr = unit ? `${entity.state} ${unit}` : entity.state;
@@ -113,6 +203,7 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
 
           return this.success(toolCall, {
             entity_id: entityId,
+            ...(resolvedFrom && { resolved_from: resolvedFrom }),
             friendly_name: name,
             state: stateStr,
             raw_state: entity.state,
@@ -144,7 +235,7 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
         case 'ha_call_service': {
           const domain = args.domain as string;
           const service = args.service as string;
-          const entityId = args.entity_id as string | undefined;
+          let entityId = args.entity_id as string | undefined;
           const serviceData = coerceServiceData(args.service_data);
           // target has the same "should be an object, often arrives as YAML-ish string"
           // problem as service_data. Reuse the same coercion.
@@ -281,8 +372,27 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
           // Case-insensitive option matching for select.select_option. Chooms often
           // pass lowercase "driveway" when the real preset is "Driveway" — HA rejects
           // case mismatches with a bare 400. Auto-correct against attributes.options.
-          const selectTargetEntity = entityId
+          let selectTargetEntity = entityId
             || (typeof target?.entity_id === 'string' ? target.entity_id : undefined);
+          // Camera-centric presets: if she aimed select_option at a CAMERA (or a
+          // loose name that isn't a select.* entity), map it to that camera's preset
+          // select so she can address presets by camera without knowing the
+          // select.*_ptz id. (The option-matching/validation below then runs as normal.)
+          if (domain === 'select' && service === 'select_option' && selectTargetEntity
+              && !selectTargetEntity.startsWith('select.')) {
+            const mapped = selectTargetEntity.startsWith('camera.')
+              ? (await findCameraPresetSelect(ha, selectTargetEntity))?.entity_id
+              : await (async () => {
+                  const r = await resolveEntity(ha, selectTargetEntity!, 'select');
+                  return 'entityId' in r ? r.entityId : undefined;
+                })();
+            if (mapped && mapped !== selectTargetEntity) {
+              console.log(`   🔀 select_option entity remapped: "${selectTargetEntity}" → ${mapped}`);
+              if (typeof target?.entity_id === 'string') target.entity_id = mapped;
+              else entityId = mapped;
+              selectTargetEntity = mapped;
+            }
+          }
           if (domain === 'select' && service === 'select_option' && serviceData?.option && selectTargetEntity) {
             try {
               const state = await ha.getState(selectTargetEntity);
@@ -538,11 +648,21 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
         }
 
         case 'ha_get_camera_snapshot': {
-          const entityId = args.entity_id as string;
-          if (!entityId) return this.error(toolCall, 'entity_id is required (e.g. "camera.garage")');
-          if (!entityId.startsWith('camera.')) {
-            return this.error(toolCall, `entity_id must be a camera entity (got "${entityId}"). Use ha_list_entities with domain="camera" to discover cameras.`);
+          const camRef = (args.entity_id as string) || (args.camera as string);
+          if (!camRef) return this.error(toolCall, 'entity_id is required — a camera name or id (e.g. "garage" or "camera.garage")');
+          // Resolve a loose camera reference ("garage", "front cam") against the
+          // camera domain (only a handful of cameras), so she doesn't need the
+          // exact id. Vague/no match → return just the camera list to pick from.
+          const camResolved = await resolveEntity(ha, camRef, 'camera');
+          if (!('entityId' in camResolved)) {
+            return this.error(
+              toolCall,
+              `No camera matches "${camRef}".${camResolved.candidates.length
+                ? ` Cameras on THIS system: ${entityListText(camResolved.candidates)}. Use one of these.`
+                : ' No camera entities found on this Home Assistant.'}`,
+            );
           }
+          const entityId = camResolved.entityId;
 
           const base = haSettings.baseUrl.replace(/\/+$/, '');
           const url = `${base}/api/camera_proxy/${entityId}`;
@@ -639,14 +759,24 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
 
           console.log(`   📷 Camera snapshot: ${entityId} → ${savePath} (${(imageBuffer.length / 1024).toFixed(1)}KB)${savedImageId ? ` [imageId ${savedImageId}]` : ''}`);
 
+          // Drill-down level 2: surface THIS camera's PTZ presets (scoped — only
+          // this camera's, not every entity) plus the exact call to move it, so she
+          // can reposition without hunting for the select.*_ptz entity id.
+          const presetInfo = await findCameraPresetSelect(ha, entityId);
+
           return this.success(toolCall, {
             success: true,
             entity_id: entityId,
+            ...(camResolved.resolvedFrom && { resolved_from: camResolved.resolvedFrom }),
             path: savePath,
             ...(savedImageId && { imageId: savedImageId }),
             sizeKB: Math.round(imageBuffer.length / 1024),
             captured_at: new Date().toISOString(),
-            message: `Saved snapshot from ${entityId} to ${savePath}${savedImageId ? ' and displayed in chat' : ''}. IMPORTANT: this snapshot shows whatever the camera was pointing at when you called this tool — it is NOT associated with any PTZ preset unless you successfully called select.select_option on the preset selector entity BEFORE this snapshot and that call succeeded (the 400 errors you may have received on ptz_preset services mean the camera did NOT move). Do NOT claim the image shows a specific preset view unless you verified the preset change succeeded. For analysis use analyze_image(image_path="${savePath}"). To text it to the user use send_notification(file_paths=["${savePath}"]).`,
+            ...(presetInfo && presetInfo.options.length && {
+              presets: presetInfo.options,
+              move_to_preset: `ha_call_service(domain="select", service="select_option", entity_id="${presetInfo.entity_id}", service_data={"option":"<one of presets>"})`,
+            }),
+            message: `Saved snapshot from ${entityId} to ${savePath}${savedImageId ? ' and displayed in chat' : ''}.${presetInfo && presetInfo.options.length ? ` This camera's PTZ presets: ${presetInfo.options.join(', ')} — move it with the move_to_preset call, then snapshot again.` : ''} IMPORTANT: this snapshot shows whatever the camera was pointing at when you called this tool — it is NOT associated with any PTZ preset unless you successfully called select.select_option on the preset selector entity BEFORE this snapshot and that call succeeded. Do NOT claim the image shows a specific preset view unless you verified the preset change succeeded. For analysis use analyze_image(image_path="${savePath}"). To text it to the user use send_notification(file_paths=["${savePath}"]).`,
           });
         }
 

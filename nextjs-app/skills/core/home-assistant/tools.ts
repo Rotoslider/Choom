@@ -3,13 +3,13 @@ import type { ToolDefinition } from '@/lib/types';
 export const tools: ToolDefinition[] = [
   {
     name: 'ha_get_state',
-    description: 'Get the current state and attributes of a single Home Assistant entity. Returns state value, friendly name, and relevant attributes.',
+    description: 'Get the current state and attributes of a single Home Assistant entity. Returns state value, friendly name, and relevant attributes. You can pass a loose name (e.g. "garage temp", "mini split") — it resolves to the real entity; if it is ambiguous you get back the matching entities to pick from, so do NOT guess long ids.',
     parameters: {
       type: 'object',
       properties: {
         entity_id: {
           type: 'string',
-          description: 'The entity ID in domain.name format, e.g. "sensor.bathroom_temperature", "light.kitchen"',
+          description: 'Entity id in domain.name format (e.g. "light.kitchen") OR a loose name/friendly name (e.g. "kitchen light"). A wrong/loose value returns the real matching entities instead of failing.',
         },
       },
       required: ['entity_id'],
@@ -145,13 +145,13 @@ export const tools: ToolDefinition[] = [
   },
   {
     name: 'ha_get_camera_snapshot',
-    description: 'Fetch a JPEG frame from a Home Assistant camera entity and save it to the workspace. Use this for camera.* entities (Reolink, generic MJPEG, etc.) — do NOT use ha_call_service with camera.snapshot. Returns a workspace path usable with analyze_image, send_notification(file_paths=...), or inline display in chat.',
+    description: 'Fetch a JPEG frame from a Home Assistant camera and save it to the workspace. Use this for camera.* entities (Reolink, generic MJPEG, etc.) — do NOT use ha_call_service with camera.snapshot. You can pass a loose camera name (e.g. "garage", "tower") — it resolves to the real camera, or returns the camera list if unclear, so do NOT guess ids. For PTZ cameras the result also lists THAT camera\'s presets plus the exact call to move it. Returns a workspace path usable with analyze_image, send_notification(file_paths=...), or inline display in chat.',
     parameters: {
       type: 'object',
       properties: {
         entity_id: {
           type: 'string',
-          description: 'Camera entity ID, e.g. "camera.tower_clear", "camera.garage". Use ha_list_entities with domain="camera" if unsure.',
+          description: 'Camera id (e.g. "camera.garage") OR a loose camera name (e.g. "garage", "tower"). A wrong/loose value returns the real camera list instead of failing.',
         },
         save_path: {
           type: 'string',
