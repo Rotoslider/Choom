@@ -1,0 +1,17 @@
+# ngrok traffic policy — Basic Auth for the Choom tunnel.
+#
+# The REAL file (ngrok-policy.yml) is git-ignored on purpose: it holds the
+# tunnel password and must NEVER be committed (this repo is public).
+#
+# Setup:
+#   1. cp ngrok-policy.yml.example ngrok-policy.yml
+#   2. set a strong unique password below (e.g. `openssl rand -hex 18`)
+#   3. sudo systemctl restart ngrok.service
+#
+# ngrok.service references the real file via --traffic-policy-file=<path>.
+on_http_request:
+  - actions:
+      - type: basic-auth
+        config:
+          credentials:
+            - "choom:CHANGE_ME"

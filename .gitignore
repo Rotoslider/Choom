@@ -65,3 +65,6 @@ Thumbs.db
 # Lock files (not needed for project - no CI)
 package-lock.json
 nextjs-app/tests/
+
+# Secret: ngrok tunnel basic-auth credentials (keep OUT of git)
+nextjs-app/services/signal-bridge/systemd/ngrok-policy.yml
