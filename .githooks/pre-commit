@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Secret-scanning pre-commit hook (gitleaks).
+#
+# Blocks any commit whose STAGED changes contain a key / password / token.
+# This repo is PUBLIC, so it FAILS CLOSED: if the scanner can't be found the
+# commit is blocked rather than silently committing unprotected.
+#
+# Enable with:  bash .githooks/install.sh   (sets core.hooksPath=.githooks)
+set -uo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+
+# Locate gitleaks: PATH first, then ~/.local/bin (where install.sh puts it).
+gitleaks_bin="$(command -v gitleaks || true)"
+if [ -z "$gitleaks_bin" ] && [ -x "$HOME/.local/bin/gitleaks" ]; then
+  gitleaks_bin="$HOME/.local/bin/gitleaks"
+fi
+if [ -z "$gitleaks_bin" ]; then
+  echo "" >&2
+  echo "✖ pre-commit: gitleaks is not installed — commit BLOCKED (fail-closed; this repo is public)." >&2
+  echo "  Install it:  bash .githooks/install.sh" >&2
+  exit 1
+fi
+
+# Scan ONLY the staged diff. --redact masks any secret value in the output.
+if ! "$gitleaks_bin" git --staged --no-banner --redact \
+       -c "$repo_root/.gitleaks.toml"; then
+  echo "" >&2
+  echo "✖ pre-commit: gitleaks found a potential secret in your STAGED changes — commit BLOCKED." >&2
+  echo "  • Move the secret into an untracked/gitignored file (.env, bridge-config.json, …)." >&2
+  echo "  • Re-stage and commit again." >&2
+  echo "  • Genuine false positive? add a 'gitleaks:allow' comment on the line, or a narrow" >&2
+  echo "    rule to .gitleaks.toml." >&2
+  exit 1
+fi

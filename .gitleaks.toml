@@ -1,0 +1,22 @@
+# gitleaks config for the Choom repo (PUBLIC — keep all secrets out of git).
+# Used by the pre-commit hook (.githooks/pre-commit) to scan STAGED changes.
+title = "Choom secret scan"
+
+[extend]
+# Start from gitleaks' full built-in ruleset (AWS, GCP, GitHub, Slack, private
+# keys, generic high-entropy assignments, etc.).
+useDefault = true
+
+[allowlist]
+description = "Placeholder templates and docs — not real secrets"
+# Files that legitimately contain dummy/placeholder credentials.
+paths = [
+  '''\.example$''',
+  '''\.sample$''',
+]
+# Obvious placeholder tokens that must never be treated as leaks.
+regexes = [
+  '''CHANGE_ME''',
+  '''<REDACTED>''',
+  '''your[-_]?(api[-_]?key|token|password|secret)''',
+]
