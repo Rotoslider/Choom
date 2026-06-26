@@ -15,7 +15,35 @@ const TOOL_NAMES = new Set([
   'scrape_page_content',
   'download_web_image',
   'download_web_file',
+  'fetch_url',
 ]);
+
+// Content types we refuse to decode as text — caller should use download_web_file instead.
+const BINARY_CONTENT_TYPE = /^(?:image|video|audio|font)\/|^application\/(?:octet-stream|pdf|zip|x-gzip|gzip|x-tar|x-7z-compressed|vnd\.|msword|x-msdownload)/i;
+
+/**
+ * Normalize common GitHub URL forms so a raw text fetch actually hits the file.
+ *  - github.com/<owner>/<repo>/blob/<ref>/<path>  → raw.githubusercontent.com/<owner>/<repo>/<ref>/<path>
+ *  - github.com/<owner>/<repo>/raw/<ref>/<path>   → raw.githubusercontent.com/<owner>/<repo>/<ref>/<path>
+ *  - raw.githubusercontent.com/.../blob/<ref>/... → strips the stray "blob/" (a very common model mistake → 404)
+ * Returns the original URL unchanged for anything else.
+ */
+function normalizeFetchUrl(raw: string): string {
+  try {
+    const u = new URL(raw);
+    if (u.hostname === 'github.com') {
+      const m = u.pathname.match(/^\/([^/]+)\/([^/]+)\/(?:blob|raw)\/(.+)$/);
+      if (m) return `https://raw.githubusercontent.com/${m[1]}/${m[2]}/${m[3]}`;
+    }
+    if (u.hostname === 'raw.githubusercontent.com') {
+      const fixed = u.pathname.replace(/^\/([^/]+)\/([^/]+)\/blob\//, '/$1/$2/');
+      if (fixed !== u.pathname) return `https://raw.githubusercontent.com${fixed}`;
+    }
+    return raw;
+  } catch {
+    return raw;
+  }
+}
 
 export default class WebScrapingHandler extends BaseSkillHandler {
   canHandle(toolName: string): boolean {
@@ -32,6 +60,8 @@ export default class WebScrapingHandler extends BaseSkillHandler {
         return this.downloadWebImage(toolCall, ctx);
       case 'download_web_file':
         return this.downloadWebFile(toolCall, ctx);
+      case 'fetch_url':
+        return this.fetchUrl(toolCall);
       default:
         return this.error(toolCall, `Unknown web-scraping tool: ${toolCall.name}`);
     }
@@ -396,6 +426,94 @@ export default class WebScrapingHandler extends BaseSkillHandler {
       return this.success(toolCall, { success: true, message: result, path: savePath, sizeKB: Math.round(fileBuffer.length / 1024) });
     } catch (err) {
       return this.error(toolCall, `File download failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    }
+  }
+
+  // ===========================================================================
+  // fetch_url — GET a URL and RETURN its text content inline (for reading/review)
+  // ===========================================================================
+
+  private async fetchUrl(toolCall: ToolCall): Promise<ToolResult> {
+    const requestedUrl = toolCall.arguments.url as string;
+    const maxChars = Math.min(Math.max((toolCall.arguments.max_chars as number) || 100_000, 1_000), 300_000);
+
+    // Validate URL
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(normalizeFetchUrl(requestedUrl));
+      if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+        throw new Error('Only http/https URLs are allowed');
+      }
+    } catch {
+      return this.error(toolCall, `Invalid URL: ${requestedUrl}`);
+    }
+    const finalUrl = parsedUrl.href;
+    const wasNormalized = finalUrl !== requestedUrl;
+
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 30000);
+      const response = await fetch(finalUrl, {
+        signal: controller.signal,
+        headers: {
+          'User-Agent': BROWSER_USER_AGENT,
+          'Accept': 'text/plain,text/*,application/json,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.9',
+          'Referer': parsedUrl.origin + '/',
+        },
+      });
+      clearTimeout(timeout);
+
+      if (!response.ok) {
+        // Surface the real status so the model can self-correct (wrong path/branch, 404, rate-limit)
+        const hint = response.status === 404
+          ? ' — file/page not found. Check the path, branch (main vs master), and that the URL is correct.'
+          : response.status === 403 || response.status === 429
+            ? ' — blocked or rate-limited. Try again shortly or use scrape_page_content.'
+            : '';
+        return this.error(toolCall, `HTTP ${response.status} ${response.statusText} for ${finalUrl}${hint}`);
+      }
+
+      const contentType = response.headers.get('content-type') || '';
+      if (BINARY_CONTENT_TYPE.test(contentType)) {
+        return this.error(
+          toolCall,
+          `Not text content (content-type "${contentType}"). Use download_web_file to save this to the workspace instead.`,
+        );
+      }
+
+      // Enforce a raw byte ceiling before decoding (10MB) to avoid pulling huge bodies into memory
+      const arrayBuffer = await response.arrayBuffer();
+      const MAX_BYTES = 10 * 1024 * 1024;
+      if (arrayBuffer.byteLength > MAX_BYTES) {
+        return this.error(
+          toolCall,
+          `Response too large (${(arrayBuffer.byteLength / 1024 / 1024).toFixed(1)}MB). Use download_web_file to save it instead.`,
+        );
+      }
+
+      const fullText = Buffer.from(arrayBuffer).toString('utf-8');
+      const truncated = fullText.length > maxChars;
+      const text = truncated
+        ? fullText.slice(0, maxChars) + `\n\n[Truncated — ${fullText.length} chars total, showing first ${maxChars}. Re-call with a larger max_chars to see more.]`
+        : fullText;
+
+      console.log(`   📄 fetch_url: ${finalUrl}${wasNormalized ? ` (normalized from ${requestedUrl})` : ''} — ${fullText.length} chars, ${contentType}`);
+
+      return this.success(toolCall, {
+        success: true,
+        url: finalUrl,
+        normalizedFrom: wasNormalized ? requestedUrl : undefined,
+        status: response.status,
+        contentType,
+        charCount: fullText.length,
+        truncated,
+        text,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      const detail = msg.includes('abort') ? 'request timed out after 30s' : msg;
+      return this.error(toolCall, `fetch_url failed for ${finalUrl}: ${detail}`);
     }
   }
 }

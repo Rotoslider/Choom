@@ -6596,7 +6596,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               'search_memories', 'search_by_type', 'search_by_tags', 'get_recent_memories',
               'search_by_date_range', 'get_memory_stats',
               'workspace_read_file', 'workspace_list_files',
-              'scrape_page_images',
+              'scrape_page_images', 'fetch_url',
               'ha_get_state', 'ha_list_entities', 'ha_get_history', 'ha_get_home_status',
               'list_team', 'get_delegation_result',
               'list_emails', 'read_email', 'search_emails',
@@ -7186,9 +7186,21 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                   console.log(`   🖼️  Image generated (${sizeMB}MB base64 stripped from LLM context)`);
                 }
               }
+              // Surface tool errors to the model. Previously a failed call sent
+              // JSON.stringify(tr.result) === "null" with the real reason (e.g.
+              // "HTTP 404") stranded in tr.error and never shown — models saw a
+              // bare "null", couldn't tell a wrong URL from a broken tool, and
+              // thrashed. Now the error string rides along so they can self-correct.
+              const contentForLLM = tr.error
+                ? JSON.stringify({
+                    success: false,
+                    error: tr.error,
+                    ...(resultForLLM && typeof resultForLLM === 'object' ? resultForLLM : {}),
+                  })
+                : JSON.stringify(resultForLLM);
               currentMessages.push({
                 role: 'tool' as const,
-                content: JSON.stringify(resultForLLM),
+                content: contentForLLM,
                 tool_call_id: tr.toolCallId,
                 name: tr.name,
               });

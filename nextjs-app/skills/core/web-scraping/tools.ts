@@ -77,7 +77,7 @@ export const tools: ToolDefinition[] = [
   {
     name: 'download_web_file',
     description:
-      'Download any file from a URL and save it to the project workspace. Use for PDFs, documents, archives, data files, or any non-image file. For images, prefer download_web_image instead (it supports resizing). The file extension in save_path must match the content being downloaded.',
+      'Download any file from a URL and save it to the project workspace. Use for PDFs, documents, archives, data files, or any non-image file. For images, prefer download_web_image instead (it supports resizing). The file extension in save_path must match the content being downloaded. NOTE: this only SAVES the file — it does NOT return the contents. To READ a text file (source code, README, JSON, docs), use fetch_url instead.',
     parameters: {
       type: 'object',
       properties: {
@@ -91,6 +91,25 @@ export const tools: ToolDefinition[] = [
         },
       },
       required: ['url', 'save_path'],
+    },
+  },
+  {
+    name: 'fetch_url',
+    description:
+      'Fetch a URL and RETURN its text content inline so you can read and review it — source code, READMEs, docs, JSON/API responses, or any text resource. This is the right tool for reviewing files in a GitHub repo: it auto-converts github.com/.../blob/<branch>/<path> links to raw form, so you can pass either the normal GitHub page URL or the raw URL. Returns the text directly (no workspace save). For binary files (PDF, zip, images) use download_web_file; for JavaScript-rendered pages use scrape_page_content.',
+    parameters: {
+      type: 'object',
+      properties: {
+        url: {
+          type: 'string',
+          description: 'The URL to fetch. GitHub blob/raw URLs are auto-normalized to raw.githubusercontent.com.',
+        },
+        max_chars: {
+          type: 'number',
+          description: 'Maximum characters of text to return (default 100000, max 300000). Re-call with a larger value to read more of a truncated file.',
+        },
+      },
+      required: ['url'],
     },
   },
 ];
