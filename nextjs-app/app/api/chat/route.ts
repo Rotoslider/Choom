@@ -6776,13 +6776,19 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 const isNoData = /no (?:history |data |results? )(?:data |found )?for /i.test(result.error);
                 // File/path not found is recoverable — LLM guessed wrong filename, can list dir and retry
                 const isPathError = /ENOENT|no such file or directory|file not found|path not found|does not exist|not found in project/i.test(result.error);
+                // A referenced id (image id, etc.) that doesn't exist — recoverable: the
+                // model guessed/used a stale id, and these errors already list the VALID
+                // ids to retry with. Counting them disabled the tool after 2 tries
+                // (Eve incremented image ids ...0s9u → ...0s9v and burned the cap before
+                // she could use a real one). Treat like path-not-found.
+                const isStaleRef = /\bid ".*?" (?:was|is) not found|image id .*? (?:was|is) not found|no .*? with id ["']/i.test(result.error);
                 // Folder-ownership / shared-folder blocks (contractGate) are recoverable and
                 // argument-specific: a write to the worker's own folder or choom_commons/
                 // would succeed. Must NOT count toward the per-tool failure cap, or two
                 // mis-targeted writes disable workspace_write_file for the whole request —
                 // including the legitimate writes the model issues right after.
                 const isPermissionBlock = /^Blocked: (?:cannot (?:write into|delete from) another Choom|sibling_journal\/ is archived|[^/]+\/ is a shared folder)/i.test(result.error);
-                errorClass = isConfigError ? 'config' : isParamError ? 'param' : isGpuBusy ? 'gpu_busy' : isNoData ? 'no_data' : (isPathError || isPermissionBlock) ? 'path' : 'other';
+                errorClass = isConfigError ? 'config' : isParamError ? 'param' : isGpuBusy ? 'gpu_busy' : isNoData ? 'no_data' : (isPathError || isPermissionBlock || isStaleRef) ? 'path' : 'other';
                 failedCallCache.set(dedupKey, result.error);
 
                 // Capture "Use TOOL_NAME ..." guidance from error messages.
@@ -6809,13 +6815,14 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                   // No data found is informational — the tool works, the entity just has no data.
                   // Don't count toward failure caps (prevents blocking ha_get_history etc.)
                   console.log(`   ℹ️  ${tc.name}: no data found (informational, not counted as failure)`);
-                } else if (isPathError || isPermissionBlock) {
-                  // File/path not found OR folder-ownership block — both recoverable.
-                  // Don't count toward failure caps. LLM can list the directory and retry
-                  // with the correct path, or (for ownership blocks) write to its own
-                  // folder / choom_commons. Counting these would disable the tool after
-                  // 2 tries and lock the model out of ALL writes for the rest of the request.
-                  console.log(`   📁 ${tc.name}: ${isPermissionBlock ? 'folder-ownership block' : 'path not found'} (recoverable, not counted as failure)`);
+                } else if (isPathError || isPermissionBlock || isStaleRef) {
+                  // File/path not found, folder-ownership block, OR a stale/guessed id
+                  // (the error lists valid ids) — all recoverable. Don't count toward
+                  // failure caps. LLM can list the directory and retry with the correct
+                  // path, write to its own folder / choom_commons, or reuse a valid id.
+                  // Counting these would disable the tool after 2 tries and lock the
+                  // model out of ALL such calls for the rest of the request.
+                  console.log(`   📁 ${tc.name}: ${isPermissionBlock ? 'folder-ownership block' : isStaleRef ? 'stale/unknown id' : 'path not found'} (recoverable, not counted as failure)`);
                 } else if (isGpuBusy) {
                   // GPU busy is temporary — don't count as failure, don't block the tool.
                   // The model should stop retrying and inform the user.

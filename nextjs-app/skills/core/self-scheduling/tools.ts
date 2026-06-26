@@ -69,13 +69,13 @@ export const tools: ToolDefinition[] = [
   },
   {
     name: 'cancel_self_followup',
-    description: 'Cancel a pending self-followup by id. Use when you no longer need the followup or want to free a slot for a new one.',
+    description: 'Cancel a pending self-followup by id. Use when you no longer need the followup or want to free a slot. ALWAYS call list_self_followups first to get the real ids (they look like "sf_1a2b3c4d") — do NOT guess ids like "1"/"2". To clear ALL your pending followups at once, pass id="all".',
     parameters: {
       type: 'object',
       properties: {
         id: {
           type: 'string',
-          description: 'The followup id from list_self_followups.',
+          description: 'The followup id from list_self_followups (e.g. "sf_1a2b3c4d"), or "all" to cancel every pending followup.',
         },
       },
       required: ['id'],

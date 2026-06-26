@@ -1,5 +1,5 @@
 import { BaseSkillHandler, type SkillHandlerContext } from '@/lib/skill-handler';
-import { HomeAssistantService, type HomeAssistantSettings } from '@/lib/homeassistant-service';
+import { HomeAssistantService, type HomeAssistantSettings, type HAEntity } from '@/lib/homeassistant-service';
 import { WorkspaceService } from '@/lib/workspace-service';
 import { WORKSPACE_ROOT } from '@/lib/config';
 import prisma from '@/lib/db';
@@ -22,6 +22,28 @@ const TOOL_NAMES = new Set([
  * as a YAML-ish string ("entity_id: camera.x") or a JSON string; HA rejects
  * both because the REST API requires an object body. Parse transparently.
  */
+/**
+ * Rank real HA entities by similarity to a guessed id, so a not-found error can
+ * suggest the actual ids the model probably meant (ending the guess-and-retry
+ * loop that drove most wasted iterations — Eve invented climate.mini_split,
+ * sensor.garden_soil_moisture, camera.random_camera). Cheap token-overlap score
+ * on entity_id + friendly_name; original HA order breaks ties. Returns all
+ * entities unchanged if nothing looks similar (caller slices the head).
+ */
+function rankEntityMatches(guessed: string, entities: HAEntity[]): HAEntity[] {
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const gTokens = norm(guessed).split(/\s+/).filter(t => t.length > 1);
+  if (!gTokens.length) return entities;
+  const scored = entities.map((e, i) => {
+    const hay = norm(`${e.entity_id} ${String(e.attributes?.friendly_name || '')}`);
+    let score = 0;
+    for (const t of gTokens) if (hay.includes(t)) score++;
+    return { e, score, i };
+  });
+  if (!scored.some(s => s.score > 0)) return entities;
+  return scored.sort((a, b) => b.score - a.score || a.i - b.i).map(s => s.e);
+}
+
 function coerceServiceData(raw: unknown): Record<string, unknown> | undefined {
   if (raw === undefined || raw === null) return undefined;
   if (typeof raw === 'object' && !Array.isArray(raw)) return raw as Record<string, unknown>;
@@ -535,7 +557,22 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
           }
           if (!resp.ok) {
             const text = await resp.text().catch(() => '');
-            return this.error(toolCall, `HA camera_proxy ${resp.status}: ${text.slice(0, 200) || resp.statusText}. The entity may be unavailable or not a streamable camera — check ha_get_state("${entityId}").`);
+            // A 404 is almost always a guessed camera id — list the real cameras
+            // and suggest the closest ones rather than just saying "check the state".
+            let suggestion = ` Check ha_get_state("${entityId}").`;
+            if (resp.status === 404) {
+              try {
+                const cams = await ha.listStates('camera');
+                if (cams.length) {
+                  const top = rankEntityMatches(entityId, cams).slice(0, 8).map(e => {
+                    const fn = String(e.attributes?.friendly_name || '');
+                    return fn && fn !== e.entity_id ? `${e.entity_id} ("${fn}")` : e.entity_id;
+                  }).join(', ');
+                  suggestion = ` Real cameras on THIS system: ${top}. Use one of these exact ids — do NOT guess.`;
+                }
+              } catch { /* fall back to the generic hint */ }
+            }
+            return this.error(toolCall, `HA camera_proxy ${resp.status}: ${text.slice(0, 200) || resp.statusText}. The entity may be unavailable or not a streamable camera.${suggestion}`);
           }
 
           const arrayBuf = await resp.arrayBuffer();
@@ -630,9 +667,27 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
       if (/HA API 404\b/.test(msg)) {
         const guessedId = (toolCall.arguments?.entity_id as string) || '';
         const domainHint = guessedId.includes('.') ? guessedId.split('.')[0] : '';
+        // Don't just tell the model to list entities — DO the lookup and hand back
+        // the real ids (closest matches first). The guess-and-retry loop was the
+        // top driver of wasted iterations; surfacing actual ids ends it in one turn.
+        let suggestion = '';
+        try {
+          const candidates = await ha.listStates(domainHint || undefined);
+          if (candidates.length) {
+            const ranked = rankEntityMatches(guessedId, candidates);
+            const top = ranked.slice(0, 8);
+            const label = top.map(e => {
+              const fn = String(e.attributes?.friendly_name || '');
+              return fn && fn !== e.entity_id ? `${e.entity_id} ("${fn}")` : e.entity_id;
+            }).join(', ');
+            suggestion = ` Real ${domainHint ? `${domainHint} ` : ''}entities on THIS system${top.length < candidates.length ? ' (closest matches)' : ''}: ${label}. Use one of these exact ids.`;
+          }
+        } catch {
+          // Listing failed — fall back to the generic "go list" guidance below.
+        }
         return this.error(
           toolCall,
-          `Entity "${guessedId}" does not exist. NEVER guess entity IDs — use ha_list_entities(${domainHint ? `domain="${domainHint}"` : ''}) to discover actual entity IDs on this system.`
+          `Entity "${guessedId}" does not exist — do NOT guess entity IDs.${suggestion || ` Call ha_list_entities(${domainHint ? `domain="${domainHint}"` : ''}) to discover the actual ids on this system.`}`
         );
       }
       return this.error(toolCall, `Home Assistant error: ${msg}`);

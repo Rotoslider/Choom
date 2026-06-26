@@ -298,43 +298,81 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
     });
   }
 
-  private async cancelFollowup(toolCall: ToolCall, ctx: SkillHandlerContext): Promise<ToolResult> {
-    const id = (toolCall.arguments.id as string || '').trim();
-    if (!id) return this.error(toolCall, 'id is required. Use list_self_followups to see your pending ids.');
-
-    const src = entryPath(ctx.choomId, 'pending', id);
-    const dst = entryPath(ctx.choomId, 'cancelled', id);
-
-    if (!fs.existsSync(src)) {
-      return this.error(toolCall, `No pending self-followup with id "${id}". Call list_self_followups to see what's queued.`);
-    }
-
+  // Cancel ONE pending followup by id. Returns true if it was cancelled, false if
+  // it wasn't pending (already fired/cancelled, or never existed). Never throws for
+  // the not-found case — idempotent so it can be reused by the bulk path.
+  private cancelOne(choomId: string, id: string): boolean {
+    const src = entryPath(choomId, 'pending', id);
+    const dst = entryPath(choomId, 'cancelled', id);
+    if (!fs.existsSync(src)) return false;
     // Atomic claim: rename out of pending/ first so the scheduler can't fire it.
     try {
-      fs.mkdirSync(bucketDir(ctx.choomId, 'cancelled'), { recursive: true });
+      fs.mkdirSync(bucketDir(choomId, 'cancelled'), { recursive: true });
       fs.renameSync(src, dst);
     } catch (err: unknown) {
-      const code = (err as NodeJS.ErrnoException)?.code;
-      if (code === 'ENOENT') {
-        return this.error(toolCall, `Self-followup "${id}" already fired or was cancelled.`);
-      }
+      if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return false; // raced with a fire/cancel
       throw err;
     }
-
-    // Now update metadata in the cancelled bucket (only Node touches cancelled/, so this is safe).
+    // Update metadata in the cancelled bucket (only Node touches cancelled/).
     try {
-      const raw = fs.readFileSync(dst, 'utf-8');
-      const entry = JSON.parse(raw) as QueueEntry;
+      const entry = JSON.parse(fs.readFileSync(dst, 'utf-8')) as QueueEntry;
       entry.consumed = true;
       entry.status = 'cancelled';
       entry.cancelled_at = new Date().toISOString();
       atomicWriteJson(dst, entry);
     } catch {
-      // Metadata update failed but the file is already in cancelled/ — that's still correct status.
+      // File is already in cancelled/ — the status is correct enough.
+    }
+    return true;
+  }
+
+  private async cancelFollowup(toolCall: ToolCall, ctx: SkillHandlerContext): Promise<ToolResult> {
+    const id = (toolCall.arguments.id as string || '').trim();
+    if (!id) return this.error(toolCall, 'id is required — use list_self_followups to see your pending ids, or id="all" to cancel them all.');
+
+    // Bulk cancel: clear every pending followup in ONE call. Eve had ~15 to clear
+    // and cancelling them one-by-one (after guessing ids) tripped the per-tool
+    // failure cap and disabled the tool mid-cleanup.
+    if (/^(all|\*|everything|clear)$/i.test(id)) {
+      const pending = listEntries(ctx.choomId, 'pending');
+      const cancelled: string[] = [];
+      for (const e of pending) if (this.cancelOne(ctx.choomId, e.id)) cancelled.push(e.id);
+      console.log(`   🗑️  Self-followups bulk-cancelled for ${ctx.choomId}: ${cancelled.length}`);
+      return this.success(toolCall, {
+        success: true,
+        cancelled_count: cancelled.length,
+        cancelled_ids: cancelled,
+        message: cancelled.length
+          ? `Cancelled all ${cancelled.length} pending followup${cancelled.length === 1 ? '' : 's'}.`
+          : 'You had no pending followups — nothing to cancel.',
+      });
     }
 
-    console.log(`   🗑️  Self-followup cancelled: ${id}`);
-    return this.success(toolCall, { success: true, id, message: `Cancelled ${id}.` });
+    if (this.cancelOne(ctx.choomId, id)) {
+      const remaining = listEntries(ctx.choomId, 'pending').length;
+      console.log(`   🗑️  Self-followup cancelled: ${id}`);
+      return this.success(toolCall, {
+        success: true, cancelled: true, id, remaining,
+        message: `Cancelled ${id}.${remaining ? ` ${remaining} still pending.` : ''}`,
+      });
+    }
+
+    // Not found → idempotent SUCCESS (the desired end-state — that id is not
+    // pending — already holds). Returning an ERROR here used to count as a hard
+    // failure; two guessed ids ("1","2") tripped the per-tool cap and DISABLED the
+    // tool, blocking the real cancels that came after. Hand back the actual pending
+    // list so the model retries with a correct id (or uses id="all").
+    const pending = listEntries(ctx.choomId, 'pending');
+    return this.success(toolCall, {
+      success: true,
+      cancelled: false,
+      already_absent: true,
+      id,
+      pending: pending.map(e => ({ id: e.id, trigger_at: e.trigger_at, prompt: e.prompt.slice(0, 80) })),
+      message: pending.length
+        ? `No pending followup with id "${id}" (already fired/cancelled, or the id was wrong — nothing to cancel). Your ${pending.length} actual pending id${pending.length === 1 ? ' is' : 's are'}: ${pending.map(e => e.id).join(', ')}. To clear them all at once, call cancel_self_followup with id="all".`
+        : `No pending followup with id "${id}", and you have no pending followups at all — nothing to cancel.`,
+    });
   }
 }
 
