@@ -61,6 +61,14 @@ function stripLeadingName(s: string, names: string[]): string {
   return out;
 }
 
+// A streamed sentence that STARTS with a "[Name]:" label is a reproduced
+// transcript line (a weak model echoing the room back), not the speaker's own
+// prose — never speak it. The server strips these from the saved/Signal text, but
+// the live TTS reads raw tokens, so without this the audio speaks the whole room.
+function isEchoedTranscriptLine(s: string): boolean {
+  return /^\s*\[[^\]\n]{1,40}\]\s*[:：]/.test(s);
+}
+
 export default function RoomsPage() {
   const router = useRouter();
   const { settings, ui } = useAppStore();
@@ -298,7 +306,7 @@ export default function RoomsPage() {
                 let sentence = ttsBufRef.current.trim();
                 if (firstChunkRef.current) { sentence = stripLeadingName(sentence, names); firstChunkRef.current = false; }
                 const key = sentence.toLowerCase().replace(/\s+/g, ' ').trim();
-                if (sentence && !ttsSpokenRef.current.has(key)) {
+                if (sentence && !isEchoedTranscriptLine(sentence) && !ttsSpokenRef.current.has(key)) {
                   ttsSpokenRef.current.add(key);
                   ttsRef.current?.enqueue(sentence, ttsVoiceRef.current);
                 }
@@ -315,7 +323,7 @@ export default function RoomsPage() {
               let tail = ttsBufRef.current.trim();
               if (firstChunkRef.current) { tail = stripLeadingName(tail, [...choomsRef.current.map(c => c.name), 'Donny', 'You']); firstChunkRef.current = false; }
               const tailKey = tail.toLowerCase().replace(/\s+/g, ' ').trim();
-              if (tail && !ttsSpokenRef.current.has(tailKey)) {
+              if (tail && !isEchoedTranscriptLine(tail) && !ttsSpokenRef.current.has(tailKey)) {
                 ttsSpokenRef.current.add(tailKey);
                 ttsRef.current?.enqueue(tail, ttsVoiceRef.current);
               }

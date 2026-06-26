@@ -138,6 +138,66 @@ function normalizeForDup(s: string): string {
   return stripImageNotes(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
+// Weak local models (the GLM-4.7-flash group-seat being the worst offender) some-
+// times reproduce the POV transcript ITSELF — pasting the other speakers' (and the
+// user's) recent lines back as their "reply", line by line. The whole blob then
+// gets saved, sent to Signal, AND streamed to TTS, where speaking the entire room
+// back times out. `dedupeParagraphs` only catches repeats WITHIN one reply and
+// `isRepeatOrParrot` only an EXACT match against a single prior message, so neither
+// catches "concatenate everyone's lines." This strips the echoed lines so only the
+// speaker's genuinely-new words survive. Two conservative, line-level signals:
+//   1. A line beginning with a "[Anything]:" label is ALWAYS a transcript artifact
+//      (renderPov adds those; a speaker never writes them in prose) → drop.
+//   2. A substantial line (≥ 40 norm chars) that exactly-matches, is essentially
+//      contained by, or has Jaccard ≥ 0.85 word-overlap with a recent transcript
+//      line → drop as an echo. (High bar so genuine agreement is never silenced.)
+// Returns the cleaned content plus the fraction of characters dropped, so the
+// caller can treat a mostly-echo reply as a parrot (retry once, then suppress).
+export function stripEchoedTranscript(
+  content: string,
+  transcript: GroupTranscriptEntry[],
+): { content: string; echoRatio: number } {
+  const original = content || '';
+  if (!original.trim()) return { content: original, echoRatio: 0 };
+
+  // Recent transcript lines to compare against (split each message into lines so
+  // we compare line-to-line, not just whole-message-to-whole-message).
+  const recentLines: Array<{ norm: string; words: Set<string> }> = [];
+  for (const t of transcript.slice(-16)) {
+    for (const seg of stripImageNotes(t.content).split(/\n+/)) {
+      const norm = normalizeForDup(seg);
+      if (norm.length >= 25) recentLines.push({ norm, words: contentWordSet(seg) });
+    }
+  }
+
+  const labelRe = /^\s*\[[^\]\n]{1,40}\]\s*[:：]/; // any "[X]:" line = transcript artifact
+  const kept: string[] = [];
+  let droppedChars = 0;
+  for (const seg of original.split(/\n+/)) {
+    if (!seg.trim()) continue;
+    if (labelRe.test(seg)) { droppedChars += seg.length; continue; }
+    const norm = normalizeForDup(seg);
+    if (norm.length >= 40 && recentLines.length) {
+      const segWords = contentWordSet(seg);
+      let echo = false;
+      for (const rl of recentLines) {
+        // Exact, or this segment IS basically that line (contained, ≤ 1.5× longer).
+        if (rl.norm === norm || (norm.includes(rl.norm) && norm.length <= rl.norm.length * 1.5)) { echo = true; break; }
+        if (segWords.size >= 8 && rl.words.size >= 8) {
+          let inter = 0;
+          for (const w of segWords) if (rl.words.has(w)) inter++;
+          const union = segWords.size + rl.words.size - inter;
+          if (union > 0 && inter / union >= 0.85) { echo = true; break; }
+        }
+      }
+      if (echo) { droppedChars += seg.length; continue; }
+    }
+    kept.push(seg);
+  }
+  const cleaned = kept.join('\n\n').trim();
+  return { content: cleaned, echoRatio: original.length > 0 ? droppedChars / original.length : 0 };
+}
+
 // ── Convergence detection ────────────────────────────────────────────────────
 // Homogeneous (or just looping) rooms collapse into a shared low-entropy "mood"
 // attractor — everyone mirrors the last line's tone + vocabulary until each turn
@@ -491,6 +551,14 @@ export async function runSpeakerTurn(opts: {
     finalContent = stripSpeakerPrefix(finalContent, [...participantNames, 'Donny', 'You']);
     // Drop repeated paragraphs (model regurgitating whole past turns in one reply).
     finalContent = dedupeParagraphs(finalContent);
+    // Strip reproduced transcript lines — a weak group-seat model (GLM-4.7-flash)
+    // pasting the whole room back as its reply. Salvages any real words it added;
+    // a near-empty result means it was an all-echo turn (handled as a parrot below).
+    const echo = stripEchoedTranscript(finalContent, transcript);
+    if (echo.echoRatio > 0.05) {
+      console.log(`   ✂️ [${speakerName}] stripped transcript echo (${(echo.echoRatio * 100).toFixed(0)}% of reply was reproduced room lines)`);
+    }
+    finalContent = echo.content;
     if (PASS_RE.test(finalContent)) {
       // The whole message is just a pass marker → truly silent this turn.
       result.passed = true;
@@ -523,14 +591,20 @@ export async function runSpeakerTurn(opts: {
       : null;
     const identityBleed = !!result.content && !result.imageUrl &&
       spokeAsAnother(result.content, speakerName, participantNames);
-    if (repeatKind || identityBleed) {
+    // Heavy transcript echo: most of the reply was reproduced room lines and almost
+    // nothing real survived the strip above (the GLM-flash "speak the whole room"
+    // bug). Treat it like a parrot — retry once for a real reply, then suppress.
+    const heavyEcho = !result.imageUrl && echo.echoRatio >= 0.5 &&
+      normalizeForDup(result.content).length < 40;
+    if (repeatKind || identityBleed || heavyEcho) {
       if (antiEcho) {
         result.passed = true;
         result.windingDown = false;
         result.content = '';
       } else {
         result.parroted = true;
-        // 'self' → tailored "say what's different" retry; parrot/bleed → generic.
+        result.passed = false; // override the empty-after-strip PASS so the retry runs
+        // 'self' → tailored "say what's different" retry; parrot/bleed/echo → generic.
         result.repeatReason = repeatKind === 'self' ? 'self' : 'parrot';
       }
     }
