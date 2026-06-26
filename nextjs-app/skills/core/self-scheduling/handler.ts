@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
 import prisma from '@/lib/db';
+import { parseLocalDateTime } from '@/lib/local-time-parse';
 import {
   QUEUE_ROOT,
   type Bucket,
@@ -23,10 +24,19 @@ const TOOL_NAMES = new Set([
   'cancel_self_followup',
 ]);
 
-const MIN_DELAY_MIN = 5;
+const MIN_DELAY_MIN = 15; // minimum lead time before a followup may fire
 const MAX_DELAY_MIN = 30 * 24 * 60; // 30 days
 const MAX_PROMPT_CHARS = 2000;
 const MAX_PENDING_PER_CHOOM = 100;
+const USER_TZ = 'America/Denver'; // Donny's local (Mountain) time
+
+// Format a UTC instant as Donny's local wall clock for log lines + tool responses.
+function fmtLocal(d: Date): string {
+  return d.toLocaleString('en-US', {
+    weekday: 'short', month: 'short', day: 'numeric',
+    hour: 'numeric', minute: '2-digit', timeZoneName: 'short', timeZone: USER_TZ,
+  });
+}
 
 export default class SelfSchedulingHandler extends BaseSkillHandler {
   canHandle(toolName: string): boolean {
@@ -47,6 +57,49 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
       default:
         return this.error(toolCall, `Unknown self-scheduling tool: ${toolCall.name}`);
     }
+  }
+
+  // Resolve the absolute trigger instant from EITHER `at` (a wall-clock time in
+  // Donny's local zone — the easy path; no minutes-from-now math, no UTC) OR
+  // `delay_minutes`. Enforces the [MIN_DELAY_MIN, MAX_DELAY_MIN] window. Returns
+  // the trigger Date + a human note about any clamp, or an { error } string.
+  private resolveTrigger(args: Record<string, unknown>):
+    { triggerAt: Date; note: string; effectiveMinutes: number } | { error: string } {
+    const now = Date.now();
+    const minMs = now + MIN_DELAY_MIN * 60 * 1000;
+    const maxMs = now + MAX_DELAY_MIN * 60 * 1000;
+    const atRaw = (typeof args.at === 'string' ? args.at : '').trim();
+
+    // Absolute time wins when provided — this is the path that spares a weak model
+    // the minutes math and local-vs-UTC confusion.
+    if (atRaw) {
+      const parsed = parseLocalDateTime(atRaw, USER_TZ);
+      if (!parsed) {
+        return { error: `Couldn't read the time "${atRaw}". Give a wall-clock time in Donny's local (Mountain) time — e.g. "2026-06-26 2:05pm", "June 26 at 14:05", "tomorrow 9am", or just "2:05pm" for the next time it's that o'clock. (Or use delay_minutes instead.)` };
+      }
+      if (parsed.getTime() < now) {
+        return { error: `That time (${fmtLocal(parsed)}) is already in the past — it's ${fmtLocal(new Date(now))} now. Pick a future time; if you meant today but it has passed, use tomorrow's date.` };
+      }
+      let t = parsed.getTime();
+      let note = '';
+      if (t < minMs) { t = minMs; note = ` (followups need a ${MIN_DELAY_MIN}-min minimum lead time, so bumped to ${fmtLocal(new Date(minMs))})`; }
+      else if (t > maxMs) { t = maxMs; note = ' (capped to the 30-day maximum)'; }
+      return { triggerAt: new Date(t), note, effectiveMinutes: Math.round((t - now) / 60000) };
+    }
+
+    // Fallback: minutes-from-now.
+    const rawDelay = args.delay_minutes;
+    const hasDelay = rawDelay !== undefined && rawDelay !== null && String(rawDelay).trim() !== '';
+    if (!hasDelay) {
+      return { error: 'Provide either `at` (an absolute time like "2026-06-26 2:05pm" in Donny\'s local time) or `delay_minutes` (minutes from now).' };
+    }
+    const delay = typeof rawDelay === 'number' ? rawDelay : parseFloat(String(rawDelay));
+    if (!Number.isFinite(delay)) {
+      return { error: 'delay_minutes must be a number — or use `at` to name the absolute time instead.' };
+    }
+    const clamped = Math.max(MIN_DELAY_MIN, Math.min(MAX_DELAY_MIN, delay));
+    const note = clamped !== delay ? ` (clamped from ${delay} to ${clamped} min)` : '';
+    return { triggerAt: new Date(now + clamped * 60 * 1000), note, effectiveMinutes: clamped };
   }
 
   // Resolve which group room a room-followup targets: the current room (if this
@@ -87,14 +140,11 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
   }
 
   private async scheduleRoomFollowup(toolCall: ToolCall, ctx: SkillHandlerContext): Promise<ToolResult> {
-    const rawDelay = toolCall.arguments.delay_minutes;
-    const delay = typeof rawDelay === 'number' ? rawDelay : parseFloat(String(rawDelay));
     const prompt = (toolCall.arguments.prompt as string || '').trim();
     const reason = (toolCall.arguments.reason as string || '').trim();
     const roomArg = (toolCall.arguments.room as string || '').trim() || undefined;
     const choomName = ((ctx.choom as Record<string, unknown>)?.name as string) || 'unknown';
 
-    if (!Number.isFinite(delay)) return this.error(toolCall, 'delay_minutes must be a number');
     if (!prompt) {
       return this.error(toolCall, 'prompt is required — what you want to say or do when you pop back into the room.');
     }
@@ -105,15 +155,15 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
     const resolved = await this.resolveRoom(ctx, roomArg);
     if ('error' in resolved) return this.error(toolCall, resolved.error);
 
-    const clamped = Math.max(MIN_DELAY_MIN, Math.min(MAX_DELAY_MIN, delay));
-    const clampNote = clamped !== delay ? ` (clamped from ${delay} to ${clamped})` : '';
+    const trig = this.resolveTrigger(toolCall.arguments);
+    if ('error' in trig) return this.error(toolCall, trig.error);
+    const { triggerAt, note: clampNote } = trig;
 
     const pendingCount = listEntries(ctx.choomId, 'pending').length;
     if (pendingCount >= MAX_PENDING_PER_CHOOM) {
       return this.error(toolCall, `You already have ${pendingCount} pending followups (max ${MAX_PENDING_PER_CHOOM}). Cancel one first with cancel_self_followup.`);
     }
 
-    const triggerAt = new Date(Date.now() + clamped * 60 * 1000);
     const entry: QueueEntry = {
       id: `sf_${randomUUID().slice(0, 8)}`,
       choom_id: ctx.choomId,
@@ -129,10 +179,7 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
     };
     atomicWriteJson(entryPath(ctx.choomId, 'pending', entry.id), entry);
 
-    const triggerLocal = triggerAt.toLocaleString('en-US', {
-      weekday: 'short', month: 'short', day: 'numeric',
-      hour: 'numeric', minute: '2-digit', timeZoneName: 'short', timeZone: 'America/Denver',
-    });
+    const triggerLocal = fmtLocal(triggerAt);
     console.log(`   ⏰ ROOM followup queued for ${choomName}: ${entry.id} → room "${resolved.title}" at ${entry.trigger_at} (${triggerLocal})${clampNote}`);
     return this.success(toolCall, {
       success: true,
@@ -140,21 +187,16 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
       room: resolved.title,
       trigger_at: entry.trigger_at,
       trigger_at_local: triggerLocal,
-      delay_minutes: clamped,
+      delay_minutes: trig.effectiveMinutes,
       message: `Queued a room re-entry ${entry.id} for "${resolved.title}" at ${triggerLocal}${clampNote}. When it fires you'll re-enter that room (seeing the latest conversation) and your opening line will be your prompt — your sisters there can react.`,
     });
   }
 
   private async scheduleFollowup(toolCall: ToolCall, ctx: SkillHandlerContext): Promise<ToolResult> {
-    const rawDelay = toolCall.arguments.delay_minutes;
-    const delay = typeof rawDelay === 'number' ? rawDelay : parseFloat(String(rawDelay));
     const prompt = (toolCall.arguments.prompt as string || '').trim();
     const reason = (toolCall.arguments.reason as string || '').trim();
     const choomName = ((ctx.choom as Record<string, unknown>)?.name as string) || 'unknown';
 
-    if (!Number.isFinite(delay)) {
-      return this.error(toolCall, 'delay_minutes must be a number');
-    }
     if (!prompt) {
       return this.error(toolCall, 'prompt is required. Provide a short message to your future self — what to check and why.');
     }
@@ -189,8 +231,9 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
       return roomResult;
     }
 
-    const clamped = Math.max(MIN_DELAY_MIN, Math.min(MAX_DELAY_MIN, delay));
-    const clampNote = clamped !== delay ? ` (clamped from ${delay} to ${clamped})` : '';
+    const resolved = this.resolveTrigger(toolCall.arguments);
+    if ('error' in resolved) return this.error(toolCall, resolved.error);
+    const { triggerAt, note: clampNote } = resolved;
 
     // Per-Choom cap: count files currently in pending/
     const pendingCount = listEntries(ctx.choomId, 'pending').length;
@@ -204,7 +247,6 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
       );
     }
 
-    const triggerAt = new Date(Date.now() + clamped * 60 * 1000);
     const entry: QueueEntry = {
       id: `sf_${randomUUID().slice(0, 8)}`,
       choom_id: ctx.choomId,
@@ -219,12 +261,7 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
 
     atomicWriteJson(entryPath(ctx.choomId, 'pending', entry.id), entry);
 
-    const userTz = 'America/Denver';
-    const triggerLocal = triggerAt.toLocaleString('en-US', {
-      weekday: 'short', month: 'short', day: 'numeric',
-      hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
-      timeZone: userTz,
-    });
+    const triggerLocal = fmtLocal(triggerAt);
 
     console.log(`   ⏰ Self-followup queued for ${choomName}: ${entry.id} at ${entry.trigger_at} (${triggerLocal}) — "${prompt.slice(0, 80)}"${clampNote}`);
     return this.success(toolCall, {
@@ -232,7 +269,7 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
       id: entry.id,
       trigger_at: entry.trigger_at,
       trigger_at_local: triggerLocal,
-      delay_minutes: clamped,
+      delay_minutes: resolved.effectiveMinutes,
       message: `Queued self-followup ${entry.id} for ${triggerLocal} (Donny's local time)${clampNote}. It will fire as a one-shot heartbeat. Sanity check: does that wall-clock time match the "morning/midday/evening" framing in your prompt?`,
     });
   }
