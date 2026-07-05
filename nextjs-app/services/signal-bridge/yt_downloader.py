@@ -11,13 +11,17 @@ import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
 from paths import WORKSPACE_ROOT
 PROJECT_NAME = "YouTube_Music"
 PROJECT_DIR = os.path.join(WORKSPACE_ROOT, PROJECT_NAME)
+
+# Extra flat-listing entries to fetch beyond (skipped ids + max_videos), so a
+# cluster of gated/unavailable uploads can't starve a run of downloadable tracks.
+LISTING_HEADROOM = 30
 
 YT_DLP_BIN = "/usr/bin/yt-dlp"
 YT_DLP_COOKIES = os.path.join(os.path.dirname(__file__), "youtube-cookies.txt")
@@ -59,6 +63,24 @@ def _clean_title(title: str) -> str:
     if " // " in title:
         title = title.split(" // ", 1)[0].strip()
     return title
+
+
+# Substrings that identify a permanently-inaccessible members-only / paid-tier
+# video. These are NOT transient auth failures — retrying them wastes backoff,
+# and counting them toward the channel abort threshold (or re-reporting them
+# every run) just spams errors. We detect them and skip permanently instead.
+_MEMBERS_ONLY_MARKERS = (
+    "members-only",
+    "members on level",
+    "join this channel to get access",
+    "available to this channel's members",
+)
+
+
+def _is_members_only_error(stderr: str) -> bool:
+    """True if a yt-dlp error indicates members-only / paid-tier gated content."""
+    low = (stderr or "").lower()
+    return any(marker in low for marker in _MEMBERS_ONLY_MARKERS)
 
 
 class YouTubeDownloader:
@@ -104,7 +126,7 @@ class YouTubeDownloader:
                     return json.load(f)
             except Exception as e:
                 logger.warning(f"Corrupt history at {hist_path}: {e}")
-        return {"downloaded_ids": [], "last_check": None, "total_downloaded": 0}
+        return {"downloaded_ids": [], "members_only_ids": [], "last_check": None, "total_downloaded": 0}
 
     def save_history(self, channel_dir: str, data: Dict[str, Any]):
         """Persist download history for a channel directory."""
@@ -153,9 +175,15 @@ class YouTubeDownloader:
             logger.error(f"yt-dlp list error for {url}: {e}")
             return []
 
-    def get_video_metadata(self, video_id: str, retries: int = 2) -> Optional[Dict[str, Any]]:
+    def get_video_metadata(self, video_id: str, retries: int = 2) -> Tuple[Optional[Dict[str, Any]], str]:
         """Fetch full metadata for a video via yt-dlp --dump-json.
         Retries with exponential backoff to handle transient YouTube blocks.
+
+        Returns (metadata, error_kind):
+          - (dict, "")            on success
+          - (None, "members_only") for gated content — do NOT retry or count as
+            a failure; it will never succeed with the current cookies
+          - (None, "failed")       for a transient/auth failure (retries exhausted)
         """
         cmd = [
             YT_DLP_BIN,
@@ -177,14 +205,19 @@ class YouTubeDownloader:
                 )
                 if result.returncode != 0:
                     last_err = result.stderr[:300]
+                    # Members-only content will never succeed — bail immediately
+                    # instead of burning retry backoff on it.
+                    if _is_members_only_error(result.stderr):
+                        logger.info(f"  Skipping members-only video {video_id}")
+                        return None, "members_only"
                     logger.warning(f"yt-dlp metadata attempt {attempt + 1} failed for {video_id}: {last_err}")
                     continue
-                return json.loads(result.stdout)
+                return json.loads(result.stdout), ""
             except Exception as e:
                 last_err = str(e)
                 logger.warning(f"yt-dlp metadata attempt {attempt + 1} error for {video_id}: {e}")
         logger.error(f"yt-dlp metadata failed after {1 + retries} attempts for {video_id}: {last_err}")
-        return None
+        return None, "failed"
 
     def download_as_mp3(self, video_id: str, output_dir: str) -> Optional[str]:
         """Download a video as high-quality MP3 with thumbnail.
@@ -351,7 +384,7 @@ class YouTubeDownloader:
         """
         name = channel_config.get("name", "Unknown")
         url = channel_config.get("url", "")
-        result = {"channel_name": name, "downloaded": [], "errors": [], "skipped": 0}
+        result = {"channel_name": name, "downloaded": [], "errors": [], "members_only": [], "skipped": 0}
 
         if not url:
             result["errors"].append("No URL configured")
@@ -362,9 +395,19 @@ class YouTubeDownloader:
         channel_dir = self.get_channel_dir(name)
         history = self.load_history(channel_dir)
         known_ids = set(history.get("downloaded_ids", []))
+        members_only_ids = set(history.get("members_only_ids", []))
+        # Videos we already have OR know are permanently gated — skip both so the
+        # listing window can reach still-downloadable tracks further down.
+        skip_ids = known_ids | members_only_ids
 
-        # List recent videos
-        videos = self.list_channel_videos(url, max_videos=max_videos + len(known_ids))
+        # List recent videos. We want up to max_videos *downloadable* tracks, but
+        # recent uploads may be gated/unavailable, so pull well past everything we
+        # already skip plus generous headroom — otherwise a cluster of members-only
+        # uploads starves the run (e.g. a 9-video window with 5 gated yields 1). The
+        # download loop still stops at max_videos, and skipped ids are filtered
+        # cheaply (no probe/delay), so over-fetching the flat listing is inexpensive.
+        listing_depth = len(skip_ids) + max_videos + LISTING_HEADROOM
+        videos = self.list_channel_videos(url, max_videos=listing_depth)
         if not videos:
             logger.warning(f"No videos found for channel: {name}")
             result["errors"].append("No videos found or listing failed")
@@ -376,7 +419,7 @@ class YouTubeDownloader:
         for video in videos:
             vid_id = video["id"]
 
-            if vid_id in known_ids:
+            if vid_id in skip_ids:
                 result["skipped"] += 1
                 continue
 
@@ -391,8 +434,18 @@ class YouTubeDownloader:
             logger.info(f"  Downloading: {video['title']} ({vid_id})")
 
             # Get full metadata
-            meta = self.get_video_metadata(vid_id)
+            meta, err_kind = self.get_video_metadata(vid_id)
             if not meta:
+                if err_kind == "members_only":
+                    # Permanently gated — record it once so future runs skip it
+                    # silently (no re-notify), and do NOT let it count toward the
+                    # auth-failure abort threshold or reset it (it's orthogonal).
+                    result["members_only"].append(video["title"])
+                    members_only_ids.add(vid_id)
+                    skip_ids.add(vid_id)
+                    history["members_only_ids"] = sorted(members_only_ids)
+                    self.save_history(channel_dir, history)
+                    continue
                 result["errors"].append(f"Metadata failed: {video['title']}")
                 consecutive_meta_failures += 1
                 # Abort channel if 3+ consecutive metadata failures (likely auth/bot issue)
@@ -436,6 +489,7 @@ class YouTubeDownloader:
             history["last_check"] = datetime.now().isoformat()
             self.save_history(channel_dir, history)
             known_ids.add(vid_id)
+            skip_ids.add(vid_id)
 
             result["downloaded"].append(video["title"])
             downloaded_count += 1
@@ -480,6 +534,7 @@ class YouTubeDownloader:
             name = r["channel_name"]
             dl = r["downloaded"]
             errs = r["errors"]
+            gated = r.get("members_only", [])
             total_downloaded += len(dl)
             total_errors += len(errs)
 
@@ -487,10 +542,18 @@ class YouTubeDownloader:
                 lines.append(f"{name}: {len(dl)} new")
                 for title in dl:
                     lines.append(f"  - {title}")
+                if gated:
+                    lines.append(f"  ({len(gated)} members-only, skipped)")
             elif errs:
                 lines.append(f"{name}: {len(errs)} error(s)")
                 for err in errs:
                     lines.append(f"  ! {err}")
+            elif gated:
+                # Newly-detected gated tracks — shown once, then recorded to
+                # history so later runs skip them silently ("Up to date").
+                lines.append(f"{name}: {len(gated)} members-only (skipped)")
+                for title in gated:
+                    lines.append(f"  ~ {title}")
             else:
                 lines.append(f"{name}: Up to date")
 
