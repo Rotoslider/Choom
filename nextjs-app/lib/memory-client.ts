@@ -17,7 +17,8 @@ export class MemoryClient {
   private async request(
     path: string,
     method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'GET',
-    body?: Record<string, unknown>
+    body?: Record<string, unknown>,
+    timeoutMs?: number
   ): Promise<MemoryServerResult> {
     const url = ensureEndpoint(this.endpoint, path);
 
@@ -27,6 +28,7 @@ export class MemoryClient {
         'Content-Type': 'application/json',
       },
       body: body ? JSON.stringify(body) : undefined,
+      ...(timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
     });
 
     if (!response.ok) {
@@ -61,16 +63,22 @@ export class MemoryClient {
   }
 
   // Semantic search
+  // opts.reinforce=false: automatic per-turn recall — server skips the
+  // reinforcement bump + last_accessed stamp so background retrieval doesn't
+  // inflate importance or block decay. Deliberate tool calls keep the default.
+  // opts.timeoutMs: bound the request so a hung memory server can't stall a turn.
   async search(
     query: string,
     limit: number = 10,
-    companion_id?: string
+    companion_id?: string,
+    opts?: { reinforce?: boolean; timeoutMs?: number }
   ): Promise<MemoryServerResult> {
     return this.request('/memory/search', 'POST', {
       query,
       limit,
       companion_id,
-    });
+      ...(opts?.reinforce === false ? { reinforce: false } : {}),
+    }, opts?.timeoutMs);
   }
 
   // Search by memory type

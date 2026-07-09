@@ -50,6 +50,9 @@ class SearchRequest(BaseModel):
     query: str
     limit: int = 10
     companion_id: Optional[str] = None
+    # False for automatic per-turn recall: skips reinforcement + last_accessed
+    # bump so background retrieval doesn't inflate importance or block decay.
+    reinforce: bool = True
 
 
 class SearchByTypeRequest(BaseModel):
@@ -181,6 +184,7 @@ async def search_memories(request: SearchRequest):
         query=request.query,
         limit=request.limit,
         companion_id=request.companion_id,
+        reinforce=request.reinforce,
     )
 
     return result_to_dict(result)

@@ -213,6 +213,11 @@ class RobustMemorySystem:
         # Perform integrity check on startup
         self._integrity_check()
 
+        # One-time migration: vectors indexed before companion_id was written to
+        # Chroma metadata are invisible to the vector-level companion filter in
+        # search_semantic. Patch the metadata in place (no re-embedding needed).
+        self._backfill_companion_metadata()
+
     def _setup_logging(self):
         """Setup logging for debugging and monitoring"""
         log_file = self.data_folder / "memory_system.log"
@@ -353,6 +358,53 @@ class RobustMemorySystem:
         except Exception as e:
             self.logger.error("Failed to initialize SQLite: %s", e)
             raise
+
+    def _backfill_companion_metadata(self):
+        """Stamp companion_id onto any Chroma vectors missing it, from SQLite.
+
+        search_semantic filters at the vector level with
+        where={"companion_id": ...}; vectors without that metadata key would
+        never match. This runs at every startup but is a no-op once all
+        vectors carry the key. Metadata-only update — embeddings are untouched,
+        so it's fast even for thousands of memories.
+        """
+        try:
+            data = self.chroma_collection.get(include=["metadatas"])
+            ids = data.get("ids") or []
+            metas = data.get("metadatas") or []
+            upd_ids, upd_metas = [], []
+            for mid, meta in zip(ids, metas):
+                meta = meta or {}
+                if meta.get("companion_id"):
+                    continue
+                row = self.sqlite_conn.execute(
+                    "SELECT companion_id FROM memories WHERE id = ?", (mid,)
+                ).fetchone()
+                new_meta = dict(meta)
+                new_meta["companion_id"] = (row["companion_id"] if row else None) or "default"
+                upd_ids.append(mid)
+                upd_metas.append(new_meta)
+
+            if not upd_ids:
+                return
+
+            batch = 256
+            for i in range(0, len(upd_ids), batch):
+                self.chroma_collection.update(
+                    ids=upd_ids[i : i + batch], metadatas=upd_metas[i : i + batch]
+                )
+            try:
+                if hasattr(self.chroma_client, "persist"):
+                    self.chroma_client.persist()
+            except Exception as pe:
+                self.logger.warning("Chroma persist warning: %s", pe)
+            self.logger.info(
+                "Backfilled companion_id metadata on %d/%d vectors", len(upd_ids), len(ids)
+            )
+        except Exception as e:
+            # Never block startup on the migration — search falls back to an
+            # unfiltered query + SQLite post-filter if metadata is incomplete.
+            self.logger.warning("companion_id metadata backfill skipped: %s", e)
 
     def _init_chromadb(self):
         """Initialize ChromaDB for vector storage"""
@@ -545,14 +597,25 @@ class RobustMemorySystem:
             return Result(success=False, reason=f"Storage error: {str(e)}")
 
     def search_semantic(
-        self, 
-        query: str, 
-        limit: int = 10, 
+        self,
+        query: str,
+        limit: int = 10,
         min_relevance: float = 0.15,
-        companion_id: Optional[str] = None
+        companion_id: Optional[str] = None,
+        reinforce: bool = True,
     ) -> Result:
         """
         Semantic search using vector similarity with adaptive thresholding + top-1 fallback.
+
+        companion_id filters at the VECTOR level (Chroma where-clause), so the
+        top-N candidates all belong to this companion — other Chooms' memories
+        can no longer occupy the candidate slots and get silently dropped by the
+        SQLite post-filter (which remains as a safety net).
+
+        reinforce=False (used by automatic per-turn recall) skips the
+        reinforcement bump and last_accessed update so background retrieval
+        never inflates importance or blocks natural decay — only deliberate
+        recall (tool calls) counts as an access.
         """
         try:
             if not query.strip():
@@ -567,12 +630,29 @@ class RobustMemorySystem:
             # Generate query embedding
             query_embedding = self.embedding_model.encode(query).tolist()
 
-            # Search ChromaDB
-            results = self.chroma_collection.query(
-                query_embeddings=[query_embedding],
-                n_results=limit,
-                include=["documents", "metadatas", "distances"],
-            )
+            # Search ChromaDB, scoped to this companion's vectors
+            query_kwargs = {
+                "query_embeddings": [query_embedding],
+                "n_results": limit,
+                "include": ["documents", "metadatas", "distances"],
+            }
+            if companion_id:
+                query_kwargs["where"] = {"companion_id": companion_id}
+            results = self.chroma_collection.query(**query_kwargs)
+
+            # Compat fallback: vectors indexed before companion_id was written to
+            # Chroma metadata are invisible to the where-filter. If the filtered
+            # query comes back empty, retry unfiltered and let the SQLite
+            # post-filter enforce ownership. Run /memory/rebuild_vectors to
+            # backfill metadata and make this path obsolete.
+            if companion_id and not results["ids"][0]:
+                self.logger.warning(
+                    "Filtered vector query returned 0 for companion_id=%s; "
+                    "retrying unfiltered (run rebuild_vectors to backfill metadata)",
+                    companion_id,
+                )
+                del query_kwargs["where"]
+                results = self.chroma_collection.query(**query_kwargs)
 
             if not results["ids"][0]:
                 return Result(success=True, data=[])
@@ -635,14 +715,16 @@ class RobustMemorySystem:
                 if not row:
                     continue
 
-                # Lazy decay before reinforcement
+                # Lazy decay (pure time-based maintenance — always runs)
                 self._maybe_decay(row)
-                self._maybe_reinforce(row)
 
-                # Reinforcement
-                self.sqlite_conn.execute(
-                    "UPDATE memories SET last_accessed = ? WHERE id = ?", (now_iso, memory_id)
-                )
+                # Reinforcement + access stamp only for deliberate retrieval;
+                # automatic per-turn recall must not count as an access.
+                if reinforce:
+                    self._maybe_reinforce(row)
+                    self.sqlite_conn.execute(
+                        "UPDATE memories SET last_accessed = ? WHERE id = ?", (now_iso, memory_id)
+                    )
 
                 record = MemoryRecord(
                     id=row["id"],
@@ -945,6 +1027,10 @@ class RobustMemorySystem:
                             "importance": updated_row["importance"],
                             "memory_type": updated_row["memory_type"],
                             "tags": updated_row["tags"],
+                            # Preserve companion_id — the vector-level search
+                            # filter depends on it; dropping it here would make
+                            # the memory invisible after an edit.
+                            "companion_id": (updated_row["companion_id"] if "companion_id" in updated_row.keys() else "default") or "default",
                         }
                     ],
                 )
@@ -1290,7 +1376,7 @@ class RobustMemorySystem:
 
             rows = self.sqlite_conn.execute(
                 "SELECT id, title, content, timestamp, importance, memory_type, "
-                "tags FROM memories ORDER BY timestamp ASC"
+                "tags, companion_id FROM memories ORDER BY timestamp ASC"
             ).fetchall()
 
             ids, embs, docs, metas = [], [], [], []
@@ -1307,6 +1393,9 @@ class RobustMemorySystem:
                         "importance": row["importance"],
                         "memory_type": row["memory_type"],
                         "tags": row["tags"],
+                        # companion_id must survive rebuilds — search_semantic
+                        # filters on it at the vector level.
+                        "companion_id": row["companion_id"] or "default",
                     }
                 )
 

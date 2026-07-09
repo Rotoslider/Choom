@@ -48,6 +48,7 @@ class ChoomClient:
         self.session = requests.Session()
         self.chooms: Dict[str, ChoomInfo] = {}
         self.chats: Dict[str, str] = {}  # choom_id -> active chat_id
+        self.autonomous_chats: Dict[str, str] = {}  # choom_id -> persistent [Autonomous] chat_id
         self._chooms_fetched_at: float = 0  # timestamp of last fetch
         self._chooms_ttl: float = 60  # refresh chooms every 60 seconds
         self._last_user_activity: Dict[str, float] = {}  # choom_name (lower) -> timestamp
@@ -176,9 +177,10 @@ class ChoomClient:
     def get_or_create_chat(self, choom_id: str) -> str:
         """Resolve the Choom's CURRENT 1:1 chat for Signal — the most recently
         updated non-archived chat — so a Signal message CONTINUES whatever
-        conversation is active (the one you had open on the web, or a heartbeat
-        the Choom just sent you), instead of a separate Signal-only thread that
-        loses all context.
+        conversation is active (the one you had open on the web), instead of a
+        separate Signal-only thread that loses all context. Replies to a
+        heartbeat also land here: the Choom sees what she just said in her
+        [Autonomous] chat through the cross-session awareness block.
 
         Group chats stay in their own world: each participant's group scratch
         chat is archived (and titled '[group scratch]'), so it's filtered out by
@@ -197,10 +199,19 @@ class ChoomClient:
                 for chat in chats:
                     title = chat.get("title") or ""
                     # Skip internal work threads that aren't your conversation:
-                    # group scratch chats and per-task delegation chats. (Group
-                    # scratch is also archived; delegation chats are not, so the
-                    # title guard is the real protection there.)
-                    if "[group scratch]" in title or title.startswith("[Delegation]"):
+                    # group scratch chats, per-task delegation chats, and the
+                    # persistent [Autonomous] chat (heartbeats/briefings land
+                    # there and bump its updatedAt — without this guard it would
+                    # hijack every Signal reply; a reply to a heartbeat instead
+                    # continues the real conversation, which sees the heartbeat
+                    # via the cross-session awareness block). Legacy per-day
+                    # "Briefing" chats are skipped for the same reason. (Group
+                    # scratch is also archived; the others are not, so the
+                    # title guard is the real protection.)
+                    if ("[group scratch]" in title
+                            or title.startswith("[Delegation]")
+                            or title.startswith("[Autonomous]")
+                            or title.startswith("Briefing ")):
                         continue
                     chat_id = chat.get("id")
                     if chat_id:
@@ -224,6 +235,47 @@ class ChoomClient:
         self.chats[choom_id] = chat_id
 
         logger.info(f"Created new chat {chat_id} for Choom {choom_id} (no existing 1:1 chat)")
+        return chat_id
+
+    def get_or_create_autonomous_chat(self, choom_id: str) -> str:
+        """Resolve the Choom's ONE persistent autonomous chat — the shared home
+        for every heartbeat, self-followup, morning briefing, and cron/skill
+        automation fire. Replaces the old fresh-chat-per-fire behavior
+        ("Briefing YYYY-MM-DD") that scattered autonomous activity across
+        countless orphan threads no other session knew about. Other sessions
+        now see this thread's recent output via the chat API's cross-session
+        awareness block.
+        """
+        cached = self.autonomous_chats.get(choom_id)
+        if cached:
+            return cached
+
+        try:
+            response = self._make_request("GET", f"/api/chats?choomId={choom_id}")
+            chats = response.json()
+            if isinstance(chats, list):
+                for chat in chats:
+                    title = chat.get("title") or ""
+                    if title.startswith("[Autonomous]"):
+                        chat_id = chat.get("id")
+                        if chat_id:
+                            self.autonomous_chats[choom_id] = chat_id
+                            return chat_id
+        except Exception as e:
+            logger.warning(f"get_or_create_autonomous_chat: could not list chats for {choom_id}, creating a new one: {e}")
+
+        response = self._make_request(
+            "POST",
+            "/api/chats",
+            json={
+                "choomId": choom_id,
+                "title": "[Autonomous] Heartbeats & Briefings"
+            }
+        )
+        data = response.json()
+        chat_id = data.get("id") or data.get("chat", {}).get("id")
+        self.autonomous_chats[choom_id] = chat_id
+        logger.info(f"Created persistent autonomous chat {chat_id} for Choom {choom_id}")
         return chat_id
 
     def get_recent_conversations(self, choom_name: str, since_hours: int = 24, max_messages: int = 40) -> str:
@@ -257,9 +309,11 @@ class ChoomClient:
                 except Exception:
                     continue
 
-                # Skip briefing chats
+                # Skip autonomous/briefing chats — a heartbeat prompt must not
+                # see the Choom's own prior autonomous output as "recent
+                # conversation" (repetition/mimicry risk).
                 title = chat.get("title", "")
-                if title and "Briefing" in title:
+                if title and ("Briefing" in title or title.startswith("[Autonomous]")):
                     continue
 
                 # Fetch messages for this chat
@@ -529,17 +583,13 @@ class ChoomClient:
 
         # Get or create chat
         if fresh_chat:
-            # Create a fresh chat to avoid stale conversation context
-            from datetime import datetime as dt
-            title = f"Briefing {dt.now().strftime('%Y-%m-%d')}"
-            response = self._make_request(
-                "POST",
-                "/api/chats",
-                json={"choomId": choom.id, "title": title}
-            )
-            data = response.json()
-            chat_id = data.get("id") or data.get("chat", {}).get("id")
-            logger.info(f"Created fresh chat {chat_id} for {choom_name}: {title}")
+            # Autonomous fire (heartbeat / self-followup / briefing / cron):
+            # land in the ONE persistent per-Choom "[Autonomous]" chat instead of
+            # minting a new Chat row per fire. The freshContext flag below keeps
+            # the original fresh-chat semantics for the LLM call (empty history,
+            # sparse prompt) while persisting the exchange where every other
+            # session can see it via the cross-session awareness block.
+            chat_id = self.get_or_create_autonomous_chat(choom.id)
         else:
             chat_id = self.get_or_create_chat(choom.id)
 
@@ -570,6 +620,10 @@ class ChoomClient:
             "settings": default_settings,
             "suppressNotifications": True,
         }
+        if fresh_chat:
+            # Persist to the shared [Autonomous] chat but give the LLM an empty
+            # history — autonomous prompts must not replay prior fires.
+            payload["freshContext"] = True
         if no_tools:
             payload["noTools"] = True
         if max_iterations:

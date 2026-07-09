@@ -3764,6 +3764,13 @@ export async function POST(request: NextRequest) {
     // goes to whichever Choom the owner last genuinely talked to (see
     // /api/chooms/recent-user — it reads Chat.lastUserMessageAt stamped below).
     const userInitiated: boolean = !!body.userInitiated;
+    // Autonomous fires (heartbeats, self-followups, briefings, cron automations)
+    // now share ONE persistent per-Choom "[Autonomous]" chat instead of minting a
+    // new Chat row per fire. freshContext preserves their original semantics:
+    // messages are PERSISTED to that chat (so other sessions can see the activity
+    // via the cross-session block below) but the LLM call starts with an empty
+    // history — the sparse-prompt design the Presence Engine depends on.
+    const freshContext: boolean = !!body.freshContext;
     // Group-room turn: the orchestrator (/api/group-chat) renders the shared
     // transcript from THIS Choom's point of view and passes it as groupMessages.
     // When set, we ignore the scratch chat's own history and use groupMessages,
@@ -4105,6 +4112,117 @@ export async function POST(request: NextRequest) {
       // No growth journal yet — that's fine
     }
 
+    // --- Auto-recalled long-term memories (cross-session continuity) ---
+    // Every turn (web, Signal, group room, heartbeat, delegation) semantically
+    // searches this Choom's long-term memory with the incoming message and
+    // injects the top hits, so relevant memories surface WITHOUT the model
+    // having to decide to call search_memories. The memory tools stay available
+    // for deliberate, deeper recall. reinforce:false → background recall never
+    // inflates importance or blocks decay. READ-ONLY: nothing is auto-written
+    // to long-term memory; only the explicit remember tool stores memories.
+    let autoMemoriesInfo = '';
+    try {
+      const memQuery = String(message).slice(0, 1500);
+      const autoMemResult = await memoryClient.search(memQuery, 5, memoryCompanionId, { reinforce: false, timeoutMs: 6000 });
+      if (autoMemResult.success && Array.isArray(autoMemResult.data) && autoMemResult.data.length > 0) {
+        // Floor filters the server's top-1 fallback and other weak matches —
+        // an every-turn block must not inject barely-related memories as noise.
+        const AUTO_MEM_MIN_RELEVANCE = 0.3;
+        const memLines = (autoMemResult.data as Array<Record<string, unknown>>)
+          .filter(m => typeof m.relevance_score !== 'number' || (m.relevance_score as number) >= AUTO_MEM_MIN_RELEVANCE)
+          .slice(0, 5)
+          .map(m => {
+            const content = String(m.content || '').replace(/\s+/g, ' ').trim();
+            const trimmed = content.length > 400 ? content.slice(0, 397) + '...' : content;
+            const ts = typeof m.timestamp === 'string' ? m.timestamp.slice(0, 10) : '';
+            const title = m.title ? `${String(m.title)}: ` : '';
+            return `- [${m.memory_type || 'memory'}${ts ? `, ${ts}` : ''}] ${title}${trimmed}`;
+          });
+        if (memLines.length > 0) {
+          autoMemoriesInfo = `\n\n## RELEVANT MEMORIES (auto-recalled)\nThese are YOUR long-term memories, automatically recalled because they may relate to the current message. Use them for continuity. For more or older detail, call search_memories and the other memory tools as usual.\n${memLines.join('\n')}`;
+          console.log(`   🧠 Auto-recalled ${memLines.length} memories for ${choom.name}`);
+        }
+      }
+    } catch (error) {
+      // Memory server down/slow — never block the turn on auto-recall.
+      console.warn('   ⚠️  Memory auto-recall skipped:', error instanceof Error ? error.message : error);
+    }
+
+    // --- Cross-session awareness ---
+    // A Choom is ONE person across every window: web chats, Signal, scheduled
+    // wake-ups ([Autonomous]) and delegated work ([Delegation]). Inject a short,
+    // char-capped digest of the Choom's OTHER recently-active chats so context
+    // is no longer siloed per window. Group turns are excluded for now —
+    // room↔1:1 bridging is a separate feature with its own privacy decision.
+    let crossSessionInfo = '';
+    if (!isGroupTurn) {
+      try {
+        const ownerLabel = getOwnerIdentity().name;
+        const CROSS_SESSION_WINDOW_MS = 48 * 60 * 60 * 1000;
+        const siblingChats = await prisma.chat.findMany({
+          where: {
+            choomId,
+            id: { not: chatId },
+            archived: false,
+            updatedAt: { gte: new Date(Date.now() - CROSS_SESSION_WINDOW_MS) },
+          },
+          orderBy: { updatedAt: 'desc' },
+          take: 6,
+          include: { messages: { orderBy: { createdAt: 'desc' }, take: 4 } },
+        });
+        const agoStr = (d: Date) => {
+          const mins = Math.max(0, Math.round((Date.now() - d.getTime()) / 60000));
+          return mins < 60 ? `${mins}m ago` : mins < 1440 ? `${Math.round(mins / 60)}h ago` : `${Math.round(mins / 1440)}d ago`;
+        };
+        const blocks: string[] = [];
+        let budget = 4500; // chars — hard cap so this block can't bloat the prompt
+        let autonomousIncluded = false; // one autonomous section is enough (legacy per-day Briefing chats would otherwise flood the budget)
+        for (const sib of siblingChats) {
+          if (budget <= 0) break;
+          const title = sib.title || 'Untitled chat';
+          if (title.includes('[group scratch]')) continue;
+          const isAutonomousChat = title.startsWith('[Autonomous]') || title.startsWith('Briefing');
+          if (isAutonomousChat && autonomousIncluded) continue;
+          const isDelegationChat = title.startsWith('[Delegation]');
+          // In autonomous/delegation threads the user-role rows are internal
+          // scheduler/delegator prompts, not conversation — only the Choom's
+          // own output is meaningful to other sessions.
+          const msgs = sib.messages
+            .filter(m => (m.role === 'user' || m.role === 'assistant') && m.content && m.content.trim())
+            .filter(m => !(isAutonomousChat || isDelegationChat) || m.role === 'assistant')
+            .slice(0, isAutonomousChat || isDelegationChat ? 2 : 3)
+            .reverse();
+          if (msgs.length === 0) continue;
+          const header = isAutonomousChat
+            ? `### Your autonomous activity (wake-ups, briefings, scheduled follow-ups) — ${agoStr(sib.updatedAt)}`
+            : isDelegationChat
+              ? `### Delegated task "${title.replace(/^\[Delegation\]\s*/, '').slice(0, 60)}" — ${agoStr(sib.updatedAt)}`
+              : `### Chat "${title.slice(0, 60)}" — ${agoStr(sib.updatedAt)}`;
+          const sibSummary = (sib as unknown as { compactionSummary?: string | null }).compactionSummary;
+          const summaryLine = (!isAutonomousChat && !isDelegationChat && sibSummary)
+            ? `Earlier in that chat: ${sibSummary.replace(/\s+/g, ' ').trim().slice(0, 350)}\n`
+            : '';
+          const msgLines = msgs.map(m => {
+            const who = m.role === 'assistant' ? 'You' : ownerLabel;
+            const text = m.content.replace(/\s+/g, ' ').trim();
+            const cap = isAutonomousChat ? 500 : 300;
+            return `${who}: ${text.length > cap ? text.slice(0, cap - 3) + '...' : text}`;
+          }).join('\n');
+          const block = `${header}\n${summaryLine}${msgLines}`;
+          if (block.length > budget) continue;
+          blocks.push(block);
+          budget -= block.length;
+          if (isAutonomousChat) autonomousIncluded = true;
+        }
+        if (blocks.length > 0) {
+          crossSessionInfo = `\n\n## YOUR OTHER CONVERSATIONS (cross-session awareness)\nYou are ONE person across every chat window, Signal, and your autonomous wake-ups. These are your other recently-active threads, newest first. Use them for continuity — if ${ownerLabel} refers to something you said elsewhere, this is likely where it came from. Carry relevant context in naturally; don't re-announce or quote these lines verbatim.\n\n${blocks.join('\n\n')}`;
+          console.log(`   🔗 Cross-session awareness: ${blocks.length} sibling chat(s) injected`);
+        }
+      } catch (error) {
+        console.warn('   ⚠️  Cross-session awareness skipped:', error instanceof Error ? error.message : error);
+      }
+    }
+
     // Build system prompt with explicit tool instructions
     const projectNameNote = `\n\n## PROJECT NAME\nThis project is called "Choom" (rhymes with "room"). If you see "Choo" in your memories or past conversations, it was a typo from Signal autocorrect — the correct name is always "Choom". Use "Choom" when referring to the project.`;
     // Who the Choom is talking to — the human owner, by their real name. This is
@@ -4114,7 +4232,7 @@ export async function POST(request: NextRequest) {
     const systemPrompt = `${choom.systemPrompt || 'You are a helpful AI assistant.'}
 ${projectNameNote}
 ${ownerInfo}
-${growthInfo}
+${growthInfo}${crossSessionInfo}${autoMemoriesInfo}
 ${timeInfo}${weatherInfo}${homeAssistantInfo}${recentImagesInfo}
 
 ## TOOL USAGE (CRITICAL)
@@ -4328,9 +4446,15 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
     // Group turns ignore the scratch chat's DB history and use the POV-rendered
     // transcript supplied by the orchestrator (own lines → assistant, everyone
     // else → user prefixed "[Name]:").
+    // freshContext (autonomous fires in the shared [Autonomous] chat): persist
+    // messages but start the LLM from an empty history — heartbeats must not
+    // replay their own previous prompts/output (sparse-prompt design; weak
+    // models mimic prior HB output when they see it).
     const historySource: Array<{ role: string; content: string }> = isGroupTurn
       ? groupMessages
-      : chat.messages;
+      : freshContext
+        ? []
+        : chat.messages;
     const rawHistory: Array<{ role: string; content: string }> = [];
     for (const msg of historySource) {
       if (msg.role === 'tool') continue;

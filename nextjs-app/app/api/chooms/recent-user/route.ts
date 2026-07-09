@@ -19,6 +19,10 @@ export async function GET() {
         NOT: [
           { title: { contains: '[group scratch]' } },
           { title: { startsWith: '[Delegation]' } },
+          // Autonomous fires never stamp lastUserMessageAt, so this is
+          // belt-and-braces — the shared heartbeat/briefing chat must never
+          // decide who answers an un-addressed Signal message.
+          { title: { startsWith: '[Autonomous]' } },
         ],
       },
       orderBy: { lastUserMessageAt: 'desc' },
