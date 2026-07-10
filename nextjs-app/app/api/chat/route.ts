@@ -4150,24 +4150,29 @@ export async function POST(request: NextRequest) {
 
     // --- Cross-session awareness ---
     // A Choom is ONE person across every window: web chats, Signal, scheduled
-    // wake-ups ([Autonomous]) and delegated work ([Delegation]). Inject a short,
-    // char-capped digest of the Choom's OTHER recently-active chats so context
-    // is no longer siloed per window. Group turns are excluded for now —
-    // room↔1:1 bridging is a separate feature with its own privacy decision.
+    // wake-ups ([Autonomous]), delegated work ([Delegation]), and group rooms.
+    // Inject a char-capped digest of the Choom's OTHER recently-active threads
+    // so context is no longer siloed per window. Runs on group turns too
+    // (tighter budget — the block repeats for EVERY speaker turn and group
+    // seats may run small local models), completing the room↔1:1 bridge in
+    // both directions; the current room itself is excluded (its transcript is
+    // already the turn's history).
     let crossSessionInfo = '';
-    if (!isGroupTurn) {
+    {
       try {
         const ownerLabel = getOwnerIdentity().name;
         const CROSS_SESSION_WINDOW_MS = 48 * 60 * 60 * 1000;
+        const crossCutoff = new Date(Date.now() - CROSS_SESSION_WINDOW_MS);
+        let budget = isGroupTurn ? 2500 : 6000; // chars — hard cap so this block can't bloat the prompt
         const siblingChats = await prisma.chat.findMany({
           where: {
             choomId,
             id: { not: chatId },
             archived: false,
-            updatedAt: { gte: new Date(Date.now() - CROSS_SESSION_WINDOW_MS) },
+            updatedAt: { gte: crossCutoff },
           },
           orderBy: { updatedAt: 'desc' },
-          take: 6,
+          take: isGroupTurn ? 3 : 6,
           include: { messages: { orderBy: { createdAt: 'desc' }, take: 4 } },
         });
         const agoStr = (d: Date) => {
@@ -4175,7 +4180,6 @@ export async function POST(request: NextRequest) {
           return mins < 60 ? `${mins}m ago` : mins < 1440 ? `${Math.round(mins / 60)}h ago` : `${Math.round(mins / 1440)}d ago`;
         };
         const blocks: string[] = [];
-        let budget = 4500; // chars — hard cap so this block can't bloat the prompt
         let autonomousIncluded = false; // one autonomous section is enough (legacy per-day Briefing chats would otherwise flood the budget)
         for (const sib of siblingChats) {
           if (budget <= 0) break;
@@ -4190,22 +4194,22 @@ export async function POST(request: NextRequest) {
           const msgs = sib.messages
             .filter(m => (m.role === 'user' || m.role === 'assistant') && m.content && m.content.trim())
             .filter(m => !(isAutonomousChat || isDelegationChat) || m.role === 'assistant')
-            .slice(0, isAutonomousChat || isDelegationChat ? 2 : 3)
+            .slice(0, isGroupTurn || isAutonomousChat || isDelegationChat ? 2 : 3)
             .reverse();
           if (msgs.length === 0) continue;
           const header = isAutonomousChat
             ? `### Your autonomous activity (wake-ups, briefings, scheduled follow-ups) — ${agoStr(sib.updatedAt)}`
             : isDelegationChat
               ? `### Delegated task "${title.replace(/^\[Delegation\]\s*/, '').slice(0, 60)}" — ${agoStr(sib.updatedAt)}`
-              : `### Chat "${title.slice(0, 60)}" — ${agoStr(sib.updatedAt)}`;
+              : `### Private chat "${title.slice(0, 60)}" — ${agoStr(sib.updatedAt)}`;
           const sibSummary = (sib as unknown as { compactionSummary?: string | null }).compactionSummary;
-          const summaryLine = (!isAutonomousChat && !isDelegationChat && sibSummary)
+          const summaryLine = (!isGroupTurn && !isAutonomousChat && !isDelegationChat && sibSummary)
             ? `Earlier in that chat: ${sibSummary.replace(/\s+/g, ' ').trim().slice(0, 350)}\n`
             : '';
           const msgLines = msgs.map(m => {
             const who = m.role === 'assistant' ? 'You' : ownerLabel;
             const text = m.content.replace(/\s+/g, ' ').trim();
-            const cap = isAutonomousChat ? 500 : 300;
+            const cap = isGroupTurn ? 250 : isAutonomousChat ? 500 : 300;
             return `${who}: ${text.length > cap ? text.slice(0, cap - 3) + '...' : text}`;
           }).join('\n');
           const block = `${header}\n${summaryLine}${msgLines}`;
@@ -4214,9 +4218,47 @@ export async function POST(request: NextRequest) {
           budget -= block.length;
           if (isAutonomousChat) autonomousIncluded = true;
         }
+
+        // Group rooms this Choom participates in, with recent activity — so a
+        // 1:1 turn (or a turn in a DIFFERENT room) knows what she's been part
+        // of. The current room is excluded: its transcript IS the history.
+        const recentRooms = await prisma.groupRoom.findMany({
+          where: {
+            archived: false,
+            participants: { some: { choomId } },
+            messages: { some: { createdAt: { gte: crossCutoff } } },
+            ...(isGroupTurn && groupRoomId ? { id: { not: groupRoomId } } : {}),
+          },
+          take: isGroupTurn ? 2 : 3,
+          include: { messages: { orderBy: { createdAt: 'desc' }, take: 5 } },
+        });
+        // Order by actual latest message, not row updatedAt
+        recentRooms.sort((a, b) =>
+          (b.messages[0]?.createdAt.getTime() || 0) - (a.messages[0]?.createdAt.getTime() || 0));
+        for (const room of recentRooms) {
+          if (budget <= 0) break;
+          const msgs = room.messages.filter(m => m.content && m.content.trim()).reverse();
+          if (msgs.length === 0) continue;
+          const latest = room.messages[0].createdAt;
+          const lines = msgs.map(m => {
+            const isSelf = m.authorChoomId === choomId;
+            const who = isSelf ? 'You' : `[${m.authorName || ownerLabel}]`;
+            const text = m.content.replace(/\s+/g, ' ').trim();
+            const cap = 250;
+            return `${who}: ${text.length > cap ? text.slice(0, cap - 3) + '...' : text}`;
+          }).join('\n');
+          const block = `### Group room "${(room.title || 'Untitled room').slice(0, 60)}" — ${agoStr(latest)}\n${lines}`;
+          if (block.length > budget) continue;
+          blocks.push(block);
+          budget -= block.length;
+        }
+
         if (blocks.length > 0) {
-          crossSessionInfo = `\n\n## YOUR OTHER CONVERSATIONS (cross-session awareness)\nYou are ONE person across every chat window, Signal, and your autonomous wake-ups. These are your other recently-active threads, newest first. Use them for continuity — if ${ownerLabel} refers to something you said elsewhere, this is likely where it came from. Carry relevant context in naturally; don't re-announce or quote these lines verbatim.\n\n${blocks.join('\n\n')}`;
-          console.log(`   🔗 Cross-session awareness: ${blocks.length} sibling chat(s) injected`);
+          const intro = isGroupTurn
+            ? `You are ONE person across every window — these are your other recent threads OUTSIDE this room: private chats with ${ownerLabel}, autonomous wake-ups, and other rooms. Use them for continuity and awareness. Your private 1:1 conversations are your own: bring in what's relevant naturally, but use normal discretion about personal or private details when speaking in front of others.`
+            : `You are ONE person across every chat window, Signal, group rooms, and your autonomous wake-ups. These are your other recently-active threads, newest first. Use them for continuity — if ${ownerLabel} refers to something you said elsewhere, this is likely where it came from. Carry relevant context in naturally; don't re-announce or quote these lines verbatim.`;
+          crossSessionInfo = `\n\n## YOUR OTHER CONVERSATIONS (cross-session awareness)\n${intro}\n\n${blocks.join('\n\n')}`;
+          console.log(`   🔗 Cross-session awareness: ${blocks.length} thread(s) injected${isGroupTurn ? ' (group turn)' : ''}`);
         }
       } catch (error) {
         console.warn('   ⚠️  Cross-session awareness skipped:', error instanceof Error ? error.message : error);
@@ -4354,7 +4396,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           ? `- **Images shared in this room** — you already know what each shows (described below), so react to the actual image; never invent its contents. Only call \`analyze_image\` with the exact \`image_path\` if you need finer detail. Do NOT type these paths into your reply.\n${groupRecentImages.map(p => `    • \`${p}\`${groupImageDescriptions[p] ? ` — shows: ${groupImageDescriptions[p]}` : ' — (not yet described; use analyze_image to look)'}`).join('\n')}\n`
           : '') +
         `- Keep it conversational and reasonably concise — this is a group chat, not a monologue. You may address ${owner.name} or a sibling by name.\n` +
-        `- **Memory:** this is the SAME you as your private chats — same long-term memory. If the conversation touches ${owner.name}, your shared history, a person/place/project, or anything personal, call \`search_memories\` to recall the real details BEFORE you respond, exactly as you would one-on-one. Don't rely on vague impressions.\n` +
+        `- **Memory:** this is the SAME you as your private chats — same long-term memory. Your YOUR OTHER CONVERSATIONS section shows what you've been doing outside this room, and relevant memories are auto-recalled for you each turn. If the conversation touches ${owner.name}, your shared history, a person/place/project, or anything personal and you need more detail, call \`search_memories\` to recall the real details BEFORE you respond, exactly as you would one-on-one. Don't rely on vague impressions.\n` +
         `- **Real-world grounding:** you are in the same real place and time as your private chats — ${owner.name}'s home in ${owner.location}. The weather, Home Assistant, and location data already in this prompt are authoritative. Never relocate yourself or ${owner.name} somewhere else (e.g. do NOT say "Colorado").\n` +
         `- **Actions must be real, never narrated.** If you take an action — turn on a light, generate an image, save a file, remember something — you MUST call the actual tool. NEVER write a stage-direction like \`*turns on the kitchen lights*\` or "I'm saving this to the room" and imply it happened without calling the tool. Claiming an action you didn't perform is a lie and breaks the user's trust. Either call the tool, or say you're choosing not to.\n` +
         `- **Images auto-save:** any image you generate here is automatically saved to the shared room folder and your siblings can see it — you do NOT need to call save_generated_image, and you should NOT claim to "save it to the room" as a separate step. To look at an image a sibling shared, use \`analyze_image\` with the \`image_path\` shown in their message.\n` +
