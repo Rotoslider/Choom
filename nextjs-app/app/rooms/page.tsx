@@ -14,6 +14,7 @@ import {
 } from '@/components/ui/dialog';
 import { AvatarDisplay } from '@/components/common/avatar-display';
 import { InputArea, type ImageAttachment } from '@/components/chat/input-area';
+import { TtsPlayButton } from '@/components/chat/tts-play-button';
 import { useAppStore } from '@/lib/store';
 import { RoomTTSQueue } from '@/lib/room-tts-queue';
 import { cn, isSentenceEnd, formatDayTime } from '@/lib/utils';
@@ -799,6 +800,9 @@ function RoomBubble({ msg, chooms }: { msg: RoomMessage; chooms: Choom[] }) {
         <p className={cn('text-sm font-medium mb-1', isUser ? 'text-muted-foreground' : 'text-primary')}>
           {msg.authorName}
           <span className="ml-2 text-xs font-normal text-muted-foreground">{formatDayTime(msg.createdAt)}</span>
+          {!isUser && msg.content?.trim() && (
+            <TtsPlayButton src={`/api/tts/message/${msg.id}?kind=group`} className="ml-1.5" />
+          )}
         </p>
         <div className={cn(
           'rounded-2xl px-4 py-2 inline-block max-w-full',

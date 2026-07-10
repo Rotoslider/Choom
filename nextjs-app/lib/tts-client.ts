@@ -112,6 +112,37 @@ export class StreamingTTS {
         this.sendToTTS(text);
       }
       this.buffer = '';
+    } else if (this.buffer.length > 600) {
+      // Large chunk delivered at once — the server buffers post-tool replies
+      // for repeat/dedup checks and flushes the WHOLE reply as one content
+      // event. Speaking that as a single monolithic TTS request stalls
+      // Chatterbox (perceived as "TTS stopped working"). Split into complete
+      // sentences, grouped into ~350-char requests; the unterminated tail
+      // stays buffered for the next event or flush().
+      // Code fences: sentence-splitting could cut a ``` block across groups
+      // and leak code fragments past stripForTTS (which strips only complete
+      // fences) — defer to flush(), which strips the buffer as one piece.
+      if (this.buffer.includes('```')) return;
+      const pieces = this.buffer.match(/[\s\S]*?[.!?…](?:["')\]]*)(?:\s+|$)/g) || [];
+      if (pieces.length > 0) {
+        let group = '';
+        for (const piece of pieces) {
+          group += piece;
+          if (group.length >= 350) {
+            const text = stripForTTS(group.trim());
+            if (text.length > 0) this.sendToTTS(text);
+            group = '';
+          }
+        }
+        // Speak the final sub-350 group of complete sentences too — with
+        // buffered delivery there may be no further tokens coming.
+        if (group.trim()) {
+          const text = stripForTTS(group.trim());
+          if (text.length > 0) this.sendToTTS(text);
+        }
+        this.buffer = this.buffer.slice(pieces.join('').length);
+      }
+      // No sentence punctuation at all yet → keep buffering; flush() handles it.
     }
   }
 

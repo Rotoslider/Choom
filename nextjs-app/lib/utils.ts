@@ -217,6 +217,16 @@ export function stripForTTS(text: string): string {
     // Remove Mistral tool-call text that leaked past the parser ([TOOL_CALLS]…)
     // so it isn't read aloud — the actual call is salvaged & executed server-side.
     .replace(/\[TOOL_CALLS\][\s\S]*/i, '')
+    // Remove asterisk-wrapped bracket stage directions — *[generates an image:
+    // <entire prompt>]* — models narrate tool actions this way and TTS would
+    // otherwise read the whole image prompt aloud. Must run BEFORE the
+    // markdown-formatting strip below, which would erase the asterisk markers
+    // and leave the bracket content spoken.
+    .replace(/\*+\s*\[[^\]]*\]\s*\*+/g, '')
+    // Remove bare bracketed ACTION asides — [generating image...], [taking a
+    // snapshot], [checking the camera] — verb-anchored so ordinary bracketed
+    // words ([Mount Graham], [Eve]: labels) are never touched.
+    .replace(/\[\s*(?:takes?|taking|captures?|capturing|grabs?|grabbing|snaps?|snapping|analyzes?|analyzing|checks?|checking|runs?|running|calls?|calling|executes?|executing|generates?|generating|saves?|saving|searches|searching|fetches|fetching|creates?|creating)\b[^\]]*\]/gi, '')
     // Remove [think]...[/think] blocks (case insensitive)
     .replace(/\[think\][\s\S]*?\[\/think\]/gi, '')
     // Remove <think>...</think> blocks (case insensitive)

@@ -3745,6 +3745,34 @@ Call tools via function calls. Each tool is described in the tools array provide
 // Main POST handler
 // ============================================================================
 
+// Cross-turn near-verbatim repeat detector — the 1:1 counterpart of the group
+// rooms' self-repeat catch (isRepeatOrParrot in group-chat-runner.ts, ba6b5e4).
+// Weak local models anchor on their previous turn and replay it nearly
+// word-for-word (classic case: re-apologizing and re-running the same tools on
+// the turn AFTER a correction→apology exchange). Exact/containment match on
+// normalized text, or word-set Jaccard >= 0.8 — a genuinely fresh reply scores
+// ~0.2, so new content never trips this.
+function isNearVerbatimRepeat(candidate: string, previous: string[]): boolean {
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  const wordSet = (s: string) => new Set(norm(s).split(' ').filter(w => w.length > 2));
+  const normNew = norm(candidate);
+  if (normNew.length < 40) return false;
+  const newWords = wordSet(candidate);
+  for (const prev of previous) {
+    const normOld = norm(prev);
+    if (normOld.length < 40) continue;
+    if (normOld === normNew || normOld.includes(normNew) || normNew.includes(normOld)) return true;
+    const oldWords = wordSet(prev);
+    if (oldWords.size >= 8 && newWords.size >= 8) {
+      let inter = 0;
+      for (const w of newWords) if (oldWords.has(w)) inter++;
+      const union = newWords.size + oldWords.size - inter;
+      if (union > 0 && inter / union >= 0.8) return true;
+    }
+  }
+  return false;
+}
+
 export async function POST(request: NextRequest) {
   const encoder = new TextEncoder();
 
@@ -5382,6 +5410,12 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             intentToolHint = 'music_control';
           } else if (/\b(?:search|find)(?: for)?(?: some| a)? (?:music|song|track|artist|album)\b/i.test(msgLower)) {
             intentToolHint = 'music_search';
+          } else if (/\b(?:grab|take|get|capture|snap|check|show|pull)\b[^.!?\n]{0,40}\b(?:cam|camera|snapshot)\b|\bcamera\s+(?:snapshot|image|shot|view|feed)\b|\b(?:tower|garage)\s*cam\b/i.test(msgLower)) {
+            // "grab another tower cam snapshot", "check the garage camera" —
+            // camera asks previously fell through intent detection entirely,
+            // so soft phrasings ("...if you want to see the sunset") produced
+            // pure conversation with no tool call.
+            intentToolHint = 'ha_get_camera_snapshot';
           }
           // NEVER force tool_choice on a group turn. Proven by execution traces:
           // in a room, `message` is the SIBLINGS' lines, which constantly trip the
@@ -5502,6 +5536,17 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           // Preserve any pre-loop content (e.g., plan summaries) so the final iteration can prefix it
           const preLoopContent = fullContent;
           const iterationTexts: string[] = []; // Track each iteration's text for dedup
+          // Final assistant replies from the PREVIOUS turns of this chat —
+          // baseline for the cross-turn repeat guard below. Group turns have
+          // their own guard in group-chat-runner; freshContext turns have no
+          // history to repeat.
+          const prevAssistantTexts: string[] = (!isGroupTurn && !freshContext)
+            ? chat.messages
+                .filter(m => m.role === 'assistant' && m.content && m.content.trim())
+                .slice(-2)
+                .map(m => m.content)
+            : [];
+          let crossTurnRepeatRetried = false; // one fresh-reply retry per turn, max
           // Track consecutive iterations that produced only text (no tool calls).
           // When tools were called earlier but the Choom has gone silent for 1+ turns,
           // it usually means she's hedging or summarizing instead of finishing the job.
@@ -5719,7 +5764,12 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             // typically a confirmation ("I've set that reminder..."). Models
             // sometimes repeat this across iterations — streaming it live means
             // TTS and Signal get the duplicate before post-loop dedup can catch it.
-            const bufferForDedup = allToolCalls.length > 0 && iterationTexts.length > 0;
+            // Also buffer when the chat has prior assistant turns: the
+            // cross-turn repeat guard below can only suppress a replayed reply
+            // while it's still unsent. Cost: post-tool confirmations arrive as
+            // one chunk instead of token-streaming — same tradeoff the
+            // within-turn dedup already made.
+            const bufferForDedup = allToolCalls.length > 0 && (iterationTexts.length > 0 || prevAssistantTexts.length > 0);
 
             const streamPromise = (async () => {
               let reasoningContentSalvaged = false;
@@ -5965,8 +6015,13 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               }
               if (fallbackAttempt < fallbackConfigs.length) {
                 if (iterationContent) {
-                  console.log(`   ⚠️  ${choomTag} Partial content (${iterationContent.length} chars) streamed before error — clearing for fallback attempt`);
-                  send({ type: 'retract_partial', length: iterationContent.length });
+                  console.log(`   ⚠️  ${choomTag} Partial content (${iterationContent.length} chars) ${bufferForDedup ? 'buffered (never sent — no retraction needed)' : 'streamed'} before error — clearing for fallback attempt`);
+                  // Only retract text the client actually received. Buffered
+                  // content was never sent — retracting its length would chop
+                  // earlier LEGITIMATE text off the client's display.
+                  if (!bufferForDedup) {
+                    send({ type: 'retract_partial', length: iterationContent.length });
+                  }
                 }
                 // Strip nudge/hint messages injected for the primary model —
                 // the fallback model hasn't seen the primary's behavior and these
@@ -6462,6 +6517,30 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               }
             }
 
+            // Cross-turn repeat guard — 1:1 counterpart of the group rooms'
+            // near-verbatim catch + fresh-reaction retry. Only acts while the
+            // content is still buffered (never streamed/TTS'd) and this
+            // iteration has no pending tool calls to execute; one retry max.
+            if (
+              bufferForDedup && !crossTurnRepeatRetried && toolCalls.length === 0 &&
+              iterationContent.trim() && prevAssistantTexts.length > 0 &&
+              // Explicit re-ask ("say that again", "repeat that") makes a
+              // verbatim repeat the CORRECT answer — never suppress it then.
+              !/\b(?:repeat (?:that|it|yourself)|say (?:that|it) again|read (?:that|it) (?:back|again)|one more time|tell me (?:that )?again)\b/i.test(message || '') &&
+              isNearVerbatimRepeat(iterationContent, prevAssistantTexts)
+            ) {
+              crossTurnRepeatRetried = true;
+              console.log(`   🔁 ${choomTag} Suppressed near-verbatim repeat of previous turn (${iterationContent.length} chars) — fresh-reply retry`);
+              traceBuilder.recordNudge('cross_turn_repeat');
+              currentMessages.push({ role: 'assistant', content: iterationContent });
+              currentMessages.push({
+                role: 'user',
+                content: `[System] Your reply above repeated your PREVIOUS message almost word-for-word. The user's new message is: "${(message || '').trim().slice(0, 300)}". Respond freshly to THAT in words only — do NOT call any tools again (the tool calls you already made this turn have run and their results stand), do not re-apologize, and do not repeat earlier wording.`,
+              });
+              iterationContent = ''; // suppressed — it was buffered, never sent
+              continue;
+            }
+
             // Flush or suppress buffered post-tool-call content
             if (bufferForDedup && iterationContent.trim()) {
               const isDuplicate = iterationTexts.some(prev => prev.trim() === iterationContent.trim());
@@ -6554,7 +6633,17 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 // announcement", "now playing on...", "I turned on the light" when no
                 // tool call happened this iteration. Most damaging failure mode because
                 // it looks like success but the action never ran.
-                const fakeSuccess = /\b(?:(?:the |my )?(?:service |tool )?call (?:succeeded|executed|completed|went through|worked)|i (?:(?:just |successfully |already ))?(?:called|invoked|executed|ran|made the call to|used the|triggered)(?: the)? \w+(?:\.\w+)?(?: service| tool)?|i(?:'?ve| have)(?: just| successfully| already)? (?:sent|spoken|announced|played|turned (?:on|off)|set|activated|triggered|executed|completed|called)|(?:now|it'?s now) (?:playing|speaking|announcing|turned (?:on|off)|active)|(?:announcement|message|audio) (?:has been |was |is now )?(?:sent|played|spoken|broadcast)|should (?:now )?be (?:playing|speaking|audible|coming through))/i.test(lc);
+                // Stage-direction fabrication — "*[taking tower camera snapshot]*",
+                // "*analyzing the snapshot*" — the model role-plays the tool action
+                // as an asterisk aside and then INVENTS results. Verb list is
+                // action-tools only so benign roleplay (*smiles*, *leans back*)
+                // never matches.
+                const fakeSuccess = /\b(?:(?:the |my )?(?:service |tool )?call (?:succeeded|executed|completed|went through|worked)|i (?:(?:just |successfully |already ))?(?:called|invoked|executed|ran|made the call to|used the|triggered)(?: the)? \w+(?:\.\w+)?(?: service| tool)?|i(?:'?ve| have)(?: just| successfully| already)? (?:sent|spoken|announced|played|turned (?:on|off)|set|activated|triggered|executed|completed|called)|(?:now|it'?s now) (?:playing|speaking|announcing|turned (?:on|off)|active)|(?:announcement|message|audio) (?:has been |was |is now )?(?:sent|played|spoken|broadcast)|should (?:now )?be (?:playing|speaking|audible|coming through))/i.test(lc)
+                  // Requires a tool-ish OBJECT after the verb — "*taking tower
+                  // camera snapshot*" / "*generates an image: ...*" match, but
+                  // innocent roleplay ("*takes a deep breath*", "*running my
+                  // fingers through your hair*") never does.
+                  || /\*\[?(?:takes?|taking|captures?|capturing|grabs?|grabbing|snaps?|snapping|analyzes?|analyzing|checks?|checking|runs?|running|calls?|calling|executes?|executing|generates?|generating|saves?|saving|searches|searching|fetches|fetching)\b[^*\]\n]{0,50}?\b(?:image|photo|picture|snapshot|selfie|camera|cam|memor(?:y|ies)|file|note|reminder|alarm|calendar|weather|forecast|search|web|email|report|status|log|tool|service)\b[^*\]\n]{0,40}\]?\*/i.test(lc);
 
                 // Check 2: Original task mentions steps that were never completed.
                 // Compare the user's instructions against tools actually called.

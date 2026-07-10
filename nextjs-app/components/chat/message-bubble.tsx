@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils';
 import { formatDayTime } from '@/lib/utils';
 import { User, Bot, Wrench } from 'lucide-react';
 import { FileReference } from './file-reference';
+import { TtsPlayButton } from './tts-play-button';
 import type { Message, ToolResult } from '@/lib/types';
 
 interface MessageBubbleProps {
@@ -276,7 +277,11 @@ export function MessageBubble({
       const result = tr.result as { imageUrl?: string; imageId?: string };
       return { imageUrl: result.imageUrl, imageId: result.imageId };
     })
-    .filter((img) => img.imageUrl || img.imageId);
+    .filter((img) => img.imageUrl || img.imageId)
+    // Dedupe: when the model re-calls generate_image, the server's dedup cache
+    // returns the SAME image as a second toolResults entry — render it once.
+    .filter((img, i, arr) =>
+      arr.findIndex((o) => (o.imageId || o.imageUrl) === (img.imageId || img.imageUrl)) === i);
 
   // Extract workspace file references
   const fileRefs = toolResults
@@ -391,9 +396,12 @@ export function MessageBubble({
           )}
         </div>
 
-        {/* Timestamp */}
-        <span className="text-xs text-muted-foreground px-1">
+        {/* Timestamp + per-message TTS playback */}
+        <span className="text-xs text-muted-foreground px-1 inline-flex items-center gap-1.5">
           {formatDayTime(message.createdAt)}
+          {!isUser && content?.trim() && (
+            <TtsPlayButton src={`/api/tts/message/${message.id}`} />
+          )}
         </span>
       </div>
     </div>
