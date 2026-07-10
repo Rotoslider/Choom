@@ -4133,13 +4133,13 @@ export async function POST(request: NextRequest) {
           .slice(0, 5)
           .map(m => {
             const content = String(m.content || '').replace(/\s+/g, ' ').trim();
-            const trimmed = content.length > 400 ? content.slice(0, 397) + '...' : content;
+            const trimmed = content.length > 300 ? content.slice(0, 297) + '...' : content;
             const ts = typeof m.timestamp === 'string' ? m.timestamp.slice(0, 10) : '';
             const title = m.title ? `${String(m.title)}: ` : '';
             return `- [${m.memory_type || 'memory'}${ts ? `, ${ts}` : ''}] ${title}${trimmed}`;
           });
         if (memLines.length > 0) {
-          autoMemoriesInfo = `\n\n## RELEVANT MEMORIES (auto-recalled)\nThese are YOUR long-term memories, automatically recalled because they may relate to the current message. Use them for continuity. For more or older detail, call search_memories and the other memory tools as usual.\n${memLines.join('\n')}`;
+          autoMemoriesInfo = `\n\n## RELEVANT MEMORIES (auto-recalled background)\nYOUR long-term memories, auto-recalled for this message — background reference only. For more detail call search_memories; all your other tools work exactly as normal.\n${memLines.join('\n')}`;
           console.log(`   🧠 Auto-recalled ${memLines.length} memories for ${choom.name}`);
         }
       }
@@ -4163,7 +4163,13 @@ export async function POST(request: NextRequest) {
         const ownerLabel = getOwnerIdentity().name;
         const CROSS_SESSION_WINDOW_MS = 48 * 60 * 60 * 1000;
         const crossCutoff = new Date(Date.now() - CROSS_SESSION_WINDOW_MS);
-        let budget = isGroupTurn ? 2500 : 6000; // chars — hard cap so this block can't bloat the prompt
+        // Keep this block SMALL and clearly inert. Local models mimic
+        // transcript-style prompt content and start narrating actions instead
+        // of calling tools when the system prompt fills with dialogue — the
+        // first version of this block (6000 chars, bare "You:" lines) dropped
+        // tool-call rates measurably. Excerpts are quoted ("> ") and capped
+        // hard so they read as background notes, not live conversation.
+        let budget = isGroupTurn ? 1400 : 2600; // chars — hard cap so this block can't bloat the prompt
         const siblingChats = await prisma.chat.findMany({
           where: {
             choomId,
@@ -4172,7 +4178,7 @@ export async function POST(request: NextRequest) {
             updatedAt: { gte: crossCutoff },
           },
           orderBy: { updatedAt: 'desc' },
-          take: isGroupTurn ? 3 : 6,
+          take: isGroupTurn ? 2 : 4,
           include: { messages: { orderBy: { createdAt: 'desc' }, take: 4 } },
         });
         const agoStr = (d: Date) => {
@@ -4194,7 +4200,7 @@ export async function POST(request: NextRequest) {
           const msgs = sib.messages
             .filter(m => (m.role === 'user' || m.role === 'assistant') && m.content && m.content.trim())
             .filter(m => !(isAutonomousChat || isDelegationChat) || m.role === 'assistant')
-            .slice(0, isGroupTurn || isAutonomousChat || isDelegationChat ? 2 : 3)
+            .slice(0, 2)
             .reverse();
           if (msgs.length === 0) continue;
           const header = isAutonomousChat
@@ -4204,13 +4210,13 @@ export async function POST(request: NextRequest) {
               : `### Private chat "${title.slice(0, 60)}" — ${agoStr(sib.updatedAt)}`;
           const sibSummary = (sib as unknown as { compactionSummary?: string | null }).compactionSummary;
           const summaryLine = (!isGroupTurn && !isAutonomousChat && !isDelegationChat && sibSummary)
-            ? `Earlier in that chat: ${sibSummary.replace(/\s+/g, ' ').trim().slice(0, 350)}\n`
+            ? `Earlier in that chat: ${sibSummary.replace(/\s+/g, ' ').trim().slice(0, 220)}\n`
             : '';
           const msgLines = msgs.map(m => {
-            const who = m.role === 'assistant' ? 'You' : ownerLabel;
+            const who = m.role === 'assistant' ? 'you' : ownerLabel;
             const text = m.content.replace(/\s+/g, ' ').trim();
-            const cap = isGroupTurn ? 250 : isAutonomousChat ? 500 : 300;
-            return `${who}: ${text.length > cap ? text.slice(0, cap - 3) + '...' : text}`;
+            const cap = isGroupTurn ? 180 : isAutonomousChat ? 320 : 200;
+            return `> ${who} said: "${text.length > cap ? text.slice(0, cap - 3) + '...' : text}"`;
           }).join('\n');
           const block = `${header}\n${summaryLine}${msgLines}`;
           if (block.length > budget) continue;
@@ -4229,8 +4235,8 @@ export async function POST(request: NextRequest) {
             messages: { some: { createdAt: { gte: crossCutoff } } },
             ...(isGroupTurn && groupRoomId ? { id: { not: groupRoomId } } : {}),
           },
-          take: isGroupTurn ? 2 : 3,
-          include: { messages: { orderBy: { createdAt: 'desc' }, take: 5 } },
+          take: 2,
+          include: { messages: { orderBy: { createdAt: 'desc' }, take: 3 } },
         });
         // Order by actual latest message, not row updatedAt
         recentRooms.sort((a, b) =>
@@ -4242,10 +4248,10 @@ export async function POST(request: NextRequest) {
           const latest = room.messages[0].createdAt;
           const lines = msgs.map(m => {
             const isSelf = m.authorChoomId === choomId;
-            const who = isSelf ? 'You' : `[${m.authorName || ownerLabel}]`;
+            const who = isSelf ? 'you' : (m.authorName || ownerLabel);
             const text = m.content.replace(/\s+/g, ' ').trim();
-            const cap = 250;
-            return `${who}: ${text.length > cap ? text.slice(0, cap - 3) + '...' : text}`;
+            const cap = 180;
+            return `> ${who} said: "${text.length > cap ? text.slice(0, cap - 3) + '...' : text}"`;
           }).join('\n');
           const block = `### Group room "${(room.title || 'Untitled room').slice(0, 60)}" — ${agoStr(latest)}\n${lines}`;
           if (block.length > budget) continue;
@@ -4255,10 +4261,10 @@ export async function POST(request: NextRequest) {
 
         if (blocks.length > 0) {
           const intro = isGroupTurn
-            ? `You are ONE person across every window — these are your other recent threads OUTSIDE this room: private chats with ${ownerLabel}, autonomous wake-ups, and other rooms. Use them for continuity and awareness. Your private 1:1 conversations are your own: bring in what's relevant naturally, but use normal discretion about personal or private details when speaking in front of others.`
-            : `You are ONE person across every chat window, Signal, group rooms, and your autonomous wake-ups. These are your other recently-active threads, newest first. Use them for continuity — if ${ownerLabel} refers to something you said elsewhere, this is likely where it came from. Carry relevant context in naturally; don't re-announce or quote these lines verbatim.`;
-          crossSessionInfo = `\n\n## YOUR OTHER CONVERSATIONS (cross-session awareness)\n${intro}\n\n${blocks.join('\n\n')}`;
-          console.log(`   🔗 Cross-session awareness: ${blocks.length} thread(s) injected${isGroupTurn ? ' (group turn)' : ''}`);
+            ? `Background notes ONLY — past excerpts from your other threads (private chats with ${ownerLabel}, wake-ups, other rooms), NOT part of this room's conversation. Use them for continuity; use normal discretion about private details in front of others. They show none of your tool activity: acting NOW still requires real tool calls per your TOOL USAGE rules.`
+            : `Background notes ONLY — past excerpts from your other recent threads (other windows, Signal, rooms, wake-ups), newest first. They are NOT part of this conversation and show none of your tool activity — acting NOW still requires real tool calls per your TOOL USAGE rules. Use them for continuity; don't quote or re-announce them.`;
+          crossSessionInfo = `\n\n## YOUR OTHER CONVERSATIONS (background awareness — not this conversation)\n${intro}\n\n${blocks.join('\n\n')}`;
+          console.log(`   🔗 Cross-session awareness: ${blocks.length} thread(s) injected${isGroupTurn ? ' (group turn)' : ''} (${(isGroupTurn ? 1400 : 2600) - budget} chars)`);
         }
       } catch (error) {
         console.warn('   ⚠️  Cross-session awareness skipped:', error instanceof Error ? error.message : error);
