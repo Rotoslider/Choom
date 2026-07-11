@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, Component, ErrorInfo, ReactNode } from 'react';
+import React, { useState, Component, ErrorInfo, ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/cjs/styles/prism';
@@ -195,59 +195,57 @@ function buildImageFilename(choomName: string | undefined, imageId: string, sett
   return `${name}-${isSelfie ? 'selfie' : 'image'}-${shortId}.png`;
 }
 
-// Component to load and display an image by its ID
+// Component to display a stored image by its ID.
+// Renders <img src=/api/images/[id]/file> directly instead of fetching the
+// row's base64 JSON: a long chat mounts every image bubble at once, and N
+// concurrent multi-MB JSON fetches saturate the browser's per-origin
+// connection pool, starving unrelated /api requests into "Failed to fetch".
+// The /file route streams binary with immutable cache headers, and
+// loading="lazy" defers offscreen images entirely.
 function ImageById({ imageId, choomName }: { imageId: string; choomName?: string }) {
-  const [imageUrl, setImageUrl] = useState<string | null>(null);
-  const [imageSettings, setImageSettings] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [status, setStatus] = useState<'loading' | 'loaded' | 'error'>('loading');
 
-  useEffect(() => {
-    let cancelled = false;
-    fetch(`/api/images/${imageId}`)
-      .then((res) => res.ok ? res.json() : null)
-      .then((data) => {
-        if (!cancelled && data?.imageUrl) {
-          setImageUrl(data.imageUrl);
-          setImageSettings(data.settings || null);
-        }
-        if (!cancelled) setLoading(false);
-      })
-      .catch(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => { cancelled = true; };
-  }, [imageId]);
+  if (status === 'error') return null;
 
-  if (loading) {
-    return (
-      <div className="w-full h-48 bg-muted/50 rounded-lg animate-pulse flex items-center justify-center">
-        <span className="text-sm text-muted-foreground">Loading image...</span>
-      </div>
-    );
-  }
+  const fileUrl = `/api/images/${imageId}/file`;
 
-  if (!imageUrl) return null;
-
-  const filename = buildImageFilename(choomName, imageId, imageSettings);
+  const download = async () => {
+    // Metadata (settings → selfie-vs-image filename) is fetched only on
+    // click; the binary itself comes from the browser's cached copy.
+    let settings: string | null = null;
+    try {
+      const res = await fetch(`/api/images/${imageId}?meta=1`);
+      if (res.ok) settings = (await res.json())?.settings || null;
+    } catch { /* generic filename */ }
+    const link = document.createElement('a');
+    link.href = fileUrl;
+    link.download = buildImageFilename(choomName, imageId, settings);
+    link.click();
+  };
 
   return (
-    <div className="relative">
-      {/* eslint-disable-next-line @next/next/no-img-element -- generated image, intrinsic size, may be a data: URL */}
+    <div
+      className={cn(
+        'relative',
+        status === 'loading' && 'min-h-48 bg-muted/50 rounded-lg animate-pulse'
+      )}
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element -- generated image, intrinsic size */}
       <img
-        src={imageUrl}
+        src={fileUrl}
         alt="Generated image"
+        loading="lazy"
         className="max-w-full rounded-lg shadow-md cursor-pointer hover:opacity-90 transition-opacity"
         style={{ maxHeight: '400px' }}
-        onClick={() => {
-          const link = document.createElement('a');
-          link.href = imageUrl;
-          link.download = filename;
-          link.click();
-        }}
+        onLoad={() => setStatus('loaded')}
+        onError={() => setStatus('error')}
+        onClick={download}
       />
-      <div className="absolute bottom-2 right-2 bg-black/50 text-white text-xs px-2 py-1 rounded">
-        Click to download
-      </div>
+      {status === 'loaded' && (
+        <div className="absolute bottom-2 right-2 bg-black/50 text-white text-xs px-2 py-1 rounded">
+          Click to download
+        </div>
+      )}
     </div>
   );
 }
@@ -372,6 +370,7 @@ export function MessageBubble({
                       <img
                         src={img.imageUrl}
                         alt="Generated image"
+                        loading="lazy"
                         className="max-w-full rounded-lg shadow-md cursor-pointer hover:opacity-90 transition-opacity"
                         style={{ maxHeight: '400px' }}
                         onClick={() => {

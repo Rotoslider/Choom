@@ -23,16 +23,30 @@ export async function DELETE(
   }
 }
 
-// GET /api/images/[id] - Get a single image
+// GET /api/images/[id] - Get a single image.
+// With ?meta=1, imageUrl (a multi-MB base64 data URI) is excluded — the
+// binary is served by /api/images/[id]/file. The chat UI uses ?meta=1; the
+// full response stays the default because the Signal bridge's image-delivery
+// fallback (bridge.py) reads imageUrl from this route.
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const { id } = await params;
+    const metaOnly = request.nextUrl.searchParams.has('meta');
 
     const image = await prisma.generatedImage.findUnique({
       where: { id },
+      ...(metaOnly && {
+        select: {
+          id: true,
+          choomId: true,
+          prompt: true,
+          settings: true,
+          createdAt: true,
+        },
+      }),
     });
 
     if (!image) {
