@@ -6,6 +6,8 @@
  * heartbeats, concurrent cron jobs, and multi-step task completion.
  */
 import { readFileSync } from 'fs';
+import { classifyEndpoint, computeStreamTimeouts, isLocalEndpoint } from '../lib/stream-timeouts';
+import { classifyToolError } from '../lib/tool-error-classification';
 import path from 'path';
 
 // Import CompactionService for direct unit testing
@@ -190,55 +192,81 @@ describe('2. Critical Tool Results Protected from Compaction', () => {
 });
 
 // ─── 3. Three-Tier Timeout System ───────────────────────────────────────
+//
+// These used to grep route.ts for literals like "Math.max(120000" and
+// "BETWEEN_TOKEN_MS = 45000". Some of those values never existed and the rest
+// were legitimately tuned, so the tests failed for months while the code was
+// fine. The policy now lives in lib/stream-timeouts.ts and is asserted by
+// calling it.
 
 describe('3. Three-Tier Timeout System', () => {
-  test('NVIDIA endpoints are classified as cloud-inference', () => {
-    expect(routeContent).toContain('nvidia');
-    expect(routeContent).toContain('isCloudInference');
-    // Verify the regex includes NVIDIA and other inference providers
-    expect(routeContent).toMatch(/nvidia\|.*together\|.*fireworks\|.*groq/);
+  test('NVIDIA and other serverless-inference hosts classify as cloud-inference', () => {
+    for (const url of [
+      'https://integrate.api.nvidia.com/v1',
+      'https://api.together.xyz/v1',
+      'https://api.fireworks.ai/inference/v1',
+      'https://api.groq.com/openai/v1',
+    ]) {
+      expect(classifyEndpoint(url, true)).toBe('cloud-inference');
+    }
   });
 
-  test('cloud-inference gets generous first-token (120s+)', () => {
-    // Cloud-inference: FIRST_TOKEN_MS = Math.max(120000, timeoutMs - 15000)
-    expect(routeContent).toContain('} else if (isCloudInference) {');
-    // The isCloudInference block should have the same generous first-token as local
-    const cloudInferenceBlock = routeContent.slice(
-      routeContent.indexOf('} else if (isCloudInference) {'),
-      routeContent.indexOf('} else if (isCloudInference) {') + 300
-    );
-    expect(cloudInferenceBlock).toContain('Math.max(120000');
+  test('a generic cloud endpoint classifies as cloud-fast', () => {
+    expect(classifyEndpoint('https://api.anthropic.com/v1', true)).toBe('cloud-fast');
   });
 
-  test('cloud-inference gets tight between-token (45s)', () => {
-    expect(routeContent).toContain('BETWEEN_TOKEN_MS = 45000');
+  test('cloud-inference gets a generous prefill but a tight between-token gap', () => {
+    const t = computeStreamTimeouts('cloud-inference', 180_000);
+    expect(t.prefillMs).toBe(60_000);      // queueing is expected
+    expect(t.betweenTokenMs).toBe(15_000); // mid-stream stalls are not
+    expect(t.connectionMs).toBe(15_000);
   });
 
-  test('cloud-fast gets tight first-token (30s)', () => {
-    expect(routeContent).toContain('FIRST_TOKEN_MS = 30000');
+  test('cloud-fast is tight on every phase', () => {
+    const t = computeStreamTimeouts('cloud-fast', 180_000);
+    expect(t.connectionMs).toBe(15_000);
+    expect(t.prefillMs).toBe(30_000);
+    expect(t.betweenTokenMs).toBe(15_000);
   });
 
-  test('cloud-fast gets tight between-token (30s)', () => {
-    expect(routeContent).toContain('BETWEEN_TOKEN_MS = 30000');
+  test('local endpoints get generous timeouts that scale with the budget', () => {
+    const t = computeStreamTimeouts('local', 300_000);
+    expect(t.connectionMs).toBe(30_000);
+    expect(t.prefillMs).toBe(285_000);       // timeoutMs - 15s
+    expect(t.betweenTokenMs).toBe(225_000);  // 75% of budget
   });
 
-  test('local endpoints still get generous timeouts', () => {
-    expect(routeContent).toContain('BETWEEN_TOKEN_MS = 120000');
+  test('local prefill never drops below 2 minutes even on a small budget', () => {
+    const t = computeStreamTimeouts('local', 30_000);
+    expect(t.prefillMs).toBe(120_000);
+    expect(t.betweenTokenMs).toBe(120_000);
   });
 
-  test('fallback timeout uses same three-tier classification', () => {
-    expect(routeContent).toContain('fbIsCloudInference');
-    expect(routeContent).toContain('fbBetweenTokenMs = 45000');
-    expect(routeContent).toContain('fbFirstTokenMs = 30000');
-    expect(routeContent).toContain('fbBetweenTokenMs = 30000');
+  test('fallback path uses the same policy function as the primary', () => {
+    // Regression guard: the fallback used to carry its own copy of the tier
+    // ladder, which is how the two silently diverge.
+    expect(routeContent).toContain('computeStreamTimeouts(fbTier, fbTimeoutMs)');
+    expect(routeContent).not.toMatch(/fbIsCloudInference/);
   });
 
   test('isLocalEndpoint correctly identifies LAN addresses', () => {
-    // Verify the function exists and checks common local patterns
-    expect(routeContent).toContain("host === 'localhost'");
-    expect(routeContent).toContain("host === '127.0.0.1'");
-    expect(routeContent).toContain("host.startsWith('192.168.')");
-    expect(routeContent).toContain("host.startsWith('10.')");
+    for (const url of [
+      'http://localhost:1234/v1',
+      'http://127.0.0.1:1234/v1',
+      'http://192.168.1.23:1234/v1',
+      'http://10.0.0.5:1234/v1',
+      'http://172.16.0.9:1234/v1',
+      'http://nuc1.local:1234/v1',
+    ]) {
+      expect(isLocalEndpoint(url)).toBe(true);
+    }
+    for (const url of ['https://api.openai.com/v1', 'https://integrate.api.nvidia.com/v1']) {
+      expect(isLocalEndpoint(url)).toBe(false);
+    }
+  });
+
+  test('an unparseable endpoint is treated as local (fail generous, not fatal)', () => {
+    expect(isLocalEndpoint('not a url')).toBe(true);
   });
 });
 
@@ -607,8 +635,15 @@ describe('14. Multi-Step Task Completion', () => {
 describe('15. Error Classification (Don\'t Block Recoverable Errors)', () => {
   test('path-not-found errors are NOT counted as failures', () => {
     expect(routeContent).toContain('isPathError');
-    expect(routeContent).toContain('ENOENT');
-    expect(routeContent).toContain('path not found (recoverable, not counted as failure)');
+    // Built from a template literal, so match the stable tail only.
+    expect(routeContent).toContain('(recoverable, not counted as failure)');
+    expect(routeContent).toContain("'path not found'");
+    // The patterns themselves now live in lib/tool-error-classification.ts —
+    // assert the behaviour rather than the presence of a literal in route.ts.
+    expect(classifyToolError('workspace_read_file',
+      "ENOENT: no such file or directory, open '/tmp/x.png'").recoverable).toBe(true);
+    expect(classifyToolError('workspace_read_file',
+      'File not found: "choom_commons/trips/planning.md"').recoverable).toBe(true);
   });
 
   test('GPU busy is NOT counted as failure', () => {
@@ -834,16 +869,21 @@ describe('Edge Case: Concurrent Heartbeat + User Chat', () => {
 
 describe('Edge Case: NVIDIA → Local Fallback Timeout Classification', () => {
   test('after fallback switch, next iteration recalculates timeout tier', () => {
-    // The timeout tier variables (isLocal, isCloudInference) are declared INSIDE
-    // the while loop, so they recalculate every iteration using the (potentially
-    // updated) llmSettings.endpoint
+    // The tier must be recomputed INSIDE the while loop, so that after a
+    // fallback swaps llmSettings.endpoint (e.g. NVIDIA -> local LM Studio) the
+    // next iteration stops applying cloud-tight timeouts to a local model.
     const whileLoopBody = routeContent.slice(
       routeContent.indexOf('while (iteration < maxIterations)'),
       routeContent.indexOf('// Assemble fullContent from all iterations')
     );
-    // isLocal should be inside the loop body
-    expect(whileLoopBody).toContain('const isLocal = !usingCloudProvider || isLocalEndpoint(llmSettings.endpoint)');
-    expect(whileLoopBody).toContain('const isCloudInference = !isLocal');
+    expect(whileLoopBody).toContain('classifyEndpoint(llmSettings.endpoint, usingCloudProvider)');
+    expect(whileLoopBody).toContain('computeStreamTimeouts(endpointTier, timeoutMs)');
+
+    // And the behaviour that guards: same budget, different endpoint -> different policy.
+    const cloud = computeStreamTimeouts(classifyEndpoint('https://integrate.api.nvidia.com/v1', true), 180_000);
+    const local = computeStreamTimeouts(classifyEndpoint('http://192.168.1.23:1234/v1', true), 180_000);
+    expect(cloud.betweenTokenMs).toBe(15_000);
+    expect(local.betweenTokenMs).toBeGreaterThan(cloud.betweenTokenMs);
   });
 });
 

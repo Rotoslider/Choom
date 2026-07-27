@@ -11,6 +11,7 @@ import {
   CONFIG_ERROR, PARAM_ERROR, HA_SHAPE_ERROR, HA_DISCOVERY_ERROR, GPU_BUSY,
   NO_DATA, PATH_ERROR, STALE_REF_ERROR, PERMISSION_BLOCK,
 } from '@/lib/tool-error-classification';
+import { classifyEndpoint, computeStreamTimeouts, isLocalEndpoint } from '@/lib/stream-timeouts';
 import { VisionService } from '@/lib/vision-service';
 import { ProjectService } from '@/lib/project-service';
 import type { VisionSettings, LLMProviderConfig, LLMModelProfile, VisionModelProfile } from '@/lib/types';
@@ -224,22 +225,6 @@ function detectCheckpointType(checkpointName: string): 'pony' | 'flux' | 'other'
   return 'other';
 }
 
-/**
- * Check if an endpoint URL points to a local/LAN server.
- * Used to determine timeout behavior — local models need longer prefill
- * timeouts but shouldn't be penalized by cloud-oriented limits.
- * Providers with LAN endpoints (e.g., LM Studio on 192.168.x.x) are local.
- */
-function isLocalEndpoint(endpoint: string): boolean {
-  try {
-    const host = new URL(endpoint).hostname;
-    return host === 'localhost' || host === '127.0.0.1' || host === '::1' ||
-      host.startsWith('192.168.') || host.startsWith('10.') ||
-      /^172\.(1[6-9]|2\d|3[01])\./.test(host) || host.endsWith('.local');
-  } catch {
-    return true; // assume local if URL can't be parsed
-  }
-}
 
 // Attempt JSON repair for malformed tool call arguments from local models.
 // Uses a state machine to properly track string context so braces/brackets
@@ -5665,28 +5650,12 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             //   Phase 2 — PREFILL: processing prompt tokens before first output
             //   Phase 3 — BETWEEN-TOKEN: gap between streaming tokens (stall detection)
             //
-            const isLocal = !usingCloudProvider || isLocalEndpoint(llmSettings.endpoint);
-            const endpointLower = (llmSettings.endpoint || '').toLowerCase();
-            const isCloudInference = !isLocal && /nvidia|\.nvcf\.|together|fireworks|groq|replicate|deepinfra/.test(endpointLower);
+            // Policy lives in lib/stream-timeouts.ts (pure + unit-tested).
             const DEFAULT_TIMEOUT_MS = (isDelegation || isGroupTurn) ? 300000 : 180000;
             const timeoutMs = (choom.llmTimeoutSec ? choom.llmTimeoutSec * 1000 : DEFAULT_TIMEOUT_MS);
-
-            let CONNECTION_TIMEOUT_MS: number;
-            let PREFILL_TIMEOUT_MS: number;
-            let BETWEEN_TOKEN_MS: number;
-            if (isLocal) {
-              CONNECTION_TIMEOUT_MS = 30000;
-              PREFILL_TIMEOUT_MS = Math.max(120000, timeoutMs - 15000);
-              BETWEEN_TOKEN_MS = Math.max(120000, Math.floor(timeoutMs * 0.75));
-            } else if (isCloudInference) {
-              CONNECTION_TIMEOUT_MS = 15000;
-              PREFILL_TIMEOUT_MS = 60000;
-              BETWEEN_TOKEN_MS = 15000;
-            } else {
-              CONNECTION_TIMEOUT_MS = 15000;
-              PREFILL_TIMEOUT_MS = 30000;
-              BETWEEN_TOKEN_MS = 15000;
-            }
+            const endpointTier = classifyEndpoint(llmSettings.endpoint, usingCloudProvider);
+            const { connectionMs: CONNECTION_TIMEOUT_MS, prefillMs: PREFILL_TIMEOUT_MS, betweenTokenMs: BETWEEN_TOKEN_MS } =
+              computeStreamTimeouts(endpointTier, timeoutMs);
             let connectionEstablished = false;
             let firstTokenReceived = false;
             let lastChunkTime = Date.now();
@@ -6081,27 +6050,16 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                     toolCallsAccumulator = new Map();
                     finishReason = 'stop';
 
-                    // Fallback timeout: same three-phase approach as primary.
+                    // Fallback timeout: same three-phase policy as the primary,
+                    // via the same function — this was a duplicated copy of the
+                    // tier ladder, which is exactly how the two drift apart.
+                    // Note the fallback classifies on `!fb.providerId` (a fallback
+                    // with no provider is the local default), not usingCloudProvider.
                     const fbIsLocal = !fb.providerId || isLocalEndpoint(fbSettings.endpoint);
-                    const fbEndpointLower = (fbSettings.endpoint || '').toLowerCase();
-                    const fbIsCloudInference = !fbIsLocal && /nvidia|\.nvcf\.|together|fireworks|groq|replicate|deepinfra/.test(fbEndpointLower);
                     const fbTimeoutMs = fbIsLocal ? timeoutMs : Math.max(60000, Math.floor(timeoutMs * 0.75));
-                    let fbConnectionMs: number;
-                    let fbPrefillMs: number;
-                    let fbBetweenTokenMs: number;
-                    if (fbIsLocal) {
-                      fbConnectionMs = 30000;
-                      fbPrefillMs = Math.max(120000, fbTimeoutMs - 15000);
-                      fbBetweenTokenMs = Math.max(120000, Math.floor(fbTimeoutMs * 0.75));
-                    } else if (fbIsCloudInference) {
-                      fbConnectionMs = 15000;
-                      fbPrefillMs = 60000;
-                      fbBetweenTokenMs = 15000;
-                    } else {
-                      fbConnectionMs = 15000;
-                      fbPrefillMs = 30000;
-                      fbBetweenTokenMs = 15000;
-                    }
+                    const fbTier = classifyEndpoint(fbSettings.endpoint, !fbIsLocal);
+                    const { connectionMs: fbConnectionMs, prefillMs: fbPrefillMs, betweenTokenMs: fbBetweenTokenMs } =
+                      computeStreamTimeouts(fbTier, fbTimeoutMs);
                     let fbConnectionEstablished = false;
                     let fbFirstTokenReceived = false;
                     let fbRejectInactivity: (err: Error) => void;
