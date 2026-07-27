@@ -8,6 +8,7 @@
 import { readFileSync } from 'fs';
 import { classifyEndpoint, computeStreamTimeouts, isLocalEndpoint } from '../lib/stream-timeouts';
 import { classifyToolError } from '../lib/tool-error-classification';
+import { createToolCallXmlFilter } from '../lib/tool-call-parsing';
 import path from 'path';
 
 // Import CompactionService for direct unit testing
@@ -691,13 +692,21 @@ describe('16. Parallel Tool Execution for Read-Only Tools', () => {
 // ─── 17. Tool Call XML Filter Edge Cases ────────────────────────────────
 
 describe('17. Tool Call XML Filter (Streaming Edge Cases)', () => {
+  // Behaviour for these lives in __tests__/tool-call-parsing.test.ts now that
+  // the filter is a real module. These used to grep route.ts for 'pendingBuffer'
+  // and 'OPEN_TAG.startsWith(tail)', which asserted nothing and broke on a move.
   test('filter handles partial <tool_call> split across chunks', () => {
-    expect(routeContent).toContain('pendingBuffer');
-    expect(routeContent).toContain('OPEN_TAG.startsWith(tail)');
+    const f = createToolCallXmlFilter();
+    const out = ['Hello <tool', '_call>{"name":"x"}</tool_call> bye']
+      .map(c => f.filter(c)).join('') + f.flush();
+    expect(out).toBe('Hello  bye');
+    expect(f.getCaptured()).toEqual(['{"name":"x"}']);
   });
 
   test('flush() releases buffered partial tags on stream end', () => {
-    expect(routeContent).toContain('function flush()');
+    const f = createToolCallXmlFilter();
+    const out = ['trailing <too'].map(c => f.filter(c)).join('') + f.flush();
+    expect(out).toBe('trailing <too');
   });
 
   test('flush is called after primary stream completes', () => {
