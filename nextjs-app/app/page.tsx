@@ -93,7 +93,6 @@ export default function Home() {
 
   const [isSpeaking, setIsSpeaking] = useState(false);
 
-  // Live avatar ref for playing MuseTalk-generated frames
   // Refs for live mode state (avoids stale closures in TTS callback)
   const currentChoomRef = useRef(currentChoom);
 

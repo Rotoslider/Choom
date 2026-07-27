@@ -735,17 +735,9 @@ export type AsyncState<T> =
 // Avatar Types
 // ============================================================================
 
-export interface VisemeFrame {
-  time: number;                        // seconds into audio
-  weights: Record<string, number>;     // viseme_name → 0.0-1.0
-}
-
-export type VisemeTimeline = VisemeFrame[];
-
 export interface AvatarExpression {
   name: string;
   weights: Record<string, number>;     // morph_target → weight
   triggerKeyword?: string;             // auto-trigger on this word in response
 }
 
-export type Avatar3dStatus = 'generating' | 'ready' | 'failed' | null;

@@ -954,26 +954,6 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave, onDelete }: 
                   </div>
                 </div>
 
-                {/* Live Avatar */}
-                <div className="space-y-2">
-                  <div className="flex items-center gap-2">
-                    <label className="text-sm font-medium">Live Avatar</label>
-                    <Tooltip>
-                      <TooltipTrigger asChild><Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" /></TooltipTrigger>
-                      <TooltipContent side="left" className="max-w-xs">
-                        <p className="font-medium mb-1">LivePortrait Animation</p>
-                        <p className="text-xs">Uses this Choom&apos;s avatar photo for real-time face animation with head motion, blinks, and lip sync from TTS audio.</p>
-                        <p className="text-xs mt-1">Requirements:</p>
-                        <ul className="text-xs mt-0.5 space-y-0.5 list-disc pl-3">
-                          <li>Avatar photo uploaded (above)</li>
-                          <li>Avatar service running (enable in Settings)</li>
-                          <li>Square or portrait photo, front-facing, well-lit</li>
-                        </ul>
-                      </TooltipContent>
-                    </Tooltip>
-                  </div>
-                </div>
-
                 <div className="space-y-2">
                   <div className="flex items-center gap-2">
                     <label className="text-sm font-medium">Memory ID</label>
@@ -1483,8 +1463,4 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave, onDelete }: 
     </Dialog>
   );
 }
-
-// ============================================================================
-// Live Avatar Status — shows LivePortrait readiness
-// ============================================================================
 
