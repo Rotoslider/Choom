@@ -48,17 +48,37 @@ describe('WorkspaceService.resolveSafe', () => {
     expect(ws.resolveSafe(root)).toBe(root);
   });
 
-  it('blocks absolute paths outside the workspace', () => {
-    expect(() => ws.resolveSafe('/etc/passwd')).toThrow(/Path traversal blocked/);
+  it('treats a leading-slash workspace path as workspace-relative', () => {
+    // Chooms routinely write "/choom_commons/for_eve/note.md" meaning
+    // "choom_commons/for_eve/note.md". Replaying every path argument in
+    // data/traces, 24 distinct real paths take this branch and all 24 are
+    // genuine workspace folders. Rejecting them broke cross-Choom letters,
+    // camera snapshots and uploads, so they are rebased, not refused.
+    expect(ws.resolveSafe('/freecad/view.png')).toBe(path.join(root, 'freecad/view.png'));
+  });
+
+  it('contains an absolute system path inside the workspace rather than escaping', () => {
+    // Not an error — it resolves to <root>/etc/passwd and fails later as
+    // not-found. What matters is that it never reaches the real /etc/passwd.
+    const r = ws.resolveSafe('/etc/passwd');
+    expect(r.startsWith(root + path.sep)).toBe(true);
+    expect(r).not.toBe('/etc/passwd');
   });
 
   it('blocks ../ traversal', () => {
     expect(() => ws.resolveSafe('../../etc/passwd')).toThrow(/Path traversal blocked/);
   });
 
-  it('blocks a sibling directory that shares the root as a string prefix', () => {
-    // "<root>-evil" starts with "<root>" but is NOT inside it. A bare
-    // startsWith() check would have let this through.
-    expect(() => ws.resolveSafe(`${root}-evil/secrets.txt`)).toThrow(/Path traversal blocked/);
+  it('never resolves into a sibling directory that shares the root as a prefix', () => {
+    // "<root>-evil" starts with "<root>" but is NOT inside it. The result must
+    // stay under the real root — a bare startsWith() containment check would
+    // have let the sibling through.
+    const r = ws.resolveSafe(`${root}-evil/secrets.txt`);
+    expect(r.startsWith(root + path.sep)).toBe(true);
+    expect(r).not.toBe(`${root}-evil/secrets.txt`);
+  });
+
+  it('blocks traversal that would escape the root', () => {
+    expect(() => ws.resolveSafe('a/../../../../etc/shadow')).toThrow(/Path traversal blocked/);
   });
 });

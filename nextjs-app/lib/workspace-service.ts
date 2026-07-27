@@ -53,17 +53,23 @@ export class WorkspaceService {
       const abs = path.resolve(cleaned);
       if (abs === this.rootPath || abs.startsWith(this.rootPath + path.sep)) {
         cleaned = path.relative(this.rootPath, abs) || '.';
-      } else {
-        // Absolute AND outside the workspace. The old code stripped the leading
-        // slash, so "/etc/passwd" silently became "<root>/etc/passwd" and failed
-        // later with a baffling ENOENT. Fail loudly and actionably instead —
-        // this is a 'path'-class error, so it stays recoverable and the model
-        // can retry with a workspace-relative path.
-        throw new Error(
-          `Path traversal blocked: "${relativePath}" is an absolute path outside the workspace. ` +
-          `Use a path relative to the workspace root instead.`,
-        );
       }
+      // Otherwise fall through to the leading-slash strip below, which treats
+      // it as workspace-relative.
+      //
+      // Do NOT "helpfully" throw here. A leading slash on a workspace path is
+      // overwhelmingly a Choom writing "/choom_commons/for_eve/note.md" when it
+      // means "choom_commons/for_eve/note.md" — replaying every path argument in
+      // data/traces through this function, 24 distinct real paths take this
+      // branch and all 24 are genuine workspace folders (/choom_commons/...,
+      // /selfies_aloy/..., /uploads/...). Rejecting them breaks cross-Choom
+      // letters, camera snapshots and uploads.
+      //
+      // Nothing escapes: the strip makes it relative, and the containment check
+      // at the end of this function still blocks real traversal ("../../etc",
+      // or a sibling dir sharing the root as a string prefix). A true system
+      // path like "/etc/passwd" simply resolves to <root>/etc/passwd and fails
+      // as not-found, which is contained and safe.
     }
 
     // Strip characters that are never valid in file paths.
