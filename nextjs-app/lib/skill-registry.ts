@@ -191,7 +191,7 @@ export class SkillRegistry {
       }
     } else if (fs.existsSync(toolsPath)) {
       try {
-        const toolsModule = await import(/* webpackIgnore: true */ toolsPath);
+        const toolsModule = await import(/* webpackIgnore: true */ /* turbopackIgnore: true */ toolsPath);
         toolDefinitions = toolsModule.tools || toolsModule.default || [];
       } catch {
         console.warn(`[SkillRegistry] Cannot import ${toolsPath} — tools will be loaded via pre-registration`);
@@ -230,7 +230,7 @@ export class SkillRegistry {
             }
           } else if (hasHandlerTs) {
             try {
-              const handlerModule = await import(/* webpackIgnore: true */ handlerTsPath);
+              const handlerModule = await import(/* webpackIgnore: true */ /* turbopackIgnore: true */ handlerTsPath);
               const HandlerClass = handlerModule.default || Object.values(handlerModule).find(
                 (v: unknown) => typeof v === 'function' && (v as { prototype: Record<string, unknown> }).prototype?.execute
               );
@@ -454,6 +454,7 @@ export class SkillRegistry {
         [/\b(contacts?|phone number|address book)\b/i, ['google-contacts']],
         [/\b(youtube|video|channel|playlist)\b/i, ['google-youtube']],
         [/\b(plan|multi.?step|step.?by.?step|break.?down)\b/i, ['plan-mode']],
+        [/\b(freecad|\bcad\b|3d\s?print|3d\s?model|stl|fcstd|solidworks|bracket|parametric|design (?:a |the )?part|model (?:a |the )?part)\b/i, ['freecad']],
       ];
 
       for (const [pattern, skillNames] of patterns) {

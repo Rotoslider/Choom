@@ -65,11 +65,7 @@ export function Sidebar({
     services,
   } = useAppStore();
 
-  // Count connected services — exclude avatar if no Chooms use it
-  const anyAvatarEnabled = chooms.some(c => c.avatarMode && c.avatarMode !== 'off');
-  const serviceEntries = Object.entries(services).filter(
-    ([key]) => key !== 'avatar' || anyAvatarEnabled
-  );
+  const serviceEntries = Object.entries(services);
   const connectedCount = serviceEntries.filter(([, s]) => s === 'connected').length;
   const totalServices = serviceEntries.length;
 

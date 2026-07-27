@@ -14,6 +14,27 @@ const nextConfig = {
   // message input. (Dev-only indicator; has no effect on the app itself.)
   devIndicators: false,
   serverExternalPackages: ['@prisma/client', 'pdfkit', 'sharp'],
+  // Keep sibling services and the trace corpus out of output file tracing —
+  // they are separate processes, not part of the Next app, and together they
+  // are hundreds of MB.
+  //
+  // NOTE: this does NOT fix `next build`, which currently fails with
+  //   Symlink services/*/venv/bin/python is invalid, it points out of the
+  //   filesystem root
+  // That failure happens earlier, in Turbopack's module graph: skill-registry.ts
+  // reads its skill directory from a runtime-computed path, so Turbopack
+  // conservatively creates a directory reference over the project and walks
+  // into the Python virtualenvs, whose bin/ symlinks point at /usr/bin.
+  // outputFileTracingExcludes runs too late to prevent that. The real fix is to
+  // move the Python virtualenvs out of the Next project tree. Dev mode is
+  // unaffected. See the overhaul tracker (C-13).
+  outputFileTracingExcludes: {
+    '*': [
+      './services/**',
+      './data/traces/**',
+      './skill_builder/**',
+    ],
+  },
   images: {
     remotePatterns: [
       {

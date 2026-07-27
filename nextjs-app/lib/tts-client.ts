@@ -1,12 +1,10 @@
-import type { TTSSettings, VisemeTimeline } from './types';
+import type { TTSSettings } from './types';
 import { isSentenceEnd, stripForTTS } from './utils';
 import { log } from './log-store';
-import { analyzeAudioForVisemes } from './audio-viseme-analyzer';
 import { withAudioLock } from './audio-lock';
 
 interface QueueEntry {
   audio: HTMLAudioElement;
-  visemes?: VisemeTimeline;
 }
 
 export class StreamingTTS {
@@ -17,7 +15,6 @@ export class StreamingTTS {
   private audioQueue: QueueEntry[] = [];
   private isPlaying: boolean = false;
   private onSpeakingChange?: (isSpeaking: boolean) => void;
-  private onVisemeTimeline?: (timeline: VisemeTimeline, audio: HTMLAudioElement) => void;
   private onAudioReady?: (audioBase64: string, audioElement: HTMLAudioElement) => boolean;
   private isMuted: boolean = false;
   private currentAudio: HTMLAudioElement | null = null;
@@ -29,14 +26,12 @@ export class StreamingTTS {
   constructor(
     settings: TTSSettings,
     onSpeakingChange?: (isSpeaking: boolean) => void,
-    onVisemeTimeline?: (timeline: VisemeTimeline, audio: HTMLAudioElement) => void,
     onAudioReady?: (audioBase64: string, audioElement: HTMLAudioElement) => boolean,
   ) {
     this.endpoint = settings.endpoint;
     this.voiceId = settings.defaultVoice;
     this.speed = settings.speed;
     this.onSpeakingChange = onSpeakingChange;
-    this.onVisemeTimeline = onVisemeTimeline;
     this.onAudioReady = onAudioReady;
   }
 
@@ -232,24 +227,19 @@ export class StreamingTTS {
       // Create Audio element from base64 (same as old working app)
       const audio = new Audio(`data:audio/wav;base64,${data.audio}`);
 
-      // Pre-decode audio and analyze visemes in parallel
-      const [, visemes] = await Promise.all([
-        new Promise<void>((resolve) => {
-          audio.oncanplaythrough = () => resolve();
-          audio.onerror = () => resolve();
-          audio.load();
-        }),
-        this.onVisemeTimeline
-          ? analyzeAudioForVisemes(data.audio).catch(() => undefined)
-          : Promise.resolve(undefined),
-      ]);
+      // Pre-decode so playback starts without a gap.
+      await new Promise<void>((resolve) => {
+        audio.oncanplaythrough = () => resolve();
+        audio.onerror = () => resolve();
+        audio.load();
+      });
 
       // If onAudioReady is set AND returns true, it handled the audio (live mode).
       // Otherwise, queue for normal playback.
       const handled = this.onAudioReady?.(data.audio, audio) ?? false;
 
       if (!handled) {
-        this.audioQueue.push({ audio, visemes });
+        this.audioQueue.push({ audio });
         if (!this.isPlaying && !this.isMuted) {
           this.playNext();
         }
@@ -272,11 +262,6 @@ export class StreamingTTS {
     const entry = this.audioQueue.shift()!;
     const audio = entry.audio;
     this.currentAudio = audio;
-
-    // Emit viseme timeline before playback starts
-    if (entry.visemes && this.onVisemeTimeline) {
-      this.onVisemeTimeline(entry.visemes, audio);
-    }
 
     try {
       // Hold the global audio lock while this clip plays so a group-room voice

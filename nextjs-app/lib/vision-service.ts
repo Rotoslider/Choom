@@ -93,10 +93,19 @@ export class VisionService {
     let resolvedMime = mimeType || 'image/png';
 
     if (imagePath && workspaceRoot) {
-      // Read from workspace
-      const cleaned = imagePath.replace(/^[/\\]+/, '');
-      const fullPath = path.resolve(workspaceRoot, cleaned);
-      if (!fullPath.startsWith(path.resolve(workspaceRoot))) {
+      // Read from workspace. Accept BOTH workspace-relative paths and absolute
+      // paths that already point inside the workspace — tools often hand the
+      // model an absolute path, and blindly stripping the leading slash used to
+      // produce /workspace/home/user/workspace/... double-joins (ENOENT).
+      const root = path.resolve(workspaceRoot);
+      const trimmed = imagePath.trim();
+      let fullPath = path.isAbsolute(trimmed) ? path.resolve(trimmed) : path.resolve(root, trimmed);
+      if (!fullPath.startsWith(root + path.sep) && fullPath !== root) {
+        // Not inside the workspace as-is — fall back to the legacy behavior of
+        // treating it as workspace-relative after stripping leading slashes.
+        fullPath = path.resolve(root, trimmed.replace(/^[/\\]+/, ''));
+      }
+      if (!fullPath.startsWith(root + path.sep)) {
         throw new Error('Path traversal blocked: image path resolves outside workspace');
       }
       const rawBuffer = await readFile(fullPath);

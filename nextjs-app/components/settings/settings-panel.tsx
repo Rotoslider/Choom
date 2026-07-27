@@ -22,7 +22,6 @@ import { AppearanceSettings } from './appearance-settings';
 import { ScheduledSettings } from './scheduled-settings';
 import { SelfFollowupsSettings } from './self-followups-settings';
 import { BridgeLogSettings } from './bridge-log-settings';
-import { AvatarSettingsPanel } from './avatar-settings';
 import { useAppStore } from '@/lib/store';
 
 interface SettingsPanelProps {
@@ -61,7 +60,6 @@ export function SettingsPanel({ open, onOpenChange }: SettingsPanelProps) {
             <TabsTrigger value="scheduled">Tasks</TabsTrigger>
             <TabsTrigger value="followups">Followups</TabsTrigger>
             <TabsTrigger value="bridgelog">Bridge Log</TabsTrigger>
-            <TabsTrigger value="avatar">Avatar</TabsTrigger>
             <TabsTrigger value="appearance">Theme</TabsTrigger>
           </TabsList>
 
@@ -104,10 +102,6 @@ export function SettingsPanel({ open, onOpenChange }: SettingsPanelProps) {
 
             <TabsContent value="bridgelog" className="mt-0 space-y-4">
               <BridgeLogSettings />
-            </TabsContent>
-
-            <TabsContent value="avatar" className="mt-0 space-y-4">
-              <AvatarSettingsPanel />
             </TabsContent>
           </ScrollArea>
         </Tabs>

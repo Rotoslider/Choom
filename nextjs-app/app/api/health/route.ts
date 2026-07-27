@@ -99,7 +99,6 @@ const healthPaths: Record<string, string[]> = {
   stt: ['/health', '/', '/v1/audio/transcriptions'],
   imageGen: ['/sdapi/v1/options', '/sdapi/v1/sd-models', '/'],
   searxng: ['/', '/healthz', '/search?q=test&format=json'],
-  avatar: ['/health'],
 };
 
 // Default endpoints from environment
@@ -110,12 +109,11 @@ const defaultEndpoints = {
   stt: process.env.STT_ENDPOINT || 'http://localhost:5000',
   imageGen: process.env.IMAGE_GEN_ENDPOINT || 'http://localhost:7860',
   searxng: process.env.SEARXNG_ENDPOINT || 'http://localhost:8888',
-  avatar: process.env.AVATAR_SERVICE_URL || 'http://127.0.0.1:8020',
 };
 
 function buildWeatherCheck(settings?: { provider?: string; apiKey?: string }): HealthResult {
   const provider = settings?.provider || 'openweathermap';
-  const apiKey = settings?.apiKey || process.env.OPENWEATHERMAP_API_KEY || process.env.WEATHERAPI_KEY || '';
+  const apiKey = settings?.apiKey || process.env.OPENWEATHER_API_KEY || process.env.WEATHERAPI_KEY || '';
   const label = provider === 'openweathermap' ? 'OpenWeatherMap' : 'WeatherAPI';
   return checkApiKeyConfigured('weather', label, apiKey);
 }
@@ -156,7 +154,6 @@ export async function GET(request: NextRequest) {
     buildWeatherCheck(),
     buildSearchCheck(),
     checkService('searxng', defaultEndpoints.searxng, healthPaths.searxng),
-    checkService('avatar', defaultEndpoints.avatar, healthPaths.avatar),
   ]);
 
   const healthMap = results.reduce(
@@ -190,7 +187,6 @@ export async function POST(request: NextRequest) {
       stt: endpoints?.stt || defaultEndpoints.stt,
       imageGen: endpoints?.imageGen || defaultEndpoints.imageGen,
       searxng: endpoints?.searxng || defaultEndpoints.searxng,
-      avatar: endpoints?.avatar || defaultEndpoints.avatar,
     };
 
     // Check all services in parallel
@@ -203,7 +199,6 @@ export async function POST(request: NextRequest) {
       buildWeatherCheck(weather),
       buildSearchCheck(search),
       checkService('searxng', serviceEndpoints.searxng, healthPaths.searxng),
-      checkService('avatar', serviceEndpoints.avatar, healthPaths.avatar),
     ]);
 
     const healthMap = results.reduce(

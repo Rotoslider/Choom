@@ -972,7 +972,6 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave, onDelete }: 
                       </TooltipContent>
                     </Tooltip>
                   </div>
-                  <LiveAvatarStatus avatarUrl={avatarUrl} />
                 </div>
 
                 <div className="space-y-2">
@@ -1489,36 +1488,3 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave, onDelete }: 
 // Live Avatar Status — shows LivePortrait readiness
 // ============================================================================
 
-function LiveAvatarStatus({ avatarUrl }: { avatarUrl: string }) {
-  const { services } = useAppStore();
-  const avatarServiceUp = services.avatar === 'connected';
-
-  if (!avatarUrl) {
-    return (
-      <p className="text-xs text-muted-foreground">
-        Upload an avatar photo above to enable Live mode
-      </p>
-    );
-  }
-
-  return (
-    <div className="space-y-1.5">
-      <div className="flex items-center gap-2 text-xs">
-        {avatarServiceUp ? (
-          <>
-            <Check className="h-3.5 w-3.5 text-green-500" />
-            <span className="text-green-500 font-medium">Ready — switch to Live tab to use</span>
-          </>
-        ) : (
-          <>
-            <AlertCircle className="h-3.5 w-3.5 text-yellow-500" />
-            <span className="text-yellow-500 font-medium">Avatar service not running</span>
-          </>
-        )}
-      </div>
-      <p className="text-[10px] text-muted-foreground">
-        Powered by LivePortrait — real-time head motion, blinks, and lip sync from TTS audio
-      </p>
-    </div>
-  );
-}

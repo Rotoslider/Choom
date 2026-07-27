@@ -3,7 +3,6 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import type {
   AppSettings,
   HomeAssistantSettings,
-  AvatarSettings,
   LLMProviderConfig,
   LLMModelProfile,
   VisionModelProfile,
@@ -112,10 +111,6 @@ const defaultSettings: AppSettings = {
     promptEntities: '',
     cacheSeconds: 30,
   },
-  avatar: {
-    enabled: true,
-    endpoint: 'http://127.0.0.1:8020',
-  },
   ownerName: '',
   ownerLocation: '',
 };
@@ -129,7 +124,6 @@ const defaultServiceHealth: ServiceHealth = {
   weather: 'checking',
   search: 'checking',
   searxng: 'checking',
-  avatar: 'checking',
 };
 
 // ============================================================================
@@ -225,7 +219,6 @@ interface AppState {
   updateAppearanceSettings: (settings: Partial<AppSettings['appearance']>) => void;
   updateVisionSettings: (settings: Partial<AppSettings['vision']>) => void;
   updateHomeAssistantSettings: (ha: Partial<HomeAssistantSettings>) => void;
-  updateAvatarSettings: (avatar: Partial<AvatarSettings>) => void;
   updateOwnerSettings: (owner: Partial<Pick<AppSettings, 'ownerName' | 'ownerLocation'>>) => void;
   updateProvidersSettings: (providers: LLMProviderConfig[]) => void;
   updateModelProfiles: (profiles: LLMModelProfile[]) => void;
@@ -510,7 +503,6 @@ export const useAppStore = create<AppState>()(
             weather: 'checking',
             search: 'checking',
             searxng: 'checking',
-            avatar: 'checking',
           },
         }),
 
@@ -574,11 +566,6 @@ export const useAppStore = create<AppState>()(
         }));
         syncSettingsToBridgeConfig(get().settings);
       },
-      updateAvatarSettings: (avatar) => {
-        set((state) => ({
-          settings: { ...state.settings, avatar: { ...state.settings.avatar, ...avatar } },
-        }));
-      },
       updateOwnerSettings: (owner) => {
         set((state) => ({ settings: { ...state.settings, ...owner } }));
         syncSettingsToBridgeConfig(get().settings);
@@ -636,7 +623,6 @@ export const useAppStore = create<AppState>()(
             ownerLocation: (merge(s.ownerLocation || '', server.ownerLocation) as string) || s.ownerLocation,
             // Per-device cosmetics — never server-authoritative.
             appearance: s.appearance,
-            avatar: s.avatar,
           };
           // STT interaction prefs stay per-device even though the STT endpoint is shared.
           updated.stt = { ...updated.stt, inputMode: s.stt.inputMode, vadSensitivity: s.stt.vadSensitivity };
