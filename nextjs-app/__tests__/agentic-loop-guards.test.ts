@@ -86,7 +86,11 @@ describe('Agentic Loop Guards', () => {
     });
 
     test('cached failures are checked before execution', () => {
-      expect(routeContent).toContain('const cachedError = failedCallCache.get(dedupKey)');
+      // Assert the lookup happens, not its exact expression. The call site now
+      // wraps it in a NO_DEDUP_TOOLS bypass, and pinning the full line made an
+      // intentional change look like a regression.
+      expect(routeContent).toContain('failedCallCache.get(dedupKey)');
+      expect(routeContent).toMatch(/const cachedError =[^;]*failedCallCache\.get\(dedupKey\)/);
     });
 
     test('cached failure message tells LLM to try different args', () => {

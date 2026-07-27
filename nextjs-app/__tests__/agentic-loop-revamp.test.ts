@@ -566,8 +566,11 @@ describe('13. Fallback Chain Preserves Conversation State', () => {
     // This should be in the fallback success path
     // nudgeCount = 0 is near the fallback success block but may be past the
     // Chinese model enforcement code. Search broadly.
+    // Window is generous on purpose: this asserts "nudgeCount is reset inside
+    // the fallback-success block", and a fixed narrow slice turns any added
+    // comment in that block into a spurious failure.
     const fbSuccessPos = routeContent.indexOf('Fallback succeeded — switch llmClient');
-    const afterFallback = routeContent.slice(fbSuccessPos, fbSuccessPos + 1500);
+    const afterFallback = routeContent.slice(fbSuccessPos, fbSuccessPos + 3000);
     expect(afterFallback).toContain('nudgeCount = 0');
   });
 

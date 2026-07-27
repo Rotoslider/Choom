@@ -40,6 +40,32 @@ export class WorkspaceService {
       cleaned = relativePath.replace(/%(?![0-9A-Fa-f]{2})/g, '');
     }
 
+    // Absolute paths that already point INSIDE the workspace must be rebased,
+    // not slash-stripped. Tools routinely hand the model an absolute path (image
+    // paths, download targets, FreeCAD exports) and the model hands it straight
+    // back. Blindly dropping the leading slash turned
+    //   /home/nuc1/choom-projects/freecad/view.png
+    // into
+    //   /home/nuc1/choom-projects/home/nuc1/choom-projects/freecad/view.png
+    // which is the single largest source of ENOENT ('path'-class) errors in the
+    // trace corpus. Rebase here, before any other munging.
+    if (path.isAbsolute(cleaned)) {
+      const abs = path.resolve(cleaned);
+      if (abs === this.rootPath || abs.startsWith(this.rootPath + path.sep)) {
+        cleaned = path.relative(this.rootPath, abs) || '.';
+      } else {
+        // Absolute AND outside the workspace. The old code stripped the leading
+        // slash, so "/etc/passwd" silently became "<root>/etc/passwd" and failed
+        // later with a baffling ENOENT. Fail loudly and actionably instead —
+        // this is a 'path'-class error, so it stays recoverable and the model
+        // can retry with a workspace-relative path.
+        throw new Error(
+          `Path traversal blocked: "${relativePath}" is an absolute path outside the workspace. ` +
+          `Use a path relative to the workspace root instead.`,
+        );
+      }
+    }
+
     // Strip characters that are never valid in file paths.
     // Allow: alphanumeric, hyphen, underscore, dot, forward slash, space, parentheses
     const sanitized = cleaned.replace(/[^a-zA-Z0-9\-_./\s()]/g, '');
@@ -117,7 +143,10 @@ export class WorkspaceService {
 
     const resolved = path.resolve(this.rootPath, cleaned);
 
-    if (!resolved.startsWith(this.rootPath)) {
+    // Separator-aware containment check. A bare startsWith() would accept
+    // "/home/nuc1/choom-projects-evil" for root "/home/nuc1/choom-projects",
+    // since the root is a string prefix of the sibling directory.
+    if (resolved !== this.rootPath && !resolved.startsWith(this.rootPath + path.sep)) {
       throw new Error(`Path traversal blocked: "${relativePath}" resolves outside workspace`);
     }
 

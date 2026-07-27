@@ -5355,7 +5355,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           // force the LLM to call a tool on the first iteration instead of narrating.
           // This is the biggest reliability win for local models that tend to describe actions.
           const msgLower = message.toLowerCase();
-          const strongToolIntent = /\b(what(?:'?s| is) the weather|weather (?:like|today|tomorrow|forecast)|search (?:for|the web)|look up|find (?:me|out)|generate (?:an? |some )?(?:image|picture|photo|selfie|portrait)|take a (?:selfie|photo|picture)|create (?:a |an )?(?:image|picture)|make (?:me |an? )?(?:image|picture|selfie)|(?:please |can you |you should )remember (?:that|this|my|i |the |for )|(?<!i )(?<!i'll )remember (?:that |this |my |i |the |for )|(?:don'?t |never )forget (?:that|this|my|i )|(?:save|store|note|keep) (?:this|that|my|the |it )(?:in |to |as )?(?:memory|mind)?|use (?:the )?remember(?: tool)?|remind me|set (?:a )?reminder|send (?:a )?(?:notification|message|alert)|check (?:the |my )?(?:calendar|schedule|tasks|email|inbox)|(?:any |do i have (?:any )?|what )(?:appointments?|meetings?|events?)|(?:am i |are we )(?:free|busy|available)|what(?:'?s| is) on (?:my )?(?:calendar|schedule|for )?(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this week|next week)|(?:what(?:'?s| is| do i have) )(?:scheduled|planned|coming up)|when (?:is|was|did) (?:my |the )?(?:next|last) |when (?:is|was) the last time i |when did i (?:last )?(?:go|get|have|see|do|visit|fill|take)|write (?:a |an )?(?:file|document|report)|read (?:the |my |this )?(?:file|document|pdf|report)|(?:look|take a look|glance) at (?:the |this |that )?(?:file|document|pdf|report)|open (?:the |this |that )?(?:pdf|report|document)|review (?:the |this |that )?(?:file|document|pdf|report)|list (?:my |the )?(?:files|projects|tasks)|download|scrape|analyze (?:this|the|that) (?:image|photo|picture)|turn (?:on|off) (?:the )?|(?:open|close) (?:the )?|(?:lights?|switch|fan|heater|thermostat) (?:on|off)|delegate|get (?:the )?(?:weather|forecast)|search (?:youtube|email|gmail|contacts)|draft (?:an? )?email|compose (?:an? )?email|^habit\b|habit (?:stats|summary|report|breakdown)|how (?:often|many times) (?:do|did|have) i |play (?:some |me )?(?:music|song|track|album|artist|playlist|radio)|put on (?:some )?(?:music|song)|what(?:'?s| is) (?:playing|on)(?: right now| currently)?|(?:pause|stop|skip|next|previous|resume)(?: the)?(?: music| song| track| playback)?|(?:turn|volume) (?:up|down)|(?:search|find)(?: for)?(?: some| a)? (?:music|song|track|artist|album))\b/i.test(msgLower);
+          const strongToolIntent = /\b(what(?:'?s| is) the weather|weather (?:like|today|tomorrow|forecast)|search (?:for|the web)|look up|find (?:me|out)|generate (?:an? |some )?(?:image|picture|photo|selfie|portrait)|take a (?:selfie|photo|picture)|create (?:a |an )?(?:image|picture)|make (?:me |an? )?(?:image|picture|selfie)|(?:please |can you |you should )remember (?:that|this|my|i |the |for )|(?<!i )(?<!i'll )remember (?:that |this |my |i |the |for )|(?:don'?t |never )forget (?:that|this|my|i )|(?:save|store|note|keep) (?:this|that|my|the |it )(?:in |to |as )?(?:memory|mind)?|use (?:the )?remember(?: tool)?|remind me|set (?:a )?reminder|send (?:a )?(?:notification|message|alert)|check (?:the |my )?(?:calendar|schedule|tasks|email|inbox)|(?:any |do i have (?:any )?|what )(?:appointments?|meetings?|events?)|(?:am i |are we )(?:free|busy|available)|what(?:'?s| is) on (?:my )?(?:calendar|schedule|for )?(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this week|next week)|(?:what(?:'?s| is| do i have) )(?:scheduled|planned|coming up)|when (?:is|was|did) (?:my |the )?(?:next|last) |when (?:is|was) the last time i |when did i (?:last )?(?:go|get|have|see|do|visit|fill|take)|write (?:a |an )?(?:file|document|report)|read (?:the |my |this )?(?:file|document|pdf|report)|(?:look|take a look|glance) at (?:the |this |that )?(?:file|document|pdf|report)|open (?:the |this |that )?(?:pdf|report|document)|review (?:the |this |that )?(?:file|document|pdf|report)|list (?:my |the )?(?:files|projects|tasks)|download|scrape|analyze (?:this|the|that) (?:image|photo|picture)|turn (?:on|off) (?:the )?|(?:open|close) (?:the )?|(?:lights?|switch|fan|heater|thermostat) (?:on|off)|delegate|get (?:the )?(?:weather|forecast)|search (?:youtube|email|gmail|contacts)|draft (?:an? )?email|compose (?:an? )?email|^habit\b|habit (?:stats|summary|report|breakdown)|how (?:often|many times) (?:do|did|have) i |play (?:some |me )?(?:music|song|track|album|artist|playlist|radio)|put on (?:some )?(?:music|song)|what(?:'?s| is) (?:playing|on)(?: right now| currently)?|(?:pause|stop|skip|next|previous|resume)(?: the)?(?: music| song| track| playback)?|(?:turn|volume) (?:up|down)|(?:search|find)(?: for)?(?: some| a)? (?:music|song|track|artist|album)|(?:start|open|launch|restart|fire up) freecad|(?:in|with|using) freecad|(?:build|design|model|make|create)\b[^.!?\n]{0,50}\b(?:freecad|bracket|holder|mount|enclosure|spacer|bushing|3d model|3d part)|3d.?print)\b/i.test(msgLower);
           // In noTools mode (heartbeat briefings), tools are stripped — never force tool_choice='required'.
           // Without this guard the model is forced to call tools that don't exist and the loop loses the briefing.
           //
@@ -5385,6 +5385,14 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           const MAX_CALLS_PER_TOOL = 50; // Max times any single tool can be called per request
           const MAX_CALLS_PER_READONLY_TOOL = 50; // Higher limit for read-only (PARALLEL_SAFE) tools
           const MAX_FAILURES_PER_TOOL = 2; // Block tool after this many failures (any error)
+          // Iterative tools where errors ARE the workflow (write code → error →
+          // read traceback → fix) get extra headroom before blocking; a cap of 2
+          // turns one typo plus one bad API guess into a full-turn lockout.
+          const ITERATIVE_TOOL_FAILURE_CAPS = new Map<string, number>([
+            ['run_freecad_python', 6],
+          ]);
+          const failureCapFor = (toolName: string) =>
+            ITERATIVE_TOOL_FAILURE_CAPS.get(toolName) ?? MAX_FAILURES_PER_TOOL;
           const choomTag = `[${choom.name}]`;
           console.log(`   🛠️  ${choomTag} Tools available: ${activeTools.length}${skillDispatch ? ' [skill dispatch]' : ''}`);
           // Intent-specific tool guidance: when we detect a specific intent, inject a
@@ -5435,8 +5443,14 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             console.log(`   ⚡ ${choomTag} Tool intent detected — using tool_choice='required' on first iteration${intentToolHint ? ` (hint: ${intentToolHint})` : ''}`);
           }
           if (intentToolHint && activeTools.length > 0) {
+            // Must NOT be role:'system'. Strict chat templates (Qwen/ChatML via
+            // LM Studio) hard-400 the whole request on any system turn after
+            // index 0 ("System message must be at the beginning"). A user-role
+            // turn is valid everywhere AND keeps the guidance recent — folding
+            // it into the head system prompt would bury it under the entire
+            // conversation, which is exactly where it stops working.
             currentMessages.push({
-              role: 'system',
+              role: 'user',
               content: `[Tool guidance] The user's request maps to the "${intentToolHint}" tool. Call that tool directly — do NOT use other tools for this request.`,
             });
           }
@@ -6196,8 +6210,12 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                     // respond in Chinese. Inject a language enforcement reminder.
                     const modelLower = (fbSettings.model || '').toLowerCase();
                     if (/deepseek|glm|baichuan|qwen|chatglm/.test(modelLower)) {
+                      // role:'user', not 'system' — see the [Tool guidance] note above.
+                      // These are the exact model families whose templates raise on a
+                      // late system turn, so injecting one here 400'd the very fallback
+                      // that was supposed to rescue the request.
                       currentMessages.push({
-                        role: 'system',
+                        role: 'user',
                         content: '[IMPORTANT] You MUST respond in English only. Do not use Chinese or any other language.',
                       });
                     }
@@ -6349,7 +6367,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 // Count toward failure limits so repeated empty-args don't loop forever
                 const emptyFails = (toolFailureCounts.get(r.name) || 0) + 1;
                 toolFailureCounts.set(r.name, emptyFails);
-                if (emptyFails >= MAX_FAILURES_PER_TOOL) {
+                if (emptyFails >= failureCapFor(r.name)) {
                   brokenTools.add(r.name);
                   console.log(`   🚫 ${choomTag} ${r.name} blocked after ${emptyFails} empty-args failures`);
                 }
@@ -6872,7 +6890,19 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             // Tools whose output depends on real-world state that changes between
             // calls — never dedup these even if args are identical. Camera snapshots
             // must hit the camera fresh each time (position changes between calls).
-            const NO_DEDUP_TOOLS = new Set(['ha_get_camera_snapshot']);
+            // ALL FreeCAD tools are stateful: the same list/screenshot/fuse call
+            // returns different results as the model evolves, and a call that
+            // failed once (fuse of non-overlapping parts) legitimately succeeds
+            // after the parts are moved. Serving cached results makes the model
+            // reason against a stale snapshot of the document.
+            const NO_DEDUP_TOOLS = new Set([
+              'ha_get_camera_snapshot',
+              'start_freecad', 'create_freecad_document', 'create_freecad_part',
+              'edit_freecad_object', 'delete_freecad_object', 'list_freecad_objects',
+              'freecad_view', 'save_freecad_document', 'close_freecad_document',
+              'fuse_freecad_objects', 'cut_freecad_object', 'fillet_freecad_object',
+              'run_freecad_python',
+            ]);
 
             // Pre-flight check: returns a ToolResult if the call should be skipped, or null to proceed
             const preFlightCheck = (tc: { id: string; name: string; arguments: Record<string, unknown> }): ToolResult | null => {
@@ -6969,7 +6999,9 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               }
 
               // --- Failed call cache ---
-              const cachedError = failedCallCache.get(dedupKey);
+              // (stateful tools exempt: a fuse that failed on non-overlapping parts
+              // succeeds after the parts are moved — same args, different world)
+              const cachedError = NO_DEDUP_TOOLS.has(tc.name) ? undefined : failedCallCache.get(dedupKey);
               if (cachedError) {
                 console.log(`   🔁 Returning cached failure for ${tc.name} (same args already failed)`);
                 return { toolCallId: tc.id, name: tc.name, result: null, error: `${cachedError} [This exact call already failed. Try a different approach or different arguments.]` };
@@ -7065,7 +7097,14 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 if (useHintMatch) {
                   const suggestedTool = useHintMatch[1];
                   const suggestedArgs = useHintMatch[2]?.trim();
-                  if (suggestedTool !== tc.name) {
+                  // The regex matches ANY prose "Use <word>", so it happily
+                  // scraped ordinary English out of error text: the HA error
+                  // "Real climate entities on THIS system: ... Use one of these"
+                  // produced the hint "Use `one` instead." and pointed the model
+                  // at a tool that does not exist. Only accept the capture if it
+                  // names a tool that is actually registered for this request.
+                  const isRealTool = activeTools.some(t => t.name === suggestedTool);
+                  if (isRealTool && suggestedTool !== tc.name) {
                     const hint = suggestedArgs
                       ? `Use \`${suggestedTool}\` with ${suggestedArgs.slice(0, 200)}`
                       : `Use \`${suggestedTool}\` instead.`;
@@ -7101,7 +7140,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                   // Count other failures toward per-tool cap
                   const toolFails = (toolFailureCounts.get(tc.name) || 0) + 1;
                   toolFailureCounts.set(tc.name, toolFails);
-                  if (toolFails >= MAX_FAILURES_PER_TOOL && !brokenTools.has(tc.name)) {
+                  if (toolFails >= failureCapFor(tc.name) && !brokenTools.has(tc.name)) {
                     brokenTools.add(tc.name);
                     console.log(`   🚫 ${tc.name} blocked after ${toolFails} non-param failures this request`);
                   }
