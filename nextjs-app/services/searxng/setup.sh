@@ -21,7 +21,16 @@ fi
 # 2. Create venv if not present
 if [ ! -d "$VENV_DIR" ]; then
     echo "Creating Python venv..."
-    python3 -m venv "$VENV_DIR"
+    # --copies, NOT the default symlinks. These venvs live inside the Next.js
+    # project, and a venv created with symlinks puts "bin/python3 -> /usr/bin/python3"
+    # in the tree. Turbopack walks the project directory while resolving the skill
+    # registry's runtime imports, hits a symlink pointing outside the filesystem
+    # root, and `next build` dies with:
+    #   Symlink services/*/venv/bin/python is invalid, it points out of the
+    #   filesystem root
+    # --copies keeps a real interpreter binary in the venv instead (~8MB) and the
+    # build works. Do not drop this flag.
+    python3 -m venv --copies "$VENV_DIR"
 fi
 
 # 3. Install dependencies

@@ -54,7 +54,16 @@ echo -e "\n${GREEN}Setting up Python virtual environment...${NC}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-python3 -m venv venv
+# --copies, NOT the default symlinks. These venvs live inside the Next.js
+# project, and a venv created with symlinks puts "bin/python3 -> /usr/bin/python3"
+# in the tree. Turbopack walks the project directory while resolving the skill
+# registry's runtime imports, hits a symlink pointing outside the filesystem
+# root, and `next build` dies with:
+#   Symlink services/*/venv/bin/python is invalid, it points out of the
+#   filesystem root
+# --copies keeps a real interpreter binary in the venv instead (~8MB) and the
+# build works. Do not drop this flag.
+python3 -m venv --copies venv
 source venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt

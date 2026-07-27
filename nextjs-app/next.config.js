@@ -18,16 +18,15 @@ const nextConfig = {
   // they are separate processes, not part of the Next app, and together they
   // are hundreds of MB.
   //
-  // NOTE: this does NOT fix `next build`, which currently fails with
+  // Related: `next build` used to fail outright with
   //   Symlink services/*/venv/bin/python is invalid, it points out of the
   //   filesystem root
-  // That failure happens earlier, in Turbopack's module graph: skill-registry.ts
-  // reads its skill directory from a runtime-computed path, so Turbopack
-  // conservatively creates a directory reference over the project and walks
-  // into the Python virtualenvs, whose bin/ symlinks point at /usr/bin.
-  // outputFileTracingExcludes runs too late to prevent that. The real fix is to
-  // move the Python virtualenvs out of the Next project tree. Dev mode is
-  // unaffected. See the overhaul tracker (C-13).
+  // Turbopack walks the project directory while resolving skill-registry.ts's
+  // runtime imports, and a stock venv leaves "bin/python3 -> /usr/bin/python3"
+  // in the tree. Fixed at the source: both venvs now hold a real interpreter
+  // binary (python -m venv --copies) rather than a symlink out of the project,
+  // and both setup.sh scripts pass --copies so it stays that way. These
+  // excludes are a size optimisation, not the fix.
   outputFileTracingExcludes: {
     '*': [
       './services/**',
