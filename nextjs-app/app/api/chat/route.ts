@@ -7,6 +7,10 @@ import { WeatherService } from '@/lib/weather-service';
 import { HomeAssistantService, type HomeAssistantSettings } from '@/lib/homeassistant-service';
 import { WebSearchService } from '@/lib/web-search';
 import { WorkspaceService } from '@/lib/workspace-service';
+import {
+  CONFIG_ERROR, PARAM_ERROR, HA_SHAPE_ERROR, HA_DISCOVERY_ERROR, GPU_BUSY,
+  NO_DATA, PATH_ERROR, STALE_REF_ERROR, PERMISSION_BLOCK,
+} from '@/lib/tool-error-classification';
 import { VisionService } from '@/lib/vision-service';
 import { ProjectService } from '@/lib/project-service';
 import type { VisionSettings, LLMProviderConfig, LLMModelProfile, VisionModelProfile } from '@/lib/types';
@@ -7048,39 +7052,27 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 // - Config/auth errors → block immediately (model can't fix these)
                 // - Missing param errors → DON'T count toward any failure cap (model can fix by providing params)
                 // - Other errors → count toward per-tool cap and consecutive failures
-                const isConfigError = /not configured|api key|unauthorized|forbidden|invalid.*(?:model|endpoint|key)|ECONNREFUSED/i.test(result.error);
-                // Home Assistant 400/422 on ha_call_service are almost always shape errors
-                // (wrong service_data/target format, bad option value, etc.) — recoverable
-                // by the model next iteration. Treat them as param errors so they don't
-                // burn the broken-tools quota after 2 tries. Same for unknown-service 400s
-                // on HA, which the model can fix by running ha_list_services first.
-                const isHaShapeError = /^ha_call_service$/.test(tc.name)
-                  && /HA API (?:400|422)\b/i.test(result.error);
-                // "Invented this domain" / "does not exist on this HA instance" — the LLM
-                // used a hallucinated domain or service name. The tool itself works fine;
-                // blocking it prevents the LLM from making the corrected call next iteration.
+                // Patterns live in lib/tool-error-classification.ts so they can be
+                // unit-tested against verbatim production error strings. A reworded
+                // error message once silently fell out of the recoverable set and
+                // started disabling ha_get_state mid-recovery; see that module.
+                const isConfigError = CONFIG_ERROR.test(result.error);
+                const isHaShapeError = tc.name === 'ha_call_service' && HA_SHAPE_ERROR.test(result.error);
                 const isHaServiceDiscovery = /^ha_(?:call_service|get_state)$/.test(tc.name)
-                  && /invented this domain|does not exist on this Home Assistant|HA API 404: Entity not found/i.test(result.error);
-                const isParamError = /missing required parameter|is required|must provide|please provide/i.test(result.error)
+                  && HA_DISCOVERY_ERROR.test(result.error);
+                const isParamError = PARAM_ERROR.test(result.error)
                   || isHaShapeError
                   || isHaServiceDiscovery;
-                const isGpuBusy = /GPU is busy|GPU is currently busy/i.test(result.error);
-                // "No data/history/results" is informational, not a tool failure — don't count
-                const isNoData = /no (?:history |data |results? )(?:data |found )?for /i.test(result.error);
-                // File/path not found is recoverable — LLM guessed wrong filename, can list dir and retry
-                const isPathError = /ENOENT|no such file or directory|file not found|path not found|does not exist|not found in project/i.test(result.error);
-                // A referenced id (image id, etc.) that doesn't exist — recoverable: the
-                // model guessed/used a stale id, and these errors already list the VALID
-                // ids to retry with. Counting them disabled the tool after 2 tries
-                // (Eve incremented image ids ...0s9u → ...0s9v and burned the cap before
-                // she could use a real one). Treat like path-not-found.
-                const isStaleRef = /\bid ".*?" (?:was|is) not found|image id .*? (?:was|is) not found|no .*? with id ["']/i.test(result.error);
+                const isGpuBusy = GPU_BUSY.test(result.error);
+                const isNoData = NO_DATA.test(result.error);
+                const isPathError = PATH_ERROR.test(result.error);
+                const isStaleRef = STALE_REF_ERROR.test(result.error);
                 // Folder-ownership / shared-folder blocks (contractGate) are recoverable and
                 // argument-specific: a write to the worker's own folder or choom_commons/
                 // would succeed. Must NOT count toward the per-tool failure cap, or two
                 // mis-targeted writes disable workspace_write_file for the whole request —
                 // including the legitimate writes the model issues right after.
-                const isPermissionBlock = /^Blocked: (?:cannot (?:write into|delete from) another Choom|sibling_journal\/ is archived|[^/]+\/ is a shared folder)/i.test(result.error);
+                const isPermissionBlock = PERMISSION_BLOCK.test(result.error);
                 errorClass = isConfigError ? 'config' : isParamError ? 'param' : isGpuBusy ? 'gpu_busy' : isNoData ? 'no_data' : (isPathError || isPermissionBlock || isStaleRef) ? 'path' : 'other';
                 failedCallCache.set(dedupKey, result.error);
 
