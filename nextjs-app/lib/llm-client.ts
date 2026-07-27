@@ -61,6 +61,55 @@ export interface ChatCompletionChunk {
   usage?: TokenUsageData;
 }
 
+/**
+ * Normalize a message array into a shape every provider accepts.
+ *
+ * The strictest consumers are local GGUF chat templates (Qwen/ChatML via
+ * LM Studio / llama.cpp). Their Jinja does:
+ *
+ *   {%- if message.role == 'system' and not loop.first %}
+ *       {{- raise_exception('System message must be at the beginning.') }}
+ *
+ * which turns any late system turn into a hard HTTP 400 for the whole
+ * request — no output, no recovery, just a dead turn. Cloud providers are
+ * more forgiving, so this normalizes to the strictest common denominator and
+ * both local and remote models stay valid.
+ *
+ * Rules applied, in order:
+ *  1. Drop assistant turns that are empty AND carry no tool_calls (Mistral et al. reject them).
+ *  2. Merge every system message into a single leading system turn. Late
+ *     system content is guidance, so it is appended to the head system
+ *     prompt rather than dropped — the instruction still lands, it just
+ *     lands somewhere the template accepts.
+ *  3. Guarantee the conversation does not end on an assistant turn (NVIDIA
+ *     and others set add_generation_prompt=True and require user-last).
+ */
+export function sanitizeMessages(messages: ChatMessage[]): ChatMessage[] {
+  const out: ChatMessage[] = [];
+  const systemParts: string[] = [];
+
+  for (const m of messages) {
+    if (m.role === 'assistant' && !m.content && !m.tool_calls?.length) continue;
+    if (m.role === 'system') {
+      // Collect rather than emit — every system turn is folded into index 0 below.
+      if (m.content?.trim()) systemParts.push(m.content.trim());
+      continue;
+    }
+    out.push(m);
+  }
+
+  if (systemParts.length > 0) {
+    out.unshift({ role: 'system', content: systemParts.join('\n\n') });
+  }
+
+  // A trailing assistant turn breaks providers that force a generation prompt.
+  if (out.length > 0 && out[out.length - 1].role === 'assistant') {
+    out.push({ role: 'user', content: 'Continue. Respond to the user based on the above context.' });
+  }
+
+  return out;
+}
+
 export class LLMClient {
   private endpoint: string;
   public settings: LLMSettings;
@@ -81,20 +130,7 @@ export class LLMClient {
   ): AsyncGenerator<ChatCompletionChunk, void, unknown> {
     const url = ensureEndpoint(this.endpoint, '/chat/completions');
 
-    // Sanitize messages: some APIs (Mistral, etc.) reject assistant messages
-    // with empty content and no tool_calls. Filter these out.
-    const sanitizedMessages = messages.filter(m => {
-      if (m.role === 'assistant' && !m.content && !m.tool_calls?.length) return false;
-      return true;
-    });
-
-    // NVIDIA (and some other providers) reject requests where the last message
-    // is from the assistant — they set add_generation_prompt=True which requires
-    // user-last ordering. Append a continuation prompt so the model picks up
-    // where the plan/previous iteration left off.
-    if (sanitizedMessages.length > 0 && sanitizedMessages[sanitizedMessages.length - 1].role === 'assistant') {
-      sanitizedMessages.push({ role: 'user', content: 'Continue. Respond to the user based on the above context.' });
-    }
+    const sanitizedMessages = sanitizeMessages(messages);
 
     const body: ChatCompletionRequest & { stream_options?: { include_usage: boolean } } = {
       model: this.settings.model,
@@ -190,7 +226,7 @@ export class LLMClient {
 
     const body: ChatCompletionRequest = {
       model: this.settings.model,
-      messages,
+      messages: sanitizeMessages(messages),
       temperature: this.settings.temperature,
       max_tokens: this.settings.maxTokens,
       top_p: this.settings.topP,

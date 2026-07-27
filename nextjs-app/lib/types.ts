@@ -23,10 +23,6 @@ export interface Choom {
   llmFallbackProvider2: string | null;
   groupChatModel: string | null;
   groupChatProvider: string | null;
-  avatarMode: AvatarMode | null;
-  avatar3dModelPath: string | null;
-  avatar3dStatus: string | null;
-  avatar3dError: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -142,7 +138,6 @@ export interface AppSettings {
   appearance: AppearanceSettings;
   vision: VisionSettings;
   homeAssistant: HomeAssistantSettings;
-  avatar: AvatarSettings;
   providers?: LLMProviderConfig[];
   modelProfiles?: LLMModelProfile[];
   visionProfiles?: VisionModelProfile[];
@@ -150,11 +145,6 @@ export interface AppSettings {
   // would otherwise say the generic word "user" (1:1 prompt, group rooms, Signal).
   ownerName?: string;
   ownerLocation?: string;
-}
-
-export interface AvatarSettings {
-  enabled: boolean;
-  endpoint: string;
 }
 
 export interface LLMSettings {
@@ -429,7 +419,6 @@ export interface ServiceHealth {
   weather: ServiceStatus;
   search: ServiceStatus;
   searxng: ServiceStatus;
-  avatar: ServiceStatus;
 }
 
 export interface HealthCheckResult {
@@ -673,7 +662,7 @@ export interface UIState {
   activeLiveChoomId: string | null;
 }
 
-export type SettingsTab = 'llm' | 'audio' | 'image' | 'memory' | 'search' | 'weather' | 'appearance' | 'scheduled' | 'heartbeat' | 'vision' | 'projects' | 'avatar' | 'followups' | 'bridgelog';
+export type SettingsTab = 'llm' | 'audio' | 'image' | 'memory' | 'search' | 'weather' | 'appearance' | 'scheduled' | 'heartbeat' | 'vision' | 'projects' | 'followups' | 'bridgelog';
 
 // ============================================================================
 // Form Types
@@ -715,7 +704,7 @@ export class ChoomError extends Error {
 // ============================================================================
 
 export type LogLevel = 'info' | 'success' | 'warning' | 'error';
-export type LogCategory = 'llm' | 'tts' | 'stt' | 'image' | 'memory' | 'agent' | 'system' | 'avatar';
+export type LogCategory = 'llm' | 'tts' | 'stt' | 'image' | 'memory' | 'agent' | 'system';
 
 export interface LogEntry {
   id: string;
@@ -746,18 +735,9 @@ export type AsyncState<T> =
 // Avatar Types
 // ============================================================================
 
-export interface VisemeFrame {
-  time: number;                        // seconds into audio
-  weights: Record<string, number>;     // viseme_name → 0.0-1.0
-}
-
-export type VisemeTimeline = VisemeFrame[];
-
 export interface AvatarExpression {
   name: string;
   weights: Record<string, number>;     // morph_target → weight
   triggerKeyword?: string;             // auto-trigger on this word in response
 }
 
-export type Avatar3dStatus = 'generating' | 'ready' | 'failed' | null;
-export type AvatarMode = 'off' | 'live' | 'desktop';

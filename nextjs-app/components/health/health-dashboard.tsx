@@ -93,13 +93,6 @@ const services: ServiceInfo[] = [
     description: 'Self-hosted metasearch engine (fallback)',
     defaultPort: '8888',
   },
-  {
-    name: 'Avatar Service',
-    key: 'avatar',
-    icon: User,
-    description: 'LivePortrait real-time face animation',
-    defaultPort: '8020',
-  },
 ];
 
 interface HealthDashboardProps {
@@ -113,11 +106,7 @@ export function HealthDashboard({ open, onOpenChange }: HealthDashboardProps) {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [details, setDetails] = useState<Record<string, unknown>>({});
 
-  // Only show avatar service if any Choom has avatar mode enabled
-  const anyAvatarEnabled = chooms.some(c => c.avatarMode && c.avatarMode !== 'off');
-  const visibleServices = anyAvatarEnabled
-    ? services
-    : services.filter(s => s.key !== 'avatar');
+  const visibleServices = services;
 
   const refreshHealth = async () => {
     setIsRefreshing(true);
@@ -171,11 +160,7 @@ export function HealthDashboard({ open, onOpenChange }: HealthDashboardProps) {
       refreshHealth();
     }
   }, [open]);
-
-  // Match the visible services filter — exclude avatar from counts when no Choom uses it
-  const countEntries = Object.entries(serviceStatus).filter(
-    ([key]) => key !== 'avatar' || anyAvatarEnabled
-  );
+  const countEntries = Object.entries(serviceStatus);
   const connectedCount = countEntries.filter(([, s]) => s === 'connected').length;
   const totalCount = countEntries.length;
 

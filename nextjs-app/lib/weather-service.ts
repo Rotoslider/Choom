@@ -6,6 +6,51 @@ const weatherCache: Map<string, { data: WeatherData; expiresAt: number }> = new 
 // Cache for forecast data
 const forecastCache: Map<string, { data: ForecastData; expiresAt: number }> = new Map();
 
+// Two-letter US state codes. OpenWeather's `q=` geocoder needs "City,ST,US" —
+// it does NOT accept "City, ST", which is exactly how people (and the config
+// file) write it.
+const US_STATES = new Set([
+  'AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN','IA','KS','KY','LA','ME','MD',
+  'MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI','SC',
+  'SD','TN','TX','UT','VT','VA','WA','WV','WI','WY','DC',
+]);
+
+/**
+ * Normalize a human-written place name into OpenWeather `q=` form.
+ *
+ *   "Rodeo, NM"     -> "Rodeo,NM,US"   (404 -> 200)
+ *   "Tucson, AZ, US"-> "Tucson,AZ,US"
+ *   "London"        -> "London"        (untouched)
+ *
+ * Only the US-state case is rewritten; anything else just gets whitespace
+ * around separators collapsed, so non-US queries are unaffected.
+ */
+export function normalizeLocationQuery(q: string): string {
+  const parts = q.split(',').map(s => s.trim()).filter(Boolean);
+  if (parts.length === 2 && US_STATES.has(parts[1].toUpperCase())) {
+    return `${parts[0]},${parts[1].toUpperCase()},US`;
+  }
+  return parts.join(',');
+}
+
+/** Turn an HTTP status into something the model can actually act on. */
+function weatherErrorMessage(status: number, place: string | undefined, kind = 'Weather'): string {
+  const where = place ? ` for "${place}"` : '';
+  if (status === 404) {
+    return `${kind} API error: 404 — location${where} not recognized. ` +
+      `OpenWeather expects "City,ST,US" (e.g. "Rodeo,NM,US") or latitude/longitude. ` +
+      `Set DEFAULT_WEATHER_LAT/LON for a reliable default.`;
+  }
+  if (status === 401) {
+    return `${kind} API error: 401 — OPENWEATHER_API_KEY is missing, invalid, or not yet active ` +
+      `(new keys can take ~10 minutes). This is a configuration problem, not a bad query.`;
+  }
+  if (status === 429) {
+    return `${kind} API error: 429 — OpenWeather rate limit reached. Try again shortly.`;
+  }
+  return `${kind} API error: ${status}`;
+}
+
 async function fetchWithRetry(url: string, retries = 1, delayMs = 2000): Promise<Response> {
   const response = await fetch(url);
   if (!response.ok && retries > 0 && (response.status === 404 || response.status >= 500)) {
@@ -26,7 +71,9 @@ export class WeatherService {
     const loc = location || this.settings.location;
 
     // Allow coordinate-based lookup without a location string
-    const hasCoordinates = this.settings.useCoordinates && this.settings.latitude && this.settings.longitude;
+    // Not gated on useCoordinates: if we have coordinates we always prefer them,
+    // and the cache key must match the branch fetchOpenWeatherMap actually takes.
+    const hasCoordinates = Boolean(this.settings.latitude && this.settings.longitude);
     if (!loc && !hasCoordinates) {
       throw new Error('No location specified');
     }
@@ -70,21 +117,26 @@ export class WeatherService {
 
     const units = this.settings.units === 'metric' ? 'metric' : 'imperial';
 
-    // If a specific location was passed, use it; otherwise use configured coordinates
+    // If a specific location was passed, use it; otherwise prefer coordinates.
     let url: string;
     if (location) {
-      url = `https://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(location)}&units=${units}&appid=${this.settings.apiKey}`;
-    } else if (this.settings.useCoordinates && this.settings.latitude && this.settings.longitude) {
+      url = `https://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(normalizeLocationQuery(location))}&units=${units}&appid=${this.settings.apiKey}`;
+    } else if (this.settings.latitude && this.settings.longitude) {
+      // Coordinates first whenever we have them, regardless of useCoordinates.
+      // The configured location string was "Rodeo, NM", which OpenWeather's
+      // geocoder rejects outright (404 "city not found") — every default
+      // weather lookup failed while the lat/lon for the exact same place
+      // resolved fine. Coordinates are unambiguous; a name is a guess.
       url = `https://api.openweathermap.org/data/2.5/weather?lat=${this.settings.latitude}&lon=${this.settings.longitude}&units=${units}&appid=${this.settings.apiKey}`;
     } else if (this.settings.location) {
-      url = `https://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(this.settings.location)}&units=${units}&appid=${this.settings.apiKey}`;
+      url = `https://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(normalizeLocationQuery(this.settings.location))}&units=${units}&appid=${this.settings.apiKey}`;
     } else {
       throw new Error('No location or coordinates specified for weather lookup');
     }
 
     const response = await fetchWithRetry(url);
     if (!response.ok) {
-      throw new Error(`Weather API error: ${response.status}`);
+      throw new Error(weatherErrorMessage(response.status, location || this.settings.location));
     }
 
     const data = await response.json();
@@ -174,7 +226,9 @@ export class WeatherService {
 
   async getForecast(location?: string, days: number = 5): Promise<ForecastData> {
     const loc = location || this.settings.location;
-    const hasCoordinates = this.settings.useCoordinates && this.settings.latitude && this.settings.longitude;
+    // Not gated on useCoordinates: if we have coordinates we always prefer them,
+    // and the cache key must match the branch fetchOpenWeatherMap actually takes.
+    const hasCoordinates = Boolean(this.settings.latitude && this.settings.longitude);
     if (!loc && !hasCoordinates) {
       throw new Error('No location specified');
     }
@@ -196,16 +250,16 @@ export class WeatherService {
     const units = this.settings.units === 'metric' ? 'metric' : 'imperial';
     let url: string;
     if (location) {
-      url = `https://api.openweathermap.org/data/2.5/forecast?q=${encodeURIComponent(location)}&units=${units}&appid=${this.settings.apiKey}`;
+      url = `https://api.openweathermap.org/data/2.5/forecast?q=${encodeURIComponent(normalizeLocationQuery(location))}&units=${units}&appid=${this.settings.apiKey}`;
     } else if (hasCoordinates) {
       url = `https://api.openweathermap.org/data/2.5/forecast?lat=${this.settings.latitude}&lon=${this.settings.longitude}&units=${units}&appid=${this.settings.apiKey}`;
     } else {
-      url = `https://api.openweathermap.org/data/2.5/forecast?q=${encodeURIComponent(loc!)}&units=${units}&appid=${this.settings.apiKey}`;
+      url = `https://api.openweathermap.org/data/2.5/forecast?q=${encodeURIComponent(normalizeLocationQuery(loc!))}&units=${units}&appid=${this.settings.apiKey}`;
     }
 
     const response = await fetchWithRetry(url);
     if (!response.ok) {
-      throw new Error(`Forecast API error: ${response.status}`);
+      throw new Error(weatherErrorMessage(response.status, location || loc, 'Forecast'));
     }
 
     const data = await response.json();

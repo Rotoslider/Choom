@@ -7,6 +7,16 @@ import { WeatherService } from '@/lib/weather-service';
 import { HomeAssistantService, type HomeAssistantSettings } from '@/lib/homeassistant-service';
 import { WebSearchService } from '@/lib/web-search';
 import { WorkspaceService } from '@/lib/workspace-service';
+import {
+  CONFIG_ERROR, PARAM_ERROR, HA_SHAPE_ERROR, HA_DISCOVERY_ERROR, GPU_BUSY,
+  NO_DATA, PATH_ERROR, STALE_REF_ERROR, PERMISSION_BLOCK,
+} from '@/lib/tool-error-classification';
+import { classifyEndpoint, computeStreamTimeouts, isLocalEndpoint } from '@/lib/stream-timeouts';
+import {
+  tryRepairJSON, createThinkFilter, createToolCallXmlFilter, createJsonToolCallFilter,
+  createGemmaToolCallFilter, extractMistralToolCalls, extractBracketToolCalls,
+  parseXmlToolCalls, tryRescueWriteFile, tryRescueContentTool, extractToolCallFromText,
+} from '@/lib/tool-call-parsing';
 import { VisionService } from '@/lib/vision-service';
 import { ProjectService } from '@/lib/project-service';
 import type { VisionSettings, LLMProviderConfig, LLMModelProfile, VisionModelProfile } from '@/lib/types';
@@ -220,1078 +230,6 @@ function detectCheckpointType(checkpointName: string): 'pony' | 'flux' | 'other'
   return 'other';
 }
 
-/**
- * Check if an endpoint URL points to a local/LAN server.
- * Used to determine timeout behavior — local models need longer prefill
- * timeouts but shouldn't be penalized by cloud-oriented limits.
- * Providers with LAN endpoints (e.g., LM Studio on 192.168.x.x) are local.
- */
-function isLocalEndpoint(endpoint: string): boolean {
-  try {
-    const host = new URL(endpoint).hostname;
-    return host === 'localhost' || host === '127.0.0.1' || host === '::1' ||
-      host.startsWith('192.168.') || host.startsWith('10.') ||
-      /^172\.(1[6-9]|2\d|3[01])\./.test(host) || host.endsWith('.local');
-  } catch {
-    return true; // assume local if URL can't be parsed
-  }
-}
-
-// Attempt JSON repair for malformed tool call arguments from local models.
-// Uses a state machine to properly track string context so braces/brackets
-// inside strings are not miscounted (common when content contains code).
-function tryRepairJSON(raw: string | undefined): Record<string, unknown> | null {
-  if (!raw) return null;
-  let s = raw.trim();
-
-  // State machine: track whether we're inside a JSON string value
-  // Also detect where the first root-level object ends, so we can
-  // truncate concatenated objects like "{}{}" or '{"a":1}{"b":2}'
-  let inString = false;
-  let braceDepth = 0;
-  let bracketDepth = 0;
-  let firstObjectEnd = -1;
-
-  for (let i = 0; i < s.length; i++) {
-    const ch = s[i];
-    if (inString) {
-      if (ch === '\\') {
-        i++; // skip escaped character
-      } else if (ch === '"') {
-        inString = false;
-      }
-    } else {
-      if (ch === '"') inString = true;
-      else if (ch === '{') braceDepth++;
-      else if (ch === '}') {
-        braceDepth--;
-        if (braceDepth === 0 && bracketDepth === 0 && firstObjectEnd === -1) {
-          firstObjectEnd = i;
-        }
-      }
-      else if (ch === '[') bracketDepth++;
-      else if (ch === ']') bracketDepth--;
-    }
-  }
-
-  // If the first root object closed before the end of the string,
-  // there's trailing garbage (e.g. "{}{}", '{"a":1}extra'). Truncate.
-  if (firstObjectEnd !== -1 && firstObjectEnd < s.length - 1) {
-    s = s.slice(0, firstObjectEnd + 1);
-    try { return JSON.parse(s); } catch { /* fall through to other repairs */ }
-  }
-
-  // Close unterminated string (e.g. truncated "content": "# E)
-  if (inString) {
-    // Remove trailing incomplete escape sequence (lone backslash at end)
-    s = s.replace(/\\$/, '');
-    s += '"';
-  }
-
-  // Remove trailing commas before closing brackets/braces
-  s = s.replace(/,\s*$/g, '');
-
-  // Close open structures
-  if (bracketDepth > 0) s += ']'.repeat(bracketDepth);
-  if (braceDepth > 0) s += '}'.repeat(braceDepth);
-
-  // Clean up trailing commas inside structures
-  s = s.replace(/,\s*}/g, '}');
-  s = s.replace(/,\s*]/g, ']');
-
-  try { return JSON.parse(s); } catch { return null; }
-}
-
-/**
- * Create a streaming filter that strips <think>...</think> blocks emitted by
- * reasoning models (Qwen 3.x, DeepSeek-R1, etc.). Call filter() on each content
- * chunk; it returns only the visible (non-thinking) portion. Maintains state
- * across calls so tags that span chunk boundaries are handled correctly.
- */
-function createThinkFilter(): (text: string) => string {
-  let inThinkBlock = false;
-
-  return function filter(text: string): string {
-    if (!text) return '';
-    let result = '';
-    let pos = 0;
-
-    while (pos < text.length) {
-      if (inThinkBlock) {
-        const closeIdx = text.indexOf('</think>', pos);
-        if (closeIdx !== -1) {
-          inThinkBlock = false;
-          pos = closeIdx + 8; // '</think>'.length
-        } else {
-          break; // rest is inside think block — discard
-        }
-      } else {
-        const openIdx = text.indexOf('<think>', pos);
-        if (openIdx !== -1) {
-          result += text.slice(pos, openIdx);
-          inThinkBlock = true;
-          pos = openIdx + 7; // '<think>'.length
-        } else {
-          result += text.slice(pos);
-          break;
-        }
-      }
-    }
-
-    return result;
-  };
-}
-
-/**
- * Streaming filter that strips <tool_call>...</tool_call> XML blocks from content.
- * Some local models emit tool calls as XML text instead of structured tool_calls.
- * This captures the XML for later parsing into real tool calls while hiding the
- * raw XML from the user (both web UI and Signal).
- */
-function createToolCallXmlFilter(): {
-  filter: (text: string) => string;
-  getCaptured: () => string[];
-  flush: () => string;
-} {
-  let inBlock = false;
-  let currentBlock = '';
-  let pendingBuffer = ''; // holds partial tag prefixes across chunks
-  const captured: string[] = [];
-
-  const OPEN_TAG = '<tool_call>';
-
-  function filter(text: string): string {
-    if (!text && !pendingBuffer) return '';
-
-    // Prepend any buffered partial tag from previous chunk
-    text = pendingBuffer + (text || '');
-    pendingBuffer = '';
-
-    let result = '';
-    let pos = 0;
-
-    while (pos < text.length) {
-      if (inBlock) {
-        const closeIdx = text.indexOf('</tool_call>', pos);
-        if (closeIdx !== -1) {
-          currentBlock += text.slice(pos, closeIdx);
-          captured.push(currentBlock);
-          currentBlock = '';
-          inBlock = false;
-          pos = closeIdx + 12; // '</tool_call>'.length
-        } else {
-          currentBlock += text.slice(pos);
-          break; // rest is inside block — buffer it
-        }
-      } else {
-        const openIdx = text.indexOf(OPEN_TAG, pos);
-        if (openIdx !== -1) {
-          result += text.slice(pos, openIdx);
-          inBlock = true;
-          currentBlock = '';
-          pos = openIdx + 11; // '<tool_call>'.length
-        } else {
-          // No complete <tool_call> found. Check if the text ends with a
-          // partial prefix of <tool_call> split across streaming chunks
-          // (e.g. chunk ends with "<tool" and next chunk starts with "_call>").
-          const remaining = text.slice(pos);
-          const lastLt = remaining.lastIndexOf('<');
-          if (lastLt !== -1 && lastLt >= remaining.length - OPEN_TAG.length) {
-            const tail = remaining.slice(lastLt);
-            if (OPEN_TAG.startsWith(tail)) {
-              // Tail is a valid prefix of <tool_call> — buffer it
-              result += remaining.slice(0, lastLt);
-              pendingBuffer = tail;
-            } else {
-              result += remaining;
-            }
-          } else {
-            result += remaining;
-          }
-          break;
-        }
-      }
-    }
-
-    return result;
-  }
-
-  function flush(): string {
-    // Release any buffered partial tag that never completed
-    const buf = pendingBuffer;
-    pendingBuffer = '';
-    // If stream ended while inside a block, capture whatever we have
-    // so parseXmlToolCalls can attempt to parse the truncated tool call
-    if (inBlock && currentBlock) {
-      captured.push(currentBlock);
-      currentBlock = '';
-      inBlock = false;
-    }
-    return buf;
-  }
-
-  return { filter, getCaptured: () => captured, flush };
-}
-
-/**
- * Streaming filter that strips JSON tool-call arrays emitted as plain text
- * by local models.  Catches patterns like:
- *
- *   [
- *   {"name": "remember", "parameters": {"title": "..."}}
- *   ]
- *
- * Works identically to createToolCallXmlFilter(): buffers potential blocks
- * during streaming, validates on close, and either captures (tool call) or
- * releases (normal text).
- */
-function createJsonToolCallFilter(): {
-  filter: (text: string) => string;
-  getCaptured: () => { id: string; name: string; arguments: Record<string, unknown> }[];
-  flush: () => string;
-} {
-  let inBlock = false;
-  let buffer = '';
-  let bracketDepth = 0;
-  let seenBrace = false;          // saw `{` after opening `[`
-  let pendingBracket = '';        // `[` (+ whitespace) at end of chunk
-  const captured: { id: string; name: string; arguments: Record<string, unknown> }[] = [];
-
-  /** Try to parse a complete `[…]` string as a tool-call array. */
-  function tryCapture(block: string): boolean {
-    try {
-      const parsed = JSON.parse(block);
-      if (!Array.isArray(parsed)) return false;
-      let any = false;
-      for (const item of parsed) {
-        if (item && typeof item.name === 'string' && /^[a-zA-Z0-9_-]+$/.test(item.name)) {
-          captured.push({
-            id: `jsontc_${Date.now()}_${captured.length}`,
-            name: item.name,
-            arguments: item.parameters || item.arguments || {},
-          });
-          any = true;
-        }
-      }
-      return any;
-    } catch {
-      return false;
-    }
-  }
-
-  function filter(text: string): string {
-    if (!text && !pendingBracket) return '';
-
-    text = pendingBracket + (text || '');
-    pendingBracket = '';
-
-    let result = '';
-    let i = 0;
-
-    while (i < text.length) {
-      if (inBlock) {
-        const ch = text[i];
-        buffer += ch;
-
-        if (ch === '[') {
-          bracketDepth++;
-        } else if (ch === ']') {
-          bracketDepth--;
-          if (bracketDepth === 0) {
-            // Block complete
-            if (tryCapture(buffer)) {
-              // Swallowed — don't emit
-            } else {
-              result += buffer;
-            }
-            buffer = '';
-            inBlock = false;
-            seenBrace = false;
-          }
-        } else if (!seenBrace && ch === '{') {
-          seenBrace = true;
-        } else if (!seenBrace && !/\s/.test(ch)) {
-          // First non-whitespace after `[` isn't `{` — not a tool call
-          result += buffer;
-          buffer = '';
-          inBlock = false;
-        }
-
-        // Safety valve: huge buffer means this isn't a tool call
-        if (inBlock && buffer.length > 10000) {
-          result += buffer;
-          buffer = '';
-          inBlock = false;
-          seenBrace = false;
-        }
-
-        i++;
-      } else {
-        if (text[i] === '[') {
-          // Only intercept `[` that starts on its own line (or at text start)
-          const before = i > 0 ? text[i - 1] : '\n';
-          if (before === '\n' || before === '\r' || i === 0) {
-            const rest = text.slice(i + 1);
-            if (rest.length === 0 || /^\s*$/.test(rest)) {
-              // `[` at/near end of chunk — buffer for next chunk
-              pendingBracket = text.slice(i);
-              break;
-            }
-            const peek = rest.match(/^\s*(.)/s);
-            if (peek && peek[1] === '{') {
-              inBlock = true;
-              bracketDepth = 1;
-              buffer = '[';
-              seenBrace = false;
-              i++;
-              continue;
-            }
-          }
-        }
-        result += text[i];
-        i++;
-      }
-    }
-
-    return result;
-  }
-
-  function flush(): string {
-    let remaining = pendingBracket;
-    pendingBracket = '';
-
-    if (inBlock && buffer) {
-      // Last-chance parse (e.g. stream ended right after `]`)
-      if (!tryCapture(buffer)) {
-        remaining = buffer + remaining;
-      }
-      buffer = '';
-      inBlock = false;
-      seenBrace = false;
-    }
-
-    return remaining;
-  }
-
-  return { filter, getCaptured: () => captured, flush };
-}
-
-/**
- * Streaming filter for Gemma 4 26B's text-emitted tool calls. Gemma's tokenizer
- * has special-token markers for tool calls, but when served via LM Studio those
- * tokens come out as literal text with a broken shape:
- *
- *   <|tool_call>call:send_notification{message:<|"|>hello world<|"|>}<tool_call|>
- *
- * Note the asymmetric markers (`<|tool_call>` open, `<tool_call|>` close) and
- * the `<|"|>` pseudo-quote delimiter. Without this filter, the block leaks
- * into visible output AND the tool never executes — the model then confabulates
- * that it sent the notification when it didn't.
- *
- * Like the XML/JSON filters, this buffers partial markers across chunks so
- * streaming doesn't split a block mid-marker.
- */
-function createGemmaToolCallFilter(): {
-  filter: (text: string) => string;
-  getCaptured: () => { id: string; name: string; arguments: Record<string, unknown> }[];
-  flush: () => string;
-} {
-  let pendingBuffer = '';
-  const captured: { id: string; name: string; arguments: Record<string, unknown> }[] = [];
-
-  const OPEN = '<|tool_call>';
-  const CLOSE = '<tool_call|>';
-
-  function tryParseBlock(inner: string): boolean {
-    // Block shape: call:NAME{args}
-    const m = inner.match(/^\s*call\s*:\s*([A-Za-z0-9_]+)\s*\{([\s\S]*)\}\s*$/);
-    if (!m) return false;
-    const name = m[1];
-    // Normalize Gemma's <|"|> pseudo-quote to a real quote before parsing
-    const argsStr = m[2].replace(/<\|"\|>/g, '"');
-
-    const args: Record<string, unknown> = {};
-
-    // Lenient key-value extraction:
-    // 1. Quoted string values: key:"value" (handles commas / spaces inside)
-    const kvString = /([A-Za-z_][A-Za-z0-9_]*)\s*:\s*"((?:[^"\\]|\\.)*)"/g;
-    let kv: RegExpExecArray | null;
-    while ((kv = kvString.exec(argsStr)) !== null) {
-      args[kv[1]] = kv[2].replace(/\\"/g, '"').replace(/\\n/g, '\n').replace(/\\t/g, '\t');
-    }
-
-    // 2. Numeric / bool / null values: key:123, key:true, key:null
-    const kvPrimitive = /([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(-?\d+(?:\.\d+)?|true|false|null)\b/g;
-    let kvn: RegExpExecArray | null;
-    while ((kvn = kvPrimitive.exec(argsStr)) !== null) {
-      if (args[kvn[1]] !== undefined) continue; // don't overwrite a string capture
-      const v = kvn[2];
-      if (v === 'true') args[kvn[1]] = true;
-      else if (v === 'false') args[kvn[1]] = false;
-      else if (v === 'null') args[kvn[1]] = null;
-      else args[kvn[1]] = Number(v);
-    }
-
-    // Only capture when we successfully extracted at least one arg. Empty-args
-    // Gemma blocks are dangerous — the route.ts pre-flight check would then
-    // have to catch them, and a silently-captured call with no params tends
-    // to fail downstream in confusing ways. Let legit no-arg calls come
-    // through the structured tool_calls API instead.
-    if (Object.keys(args).length > 0) {
-      captured.push({
-        id: `gemmatc_${Date.now()}_${captured.length}`,
-        name,
-        arguments: args,
-      });
-      return true;
-    }
-    return false;
-  }
-
-  function filter(text: string): string {
-    if (!text && !pendingBuffer) return '';
-    text = pendingBuffer + (text || '');
-    pendingBuffer = '';
-
-    let result = '';
-    let pos = 0;
-
-    while (pos < text.length) {
-      const openIdx = text.indexOf(OPEN, pos);
-
-      if (openIdx === -1) {
-        // No opening marker. Check if the tail could be a partial prefix
-        // split across streaming chunks (e.g., "...<|tool" in one chunk,
-        // "_call>..." in the next).
-        const remaining = text.slice(pos);
-        const lastLt = remaining.lastIndexOf('<');
-        if (lastLt !== -1 && (remaining.length - lastLt) <= OPEN.length) {
-          const tail = remaining.slice(lastLt);
-          if (OPEN.startsWith(tail)) {
-            result += remaining.slice(0, lastLt);
-            pendingBuffer = tail;
-            break;
-          }
-        }
-        result += remaining;
-        break;
-      }
-
-      // Emit any text before the open marker
-      result += text.slice(pos, openIdx);
-
-      // Find the matching close marker
-      const contentStart = openIdx + OPEN.length;
-      const closeIdx = text.indexOf(CLOSE, contentStart);
-      if (closeIdx === -1) {
-        // Block not complete — buffer from the open marker onward.
-        // Safety valve: if the buffer grows huge, something's wrong —
-        // release it as normal text so we don't leak memory.
-        const bufferedLen = text.length - openIdx;
-        if (bufferedLen > 20000) {
-          result += text.slice(openIdx);
-        } else {
-          pendingBuffer = text.slice(openIdx);
-        }
-        break;
-      }
-
-      const block = text.slice(contentStart, closeIdx);
-      const parsed = tryParseBlock(block);
-      if (!parsed) {
-        // Parse failed. Swallow the block to avoid leaking broken syntax to
-        // the user, but log so we can see unhandled Gemma shapes in dev.
-        console.warn(`   ⚠️  Gemma tool_call block didn't parse: ${block.slice(0, 120)}`);
-      }
-      pos = closeIdx + CLOSE.length;
-    }
-
-    return result;
-  }
-
-  function flush(): string {
-    const buf = pendingBuffer;
-    pendingBuffer = '';
-    // If the buffer starts with a partial/incomplete Gemma block, drop it —
-    // don't leak broken `<|tool_call>...` into the user-visible output.
-    if (buf.startsWith('<') && (OPEN.startsWith(buf) || buf.startsWith(OPEN))) {
-      if (buf.startsWith(OPEN)) {
-        console.warn(`   ⚠️  Gemma tool_call block never completed (stream ended) — dropping ${buf.length} chars`);
-      }
-      return '';
-    }
-    return buf;
-  }
-
-  return { filter, getCaptured: () => captured, flush };
-}
-
-// Find the index of the brace/bracket that closes the one at `start`, respecting
-// strings and escapes. Returns -1 if unbalanced.
-function matchBalanced(s: string, start: number, open: string, close: string): number {
-  let depth = 0, inStr = false, esc = false;
-  for (let i = start; i < s.length; i++) {
-    const c = s[i];
-    if (inStr) {
-      if (esc) esc = false;
-      else if (c === '\\') esc = true;
-      else if (c === '"') inStr = false;
-      continue;
-    }
-    if (c === '"') inStr = true;
-    else if (c === open) depth++;
-    else if (c === close) { depth--; if (depth === 0) return i; }
-  }
-  return -1;
-}
-
-/**
- * Salvage MISTRAL tool calls that leaked as TEXT. When LM Studio's Mistral chat
- * template doesn't convert them to structured `tool_calls`, the model's native
- * token sequence prints verbatim, e.g.:
- *
- *   [TOOL_CALLS]generate_image<SPECIAL_32>{"prompt":"…","self_portrait":true}
- *   [TOOL_CALLS][{"name":"get_weather","arguments":{}}]   (array form)
- *
- * Neither survives the XML/JSON/Gemma/bracket parsers (the `[TOOL_CALLS]` /
- * `<SPECIAL_n>` wrapper breaks them), so the tool never runs. This extracts both
- * shapes (validating the name against the active tool list) and returns the calls
- * plus the content with those spans removed.
- */
-function extractMistralToolCalls(
-  content: string,
-  knownToolNames: Set<string>,
-): { calls: { id: string; name: string; arguments: Record<string, unknown> }[]; cleaned: string } {
-  const calls: { id: string; name: string; arguments: Record<string, unknown> }[] = [];
-  if (!content || content.indexOf('[TOOL_CALLS]') === -1) return { calls, cleaned: content };
-  const removeRanges: Array<[number, number]> = [];
-  const marker = /\[TOOL_CALLS\]\s*/g;
-  let m: RegExpExecArray | null;
-  while ((m = marker.exec(content)) !== null) {
-    const i = m.index + m[0].length;
-    // Array form: [TOOL_CALLS][{"name":…,"arguments":…}, …]
-    if (content[i] === '[') {
-      const end = matchBalanced(content, i, '[', ']');
-      if (end > i) {
-        try {
-          const arr = JSON.parse(content.slice(i, end + 1));
-          if (Array.isArray(arr)) {
-            let any = false;
-            for (const it of arr) {
-              if (it && typeof it.name === 'string' && knownToolNames.has(it.name)) {
-                calls.push({ id: `mistraltc_${Date.now()}_${calls.length}`, name: it.name, arguments: (it.arguments || it.parameters || {}) as Record<string, unknown> });
-                any = true;
-              }
-            }
-            if (any) { removeRanges.push([m.index, end + 1]); continue; }
-          }
-        } catch { /* fall through */ }
-      }
-    }
-    // Name form: [TOOL_CALLS]tool_name<SPECIAL_n>{json}  (special tokens optional)
-    const nameMatch = /^([a-zA-Z_]\w*)\s*(?:<[^>\n]*>\s*|\[ARGS\]\s*)*/.exec(content.slice(i));
-    if (nameMatch) {
-      const name = nameMatch[1];
-      const j = i + nameMatch[0].length;
-      if (content[j] === '{' && knownToolNames.has(name)) {
-        const end = matchBalanced(content, j, '{', '}');
-        if (end > j) {
-          try {
-            const args = JSON.parse(content.slice(j, end + 1)) as Record<string, unknown>;
-            calls.push({ id: `mistraltc_${Date.now()}_${calls.length}`, name, arguments: args });
-            removeRanges.push([m.index, end + 1]);
-          } catch { /* not valid JSON args */ }
-        }
-      }
-    }
-  }
-  let cleaned = content;
-  for (let k = removeRanges.length - 1; k >= 0; k--) {
-    const [s, e] = removeRanges[k];
-    cleaned = cleaned.slice(0, s) + cleaned.slice(e);
-  }
-  return { calls, cleaned: cleaned.replace(/\n{3,}/g, '\n\n').trim() };
-}
-
-/**
- * Salvage qwen's UNFORCED freestyle tool calls. Without tool_choice=required,
- * qwen3.6 sometimes writes a tool call as markdown rather than a structured call:
- *
- *   [generate_image
- *     prompt="three figures in morning light"
- *     size="large"
- *     self_portrait=false
- *   ]
- *
- * None of the structured parsers (XML/JSON/Gemma) catch this, so it prints as
- * prose and the tool never runs (the "Genesis described an image but no image"
- * bug). This extracts `[known_tool key="val" …]` blocks and returns the calls
- * plus the content with those blocks removed. Heavily guarded against false
- * positives: the bracketed word MUST be a real active tool name, and there must
- * be at least one `key=value` pair — so prose like `[Donny]:` or
- * `[image shared to the room …]` is never matched.
- */
-function extractBracketToolCalls(
-  content: string,
-  knownToolNames: Set<string>,
-): { calls: { id: string; name: string; arguments: Record<string, unknown> }[]; cleaned: string } {
-  const calls: { id: string; name: string; arguments: Record<string, unknown> }[] = [];
-  if (!content || content.indexOf('[') === -1) return { calls, cleaned: content };
-
-  // attrRe matches a single  key="val" | key='val' | key=true|false|number  pair.
-  const attrRe = /([a-zA-Z_][a-zA-Z0-9_]*)[ \t]*=[ \t]*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|true|false|-?\d+(?:\.\d+)?)/g;
-  const parseAttrs = (segment: string): Record<string, unknown> => {
-    const args: Record<string, unknown> = {};
-    attrRe.lastIndex = 0;
-    let a: RegExpExecArray | null;
-    while ((a = attrRe.exec(segment)) !== null) {
-      const key = a[1];
-      const raw = a[2];
-      if ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"))) {
-        args[key] = raw.slice(1, -1).replace(/\\(["'\\])/g, '$1');
-      } else if (raw === 'true' || raw === 'false') {
-        args[key] = raw === 'true';
-      } else {
-        args[key] = Number(raw);
-      }
-    }
-    return args;
-  };
-
-  const removeRanges: Array<[number, number]> = [];
-  let m: RegExpExecArray | null;
-
-  // Form A: [ tool_name <newline> key=val key="val" ... ]  — attrs INSIDE the
-  // brackets, may span newlines.
-  const blockRe = /\[[ \t]*([a-zA-Z_][a-zA-Z0-9_]*)[ \t]*[\n\r][\s\S]*?\]/g;
-  while ((m = blockRe.exec(content)) !== null) {
-    const name = m[1];
-    if (!knownToolNames.has(name)) continue;
-    const args = parseAttrs(m[0]);
-    if (Object.keys(args).length === 0) continue; // no key=value pairs → not a tool call
-    calls.push({ id: `bracket_${Date.now()}_${calls.length}`, name, arguments: args });
-    removeRanges.push([m.index, m.index + m[0].length]);
-  }
-
-  // Form B: *[tool_name]* key="val" key="val" ...  — the tool name in brackets
-  // (optionally wrapped in markdown asterisks) followed by attrs OUTSIDE the
-  // brackets on the same line. This is how Qwen sometimes "speaks" a tool call
-  // inline, e.g.  *[remember]* title="…" content="…"  — without salvaging it,
-  // the raw syntax leaks into the delivered/spoken message instead of executing.
-  const labeledRe = /(\*{0,3})\[[ \t]*([a-zA-Z_][a-zA-Z0-9_]*)[ \t]*\]\1[ \t]*((?:[a-zA-Z_][a-zA-Z0-9_]*[ \t]*=[ \t]*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|true|false|-?\d+(?:\.\d+)?)[ \t,]*)+)/g;
-  while ((m = labeledRe.exec(content)) !== null) {
-    const name = m[2];
-    if (!knownToolNames.has(name)) continue;
-    const args = parseAttrs(m[3]);
-    if (Object.keys(args).length === 0) continue;
-    calls.push({ id: `label_${Date.now()}_${calls.length}`, name, arguments: args });
-    removeRanges.push([m.index, m.index + m[0].length]);
-  }
-
-  // Strip every matched span from the saved/spoken text. The two forms can
-  // interleave by position, so sort ascending and merge any overlap before
-  // removing back-to-front (keeps earlier indices valid; avoids corruption).
-  removeRanges.sort((p, q) => p[0] - q[0]);
-  const merged: Array<[number, number]> = [];
-  for (const r of removeRanges) {
-    const last = merged[merged.length - 1];
-    if (last && r[0] < last[1]) last[1] = Math.max(last[1], r[1]);
-    else merged.push([r[0], r[1]]);
-  }
-  let cleaned = content;
-  for (let i = merged.length - 1; i >= 0; i--) {
-    const [s, e] = merged[i];
-    cleaned = cleaned.slice(0, s) + cleaned.slice(e);
-  }
-  return { calls, cleaned: cleaned.replace(/\n{3,}/g, '\n\n').trim() };
-}
-
-/**
- * Parse captured <tool_call> XML blocks into structured tool calls.
- * Handles three formats:
- *   1. JSON body (Hermes): {"name":"tool_name","arguments":{...}}
- *   2. Anthropic-style: <function=tool_name><parameter=key>value</parameter>...</function>
- *      (observed from Qwen 3.6 35B-A3B emitting via reasoning_content)
- *   3. arg_key/arg_value: tool_name<arg_key>k</arg_key><arg_value>v</arg_value>...
- */
-function parseXmlToolCalls(
-  xmlBlocks: string[],
-): { id: string; name: string; arguments: Record<string, unknown> }[] {
-  const results: { id: string; name: string; arguments: Record<string, unknown> }[] = [];
-
-  // Coerce a string value to boolean/number when it looks like one. Used by
-  // formats 2 and 3 below (JSON format already has typed values).
-  const coerce = (raw: string): unknown => {
-    const trimmed = raw.trim();
-    if (trimmed === 'true') return true;
-    if (trimmed === 'false') return false;
-    if (trimmed !== '' && !isNaN(Number(trimmed))) return Number(trimmed);
-    return raw; // preserve original whitespace for strings (callers may want it)
-  };
-
-  for (let i = 0; i < xmlBlocks.length; i++) {
-    const xml = xmlBlocks[i].trim();
-
-    // Format 1: JSON body — {"name": "tool_name", "arguments": {...}}
-    const jsonMatch = xml.match(/^\s*(\{[\s\S]*\})\s*$/);
-    if (jsonMatch) {
-      try {
-        const parsed = JSON.parse(jsonMatch[1]);
-        if (parsed.name) {
-          results.push({
-            id: `xmltc_${Date.now()}_${i}`,
-            name: parsed.name,
-            arguments: parsed.arguments || parsed.params || {},
-          });
-          continue;
-        }
-      } catch { /* fall through */ }
-    }
-
-    // Format 2: Anthropic-style nested tags — <function=NAME><parameter=KEY>VALUE</parameter>...</function>
-    // Some local model templates (Qwen 3.6 35B-A3B) emit this shape inside a
-    // <tool_call> wrapper. The wrapper is already stripped by the streaming
-    // filter; we receive just the <function=...>...</function> body here.
-    const fnMatch = xml.match(/<function\s*=\s*([\w.-]+)\s*>/);
-    if (fnMatch) {
-      const name = fnMatch[1];
-      const args: Record<string, unknown> = {};
-      const paramRegex = /<parameter\s*=\s*([\w.-]+)\s*>([\s\S]*?)<\/parameter>/g;
-      let pm: RegExpExecArray | null;
-      while ((pm = paramRegex.exec(xml)) !== null) {
-        args[pm[1]] = coerce(pm[2].trim());
-      }
-      if (Object.keys(args).length > 0) {
-        results.push({ id: `xmltc_${Date.now()}_${i}`, name, arguments: args });
-        continue;
-      }
-    }
-
-    // Format 3: arg_key/arg_value pairs — tool_name<arg_key>k</arg_key><arg_value>v</arg_value>...
-    const nameMatch = xml.match(/^\s*(\w+)/);
-    if (!nameMatch) continue;
-
-    const name = nameMatch[1];
-    const args: Record<string, unknown> = {};
-    const argRegex = /<arg_key>\s*([^<]+?)\s*<\/arg_key>\s*<arg_value>([\s\S]*?)<\/arg_value>/g;
-    let match;
-    while ((match = argRegex.exec(xml)) !== null) {
-      args[match[1].trim()] = coerce(match[2]);
-    }
-
-    if (name && Object.keys(args).length > 0) {
-      results.push({ id: `xmltc_${Date.now()}_${i}`, name, arguments: args });
-    }
-  }
-
-  return results;
-}
-
-/**
- * Rescue workspace_write_file tool calls with broken JSON arguments.
- * Models often fail to properly escape code content in JSON strings, producing
- * arguments like raw code mixed with partial JSON. This extracts the path and
- * content from the mangled arguments using regex patterns.
- */
-function tryRescueWriteFile(raw: string | undefined): Record<string, unknown> | null {
-  if (!raw || raw.length < 10) return null;
-
-  // Strategy 1: Extract path from JSON-like prefix, treat rest as content
-  // Pattern: {"path": "some/file.ext", "content": "...broken code..."
-  const pathMatch = raw.match(/"path"\s*:\s*"([^"]+)"/);
-  if (pathMatch) {
-    const filePath = pathMatch[1];
-    // Find where content value starts
-    const contentKeyMatch = raw.match(/"content"\s*:\s*"/);
-    if (contentKeyMatch && contentKeyMatch.index !== undefined) {
-      const contentStart = contentKeyMatch.index + contentKeyMatch[0].length;
-      // Everything after "content": " is the raw content (may have broken escaping)
-      let content = raw.slice(contentStart);
-      // Strip trailing "} or similar JSON artifacts
-      content = content.replace(/"\s*\}\s*$/, '');
-      // Unescape what we can
-      content = content.replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\"/g, '"');
-      if (content.length > 0) {
-        console.log(`   🔧 Rescued workspace_write_file: path="${filePath}", content=${content.length} chars`);
-        return { path: filePath, content };
-      }
-    }
-  }
-
-  // Strategy 2: Path embedded in raw code dump — find path-like patterns
-  // Model output: raw code... {"path": "file.ext"... (JSON mixed into end)
-  const latePathMatch = raw.match(/\{"path"\s*:\s*"([^"]+)"/);
-  if (latePathMatch && latePathMatch.index !== undefined) {
-    const filePath = latePathMatch[1];
-    // Everything before the JSON is likely the content
-    const content = raw.slice(0, latePathMatch.index);
-    if (content.length > 10) {
-      console.log(`   🔧 Rescued workspace_write_file (late path): path="${filePath}", content=${content.length} chars`);
-      return { path: filePath, content };
-    }
-  }
-
-  // Strategy 3: No JSON structure at all, but we know it's workspace_write_file.
-  // Check if the raw string looks like code with a recognizable file path in the
-  // first or last few lines (models sometimes include the filename as a comment).
-  // The trailing (?=\s|$) anchor prevents URL-shaped matches: "github.com" used
-  // to capture as "github.c" because \S+ greedy-backtracked into the .c branch.
-  // We also reject anything containing :// (URL) or whitespace before the path.
-  const firstLine = raw.split('\n')[0] || '';
-  const fileExtMatch = firstLine.match(/(?:\/\/|#|--)\s*(?:File:\s*)?(\S+\.(?:ino|py|ts|js|cpp|c|h|yaml|yml|json|md))(?=\s|$)/i);
-  if (fileExtMatch && !/:\/\//.test(fileExtMatch[1])) {
-    console.log(`   🔧 Rescued workspace_write_file (comment path): path="${fileExtMatch[1]}", content=${raw.length} chars`);
-    return { path: fileExtMatch[1], content: raw };
-  }
-
-  return null;
-}
-
-/**
- * Generic rescue for any tool call with content-heavy fields (title+content,
- * name+body, etc.) where JSON was truncated mid-value. Extracts all parseable
- * key-value pairs from the broken JSON using regex.
- *
- * Handles patterns like: {"title": "My Report", "content": "# Intro...
- * where the last string value is truncated and the JSON is invalid.
- */
-function tryRescueContentTool(raw: string | undefined): Record<string, unknown> | null {
-  if (!raw || raw.length < 10) return null;
-
-  const result: Record<string, unknown> = {};
-
-  // Extract all complete "key": "value" pairs (value fully closed with ")
-  const completePairs = raw.matchAll(/"([a-zA-Z_]\w*)"\s*:\s*"((?:[^"\\]|\\.)*)"/g);
-  for (const match of completePairs) {
-    let value = match[2];
-    // Unescape JSON string escapes
-    value = value.replace(/\\n/g, '\n').replace(/\\t/g, '\t')
-      .replace(/\\"/g, '"').replace(/\\\\/g, '\\');
-    result[match[1]] = value;
-  }
-
-  // Extract complete "key": number/boolean/null pairs
-  const literalPairs = raw.matchAll(/"([a-zA-Z_]\w*)"\s*:\s*(true|false|null|-?\d+(?:\.\d+)?)/g);
-  for (const match of literalPairs) {
-    const val = match[2];
-    if (val === 'true') result[match[1]] = true;
-    else if (val === 'false') result[match[1]] = false;
-    else if (val === 'null') result[match[1]] = null;
-    else result[match[1]] = Number(val);
-  }
-
-  // Try to rescue the last truncated string value (the one that was cut off)
-  // Find the last "key": " that doesn't have a matching close quote
-  const lastKeyMatch = [...raw.matchAll(/"([a-zA-Z_]\w*)"\s*:\s*"/g)].pop();
-  if (lastKeyMatch && lastKeyMatch.index !== undefined) {
-    const key = lastKeyMatch[1];
-    const valueStart = lastKeyMatch.index + lastKeyMatch[0].length;
-    // Check if this key already has a complete value (was captured above)
-    if (!result[key] || (typeof result[key] === 'string' && (result[key] as string).length === 0)) {
-      let truncatedValue = raw.slice(valueStart);
-      // Strip trailing broken JSON artifacts
-      truncatedValue = truncatedValue.replace(/\\$/, ''); // trailing backslash
-      truncatedValue = truncatedValue.replace(/"\s*[}\]]*\s*$/, ''); // trailing close
-      // Unescape
-      truncatedValue = truncatedValue.replace(/\\n/g, '\n').replace(/\\t/g, '\t')
-        .replace(/\\"/g, '"').replace(/\\\\/g, '\\');
-      if (truncatedValue.length > 0) {
-        result[key] = truncatedValue;
-      }
-    }
-  }
-
-  // Must have extracted at least one field to be useful
-  if (Object.keys(result).length === 0) return null;
-
-  console.log(`   🔧 Rescued tool call via content extraction: ${JSON.stringify(Object.keys(result))}`);
-  return result;
-}
-
-// Extract tool calls from the LLM's text when it describes tool actions but doesn't
-// emit structured tool_calls (common with local models that ignore tool_choice=required).
-// Instead of nudging and hoping the model will emit structured calls, we parse what
-// it already said and construct the call directly.
-function extractToolCallFromText(
-  llmText: string,
-  userMessage: string,
-  availableToolNames: Set<string>,
-): { id: string; name: string; arguments: Record<string, unknown> } | null {
-  const lower = llmText.toLowerCase();
-  const trimmed = llmText.trim();
-
-  // First try: raw tool call syntax — model emits "tool_name{json}" or "tool_name {json}" as text
-  // Common with Mistral Large 3 and other models that echo tool call format without using structured calls
-  const rawCallMatch = trimmed.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\s*(\{[\s\S]*\})\s*$/);
-  if (rawCallMatch) {
-    const toolName = rawCallMatch[1];
-    if (availableToolNames.has(toolName)) {
-      try {
-        const args = JSON.parse(rawCallMatch[2]);
-        return {
-          id: `extracted_${Date.now()}`,
-          name: toolName,
-          arguments: args,
-        };
-      } catch { /* JSON parse failed, continue to other patterns */ }
-    }
-  }
-
-  // Second try: look for JSON tool call blocks in the text (some models emit these inline)
-  // Matches patterns like: {"name": "generate_image", "arguments": {...}}
-  // or ```json\n{"name": "tool", ...}\n```
-  const jsonBlockMatch = llmText.match(/```(?:json)?\s*\n?\s*(\{[\s\S]*?"name"\s*:\s*"(\w+)"[\s\S]*?\})\s*\n?\s*```/);
-  if (jsonBlockMatch) {
-    try {
-      const parsed = JSON.parse(jsonBlockMatch[1]);
-      if (parsed.name && availableToolNames.has(parsed.name)) {
-        return {
-          id: `extracted_${Date.now()}`,
-          name: parsed.name,
-          arguments: parsed.arguments || parsed.params || {},
-        };
-      }
-    } catch { /* continue to pattern matching */ }
-  }
-
-  // Second try: intent-based extraction from natural language
-  // Generate image — the most common failure case
-  if (availableToolNames.has('generate_image') &&
-    /(?:generat|creat|mak|produc|render|draw|design|craft)\w*\s+(?:\d+\s+)?(?:unique\s+|some\s+|a\s+|an\s+|the\s+|your\s+|my\s+)?(?:image|selfie|portrait|picture|photo|illustration|artwork)/i.test(lower)) {
-    return {
-      id: `extracted_${Date.now()}`,
-      name: 'generate_image',
-      arguments: { prompt: userMessage },
-    };
-  }
-
-  // Get weather
-  if (availableToolNames.has('get_weather') &&
-    /(?:check|get|fetch|look\w* up)\w*\s+(?:the\s+)?(?:weather|forecast|temperature)/i.test(lower)) {
-    // Extract location if mentioned, otherwise call with no args (uses configured home location)
-    const locationMatch = llmText.match(/(?:weather|forecast)\s+(?:in|for|at)\s+["']?([A-Z][a-zA-Z\s,]+)/);
-    return {
-      id: `extracted_${Date.now()}`,
-      name: 'get_weather',
-      arguments: locationMatch ? { location: locationMatch[1].trim() } : {},
-    };
-  }
-
-  // Web search
-  if (availableToolNames.has('web_search') &&
-    /(?:search|look\w* up|find\w* out|google|query)\w*\s+(?:the\s+web\s+)?(?:for\s+|about\s+)?/i.test(lower)) {
-    return {
-      id: `extracted_${Date.now()}`,
-      name: 'web_search',
-      arguments: { query: userMessage },
-    };
-  }
-
-  // Analyze image
-  if (availableToolNames.has('analyze_image') &&
-    /(?:analyz|examin|describ|look\s+at|inspect)\w*\s+(?:the\s+|this\s+|that\s+|your\s+)?(?:image|photo|picture)/i.test(lower)) {
-    // Try to extract image_id from text
-    const idMatch = llmText.match(/image[_\s]?id[:\s=]+["']?([a-zA-Z0-9_-]+)/i);
-    if (idMatch) {
-      return {
-        id: `extracted_${Date.now()}`,
-        name: 'analyze_image',
-        arguments: { image_id: idMatch[1] },
-      };
-    }
-  }
-
-  // Create reminder
-  if (availableToolNames.has('create_reminder') &&
-    /(?:remind|set\w*\s+(?:a\s+)?reminder|creat\w*\s+(?:a\s+)?reminder)/i.test(lower)) {
-    // Try to extract time from the text
-    const timeMatch = llmText.match(/(?:at|for)\s+(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm))/i);
-    const textMatch = llmText.match(/remind\w*\s+(?:you\s+)?(?:to\s+|about\s+)?["']?(.+?)["']?\s*(?:at|for|\.|$)/i);
-    const args: Record<string, unknown> = { text: textMatch ? textMatch[1].trim() : userMessage };
-    if (timeMatch) {
-      // Normalize to colon format: "8pm" → "8:00 PM"
-      let t = timeMatch[1].trim();
-      const bare = t.match(/^(\d{1,2})\s*(AM|PM)$/i);
-      if (bare) t = `${bare[1]}:00 ${bare[2].toUpperCase()}`;
-      args.time = t;
-    }
-    return {
-      id: `extracted_${Date.now()}`,
-      name: 'create_reminder',
-      arguments: args,
-    };
-  }
-
-  // Send notification
-  if (availableToolNames.has('send_notification') &&
-    /(?:send|push)\w*\s+(?:a\s+)?(?:notification|message|alert)/i.test(lower)) {
-    const msgMatch = llmText.match(/(?:message|notification|alert)[:\s]+["'](.+?)["']/i);
-    return {
-      id: `extracted_${Date.now()}`,
-      name: 'send_notification',
-      arguments: { message: msgMatch ? msgMatch[1] : userMessage },
-    };
-  }
-
-  // Workspace list files
-  if (availableToolNames.has('workspace_list_files') &&
-    /(?:list|check|browse|show|view)\w*\s+(?:the\s+)?(?:files?|folder|directory|project)/i.test(lower)) {
-    const folderMatch = llmText.match(/(?:in|from|folder|project)\s+["']?([a-zA-Z0-9_\-/]+)/i);
-    return {
-      id: `extracted_${Date.now()}`,
-      name: 'workspace_list_files',
-      arguments: folderMatch ? { path: folderMatch[1] } : {},
-    };
-  }
-
-  // Delegate to another choom
-  if (availableToolNames.has('delegate_to_choom') &&
-    /(?:delegat|ask|send|forward|pass)\w*\s+(?:this\s+)?(?:to|task)\s+/i.test(lower)) {
-    const choomMatch = llmText.match(/(?:to|ask)\s+(Genesis|Anya|Optic|Aloy|Nyx)\b/i);
-    if (choomMatch) {
-      return {
-        id: `extracted_${Date.now()}`,
-        name: 'delegate_to_choom',
-        arguments: { choom_name: choomMatch[1], task: userMessage },
-      };
-    }
-  }
-
-  // Home assistant - turn on/off
-  if (availableToolNames.has('ha_call_service') &&
-    /(?:turn|switch)\s+(?:on|off)\s+(?:the\s+)?/i.test(lower)) {
-    // Can't reliably extract entity_id from natural language, skip
-    return null;
-  }
-
-  // Remember / save memory — broad matching for LLM text describing a save/store action
-  // Also check user message for explicit remember requests the LLM acknowledged but didn't tool-call
-  const userLower = userMessage.toLowerCase();
-  const describesRemember = /(?:(?:remember|sav|stor|not|record|keep|memoriz)\w*\s+(?:that|this|it|your |the |my )|(?:i'?ll |let me |i'?m going to )(?:remember|save|store|note|record|keep)|(?:i'?ve |i have )?(?:stored|saved|noted|recorded|memorized|remembered)\s+(?:that|this|it|your|the)|use (?:the )?remember)/i.test(lower);
-  const userAskedRemember = /(?:(?:please |can you |you should )remember (?:that|this|my|i |the |for )|(?<!i )(?<!i'll )remember (?:that |this |my |i |the |for )|(?:don'?t |never )forget |(?:save|store|note|keep) (?:this|that|my|the |it )|use (?:the )?remember)/i.test(userLower);
-  if (availableToolNames.has('remember') && (describesRemember || userAskedRemember)) {
-    // Try to extract a meaningful title from the user message
-    const titleMatch = userMessage.match(/(?:remember|save|store|note|keep|don'?t forget)\s+(?:that\s+)?(.{5,60}?)(?:\.|$)/i);
-    const title = titleMatch ? titleMatch[1].trim().slice(0, 60) : 'User memory';
-    return {
-      id: `extracted_${Date.now()}`,
-      name: 'remember',
-      arguments: { title, content: userMessage },
-    };
-  }
-
-  // Search memories
-  if (availableToolNames.has('search_memories') &&
-    /(?:search|check|look\w* (?:through|in)|recall)\s+(?:my\s+)?(?:memor|notes|knowledge)/i.test(lower)) {
-    return {
-      id: `extracted_${Date.now()}`,
-      name: 'search_memories',
-      arguments: { query: userMessage },
-    };
-  }
-
-  return null;
-}
 
 // Server-side activity logging - writes directly to DB so both Signal and web GUI get logged
 async function serverLog(
@@ -5355,7 +4293,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           // force the LLM to call a tool on the first iteration instead of narrating.
           // This is the biggest reliability win for local models that tend to describe actions.
           const msgLower = message.toLowerCase();
-          const strongToolIntent = /\b(what(?:'?s| is) the weather|weather (?:like|today|tomorrow|forecast)|search (?:for|the web)|look up|find (?:me|out)|generate (?:an? |some )?(?:image|picture|photo|selfie|portrait)|take a (?:selfie|photo|picture)|create (?:a |an )?(?:image|picture)|make (?:me |an? )?(?:image|picture|selfie)|(?:please |can you |you should )remember (?:that|this|my|i |the |for )|(?<!i )(?<!i'll )remember (?:that |this |my |i |the |for )|(?:don'?t |never )forget (?:that|this|my|i )|(?:save|store|note|keep) (?:this|that|my|the |it )(?:in |to |as )?(?:memory|mind)?|use (?:the )?remember(?: tool)?|remind me|set (?:a )?reminder|send (?:a )?(?:notification|message|alert)|check (?:the |my )?(?:calendar|schedule|tasks|email|inbox)|(?:any |do i have (?:any )?|what )(?:appointments?|meetings?|events?)|(?:am i |are we )(?:free|busy|available)|what(?:'?s| is) on (?:my )?(?:calendar|schedule|for )?(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this week|next week)|(?:what(?:'?s| is| do i have) )(?:scheduled|planned|coming up)|when (?:is|was|did) (?:my |the )?(?:next|last) |when (?:is|was) the last time i |when did i (?:last )?(?:go|get|have|see|do|visit|fill|take)|write (?:a |an )?(?:file|document|report)|read (?:the |my |this )?(?:file|document|pdf|report)|(?:look|take a look|glance) at (?:the |this |that )?(?:file|document|pdf|report)|open (?:the |this |that )?(?:pdf|report|document)|review (?:the |this |that )?(?:file|document|pdf|report)|list (?:my |the )?(?:files|projects|tasks)|download|scrape|analyze (?:this|the|that) (?:image|photo|picture)|turn (?:on|off) (?:the )?|(?:open|close) (?:the )?|(?:lights?|switch|fan|heater|thermostat) (?:on|off)|delegate|get (?:the )?(?:weather|forecast)|search (?:youtube|email|gmail|contacts)|draft (?:an? )?email|compose (?:an? )?email|^habit\b|habit (?:stats|summary|report|breakdown)|how (?:often|many times) (?:do|did|have) i |play (?:some |me )?(?:music|song|track|album|artist|playlist|radio)|put on (?:some )?(?:music|song)|what(?:'?s| is) (?:playing|on)(?: right now| currently)?|(?:pause|stop|skip|next|previous|resume)(?: the)?(?: music| song| track| playback)?|(?:turn|volume) (?:up|down)|(?:search|find)(?: for)?(?: some| a)? (?:music|song|track|artist|album))\b/i.test(msgLower);
+          const strongToolIntent = /\b(what(?:'?s| is) the weather|weather (?:like|today|tomorrow|forecast)|search (?:for|the web)|look up|find (?:me|out)|generate (?:an? |some )?(?:image|picture|photo|selfie|portrait)|take a (?:selfie|photo|picture)|create (?:a |an )?(?:image|picture)|make (?:me |an? )?(?:image|picture|selfie)|(?:please |can you |you should )remember (?:that|this|my|i |the |for )|(?<!i )(?<!i'll )remember (?:that |this |my |i |the |for )|(?:don'?t |never )forget (?:that|this|my|i )|(?:save|store|note|keep) (?:this|that|my|the |it )(?:in |to |as )?(?:memory|mind)?|use (?:the )?remember(?: tool)?|remind me|set (?:a )?reminder|send (?:a )?(?:notification|message|alert)|check (?:the |my )?(?:calendar|schedule|tasks|email|inbox)|(?:any |do i have (?:any )?|what )(?:appointments?|meetings?|events?)|(?:am i |are we )(?:free|busy|available)|what(?:'?s| is) on (?:my )?(?:calendar|schedule|for )?(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this week|next week)|(?:what(?:'?s| is| do i have) )(?:scheduled|planned|coming up)|when (?:is|was|did) (?:my |the )?(?:next|last) |when (?:is|was) the last time i |when did i (?:last )?(?:go|get|have|see|do|visit|fill|take)|write (?:a |an )?(?:file|document|report)|read (?:the |my |this )?(?:file|document|pdf|report)|(?:look|take a look|glance) at (?:the |this |that )?(?:file|document|pdf|report)|open (?:the |this |that )?(?:pdf|report|document)|review (?:the |this |that )?(?:file|document|pdf|report)|list (?:my |the )?(?:files|projects|tasks)|download|scrape|analyze (?:this|the|that) (?:image|photo|picture)|turn (?:on|off) (?:the )?|(?:open|close) (?:the )?|(?:lights?|switch|fan|heater|thermostat) (?:on|off)|delegate|get (?:the )?(?:weather|forecast)|search (?:youtube|email|gmail|contacts)|draft (?:an? )?email|compose (?:an? )?email|^habit\b|habit (?:stats|summary|report|breakdown)|how (?:often|many times) (?:do|did|have) i |play (?:some |me )?(?:music|song|track|album|artist|playlist|radio)|put on (?:some )?(?:music|song)|what(?:'?s| is) (?:playing|on)(?: right now| currently)?|(?:pause|stop|skip|next|previous|resume)(?: the)?(?: music| song| track| playback)?|(?:turn|volume) (?:up|down)|(?:search|find)(?: for)?(?: some| a)? (?:music|song|track|artist|album)|(?:start|open|launch|restart|fire up) freecad|(?:in|with|using) freecad|(?:build|design|model|make|create)\b[^.!?\n]{0,50}\b(?:freecad|bracket|holder|mount|enclosure|spacer|bushing|3d model|3d part)|3d.?print)\b/i.test(msgLower);
           // In noTools mode (heartbeat briefings), tools are stripped — never force tool_choice='required'.
           // Without this guard the model is forced to call tools that don't exist and the loop loses the briefing.
           //
@@ -5385,6 +4323,14 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           const MAX_CALLS_PER_TOOL = 50; // Max times any single tool can be called per request
           const MAX_CALLS_PER_READONLY_TOOL = 50; // Higher limit for read-only (PARALLEL_SAFE) tools
           const MAX_FAILURES_PER_TOOL = 2; // Block tool after this many failures (any error)
+          // Iterative tools where errors ARE the workflow (write code → error →
+          // read traceback → fix) get extra headroom before blocking; a cap of 2
+          // turns one typo plus one bad API guess into a full-turn lockout.
+          const ITERATIVE_TOOL_FAILURE_CAPS = new Map<string, number>([
+            ['run_freecad_python', 6],
+          ]);
+          const failureCapFor = (toolName: string) =>
+            ITERATIVE_TOOL_FAILURE_CAPS.get(toolName) ?? MAX_FAILURES_PER_TOOL;
           const choomTag = `[${choom.name}]`;
           console.log(`   🛠️  ${choomTag} Tools available: ${activeTools.length}${skillDispatch ? ' [skill dispatch]' : ''}`);
           // Intent-specific tool guidance: when we detect a specific intent, inject a
@@ -5435,8 +4381,14 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             console.log(`   ⚡ ${choomTag} Tool intent detected — using tool_choice='required' on first iteration${intentToolHint ? ` (hint: ${intentToolHint})` : ''}`);
           }
           if (intentToolHint && activeTools.length > 0) {
+            // Must NOT be role:'system'. Strict chat templates (Qwen/ChatML via
+            // LM Studio) hard-400 the whole request on any system turn after
+            // index 0 ("System message must be at the beginning"). A user-role
+            // turn is valid everywhere AND keeps the guidance recent — folding
+            // it into the head system prompt would bury it under the entire
+            // conversation, which is exactly where it stops working.
             currentMessages.push({
-              role: 'system',
+              role: 'user',
               content: `[Tool guidance] The user's request maps to the "${intentToolHint}" tool. Call that tool directly — do NOT use other tools for this request.`,
             });
           }
@@ -5647,28 +4599,12 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             //   Phase 2 — PREFILL: processing prompt tokens before first output
             //   Phase 3 — BETWEEN-TOKEN: gap between streaming tokens (stall detection)
             //
-            const isLocal = !usingCloudProvider || isLocalEndpoint(llmSettings.endpoint);
-            const endpointLower = (llmSettings.endpoint || '').toLowerCase();
-            const isCloudInference = !isLocal && /nvidia|\.nvcf\.|together|fireworks|groq|replicate|deepinfra/.test(endpointLower);
+            // Policy lives in lib/stream-timeouts.ts (pure + unit-tested).
             const DEFAULT_TIMEOUT_MS = (isDelegation || isGroupTurn) ? 300000 : 180000;
             const timeoutMs = (choom.llmTimeoutSec ? choom.llmTimeoutSec * 1000 : DEFAULT_TIMEOUT_MS);
-
-            let CONNECTION_TIMEOUT_MS: number;
-            let PREFILL_TIMEOUT_MS: number;
-            let BETWEEN_TOKEN_MS: number;
-            if (isLocal) {
-              CONNECTION_TIMEOUT_MS = 30000;
-              PREFILL_TIMEOUT_MS = Math.max(120000, timeoutMs - 15000);
-              BETWEEN_TOKEN_MS = Math.max(120000, Math.floor(timeoutMs * 0.75));
-            } else if (isCloudInference) {
-              CONNECTION_TIMEOUT_MS = 15000;
-              PREFILL_TIMEOUT_MS = 60000;
-              BETWEEN_TOKEN_MS = 15000;
-            } else {
-              CONNECTION_TIMEOUT_MS = 15000;
-              PREFILL_TIMEOUT_MS = 30000;
-              BETWEEN_TOKEN_MS = 15000;
-            }
+            const endpointTier = classifyEndpoint(llmSettings.endpoint, usingCloudProvider);
+            const { connectionMs: CONNECTION_TIMEOUT_MS, prefillMs: PREFILL_TIMEOUT_MS, betweenTokenMs: BETWEEN_TOKEN_MS } =
+              computeStreamTimeouts(endpointTier, timeoutMs);
             let connectionEstablished = false;
             let firstTokenReceived = false;
             let lastChunkTime = Date.now();
@@ -6063,27 +4999,16 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                     toolCallsAccumulator = new Map();
                     finishReason = 'stop';
 
-                    // Fallback timeout: same three-phase approach as primary.
+                    // Fallback timeout: same three-phase policy as the primary,
+                    // via the same function — this was a duplicated copy of the
+                    // tier ladder, which is exactly how the two drift apart.
+                    // Note the fallback classifies on `!fb.providerId` (a fallback
+                    // with no provider is the local default), not usingCloudProvider.
                     const fbIsLocal = !fb.providerId || isLocalEndpoint(fbSettings.endpoint);
-                    const fbEndpointLower = (fbSettings.endpoint || '').toLowerCase();
-                    const fbIsCloudInference = !fbIsLocal && /nvidia|\.nvcf\.|together|fireworks|groq|replicate|deepinfra/.test(fbEndpointLower);
                     const fbTimeoutMs = fbIsLocal ? timeoutMs : Math.max(60000, Math.floor(timeoutMs * 0.75));
-                    let fbConnectionMs: number;
-                    let fbPrefillMs: number;
-                    let fbBetweenTokenMs: number;
-                    if (fbIsLocal) {
-                      fbConnectionMs = 30000;
-                      fbPrefillMs = Math.max(120000, fbTimeoutMs - 15000);
-                      fbBetweenTokenMs = Math.max(120000, Math.floor(fbTimeoutMs * 0.75));
-                    } else if (fbIsCloudInference) {
-                      fbConnectionMs = 15000;
-                      fbPrefillMs = 60000;
-                      fbBetweenTokenMs = 15000;
-                    } else {
-                      fbConnectionMs = 15000;
-                      fbPrefillMs = 30000;
-                      fbBetweenTokenMs = 15000;
-                    }
+                    const fbTier = classifyEndpoint(fbSettings.endpoint, !fbIsLocal);
+                    const { connectionMs: fbConnectionMs, prefillMs: fbPrefillMs, betweenTokenMs: fbBetweenTokenMs } =
+                      computeStreamTimeouts(fbTier, fbTimeoutMs);
                     let fbConnectionEstablished = false;
                     let fbFirstTokenReceived = false;
                     let fbRejectInactivity: (err: Error) => void;
@@ -6196,8 +5121,12 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                     // respond in Chinese. Inject a language enforcement reminder.
                     const modelLower = (fbSettings.model || '').toLowerCase();
                     if (/deepseek|glm|baichuan|qwen|chatglm/.test(modelLower)) {
+                      // role:'user', not 'system' — see the [Tool guidance] note above.
+                      // These are the exact model families whose templates raise on a
+                      // late system turn, so injecting one here 400'd the very fallback
+                      // that was supposed to rescue the request.
                       currentMessages.push({
-                        role: 'system',
+                        role: 'user',
                         content: '[IMPORTANT] You MUST respond in English only. Do not use Chinese or any other language.',
                       });
                     }
@@ -6349,7 +5278,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 // Count toward failure limits so repeated empty-args don't loop forever
                 const emptyFails = (toolFailureCounts.get(r.name) || 0) + 1;
                 toolFailureCounts.set(r.name, emptyFails);
-                if (emptyFails >= MAX_FAILURES_PER_TOOL) {
+                if (emptyFails >= failureCapFor(r.name)) {
                   brokenTools.add(r.name);
                   console.log(`   🚫 ${choomTag} ${r.name} blocked after ${emptyFails} empty-args failures`);
                 }
@@ -6872,7 +5801,19 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             // Tools whose output depends on real-world state that changes between
             // calls — never dedup these even if args are identical. Camera snapshots
             // must hit the camera fresh each time (position changes between calls).
-            const NO_DEDUP_TOOLS = new Set(['ha_get_camera_snapshot']);
+            // ALL FreeCAD tools are stateful: the same list/screenshot/fuse call
+            // returns different results as the model evolves, and a call that
+            // failed once (fuse of non-overlapping parts) legitimately succeeds
+            // after the parts are moved. Serving cached results makes the model
+            // reason against a stale snapshot of the document.
+            const NO_DEDUP_TOOLS = new Set([
+              'ha_get_camera_snapshot',
+              'start_freecad', 'create_freecad_document', 'create_freecad_part',
+              'edit_freecad_object', 'delete_freecad_object', 'list_freecad_objects',
+              'freecad_view', 'save_freecad_document', 'close_freecad_document',
+              'fuse_freecad_objects', 'cut_freecad_object', 'fillet_freecad_object',
+              'run_freecad_python',
+            ]);
 
             // Pre-flight check: returns a ToolResult if the call should be skipped, or null to proceed
             const preFlightCheck = (tc: { id: string; name: string; arguments: Record<string, unknown> }): ToolResult | null => {
@@ -6969,7 +5910,9 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               }
 
               // --- Failed call cache ---
-              const cachedError = failedCallCache.get(dedupKey);
+              // (stateful tools exempt: a fuse that failed on non-overlapping parts
+              // succeeds after the parts are moved — same args, different world)
+              const cachedError = NO_DEDUP_TOOLS.has(tc.name) ? undefined : failedCallCache.get(dedupKey);
               if (cachedError) {
                 console.log(`   🔁 Returning cached failure for ${tc.name} (same args already failed)`);
                 return { toolCallId: tc.id, name: tc.name, result: null, error: `${cachedError} [This exact call already failed. Try a different approach or different arguments.]` };
@@ -7016,39 +5959,27 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 // - Config/auth errors → block immediately (model can't fix these)
                 // - Missing param errors → DON'T count toward any failure cap (model can fix by providing params)
                 // - Other errors → count toward per-tool cap and consecutive failures
-                const isConfigError = /not configured|api key|unauthorized|forbidden|invalid.*(?:model|endpoint|key)|ECONNREFUSED/i.test(result.error);
-                // Home Assistant 400/422 on ha_call_service are almost always shape errors
-                // (wrong service_data/target format, bad option value, etc.) — recoverable
-                // by the model next iteration. Treat them as param errors so they don't
-                // burn the broken-tools quota after 2 tries. Same for unknown-service 400s
-                // on HA, which the model can fix by running ha_list_services first.
-                const isHaShapeError = /^ha_call_service$/.test(tc.name)
-                  && /HA API (?:400|422)\b/i.test(result.error);
-                // "Invented this domain" / "does not exist on this HA instance" — the LLM
-                // used a hallucinated domain or service name. The tool itself works fine;
-                // blocking it prevents the LLM from making the corrected call next iteration.
+                // Patterns live in lib/tool-error-classification.ts so they can be
+                // unit-tested against verbatim production error strings. A reworded
+                // error message once silently fell out of the recoverable set and
+                // started disabling ha_get_state mid-recovery; see that module.
+                const isConfigError = CONFIG_ERROR.test(result.error);
+                const isHaShapeError = tc.name === 'ha_call_service' && HA_SHAPE_ERROR.test(result.error);
                 const isHaServiceDiscovery = /^ha_(?:call_service|get_state)$/.test(tc.name)
-                  && /invented this domain|does not exist on this Home Assistant|HA API 404: Entity not found/i.test(result.error);
-                const isParamError = /missing required parameter|is required|must provide|please provide/i.test(result.error)
+                  && HA_DISCOVERY_ERROR.test(result.error);
+                const isParamError = PARAM_ERROR.test(result.error)
                   || isHaShapeError
                   || isHaServiceDiscovery;
-                const isGpuBusy = /GPU is busy|GPU is currently busy/i.test(result.error);
-                // "No data/history/results" is informational, not a tool failure — don't count
-                const isNoData = /no (?:history |data |results? )(?:data |found )?for /i.test(result.error);
-                // File/path not found is recoverable — LLM guessed wrong filename, can list dir and retry
-                const isPathError = /ENOENT|no such file or directory|file not found|path not found|does not exist|not found in project/i.test(result.error);
-                // A referenced id (image id, etc.) that doesn't exist — recoverable: the
-                // model guessed/used a stale id, and these errors already list the VALID
-                // ids to retry with. Counting them disabled the tool after 2 tries
-                // (Eve incremented image ids ...0s9u → ...0s9v and burned the cap before
-                // she could use a real one). Treat like path-not-found.
-                const isStaleRef = /\bid ".*?" (?:was|is) not found|image id .*? (?:was|is) not found|no .*? with id ["']/i.test(result.error);
+                const isGpuBusy = GPU_BUSY.test(result.error);
+                const isNoData = NO_DATA.test(result.error);
+                const isPathError = PATH_ERROR.test(result.error);
+                const isStaleRef = STALE_REF_ERROR.test(result.error);
                 // Folder-ownership / shared-folder blocks (contractGate) are recoverable and
                 // argument-specific: a write to the worker's own folder or choom_commons/
                 // would succeed. Must NOT count toward the per-tool failure cap, or two
                 // mis-targeted writes disable workspace_write_file for the whole request —
                 // including the legitimate writes the model issues right after.
-                const isPermissionBlock = /^Blocked: (?:cannot (?:write into|delete from) another Choom|sibling_journal\/ is archived|[^/]+\/ is a shared folder)/i.test(result.error);
+                const isPermissionBlock = PERMISSION_BLOCK.test(result.error);
                 errorClass = isConfigError ? 'config' : isParamError ? 'param' : isGpuBusy ? 'gpu_busy' : isNoData ? 'no_data' : (isPathError || isPermissionBlock || isStaleRef) ? 'path' : 'other';
                 failedCallCache.set(dedupKey, result.error);
 
@@ -7065,7 +5996,14 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 if (useHintMatch) {
                   const suggestedTool = useHintMatch[1];
                   const suggestedArgs = useHintMatch[2]?.trim();
-                  if (suggestedTool !== tc.name) {
+                  // The regex matches ANY prose "Use <word>", so it happily
+                  // scraped ordinary English out of error text: the HA error
+                  // "Real climate entities on THIS system: ... Use one of these"
+                  // produced the hint "Use `one` instead." and pointed the model
+                  // at a tool that does not exist. Only accept the capture if it
+                  // names a tool that is actually registered for this request.
+                  const isRealTool = activeTools.some(t => t.name === suggestedTool);
+                  if (isRealTool && suggestedTool !== tc.name) {
                     const hint = suggestedArgs
                       ? `Use \`${suggestedTool}\` with ${suggestedArgs.slice(0, 200)}`
                       : `Use \`${suggestedTool}\` instead.`;
@@ -7101,7 +6039,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                   // Count other failures toward per-tool cap
                   const toolFails = (toolFailureCounts.get(tc.name) || 0) + 1;
                   toolFailureCounts.set(tc.name, toolFails);
-                  if (toolFails >= MAX_FAILURES_PER_TOOL && !brokenTools.has(tc.name)) {
+                  if (toolFails >= failureCapFor(tc.name) && !brokenTools.has(tc.name)) {
                     brokenTools.add(tc.name);
                     console.log(`   🚫 ${tc.name} blocked after ${toolFails} non-param failures this request`);
                   }

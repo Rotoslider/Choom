@@ -40,6 +40,38 @@ export class WorkspaceService {
       cleaned = relativePath.replace(/%(?![0-9A-Fa-f]{2})/g, '');
     }
 
+    // Absolute paths that already point INSIDE the workspace must be rebased,
+    // not slash-stripped. Tools routinely hand the model an absolute path (image
+    // paths, download targets, FreeCAD exports) and the model hands it straight
+    // back. Blindly dropping the leading slash turned
+    //   /home/nuc1/choom-projects/freecad/view.png
+    // into
+    //   /home/nuc1/choom-projects/home/nuc1/choom-projects/freecad/view.png
+    // which is the single largest source of ENOENT ('path'-class) errors in the
+    // trace corpus. Rebase here, before any other munging.
+    if (path.isAbsolute(cleaned)) {
+      const abs = path.resolve(cleaned);
+      if (abs === this.rootPath || abs.startsWith(this.rootPath + path.sep)) {
+        cleaned = path.relative(this.rootPath, abs) || '.';
+      }
+      // Otherwise fall through to the leading-slash strip below, which treats
+      // it as workspace-relative.
+      //
+      // Do NOT "helpfully" throw here. A leading slash on a workspace path is
+      // overwhelmingly a Choom writing "/choom_commons/for_eve/note.md" when it
+      // means "choom_commons/for_eve/note.md" — replaying every path argument in
+      // data/traces through this function, 24 distinct real paths take this
+      // branch and all 24 are genuine workspace folders (/choom_commons/...,
+      // /selfies_aloy/..., /uploads/...). Rejecting them breaks cross-Choom
+      // letters, camera snapshots and uploads.
+      //
+      // Nothing escapes: the strip makes it relative, and the containment check
+      // at the end of this function still blocks real traversal ("../../etc",
+      // or a sibling dir sharing the root as a string prefix). A true system
+      // path like "/etc/passwd" simply resolves to <root>/etc/passwd and fails
+      // as not-found, which is contained and safe.
+    }
+
     // Strip characters that are never valid in file paths.
     // Allow: alphanumeric, hyphen, underscore, dot, forward slash, space, parentheses
     const sanitized = cleaned.replace(/[^a-zA-Z0-9\-_./\s()]/g, '');
@@ -117,7 +149,10 @@ export class WorkspaceService {
 
     const resolved = path.resolve(this.rootPath, cleaned);
 
-    if (!resolved.startsWith(this.rootPath)) {
+    // Separator-aware containment check. A bare startsWith() would accept
+    // "/home/nuc1/choom-projects-evil" for root "/home/nuc1/choom-projects",
+    // since the root is a string prefix of the sibling directory.
+    if (resolved !== this.rootPath && !resolved.startsWith(this.rootPath + path.sep)) {
       throw new Error(`Path traversal blocked: "${relativePath}" resolves outside workspace`);
     }
 

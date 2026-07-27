@@ -4,10 +4,8 @@ import React, { useCallback, useState, useRef, useEffect } from 'react';
 import { MessageList } from './message-list';
 import { InputArea, ImageAttachment } from './input-area';
 import { AvatarDisplay } from '../common/avatar-display';
-import { LiveAvatarView, LiveAvatarHandle } from '../avatar/live-avatar-view';
 import { useAppStore } from '@/lib/store';
 import type { Message } from '@/lib/types';
-import { MessageSquare, Video } from 'lucide-react';
 
 interface ChatInterfaceProps {
   messages: Message[];
@@ -44,7 +42,6 @@ interface ChatInterfaceProps {
     total?: number;
   } | null;
   isSpeaking?: boolean;
-  liveAvatarRef?: React.RefObject<LiveAvatarHandle | null>;
 }
 
 export function ChatInterface({
@@ -58,10 +55,9 @@ export function ChatInterface({
   agentProgress,
   planProgress,
   isSpeaking = false,
-  liveAvatarRef,
 }: ChatInterfaceProps) {
   const [isLoading, setIsLoading] = useState(false);
-  const { currentChoom, currentChatId, activeProjectByChat, setActiveProject, services, ui, isStreaming, setActiveLiveChoomId, settings } = useAppStore();
+  const { currentChoom, currentChatId, activeProjectByChat, setActiveProject, services } = useAppStore();
 
   // Projects for the chat-header "working in" dropdown.
   const [projects, setProjects] = useState<Array<{ folder: string; name?: string }>>([]);
@@ -78,17 +74,6 @@ export function ChatInterface({
     return () => { cancelled = true; };
   }, [currentChoom?.id]);
   const activeProject = currentChatId ? (activeProjectByChat[currentChatId] || '') : '';
-  const avatarEnabled = settings.avatar?.enabled ?? true;
-  const choomAvatarMode = (currentChoom?.avatarMode as 'off' | 'live' | 'desktop' | null) || 'off';
-  const showLiveTab = avatarEnabled && choomAvatarMode === 'live';
-
-  const [activeTab, setActiveTab] = useState<'chat' | 'live'>('chat');
-
-  // Reset to Chat tab when switching Chooms + release any Live lock
-  React.useEffect(() => {
-    setActiveTab('chat');
-    setActiveLiveChoomId(null);
-  }, [currentChoom?.id, setActiveLiveChoomId]);
 
   const handleSend = useCallback(
     async (message: string, attachment?: ImageAttachment) => {
@@ -112,37 +97,6 @@ export function ChatInterface({
   );
 
   const isLLMConnected = services.llm === 'connected';
-  const hasAvatar = !!currentChoom?.avatarUrl;
-  const avatarServiceUp = services.avatar === 'connected';
-  // Only block if ANOTHER choom has the live tab (not this one, not null)
-  const isLiveBlocked =
-    ui.activeLiveChoomId !== null && ui.activeLiveChoomId !== currentChoom?.id;
-  // Can only go live if mode is 'live' and has photo
-  const canGoLive = showLiveTab && hasAvatar && !isLiveBlocked;
-
-  // Auto-switch to Chat if live mode is turned off
-  React.useEffect(() => {
-    if (activeTab === 'live' && !showLiveTab) {
-      setActiveTab('chat');
-      if (ui.activeLiveChoomId === currentChoom?.id) {
-        setActiveLiveChoomId(null);
-      }
-    }
-  }, [showLiveTab, activeTab, currentChoom?.id, ui.activeLiveChoomId, setActiveLiveChoomId]);
-
-  const handleTabChange = (tab: 'chat' | 'live') => {
-    if (tab === 'live' && !canGoLive) return;
-
-    setActiveTab(tab);
-
-    if (tab === 'live') {
-      setActiveLiveChoomId(currentChoom?.id || null);
-    } else {
-      if (ui.activeLiveChoomId === currentChoom?.id) {
-        setActiveLiveChoomId(null);
-      }
-    }
-  };
 
   return (
     <div className="flex flex-col h-full">
@@ -194,46 +148,6 @@ export function ChatInterface({
               </div>
             )}
 
-            {/* Tab switcher — only show when Choom is in 'live' avatar mode */}
-            {currentChoom && showLiveTab && (
-              <div className="flex items-center gap-1 bg-muted/50 rounded-lg p-0.5">
-                <button
-                  onClick={() => handleTabChange('chat')}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
-                    activeTab === 'chat'
-                      ? 'bg-card text-foreground shadow-sm'
-                      : 'text-muted-foreground hover:text-foreground'
-                  }`}
-                >
-                  <MessageSquare className="w-3.5 h-3.5" />
-                  Chat
-                </button>
-                <button
-                  onClick={() => handleTabChange('live')}
-                  disabled={!canGoLive}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
-                    activeTab === 'live'
-                      ? 'bg-card text-foreground shadow-sm'
-                      : !canGoLive
-                        ? 'text-muted-foreground/40 cursor-not-allowed'
-                        : 'text-muted-foreground hover:text-foreground'
-                  }`}
-                  title={
-                    !hasAvatar
-                      ? 'Upload a photo to use Live mode'
-                      : !avatarServiceUp
-                        ? 'Avatar service not connected'
-                        : isLiveBlocked
-                          ? 'Another Choom has the Live tab open'
-                          : 'Live avatar mode'
-                  }
-                >
-                  <Video className="w-3.5 h-3.5" />
-                  Live
-                </button>
-              </div>
-            )}
-
             {/* Connection status */}
             <div className="flex items-center gap-2">
               <div
@@ -249,26 +163,13 @@ export function ChatInterface({
         </div>
       </div>
 
-      {/* Tab content */}
-      {activeTab === 'live' && hasAvatar && currentChoom ? (
-        <LiveAvatarView
-          ref={liveAvatarRef}
-          choomId={currentChoom.id}
-          avatarUrl={currentChoom.avatarUrl}
-          messages={messages}
-          isSpeaking={isSpeaking}
-          isStreaming={isStreaming}
-        />
-      ) : (
-        <MessageList
-          messages={messages}
-          isLoading={isLoading}
-          streamingImage={streamingImage}
-          agentProgress={agentProgress}
-          planProgress={planProgress}
-        />
-      )}
-
+      <MessageList
+        messages={messages}
+        isLoading={isLoading}
+        streamingImage={streamingImage}
+        agentProgress={agentProgress}
+        planProgress={planProgress}
+      />
 
       {/* Input area */}
       <InputArea

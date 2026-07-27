@@ -12,7 +12,6 @@ import { useAppStore } from '@/lib/store';
 import { StreamingTTS } from '@/lib/tts-client';
 import { log, useLogStore } from '@/lib/log-store';
 import type { Message, Choom, Chat, StreamingChatChunk, ServiceHealth } from '@/lib/types';
-import type { LiveAvatarHandle } from '@/components/avatar/live-avatar-view';
 import { cn } from '@/lib/utils';
 
 export default function Home() {
@@ -94,10 +93,7 @@ export default function Home() {
 
   const [isSpeaking, setIsSpeaking] = useState(false);
 
-  // Live avatar ref for playing MuseTalk-generated frames
-  const liveAvatarRef = useRef<LiveAvatarHandle | null>(null);
   // Refs for live mode state (avoids stale closures in TTS callback)
-  const liveChoomIdRef = useRef<string | null>(null);
   const currentChoomRef = useRef(currentChoom);
 
   // Abort controller for stopping generation
@@ -114,63 +110,6 @@ export default function Home() {
       ttsRef.current = new StreamingTTS(
         ttsSettings,
         (speaking) => setIsSpeaking(speaking),
-        undefined,  // onVisemeTimeline — unused with MuseTalk
-        (audioBase64, audioElement) => {
-          const choom = currentChoomRef.current;
-          const liveId = liveChoomIdRef.current;
-          const mode = (choom?.avatarMode as string) || 'off';
-
-          // Avatar mode check:
-          // 'off' → never animate, normal TTS
-          // 'live' → only when Live tab is open (liveId set)
-          // 'desktop' → send to animate service (fire-and-forget), TTS plays audio normally
-          if (mode === 'off' || !choom?.avatarUrl) {
-            return false;
-          }
-
-          if (mode === 'desktop') {
-            // Desktop: intercept audio, send to service which forwards
-            // BOTH frames AND audio to desktop app via WebSocket for perfect sync
-            fetch('/api/avatar/animate', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                choomId: choom.id,
-                imageBase64: choom.avatarUrl,
-                audioBase64,
-                includeAudio: true, // tell service to forward audio to desktop
-              }),
-            }).catch(() => {});
-            return true; // intercept — desktop app will play audio
-          }
-
-          if (mode === 'live' && !liveId) {
-            return false;
-          }
-
-          // Live tab: hold audio → animate → play via clip queue (synced)
-          fetch('/api/avatar/animate', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              choomId: choom.id,
-              imageBase64: choom.avatarUrl,
-              audioBase64,
-            }),
-          })
-            .then((res) => res.ok ? res.json() : null)
-            .then((data) => {
-              if (data?.frames?.length > 0) {
-                liveAvatarRef.current?.playFrames(data.frames, data.fps || 25, audioElement, data.idle_frame);
-              } else {
-                liveAvatarRef.current?.playFrames([], 25, audioElement);
-              }
-            })
-            .catch(() => {
-              audioElement.play().catch(() => {});
-            });
-          return true; // handled — don't queue in TTS
-        },
       );
       ttsRef.current.setMuted(ui.isMuted);
     }
@@ -185,7 +124,6 @@ export default function Home() {
   }, [ui.isMuted]);
 
   // Keep live mode refs in sync (avoids stale closures in TTS callback)
-  useEffect(() => { liveChoomIdRef.current = ui.activeLiveChoomId; }, [ui.activeLiveChoomId]);
   useEffect(() => { currentChoomRef.current = currentChoom; }, [currentChoom]);
 
   // Fetch initial data + auto-start avatar service if needed
@@ -344,14 +282,6 @@ export default function Home() {
         if (res.ok) {
           const data = await res.json();
           const serviceKeys: (keyof ServiceHealth)[] = ['llm', 'memory', 'tts', 'stt', 'imageGen', 'weather', 'search', 'searxng'];
-          // Only check avatar service if any Choom has avatar mode != 'off'
-          const anyAvatarEnabled = chooms.some(c => c.avatarMode && c.avatarMode !== 'off');
-          if (anyAvatarEnabled) {
-            serviceKeys.push('avatar');
-          } else {
-            // Mark as disconnected without checking (standby)
-            updateServiceHealth('avatar', 'disconnected');
-          }
           serviceKeys.forEach((service) => {
             const info = data.services[service] as { status: string } | undefined;
             const status = info?.status === 'connected' ? 'connected' : 'disconnected';
@@ -990,7 +920,6 @@ export default function Home() {
           agentProgress={agentProgress}
           planProgress={planProgress}
           isSpeaking={isSpeaking}
-          liveAvatarRef={liveAvatarRef}
         />
       </main>
 
