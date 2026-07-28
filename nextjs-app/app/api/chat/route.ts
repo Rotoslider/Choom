@@ -4346,6 +4346,12 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             // so soft phrasings ("...if you want to see the sunset") produced
             // pure conversation with no tool call.
             intentToolHint = 'ha_get_camera_snapshot';
+          } else if (/\bgenerate[ _]?image tool\b/i.test(msgLower) || /\b(?:generate|generating|create|creating|make|making|draw|render)\b[^.!?\n]{0,50}\b(?:image|selfie|picture|portrait|photo)s?\b[^.!?\n]{0,40}\bof\s+you(?:rself)?\b/i.test(msgLower)) {
+            // "generate a couple of images of you", "you forgot to use the
+            // generate image tool" — the user's single most common image ask
+            // had NO intent hint, so the ignored-required retry had no tool
+            // to narrow to and qwen went 0/3 on it in long context (C-44).
+            intentToolHint = 'generate_image';
           }
           // NEVER force tool_choice on a group turn. Proven by execution traces:
           // in a room, `message` is the SIBLINGS' lines, which constantly trip the
@@ -4821,7 +4827,16 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                           const probe = wouldBe.slice(-180);
                           const firstIdx = iterationContent.indexOf(probe);
                           if (firstIdx !== -1 && firstIdx < iterationContent.length - 180) {
+                            const beforeTrim = iterationContent.length;
                             iterationContent = iterationContent.slice(0, firstIdx + probe.length);
+                            // Live-streamed iterations already sent the repeated
+                            // copies to the client — retract them so the bubble
+                            // matches the trimmed content NOW (not at 'done')
+                            // and the client can drop the junk from its TTS
+                            // queue (C-44). Buffered iterations sent nothing.
+                            if (!bufferForDedup) {
+                              send({ type: 'retract_partial', length: beforeTrim - iterationContent.length });
+                            }
                           }
                         } else {
                           iterationContent += visible;
@@ -5673,7 +5688,22 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 nudgeCount++;
                 traceBuilder.recordNudge('forced_tool_choice_ignored');
                 const hint = intentToolHint ? ` Use the "${intentToolHint}" tool.` : '';
-                console.log(`   🔄 ${choomTag} Nudge ${nudgeCount}/2 — model ignored tool_choice=required, retrying${hint}`);
+                // C-32's measurement, relearned the hard way on 07-28 (C-44):
+                // re-forcing across all 132 tools in long context still lets
+                // the model narrate (83% recovery measured; 0/3 on the exact
+                // "generate images of you" turn). When we KNOW the tool —
+                // from intent detection or the model's own fabricated claim —
+                // narrow the retry to that single tool (100% measured, both
+                // context lengths, via the same mechanism phantom recovery uses).
+                const narrowTo = (intentToolHint && activeTools.some(t => t.name === intentToolHint))
+                  ? intentToolHint
+                  : detectClaimedTool(iterationContent, new Set(activeTools.map(t => t.name)));
+                if (narrowTo) {
+                  phantomForcedTool = narrowTo;
+                  console.log(`   🔄 ${choomTag} Nudge ${nudgeCount}/2 — model ignored tool_choice=required; narrowing retry to single tool "${narrowTo}"`);
+                } else {
+                  console.log(`   🔄 ${choomTag} Nudge ${nudgeCount}/2 — model ignored tool_choice=required, retrying${hint}`);
+                }
                 currentMessages.push({ role: 'assistant', content: iterationContent });
                 currentMessages.push({
                   role: 'user',
