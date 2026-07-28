@@ -7,6 +7,15 @@
  * signal. Also covered: SSRF into the home LAN (Home Assistant, LM Studio,
  * the router) via a model-chosen URL.
  */
+
+// Real DNS would make this suite slow and network-dependent — it flaked once
+// in CI-style full runs and stretched the suite from 0.9s to 8.3s. Public
+// hostnames resolve to a fixed public address; the LAN cases are asserted
+// through literal IPs and the name-based rules, which need no lookup.
+jest.mock('dns', () => ({
+  promises: { lookup: jest.fn(async () => [{ address: '93.184.216.34', family: 4 }]) },
+}));
+
 import {
   checkOutboundUrl, registrableDomain, isBlockedAddress, resetOutboundGuard,
 } from '../lib/outbound-guard';
