@@ -12,6 +12,7 @@ import {
   NO_DATA, PATH_ERROR, STALE_REF_ERROR, PERMISSION_BLOCK,
 } from '@/lib/tool-error-classification';
 import { classifyEndpoint, computeStreamTimeouts, isLocalEndpoint } from '@/lib/stream-timeouts';
+import { detectClaimedTool } from '@/lib/phantom-claim';
 import {
   tryRepairJSON, createThinkFilter, createToolCallXmlFilter, createJsonToolCallFilter,
   createGemmaToolCallFilter, extractMistralToolCalls, extractBracketToolCalls,
@@ -2690,6 +2691,7 @@ Call tools via function calls. Each tool is described in the tools array provide
 // the turn AFTER a correction→apology exchange). Exact/containment match on
 // normalized text, or word-set Jaccard >= 0.8 — a genuinely fresh reply scores
 // ~0.2, so new content never trips this.
+
 function isNearVerbatimRepeat(candidate: string, previous: string[]): boolean {
   const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
   const wordSet = (s: string) => new Set(norm(s).split(' ').filter(w => w.length > 2));
@@ -4274,6 +4276,9 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           // When set (to a tool name), the NEXT iteration forces exactly that tool. Read
           // and cleared (one-shot) where toolChoiceOverride is computed.
           let groupForcedTool: string | null = null;
+          // Set when a fabricated-success claim is detected; narrows the next
+          // iteration to that single tool (see detectClaimedTool).
+          let phantomForcedTool: string | null = null;
           // Token usage accumulator — captures usage from each LLM call across iterations
           let totalPromptTokens = 0;
           let totalCompletionTokens = 0;
@@ -4668,16 +4673,23 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             // force 'required' — so qwen can't pick a junk tool and must produce the real
             // call (it writes its own args from context). One-shot; consumed here.
             const groupForceActive = isGroupTurn && !!groupForcedTool && activeTools.some(t => t.name === groupForcedTool);
-            const iterationTools = groupForceActive ? activeTools.filter(t => t.name === groupForcedTool) : activeTools;
-            const toolChoiceOverride = (allowForce || groupForceActive) ? 'required' as const : undefined;
-            const toolChoiceWasRequired = allowForce || groupForceActive;
-            if (groupForceActive) {
+            // Phantom recovery reuses the same single-tool mechanism, but is NOT
+            // limited to group turns — a fabricated claim happens anywhere.
+            const phantomForceActive = !!phantomForcedTool && activeTools.some(t => t.name === phantomForcedTool);
+            const forcedSingle = groupForceActive ? groupForcedTool : phantomForceActive ? phantomForcedTool : null;
+            const iterationTools = forcedSingle ? activeTools.filter(t => t.name === forcedSingle) : activeTools;
+            const toolChoiceOverride = (allowForce || forcedSingle) ? 'required' as const : undefined;
+            const toolChoiceWasRequired = allowForce || !!forcedSingle;
+            if (phantomForceActive) {
+              console.log(`   🚨 ${choomTag} Phantom recovery → tools=[${phantomForcedTool}] tool_choice='required'`);
+            } else if (groupForceActive) {
               console.log(`   ⚡ ${choomTag} Group forced single-tool retry → tools=[${groupForcedTool}] tool_choice='required'`);
             } else if (forceToolCall) {
               if (allowForce) console.log(`   ⚡ Using tool_choice='required' to force tool invocation`);
             }
             forceToolCall = false; // Reset after use
             groupForcedTool = null; // one-shot: consumed this iteration
+            phantomForcedTool = null; // one-shot: consumed this iteration
 
             // Think-block filter: strips <think>...</think> from reasoning models
             const thinkFilter = createThinkFilter();
@@ -5629,6 +5641,27 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                           : '[System] You indicated you have more steps to complete. Call the next tool NOW. Do not narrate — make the tool call directly.';
                   currentMessages.push({ role: 'user', content: nudgeMsg });
                   forceToolCall = true;
+                  // C-32: on a fabricated claim, narrow the NEXT iteration to the
+                  // single tool she claimed to use. Measured on qwen at production
+                  // context length: nudge + all 132 tools + required recovered
+                  // ha_get_camera_snapshot 0/3, while single-tool + required
+                  // recovered 3/3 (and 3/3 for remember, get_weather,
+                  // create_reminder, web_search, search_memories, at both short
+                  // and long context). Forcing across 132 tools still leaves room
+                  // to narrate; one tool leaves none.
+                  //
+                  // Deliberately NOT paired with dropping the false claim from
+                  // history — tested, and discarding it made recovery WORSE
+                  // (83% vs 100%), so the claim stays in currentMessages above.
+                  if (fakeSuccess) {
+                    const claimed = detectClaimedTool(iterationContent, new Set(activeTools.map(t => t.name)));
+                    if (claimed) {
+                      phantomForcedTool = claimed;
+                      console.log(`   🚨 ${choomTag} Fabricated claim → forcing single tool "${claimed}" next iteration`);
+                    } else {
+                      console.log(`   🚨 ${choomTag} Fabricated claim but no tool matched — falling back to broad nudge`);
+                    }
+                  }
                   continue;
                 }
                 break; // fullContent built from iterationTexts after loop
