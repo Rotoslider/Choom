@@ -5658,8 +5658,18 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                     !calledToolNames.has('workspace_write_file')) {
                   unfinishedSteps.push('update/write file (workspace_write_file)');
                 }
+                // "tell me" and "let me know" are how the owner asks for an
+                // ANSWER IN THIS CHAT — he is sitting right there typing. They
+                // used to demand send_notification, so an ordinary "tell me
+                // what it says" produced a spurious Signal message from one
+                // Choom and a 3-nudge storm at another, who correctly refused
+                // and then visibly distressed about being "gaslit by a glitchy
+                // piece of software" (C-49, caught live with Eve and Optic).
+                // Require an explicit push-message ask instead, and never fire
+                // it when the user is chatting in the web UI unless they name
+                // the channel — send_notification pushes to the phone.
                 if (!suppressNotifications &&
-                    /(?:send|notify|notification|signal|let me know|tell me)/i.test(msgLower) &&
+                    /\b(?:send|text|message|ping|notify)\s+(?:me|us|donny)\b|\bsend\s+(?:a\s+)?(?:notification|signal|message|text)\b|\b(?:notification|signal message)\b|\blet me know\b[^.!?]{0,30}\b(?:on|via|over)\b[^.!?]{0,20}\b(?:signal|phone|text)\b/i.test(msgLower) &&
                     !calledToolNames.has('send_notification')) {
                   unfinishedSteps.push('send notification (send_notification)');
                 }
