@@ -8,6 +8,7 @@ import { readFile, writeFile, mkdir, readdir, stat, unlink, realpath } from 'fs/
 import { readdirSync, readFileSync } from 'fs';
 import { exec } from 'child_process';
 import path from 'path';
+import { buildSandboxEnv } from './sandbox-env';
 
 interface FileEntry {
   name: string;
@@ -330,6 +331,9 @@ export class WorkspaceService {
       exec(`pdftotext${pageArgs} -layout "${fullPath}" -`, {
         maxBuffer: 5 * 1024 * 1024, // 5MB text output limit
         timeout: 30000,
+        // Defense in depth (C-48): pdftotext parses an UNTRUSTED file and
+        // needs no credentials. Don't hand it the app's secrets.
+        env: buildSandboxEnv(),
       }, (error, stdout, stderr) => {
         if (error) {
           reject(new Error(`PDF text extraction failed: ${stderr || error.message}`));

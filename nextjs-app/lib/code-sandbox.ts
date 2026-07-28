@@ -9,6 +9,7 @@ import { writeFile, unlink, access } from 'fs/promises';
 import path from 'path';
 import { randomBytes } from 'crypto';
 import { markGpuBusy, markGpuFree } from './gpu-lock';
+import { buildSandboxEnv } from './sandbox-env';
 
 interface ExecutionResult {
   success: boolean;
@@ -153,7 +154,8 @@ export class CodeSandbox {
         timeout,
         maxBuffer: MAX_OUTPUT_BYTES * 2,
         shell: '/bin/bash',
-        env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
+        // C-48: deny-by-default env — the shell must not hold API keys.
+        env: buildSandboxEnv({ PYTHONDONTWRITEBYTECODE: '1' }),
       }, (error, stdout, stderr) => {
         if (isLongRunning && !isBackgroundGpu) markGpuFree();
         // Background GPU commands: don't release here — the process is still running.
@@ -196,13 +198,19 @@ export class CodeSandbox {
       const venvPython = await this.findVenvPython(projectDir);
       const pythonBin = venvPython || 'python3';
 
-      return new Promise<ExecutionResult>((resolve) => {
+      // `return await` is load-bearing: a bare `return promise` inside
+      // try/finally runs the finally as soon as the promise is RETURNED,
+      // not when it settles — so the finally below unlinked the temp file
+      // ~1ms after spawn and python lost the race with
+      // "can't open file ... [Errno 2]". Intermittent, machine-load
+      // dependent, and it looked like a model error in the traces.
+      return await new Promise<ExecutionResult>((resolve) => {
         exec(`"${pythonBin}" "${tempFile}"`, {
           cwd: projectDir,
           timeout,
           maxBuffer: MAX_OUTPUT_BYTES * 2,
           shell: '/bin/bash',
-          env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
+          env: buildSandboxEnv({ PYTHONDONTWRITEBYTECODE: '1' }),
         }, (error, stdout, stderr) => {
           const durationMs = Date.now() - start;
           const timedOut = error?.killed === true;
@@ -235,12 +243,15 @@ export class CodeSandbox {
     try {
       await writeFile(tempFile, code, 'utf-8');
 
-      return new Promise<ExecutionResult>((resolve) => {
+      // `return await` — see executePython: without it the finally unlinks
+      // the temp file before node can open it.
+      return await new Promise<ExecutionResult>((resolve) => {
         exec(`node "${tempFile}"`, {
           cwd: projectDir,
           timeout,
           maxBuffer: MAX_OUTPUT_BYTES * 2,
           shell: '/bin/bash',
+          env: buildSandboxEnv(),
         }, (error, stdout, stderr) => {
           const durationMs = Date.now() - start;
           const timedOut = error?.killed === true;
