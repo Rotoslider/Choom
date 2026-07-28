@@ -24,12 +24,14 @@ Use these tools when the user wants to play music, control playback, or check wh
 - `music_now_playing` — What's currently playing
 - `music_players` — List available speakers
 
+**Never invent a speaker name.** Omit `player` to use the default; call `music_players` first if the user named a specific one.
+
 ### Level 2 — Usage Patterns
 
 **Play music by name (auto-search):**
 ```
 music_play(media="Tarja Turunen")
-music_play(media="chill jazz", player="living room")
+music_play(media="chill jazz")   # omit player — the default speaker is used
 ```
 
 **Play specific URI from search results:**
