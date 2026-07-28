@@ -154,23 +154,16 @@ export default class ImageAnalysisHandler extends BaseSkillHandler {
       // case the file was "chant_shadow_afternoon.png" and she asked for
       // "chants_..." — one character off, unrecoverable without a listing.
       // workspace_read_file already solves this; do the same here.
+      // Shared with route.ts's own copy of analyze_image — see
+      // formatImageNotFoundError. Two implementations of this tool exist and
+      // only this one used to list the directory (C-50).
       if (/ENOENT|no such file/i.test(raw)) {
         const wanted = (toolCall.arguments?.image_path as string) || '';
-        if (wanted) {
-          try {
-            const { suggestFromNearestDir, isImageEntry } = await import('../../../lib/dir-suggest');
-            const { WorkspaceService } = await import('../../../lib/workspace-service');
-            const { WORKSPACE_ROOT } = await import('../../../lib/config');
-            const ws = new WorkspaceService(WORKSPACE_ROOT, 8192, ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.md', '.txt', '.json']);
-            const hit = await suggestFromNearestDir(wanted, (d: string) => ws.listFiles(d), isImageEntry);
-            if (hit) {
-              console.log(`   🖼️  ${wanted} not found — auto-listed ${hit.dirLabel} (${hit.count} entries)`);
-              return this.error(toolCall,
-                `Image not found: "${wanted}". The closest existing directory is "${hit.dirLabel}" — here is what is actually in it:\n${hit.formatted}\n\nUse one of these exact paths. Do NOT retry the same filename.`);
-            }
-          } catch (e) {
-            console.warn('   ⚠️  image auto-list failed:', e instanceof Error ? e.message : e);
-          }
+        const { formatImageNotFoundError } = await import('../../../lib/dir-suggest');
+        const friendly = await formatImageNotFoundError(wanted);
+        if (friendly) {
+          console.log(`   🖼️  ${wanted} not found — auto-listed nearest directory`);
+          return this.error(toolCall, friendly);
         }
       }
 

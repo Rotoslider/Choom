@@ -59,3 +59,32 @@ export async function suggestFromNearestDir(
 
 const IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp|svg)$/i;
 export const isImageEntry = (e: DirEntryLike) => IMAGE_EXT.test(e.name);
+
+/**
+ * The whole "image not found" error, ready to return.
+ *
+ * Exists because analyze_image is implemented TWICE — once in the
+ * image-analysis skill handler and once inside route.ts's executeToolCall —
+ * and only the skill copy had the directory listing. The traces show both
+ * paths live on the same day: 03:09-03:15 produced bare
+ * "ENOENT ... open '/home/nuc1/choom-projects/...'" while 03:18-03:19
+ * produced the helpful listing, for the SAME missing file. One shared
+ * formatter so the two cannot drift again (C-50).
+ *
+ * Returns null when nothing could be listed, so callers keep their own
+ * fallback error.
+ */
+export async function formatImageNotFoundError(wantedPath: string): Promise<string | null> {
+  if (!wantedPath) return null;
+  try {
+    const { WorkspaceService } = await import('./workspace-service');
+    const { WORKSPACE_ROOT } = await import('./config');
+    const ws = new WorkspaceService(WORKSPACE_ROOT, 8192,
+      ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.md', '.txt', '.json']);
+    const hit = await suggestFromNearestDir(wantedPath, (d: string) => ws.listFiles(d), isImageEntry);
+    if (!hit) return null;
+    return `Image not found: "${wantedPath}". The closest existing directory is "${hit.dirLabel}" — here is what is actually in it:\n${hit.formatted}\n\nUse one of these exact paths. Do NOT retry the same filename.`;
+  } catch {
+    return null;
+  }
+}

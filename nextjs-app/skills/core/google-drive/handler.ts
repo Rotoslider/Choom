@@ -3,6 +3,7 @@ import { BaseSkillHandler, SkillHandlerContext } from '@/lib/skill-handler';
 import { ToolCall, ToolResult } from '@/lib/types';
 import { getGoogleClient } from '@/lib/google-client';
 import { WORKSPACE_ROOT } from '@/lib/config';
+import { requireStringArg } from '@/lib/tool-arg-guard';
 
 const DRIVE_TOOLS = new Set([
   'list_drive_files',
@@ -65,7 +66,11 @@ export default class GoogleDriveHandler extends BaseSkillHandler {
         }
 
         case 'upload_to_drive': {
-          const workspacePath = toolCall.arguments.workspace_path as string;
+          // C-50: 11/11 calls failed because the model sends `path` and this
+          // reads `workspace_path`; Node's path.join error then taught the
+          // wrong name back to it. Correct it inline instead.
+          const workspacePath = requireStringArg('upload_to_drive', toolCall.arguments, 'workspace_path',
+            { example: 'choom_commons/report.pdf' });
           const folderId = toolCall.arguments.folder_id as string | undefined;
           const driveFilename = toolCall.arguments.drive_filename as string | undefined;
 

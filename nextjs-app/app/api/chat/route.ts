@@ -14,6 +14,7 @@ import {
 import { classifyEndpoint, computeStreamTimeouts, isLocalEndpoint } from '@/lib/stream-timeouts';
 import { detectClaimedTool, findFabricatedImageRefs } from '@/lib/phantom-claim';
 import { isNearVerbatimRepeat, stripRepeatedParagraphs } from '@/lib/repetition-guard';
+import { requireStringArg } from '@/lib/tool-arg-guard';
 import {
   tryRepairJSON, createThinkFilter, createToolCallXmlFilter, createJsonToolCallFilter,
   createGemmaToolCallFilter, extractMistralToolCalls, extractBracketToolCalls,
@@ -1101,6 +1102,13 @@ async function executeToolCall(
       const workspacePath = toolCall.arguments.workspace_path as string;
       const folderId = toolCall.arguments.folder_id as string | undefined;
       const driveFilename = toolCall.arguments.drive_filename as string | undefined;
+
+      // C-50: shared with the google-drive skill handler, which implements
+      // this tool a second time. 11/11 calls failed because the model sends
+      // `path` while both copies read `workspace_path`, and Node's path.join
+      // error taught the wrong name back to it.
+      requireStringArg('upload_to_drive', toolCall.arguments, 'workspace_path',
+        { example: 'choom_commons/report.pdf' });
 
       // Resolve workspace path to absolute path
       const path = await import('path');
@@ -2284,12 +2292,25 @@ async function executeToolCall(
         },
       };
     } catch (err) {
-      console.error('   ❌ Vision error:', err instanceof Error ? err.message : err);
+      const rawVisionErr = err instanceof Error ? err.message : 'Unknown error';
+      // C-50: this copy of analyze_image dead-ended on a bad filename while
+      // the skill-handler copy listed the directory — same missing file, same
+      // day, two different errors. Share the formatter so they cannot drift.
+      if (/ENOENT|no such file/i.test(rawVisionErr)) {
+        const wanted = (toolCall.arguments?.image_path as string) || '';
+        const { formatImageNotFoundError } = await import('@/lib/dir-suggest');
+        const friendly = await formatImageNotFoundError(wanted);
+        if (friendly) {
+          console.log(`   🖼️  ${wanted} not found — auto-listed nearest directory`);
+          return { toolCallId: toolCall.id, name: toolCall.name, result: null, error: friendly };
+        }
+      }
+      console.error('   ❌ Vision error:', rawVisionErr);
       return {
         toolCallId: toolCall.id,
         name: toolCall.name,
         result: null,
-        error: `Vision analysis failed: ${err instanceof Error ? err.message : 'Unknown error'}`,
+        error: `Vision analysis failed: ${rawVisionErr}`,
       };
     }
   }
