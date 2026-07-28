@@ -3,6 +3,7 @@ import type { ToolCall, ToolResult } from '@/lib/types';
 import { WorkspaceService } from '@/lib/workspace-service';
 import { WORKSPACE_ROOT } from '@/lib/config';
 import { scrapePage } from '@/lib/playwright-service';
+import { checkOutboundUrl } from '@/lib/outbound-guard';
 const WORKSPACE_MAX_FILE_SIZE_KB = 1024;
 const WORKSPACE_ALLOWED_EXTENSIONS = ['.md', '.txt', '.json', '.py', '.ts', '.tsx', '.js', '.jsx', '.html', '.css', '.csv', '.sh', '.bash', '.yaml', '.yml', '.xml', '.sql', '.toml', '.ini', '.cfg', '.r', '.R', '.ipynb', '.log'];
 const WORKSPACE_IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp'];
@@ -82,6 +83,9 @@ export default class WebScrapingHandler extends BaseSkillHandler {
       if (!['http:', 'https:'].includes(parsedPageUrl.protocol)) {
         throw new Error('Only http/https URLs are allowed');
       }
+      // C-48: SSRF + per-domain burst cap on every model-chosen URL.
+      const guard = await checkOutboundUrl(pageUrl);
+      if (!guard.allowed) throw new Error(guard.reason!);
 
       // Fetch the page HTML with browser-like headers
       const controller = new AbortController();
@@ -219,6 +223,8 @@ export default class WebScrapingHandler extends BaseSkillHandler {
       if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
         throw new Error('Only http/https URLs are allowed');
       }
+      const scrapeGuard = await checkOutboundUrl(url);
+      if (!scrapeGuard.allowed) throw new Error(scrapeGuard.reason!);
 
       console.log(`   🌐 Playwright scraping: ${url}${waitFor ? ` (wait for: ${waitFor})` : ''}`);
 
@@ -281,6 +287,8 @@ export default class WebScrapingHandler extends BaseSkillHandler {
       } catch {
         throw new Error(`Invalid URL: ${url}`);
       }
+      const imgGuard = await checkOutboundUrl(url);
+      if (!imgGuard.allowed) throw new Error(imgGuard.reason!);
 
       const { sessionFileCount } = ctx;
       if (sessionFileCount.created >= sessionFileCount.maxAllowed) {
@@ -384,6 +392,8 @@ export default class WebScrapingHandler extends BaseSkillHandler {
       } catch {
         throw new Error(`Invalid URL: ${url}`);
       }
+      const fileGuard = await checkOutboundUrl(url);
+      if (!fileGuard.allowed) throw new Error(fileGuard.reason!);
 
       const { sessionFileCount } = ctx;
       if (sessionFileCount.created >= sessionFileCount.maxAllowed) {
@@ -449,6 +459,9 @@ export default class WebScrapingHandler extends BaseSkillHandler {
     }
     const finalUrl = parsedUrl.href;
     const wasNormalized = finalUrl !== requestedUrl;
+
+    const fetchGuard = await checkOutboundUrl(finalUrl);
+    if (!fetchGuard.allowed) return this.error(toolCall, fetchGuard.reason!);
 
     try {
       const controller = new AbortController();
