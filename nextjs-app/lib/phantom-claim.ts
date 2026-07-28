@@ -16,7 +16,10 @@ export function detectClaimedTool(text: string, available: Set<string>): string 
   const CLAIMS: Array<[RegExp, string]> = [
     [/\b(?:tower\s*cam|garage\s*cam|camera|webcam|snapshot)\b/i, 'ha_get_camera_snapshot'],
     [/\b(?:set|created|scheduled)\b[^.!?]{0,40}\breminder\b|\bremind(?:ed)? you\b/i, 'create_reminder'],
-    [/\b(?:saved|stored|noted|recorded|memoriz\w+|remembered)\b[^.!?]{0,60}\b(?:memory|memories|notes?)\b|\bi(?:'ve| have)?\s*(?:saved|stored|noted|remembered)\s+(?:that|this|it)\b/i, 'remember'],
+    // 'updated' is in the verb list because "I have updated my memory with
+    // the details" is a phantom observed in production (C-43) that the
+    // original list missed — it fell through to the broad nudge.
+    [/\b(?:saved|stored|noted|recorded|updated|memoriz\w+|remembered)\b[^.!?]{0,60}\b(?:memory|memories|notes?)\b|\bi(?:'ve| have)?\s*(?:saved|stored|noted|remembered)\s+(?:that|this|it)\b/i, 'remember'],
     [/\b(?:looking|looked|searching|searched)\b[^.!?]{0,40}\b(?:through )?(?:my |your )?memor(?:y|ies)\b/i, 'search_memories'],
     [/\b(?:searched|looked (?:it )?up|googled|web search)\b/i, 'web_search'],
     // Both orders occur in the wild: "generated a selfie" AND "here's the

@@ -13,6 +13,7 @@ import {
 } from '@/lib/tool-error-classification';
 import { classifyEndpoint, computeStreamTimeouts, isLocalEndpoint } from '@/lib/stream-timeouts';
 import { detectClaimedTool } from '@/lib/phantom-claim';
+import { isNearVerbatimRepeat, stripRepeatedParagraphs } from '@/lib/repetition-guard';
 import {
   tryRepairJSON, createThinkFilter, createToolCallXmlFilter, createJsonToolCallFilter,
   createGemmaToolCallFilter, extractMistralToolCalls, extractBracketToolCalls,
@@ -2688,30 +2689,8 @@ Call tools via function calls. Each tool is described in the tools array provide
 // rooms' self-repeat catch (isRepeatOrParrot in group-chat-runner.ts, ba6b5e4).
 // Weak local models anchor on their previous turn and replay it nearly
 // word-for-word (classic case: re-apologizing and re-running the same tools on
-// the turn AFTER a correction→apology exchange). Exact/containment match on
-// normalized text, or word-set Jaccard >= 0.8 — a genuinely fresh reply scores
-// ~0.2, so new content never trips this.
-
-function isNearVerbatimRepeat(candidate: string, previous: string[]): boolean {
-  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
-  const wordSet = (s: string) => new Set(norm(s).split(' ').filter(w => w.length > 2));
-  const normNew = norm(candidate);
-  if (normNew.length < 40) return false;
-  const newWords = wordSet(candidate);
-  for (const prev of previous) {
-    const normOld = norm(prev);
-    if (normOld.length < 40) continue;
-    if (normOld === normNew || normOld.includes(normNew) || normNew.includes(normOld)) return true;
-    const oldWords = wordSet(prev);
-    if (oldWords.size >= 8 && newWords.size >= 8) {
-      let inter = 0;
-      for (const w of newWords) if (oldWords.has(w)) inter++;
-      const union = newWords.size + oldWords.size - inter;
-      if (union > 0 && inter / union >= 0.8) return true;
-    }
-  }
-  return false;
-}
+// the turn AFTER a correction→apology exchange). Lives in
+// lib/repetition-guard.ts together with stripRepeatedParagraphs (C-29).
 
 export async function POST(request: NextRequest) {
   const encoder = new TextEncoder();
@@ -4707,17 +4686,23 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             let capturedFbJsonToolCalls: { id: string; name: string; arguments: Record<string, unknown> }[] = [];
             let thinkTokensFiltered = false;
 
-            // Buffer post-tool-call content for dedup before sending.
-            // When tools have already been called, the next text iteration is
-            // typically a confirmation ("I've set that reminder..."). Models
-            // sometimes repeat this across iterations — streaming it live means
-            // TTS and Signal get the duplicate before post-loop dedup can catch it.
-            // Also buffer when the chat has prior assistant turns: the
-            // cross-turn repeat guard below can only suppress a replayed reply
-            // while it's still unsent. Cost: post-tool confirmations arrive as
-            // one chunk instead of token-streaming — same tradeoff the
-            // within-turn dedup already made.
-            const bufferForDedup = allToolCalls.length > 0 && (iterationTexts.length > 0 || prevAssistantTexts.length > 0);
+            // Buffer post-first-text content for dedup before sending.
+            // Once ANY earlier iteration of this turn produced text, the next
+            // text iteration is a re-generation risk: nudged models (tool_use,
+            // fakeSuccess/phantom) routinely replay their previous text
+            // alongside the forced tool call — streaming it live means TTS and
+            // Signal get the duplicate before dedup can catch it (C-43: a
+            // nudged remember call arrived with the ENTIRE prior reply
+            // re-attached, and both copies were spoken). Tool-call-only gating
+            // missed exactly that case: at the nudged iteration's start no
+            // tool had run yet, so the replay streamed live.
+            // Also buffer when tools ran and the chat has prior assistant
+            // turns: the cross-turn repeat guard below can only suppress a
+            // replayed reply while it's still unsent. Cost: these iterations
+            // arrive as one chunk instead of token-streaming — same tradeoff
+            // the within-turn dedup already made. Iteration 1 of a fresh turn
+            // always token-streams.
+            const bufferForDedup = iterationTexts.length > 0 || (allToolCalls.length > 0 && prevAssistantTexts.length > 0);
 
             const streamPromise = (async () => {
               let reasoningContentSalvaged = false;
@@ -5482,15 +5467,29 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               continue;
             }
 
-            // Flush or suppress buffered post-tool-call content
+            // Flush or suppress buffered content. Exact match alone is not
+            // enough: a replay with a junk suffix (leaked '</think>', an added
+            // emoji line) defeats it, so the near-verbatim check backs it up,
+            // and partial regurgitation (fresh confirmation + replayed
+            // paragraphs) is stripped paragraph-by-paragraph (C-29/C-43).
             if (bufferForDedup && iterationContent.trim()) {
-              const isDuplicate = iterationTexts.some(prev => prev.trim() === iterationContent.trim());
+              const isDuplicate = iterationTexts.some(prev => prev.trim() === iterationContent.trim())
+                || isNearVerbatimRepeat(iterationContent, iterationTexts);
               if (isDuplicate) {
                 console.log(`   🔄 ${choomTag} Suppressed duplicate post-tool content (${iterationContent.length} chars)`);
                 iterationContent = ''; // Don't track or send
               } else {
-                // Content is unique — flush the buffer to client
-                send({ type: 'content', content: iterationContent });
+                const stripped = stripRepeatedParagraphs(iterationContent, iterationTexts);
+                if (stripped.length < iterationContent.length) {
+                  console.log(`   🔄 ${choomTag} Stripped repeated paragraphs from buffered content (${iterationContent.length} → ${stripped.length} chars)`);
+                  iterationContent = stripped;
+                }
+                if (iterationContent.trim()) {
+                  // Content is unique — flush the buffer to client
+                  send({ type: 'content', content: iterationContent });
+                } else {
+                  iterationContent = ''; // Nothing survived the strip
+                }
               }
             }
 
@@ -6501,9 +6500,14 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           if (iterationTexts.length > 0) {
             const seen = new Set<string>();
             const deduped: string[] = [];
+            // Key on markup-stripped, whitespace-collapsed text so a replay
+            // that differs only by a leaked tag or spacing still dedups
+            // (C-43: '</think>' suffix defeated the exact-match key and the
+            // whole reply was saved twice).
+            const dedupKey = (s: string) => s.replace(/<\/?think>/g, ' ').replace(/\s+/g, ' ').trim();
             // Walk backwards so the LAST occurrence of duplicated text wins
             for (let i = iterationTexts.length - 1; i >= 0; i--) {
-              const normalized = iterationTexts[i].trim();
+              const normalized = dedupKey(iterationTexts[i]);
               if (normalized && !seen.has(normalized)) {
                 seen.add(normalized);
                 deduped.unshift(iterationTexts[i]);

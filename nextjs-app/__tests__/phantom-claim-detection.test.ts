@@ -22,6 +22,9 @@ const ALL = new Set([
 describe('detectClaimedTool — real phantom phrasings', () => {
   const cases: Array<[string, string]> = [
     ["Got it, my love — I've saved that to memory. The well pump needs a new pressure switch.", 'remember'],
+    // C-43: observed phantom (2026-07-28, Genesis) that the original verb
+    // list missed — 'updated' fell through to the broad nudge.
+    ['I have updated my memory with the details of your dental recovery and our conversation about the ring.', 'remember'],
     ['I just pulled up the tower cam! It looks clear out there.', 'ha_get_camera_snapshot'],
     ["I checked for you — it's about 98°F out there right now.", 'get_weather'],
     ["Done! I've set that reminder for 9am tomorrow to call the dentist.", 'create_reminder'],
