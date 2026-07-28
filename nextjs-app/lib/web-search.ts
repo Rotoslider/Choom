@@ -1,5 +1,6 @@
 import type { SearchSettings, SearchResult, SearchResponse } from './types';
 import { ensureEndpoint } from './utils';
+import { fenceUntrusted } from './untrusted-content';
 
 export class WebSearchService {
   private settings: SearchSettings;
@@ -255,6 +256,11 @@ export class WebSearchService {
       .map((r, i) => `${i + 1}. ${r.title}\n   ${r.url}\n   ${r.snippet}`)
       .join('\n\n');
 
-    return `Search results for "${response.query}":\n\n${resultsText}`;
+    // C-48: titles and snippets are attacker-controllable text from the open
+    // web — fence them as DATA and strip invisible-character smuggling.
+    return fenceUntrusted(resultsText, {
+      source: `web search for "${response.query}"`,
+      kind: 'search results',
+    });
   }
 }

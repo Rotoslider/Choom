@@ -4,6 +4,7 @@ import { WorkspaceService } from '@/lib/workspace-service';
 import { WORKSPACE_ROOT } from '@/lib/config';
 import { scrapePage } from '@/lib/playwright-service';
 import { checkOutboundUrl } from '@/lib/outbound-guard';
+import { fenceUntrusted } from '@/lib/untrusted-content';
 const WORKSPACE_MAX_FILE_SIZE_KB = 1024;
 const WORKSPACE_ALLOWED_EXTENSIONS = ['.md', '.txt', '.json', '.py', '.ts', '.tsx', '.js', '.jsx', '.html', '.css', '.csv', '.sh', '.bash', '.yaml', '.yml', '.xml', '.sql', '.toml', '.ini', '.cfg', '.r', '.R', '.ipynb', '.log'];
 const WORKSPACE_IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp'];
@@ -237,9 +238,11 @@ export default class WebScrapingHandler extends BaseSkillHandler {
       // Truncate text to avoid blowing up context
       const MAX_TEXT_CHARS = 15_000;
       const truncated = result.text.length > MAX_TEXT_CHARS;
-      const text = truncated
+      const rawScraped = truncated
         ? result.text.slice(0, MAX_TEXT_CHARS) + `\n\n[Truncated — ${result.wordCount} words total, showing first ${MAX_TEXT_CHARS} chars]`
         : result.text;
+      // C-48: scraped page text is untrusted — fence it as DATA.
+      const text = fenceUntrusted(rawScraped, { source: result.url || url, kind: 'web page content' });
 
       console.log(`   ✅ Scraped: "${result.title}" — ${result.wordCount} words, ${result.images.length} images`);
 
@@ -507,9 +510,12 @@ export default class WebScrapingHandler extends BaseSkillHandler {
 
       const fullText = Buffer.from(arrayBuffer).toString('utf-8');
       const truncated = fullText.length > maxChars;
-      const text = truncated
+      const rawText = truncated
         ? fullText.slice(0, maxChars) + `\n\n[Truncated — ${fullText.length} chars total, showing first ${maxChars}. Re-call with a larger max_chars to see more.]`
         : fullText;
+      // C-48: this is arbitrary text from the internet — fence it as DATA and
+      // strip invisible-character smuggling before the model sees it.
+      const text = fenceUntrusted(rawText, { source: finalUrl, kind: 'web page content' });
 
       console.log(`   📄 fetch_url: ${finalUrl}${wasNormalized ? ` (normalized from ${requestedUrl})` : ''} — ${fullText.length} chars, ${contentType}`);
 
