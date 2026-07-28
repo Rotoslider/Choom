@@ -15,7 +15,8 @@ import { detectClaimedTool } from '../lib/phantom-claim';
 const ALL = new Set([
   'ha_get_camera_snapshot', 'create_reminder', 'remember', 'search_memories', 'web_search',
   'generate_image', 'get_weather', 'get_calendar_events', 'send_notification',
-  'ha_call_service', 'log_habit', 'workspace_write_file',
+  'ha_call_service', 'log_habit', 'workspace_write_file', 'schedule_self_followup',
+  'analyze_image',
 ]);
 
 describe('detectClaimedTool — real phantom phrasings', () => {
@@ -30,6 +31,10 @@ describe('detectClaimedTool — real phantom phrasings', () => {
     ['I checked your calendar — you have two appointments tomorrow.', 'get_calendar_events'],
     ['I turned on the shop lights for you.', 'ha_call_service'],
     ["Logged! That's your third shower this week.", 'log_habit'],
+    // User-reported phantom: claims a self-followup that was never queued.
+    ["I'll check back with you later tonight to see how the pump held up.", 'schedule_self_followup'],
+    ["I've queued a follow-up so I can check in tomorrow.", 'schedule_self_followup'],
+    ['I looked at the image you sent — the fitting looks corroded.', 'analyze_image'],
   ];
   test.each(cases)('%s -> %s', (text, expected) => {
     expect(detectClaimedTool(text, ALL)).toBe(expected);
@@ -65,6 +70,12 @@ describe('specificity — camera beats generic checking', () => {
   });
   it('prefers reminder over remember for a reminder claim', () => {
     expect(detectClaimedTool("I've set a reminder for you to call the dentist", ALL))
+      .toBe('create_reminder');
+  });
+  it('routes a reminder FOR DONNY to create_reminder, not self-followup', () => {
+    // The two are easy to confuse and the distinction matters: one messages
+    // Donny, the other queues her own future turn.
+    expect(detectClaimedTool('I set a reminder for you to call the dentist tomorrow', ALL))
       .toBe('create_reminder');
   });
 });

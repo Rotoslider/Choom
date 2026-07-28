@@ -28,6 +28,14 @@ export function detectClaimedTool(text: string, available: Set<string>): string 
     [/\b(?:sent|delivered)\b[^.!?]{0,30}\b(?:notification|alert)\b/i, 'send_notification'],
     [/\b(?:turned (?:on|off)|switched (?:on|off)|activated)\b/i, 'ha_call_service'],
     [/\b(?:logged)\b[^.!?]{0,20}\bhabit\b|^\s*logged[!.]/i, 'log_habit'],
+    // Named by the user as a frequent phantom: "I've set myself a reminder to
+    // check back", "I'll follow up with you later" — she says it and never
+    // queues it. Distinct from create_reminder, which messages DONNY; this one
+    // is her own future turn. Ordered AFTER create_reminder so an explicit
+    // "reminder for you" still routes there.
+    [/\b(?:follow[- ]?up|check back|circle back|ping you|come back to (?:this|you))\b[^.!?]{0,40}\b(?:later|tonight|tomorrow|in \d+|shortly|soon)\b|\bi(?:'ve| have)?\s*(?:queued|scheduled|set)\b[^.!?]{0,30}\b(?:follow[- ]?up|check-?in|reminder to myself)\b/i, 'schedule_self_followup'],
+    [/\b(?:analyz|look\w*|examin|check\w*)\w*\b[^.!?]{0,25}\b(?:the |that |this |your )?(?:image|photo|picture|screenshot|snapshot)\b/i, 'analyze_image'],
+    [/\b(?:searched|looked)\b[^.!?]{0,30}\b(?:the )?web\b/i, 'web_search'],
     [/\b(?:wrote|saved|created)\b[^.!?]{0,30}\bfile\b/i, 'workspace_write_file'],
   ];
   for (const [re, tool] of CLAIMS) {
