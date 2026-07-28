@@ -20,6 +20,6 @@ dependencies: []
 - "Remove X from my Y list" → `remove_from_task_list`
 
 ## Important
-- Common list names: groceries, hardware store, to do
+- Never guess a list name. Call `list_task_lists` first — the real ones on this system include Groceries, To Do, Truck build, Home Automation, Tractor work.
 - If unsure of exact name, call `list_task_lists` first
 - If tool returns "not found", check available list names in error and retry
