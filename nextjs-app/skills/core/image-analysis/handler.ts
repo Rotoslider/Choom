@@ -145,6 +145,42 @@ export default class ImageAnalysisHandler extends BaseSkillHandler {
         model: result.model,
       });
     } catch (err) {
+      const raw = err instanceof Error ? err.message : 'Unknown error';
+
+      // Never dead-end on a wrong filename. analyze_image was 90 of the 309
+      // "not found, no list, no way to find one" errors in the trace corpus:
+      // the Choom names an image that does not exist, gets a bare ENOENT,
+      // retries the same fantasy path and burns the per-tool cap. In one real
+      // case the file was "chant_shadow_afternoon.png" and she asked for
+      // "chants_..." — one character off, unrecoverable without a listing.
+      // workspace_read_file already solves this; do the same here.
+      if (/ENOENT|no such file/i.test(raw)) {
+        const wanted = (toolCall.arguments?.image_path as string) || '';
+        if (wanted) {
+          try {
+            const { suggestFromNearestDir, isImageEntry } = await import('../../../lib/dir-suggest');
+            const { WorkspaceService } = await import('../../../lib/workspace-service');
+            const { WORKSPACE_ROOT } = await import('../../../lib/config');
+            const ws = new WorkspaceService(WORKSPACE_ROOT, 8192, ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.md', '.txt', '.json']);
+            const hit = await suggestFromNearestDir(wanted, (d: string) => ws.listFiles(d), isImageEntry);
+            if (hit) {
+              console.log(`   🖼️  ${wanted} not found — auto-listed ${hit.dirLabel} (${hit.count} entries)`);
+              return this.error(toolCall,
+                `Image not found: "${wanted}". The closest existing directory is "${hit.dirLabel}" — here is what is actually in it:\n${hit.formatted}\n\nUse one of these exact paths. Do NOT retry the same filename.`);
+            }
+          } catch (e) {
+            console.warn('   ⚠️  image auto-list failed:', e instanceof Error ? e.message : e);
+          }
+        }
+      }
+
+      // "fetch failed" = the vision endpoint is unreachable, not a bad request.
+      // Say so, so she stops rewording the prompt and reports the real problem.
+      if (/fetch failed|ECONNREFUSED|ETIMEDOUT/i.test(raw)) {
+        return this.error(toolCall,
+          `Vision service unreachable (${raw}). This is an availability problem, not a bad request — retrying with a different prompt or path will not help. Tell Donny the vision endpoint is down.`);
+      }
+
       console.error('   ❌ Vision error:', err instanceof Error ? err.message : err);
       return this.error(toolCall, `Vision analysis failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
     }
