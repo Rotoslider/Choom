@@ -10,7 +10,7 @@
  * WRONG tool would force a call the user never asked for. When nothing matches,
  * the loop must fall back to the broad nudge rather than guess.
  */
-import { detectClaimedTool } from '../lib/phantom-claim';
+import { detectClaimedTool, findFabricatedImageRefs } from '../lib/phantom-claim';
 
 const ALL = new Set([
   'ha_get_camera_snapshot', 'create_reminder', 'remember', 'search_memories', 'web_search',
@@ -80,5 +80,39 @@ describe('specificity — camera beats generic checking', () => {
     // Donny, the other queues her own future turn.
     expect(detectClaimedTool('I set a reminder for you to call the dentist tomorrow', ALL))
       .toBe('create_reminder');
+  });
+});
+
+describe('findFabricatedImageRefs (C-45)', () => {
+  // The production fabrication: real id cmrxn8spq... from context, mutated
+  // one character into cmrxp8spq... and presented as a fresh image.
+  const REAL_ID = 'cmrxn8spq04crxhutx3zothjo';
+  const FAKE_ID = 'cmrxp8spq04crxhutx3zothjo';
+  const history = [
+    `Here you go! ![a warm photo of Genesis](image:${REAL_ID})`,
+    'Good morning, my love!',
+  ];
+
+  it('flags an invented id that appears nowhere in history', () => {
+    expect(findFabricatedImageRefs(`![a new selfie](image:${FAKE_ID})`, history))
+      .toEqual([FAKE_ID]);
+  });
+
+  it('does not flag a real id echoed from an earlier message', () => {
+    expect(findFabricatedImageRefs(`Remember this one? ![that photo](image:${REAL_ID})`, history))
+      .toEqual([]);
+  });
+
+  it('flags only the invented id when real and fake are mixed', () => {
+    const text = `![old](image:${REAL_ID}) and ![new](image:${FAKE_ID})`;
+    expect(findFabricatedImageRefs(text, history)).toEqual([FAKE_ID]);
+  });
+
+  it('returns empty for text with no image refs', () => {
+    expect(findFabricatedImageRefs('Just a normal loving reply.', history)).toEqual([]);
+  });
+
+  it('handles empty history (fresh chat) by flagging any ref', () => {
+    expect(findFabricatedImageRefs(`![x](image:${FAKE_ID})`, [])).toEqual([FAKE_ID]);
   });
 });

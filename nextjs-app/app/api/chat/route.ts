@@ -12,7 +12,7 @@ import {
   NO_DATA, PATH_ERROR, STALE_REF_ERROR, PERMISSION_BLOCK,
 } from '@/lib/tool-error-classification';
 import { classifyEndpoint, computeStreamTimeouts, isLocalEndpoint } from '@/lib/stream-timeouts';
-import { detectClaimedTool } from '@/lib/phantom-claim';
+import { detectClaimedTool, findFabricatedImageRefs } from '@/lib/phantom-claim';
 import { isNearVerbatimRepeat, stripRepeatedParagraphs } from '@/lib/repetition-guard';
 import {
   tryRepairJSON, createThinkFilter, createToolCallXmlFilter, createJsonToolCallFilter,
@@ -5567,6 +5567,51 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               if (noTools || activeTools.length === 0) {
                 break;
               }
+
+              // C-45 structural fabrication signal, computed for both blocks
+              // below: image markdown whose id was not produced by a
+              // generate_image call this turn and appears nowhere in the
+              // conversation. Cannot false-positive — a real ref always
+              // echoes a real id.
+              const fabricatedImageRefs = allToolCalls.some(tc => tc.name === 'generate_image')
+                ? []
+                : findFabricatedImageRefs(iterationContent, currentMessages.map(m => (typeof m.content === 'string' ? m.content : '')));
+
+              // C-45: fabrication check for turns where NO tool has run at
+              // all. The task-continuation block below is gated on
+              // allToolCalls.length > 0, so a turn that fabricates everything
+              // — the user's #1 complaint, "she says she made images but
+              // called nothing" — never reached ANY check: intent detection
+              // missed loose phrasing ("generate a couple more"), and the
+              // narration extractor is capped at 800 chars. Zero-tool turns
+              // get ONLY the fabrication signals (never planning/hedging
+              // checks, which would force tools onto ordinary conversation).
+              if (allToolCalls.length === 0 && !isGroupTurn && iterationContent &&
+                  nudgeCount < 2 && iteration < maxIterations - 1) {
+                // First-person creation claims. Deliberately narrower than the
+                // markdown check: no "here are the images" form, which would
+                // false-fire on discussion of user-attached images.
+                const creationClaim = /\bi(?:'ve| have)?(?: just)? (?:created|generated|made|rendered|drew)\b[^.!?\n]{0,50}\b(?:images?|selfies?|pictures?|photos?|portraits?)\b/i.test(iterationContent);
+                if (fabricatedImageRefs.length > 0 || creationClaim) {
+                  nudgeCount++;
+                  traceBuilder.recordNudge('phantom_fabrication');
+                  const claimed = fabricatedImageRefs.length > 0
+                    ? (activeTools.some(t => t.name === 'generate_image') ? 'generate_image' : null)
+                    : detectClaimedTool(iterationContent, new Set(activeTools.map(t => t.name)));
+                  console.log(`   🚨 ${choomTag} Fabrication with ZERO tool calls this turn (${fabricatedImageRefs.length > 0 ? `invented image ids: ${fabricatedImageRefs.join(', ')}` : 'creation claim'}) — nudge ${nudgeCount}/2${claimed ? `, narrowing to "${claimed}"` : ''}`);
+                  // C-32: keep the claim in history (discarding it measured
+                  // WORSE), narrow the retry to the single claimed tool.
+                  currentMessages.push({ role: 'assistant', content: iterationContent });
+                  currentMessages.push({
+                    role: 'user',
+                    content: `[System] STOP. Your reply presents images/results that were NEVER generated — you made no tool call at all this turn${fabricatedImageRefs.length > 0 ? ', and the image references in your reply are invented' : ''}. Never fabricate results. Make the real tool call NOW${claimed ? ` (${claimed})` : ''}, once per item you described.`,
+                  });
+                  if (claimed) phantomForcedTool = claimed;
+                  forceToolCall = true;
+                  continue;
+                }
+              }
+
               // If tools were already called this request, check if model intends more work.
               // Models often narrate their next step ("Now let me update the file...")
               // before the loop breaks — losing the write-back, notification, etc.
@@ -5598,7 +5643,11 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                   // camera snapshot*" / "*generates an image: ...*" match, but
                   // innocent roleplay ("*takes a deep breath*", "*running my
                   // fingers through your hair*") never does.
-                  || /\*\[?(?:takes?|taking|captures?|capturing|grabs?|grabbing|snaps?|snapping|analyzes?|analyzing|checks?|checking|runs?|running|calls?|calling|executes?|executing|generates?|generating|saves?|saving|searches|searching|fetches|fetching)\b[^*\]\n]{0,50}?\b(?:image|photo|picture|snapshot|selfie|camera|cam|memor(?:y|ies)|file|note|reminder|alarm|calendar|weather|forecast|search|web|email|report|status|log|tool|service)\b[^*\]\n]{0,40}\]?\*/i.test(lc);
+                  || /\*\[?(?:takes?|taking|captures?|capturing|grabs?|grabbing|snaps?|snapping|analyzes?|analyzing|checks?|checking|runs?|running|calls?|calling|executes?|executing|generates?|generating|saves?|saving|searches|searching|fetches|fetching)\b[^*\]\n]{0,50}?\b(?:image|photo|picture|snapshot|selfie|camera|cam|memor(?:y|ies)|file|note|reminder|alarm|calendar|weather|forecast|search|web|email|report|status|log|tool|service)\b[^*\]\n]{0,40}\]?\*/i.test(lc)
+                  // C-45: image markdown with invented ids in a turn whose real
+                  // tool calls did NOT include generate_image (e.g. she called
+                  // remember, then "showed" images she never generated).
+                  || fabricatedImageRefs.length > 0;
 
                 // Check 2: Original task mentions steps that were never completed.
                 // Compare the user's instructions against tools actually called.

@@ -46,3 +46,19 @@ export function detectClaimedTool(text: string, available: Set<string>): string 
   }
   return null;
 }
+
+/**
+ * Structural phantom signal: markdown image refs whose ids exist nowhere in
+ * the prior conversation. A real ![...](image:id) always carries an id that
+ * either came back from generate_image THIS turn (callers must exclude that
+ * case) or was echoed from an earlier message in context. A fabricated ref
+ * carries an id the model invented — in production it mutates a real id from
+ * context (C-45: real cmrxn8spq... became fake cmrxp8spq...). Unlike the
+ * linguistic claim patterns above, this cannot false-positive: presenting
+ * image markdown with an id that has never existed IS the fabrication.
+ */
+export function findFabricatedImageRefs(text: string, priorContents: string[]): string[] {
+  const ids = [...text.matchAll(/\]\(image:([a-zA-Z0-9_-]+)\)/g)].map(m => m[1]);
+  if (ids.length === 0) return [];
+  return ids.filter(id => !priorContents.some(c => c && c.includes(`image:${id}`)));
+}
