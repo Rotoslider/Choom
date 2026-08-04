@@ -10,13 +10,13 @@
  * WRONG tool would force a call the user never asked for. When nothing matches,
  * the loop must fall back to the broad nudge rather than guess.
  */
-import { detectClaimedTool, findFabricatedImageRefs } from '../lib/phantom-claim';
+import { detectClaimedTool, detectZeroToolClaim, findFabricatedImageRefs } from '../lib/phantom-claim';
 
 const ALL = new Set([
   'ha_get_camera_snapshot', 'create_reminder', 'remember', 'search_memories', 'web_search',
   'generate_image', 'get_weather', 'get_calendar_events', 'send_notification',
   'ha_call_service', 'log_habit', 'workspace_write_file', 'schedule_self_followup',
-  'analyze_image',
+  'analyze_image', 'workspace_list_files', 'workspace_read_file',
 ]);
 
 describe('detectClaimedTool — real phantom phrasings', () => {
@@ -41,6 +41,46 @@ describe('detectClaimedTool — real phantom phrasings', () => {
   ];
   test.each(cases)('%s -> %s', (text, expected) => {
     expect(detectClaimedTool(text, ALL)).toBe(expected);
+  });
+});
+
+describe('detectZeroToolClaim — C-52 zero-tool fabricated success', () => {
+  // The live incident (2026-08-04, Lissa/qwen, 82k-token prompt, 0 tool calls,
+  // 0 nudges): a claimed "scan" with a fully invented workspace listing.
+  const INCIDENT = "Holy shit, Donny. That is a massive digital sprawl. I just ran the scan and my chaotic little heart skipped a beat at the sheer volume of chaos we've accumulated. Here's the breakdown of what's living in our workspace root: Total Items: 26";
+
+  test.each<[string, string]>([
+    [INCIDENT, 'workspace_list_files'],
+    ['I just listed the files in our workspace — 26 items of pure chaos.', 'workspace_list_files'],
+    // C-43's exact phantom, now caught on zero-tool turns too.
+    ['I have updated my memory with the details, Donny.', 'remember'],
+    ["I've saved that to memory, love.", 'remember'],
+    ["Tower cam's pulled up — I just checked the camera and the deck looks quiet.", 'ha_get_camera_snapshot'],
+    ["I've checked the weather for you — it's 98 degrees out there.", 'get_weather'],
+  ])('fires: %s -> %s', (text, expected) => {
+    expect(detectZeroToolClaim(text, ALL)).toBe(expected);
+  });
+
+  // Honest recaps of PAST actions and ordinary conversation must never fire —
+  // firing here would force a junk tool call onto normal chat. Measured on all
+  // 333 real assistant messages in the DB before wiring: the only zero-tool
+  // match was the incident itself.
+  test.each<string>([
+    'I already sent that email yesterday, remember?',
+    'I checked the tower cam earlier today — that sunset was gorgeous.',
+    'Last week I saved your notes to memory, so we are covered.',
+    'When I generated that selfie this morning, the light was perfect.',
+    'Remember before, I ran the scan and it came up clean? We could do it again.',
+    'I looked through my memories a while back and found that story you told me.',
+    'Let me check the tower cam for you.', // future intent = narration, not a claim
+    "I've saved the best for last — wait till you hear this.", // claim verb, no tool object
+    'Just a normal loving reply about our day.',
+  ])('stays quiet: %s', (text) => {
+    expect(detectZeroToolClaim(text, ALL)).toBeNull();
+  });
+
+  test('does not fire when the claimed tool is not available this turn', () => {
+    expect(detectZeroToolClaim(INCIDENT, new Set(['get_weather']))).toBeNull();
   });
 });
 

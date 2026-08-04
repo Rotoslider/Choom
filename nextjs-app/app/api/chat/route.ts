@@ -10,7 +10,7 @@ import {
   NO_DATA, PATH_ERROR, STALE_REF_ERROR, PERMISSION_BLOCK,
 } from '@/lib/tool-error-classification';
 import { classifyEndpoint, computeStreamTimeouts, isLocalEndpoint } from '@/lib/stream-timeouts';
-import { detectClaimedTool, findFabricatedImageRefs } from '@/lib/phantom-claim';
+import { detectClaimedTool, detectZeroToolClaim, findFabricatedImageRefs } from '@/lib/phantom-claim';
 import { isNearVerbatimRepeat, stripRepeatedParagraphs } from '@/lib/repetition-guard';
 import {
   tryRepairJSON, createThinkFilter, createToolCallXmlFilter, createJsonToolCallFilter,
@@ -1789,7 +1789,10 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           if (/\b(?:set|schedule|make|create|queue|put in)\b[^.!?\n]{0,24}?\bfollow[\s-]?up\b|\bremind\s+yourself\b|\bself[\s-]?follow[\s-]?up\b|\bfollow[\s-]?up\s+with\s+yourself\b|\b(?:set|make)\s+(?:a\s+)?reminder\s+for\s+yourself\b|\b(?:come|pop|check|circle|head)\s+back\s+(?:in(?:to)?|to)\s+(?:the\s+)?(?:room|lounge|chat)\b/i.test(msgLower)) {
             // In a room → return-to-room tool; in 1:1 → private self-followup.
             intentToolHint = isGroupTurn ? 'schedule_room_followup' : 'schedule_self_followup';
-          } else if (/\b(?:remind me|set (?:a )?reminder)\b/i.test(msgLower)) {
+          } else if (/\b(?:remind me(?! (?:what|who|when|where|how|why))|set (?:a )?reminder)\b/i.test(msgLower)) {
+            // "remind me what you said about X" is a memory question, not a
+            // reminder ask — matters more now that the hint narrows the first
+            // forced call to this single tool (C-52).
             intentToolHint = 'create_reminder';
           } else if (/\b(?:check (?:the |my )?(?:calendar|schedule)|what(?:'?s| is) on (?:my )?(?:calendar|schedule|for )?(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this week|next week)?|(?:any |do i have (?:any )?|what )(?:appointments?|meetings?|events?)|(?:am i |are we )(?:free|busy|available)|(?:what(?:'?s| is| do i have) )(?:scheduled|planned|coming up)|(?:anything )(?:on |scheduled )(?:for )?(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this week|next week)|when (?:is|was|did) (?:my |the )?(?:next|last) |when (?:is|was) the last time i |when did i (?:last )?(?:go|get|have|see|do|visit|fill|take))\b/i.test(msgLower)) {
             intentToolHint = 'get_calendar_events';
@@ -1817,6 +1820,11 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             // had NO intent hint, so the ignored-required retry had no tool
             // to narrow to and qwen went 0/3 on it in long context (C-44).
             intentToolHint = 'generate_image';
+          } else if (/\bworkspace_list_files\b|\b(?:list|show(?: me)?|what(?:'?s| is) in)\b[^.!?\n]{0,30}\b(?:workspace|files|folders)\b/i.test(msgLower)) {
+            // "List the files in your workspace" had NO hint, so the broad
+            // proactive force free-picked a tool — measured live (C-52):
+            // qwen answered with a generate_image junk selfie.
+            intentToolHint = 'workspace_list_files';
           }
           // NEVER force tool_choice on a group turn. Proven by execution traces:
           // in a room, `message` is the SIBLINGS' lines, which constantly trip the
@@ -1834,6 +1842,13 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           if (forceToolCall) {
             traceBuilder.setForceToolCall();
             console.log(`   ⚡ ${choomTag} Tool intent detected — using tool_choice='required' on first iteration${intentToolHint ? ` (hint: ${intentToolHint})` : ''}`);
+          }
+          // C-52: when the detected intent names ONE specific tool, the first
+          // forced call exposes only that tool (consumed one-shot at the
+          // tools/tool_choice build below, like the group + phantom narrows).
+          let intentForcedTool: string | null = null;
+          if (forceToolCall && intentToolHint && activeTools.some(t => t.name === intentToolHint)) {
+            intentForcedTool = intentToolHint;
           }
           if (intentToolHint && activeTools.length > 0) {
             // Must NOT be role:'system'. Strict chat templates (Qwen/ChatML via
@@ -2126,7 +2141,13 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             // Phantom recovery reuses the same single-tool mechanism, but is NOT
             // limited to group turns — a fabricated claim happens anywhere.
             const phantomForceActive = !!phantomForcedTool && activeTools.some(t => t.name === phantomForcedTool);
-            const forcedSingle = groupForceActive ? groupForcedTool : phantomForceActive ? phantomForcedTool : null;
+            // C-52: a proactive force with a specific intent hint narrows the
+            // FIRST call to that one tool. Broad required across 132 tools is
+            // exactly how "list the files in your workspace" produced a junk
+            // generate_image selfie (live 08-04); single-tool+required is the
+            // C-32-measured 100% mechanism. Later iterations restore all tools.
+            const intentForceActive = allowForce && !!intentForcedTool && activeTools.some(t => t.name === intentForcedTool);
+            const forcedSingle = groupForceActive ? groupForcedTool : phantomForceActive ? phantomForcedTool : intentForceActive ? intentForcedTool : null;
             const iterationTools = forcedSingle ? activeTools.filter(t => t.name === forcedSingle) : activeTools;
             const toolChoiceOverride = (allowForce || forcedSingle) ? 'required' as const : undefined;
             const toolChoiceWasRequired = allowForce || !!forcedSingle;
@@ -2134,12 +2155,15 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               console.log(`   🚨 ${choomTag} Phantom recovery → tools=[${phantomForcedTool}] tool_choice='required'`);
             } else if (groupForceActive) {
               console.log(`   ⚡ ${choomTag} Group forced single-tool retry → tools=[${groupForcedTool}] tool_choice='required'`);
+            } else if (intentForceActive) {
+              console.log(`   🎯 ${choomTag} Intent-narrowed force → tools=[${intentForcedTool}] tool_choice='required'`);
             } else if (forceToolCall) {
               if (allowForce) console.log(`   ⚡ Using tool_choice='required' to force tool invocation`);
             }
             forceToolCall = false; // Reset after use
             groupForcedTool = null; // one-shot: consumed this iteration
             phantomForcedTool = null; // one-shot: consumed this iteration
+            intentForcedTool = null; // one-shot: consumed this iteration
 
             // Think-block filter: strips <think>...</think> from reasoning models
             const thinkFilter = createThinkFilter();
@@ -3057,19 +3081,31 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 // markdown check: no "here are the images" form, which would
                 // false-fire on discussion of user-attached images.
                 const creationClaim = /\bi(?:'ve| have)?(?: just)? (?:created|generated|made|rendered|drew)\b[^.!?\n]{0,50}\b(?:images?|selfies?|pictures?|photos?|portraits?)\b/i.test(iterationContent);
-                if (fabricatedImageRefs.length > 0 || creationClaim) {
+                // C-52: linguistic fabricated-success with ZERO tools — "I just
+                // ran the scan" + an invented listing sailed through here
+                // because only IMAGE claims were checked. Triple-gated (this-
+                // turn claim, no past anchor, maps to an available tool);
+                // measured on all 333 real assistant messages before wiring:
+                // the only zero-tool turn it fires on is the fabrication itself.
+                const zeroToolClaim = detectZeroToolClaim(iterationContent, new Set(activeTools.map(t => t.name)));
+                if (fabricatedImageRefs.length > 0 || creationClaim || zeroToolClaim) {
                   nudgeCount++;
                   traceBuilder.recordNudge('phantom_fabrication');
                   const claimed = fabricatedImageRefs.length > 0
                     ? (activeTools.some(t => t.name === 'generate_image') ? 'generate_image' : null)
-                    : detectClaimedTool(iterationContent, new Set(activeTools.map(t => t.name)));
-                  console.log(`   🚨 ${choomTag} Fabrication with ZERO tool calls this turn (${fabricatedImageRefs.length > 0 ? `invented image ids: ${fabricatedImageRefs.join(', ')}` : 'creation claim'}) — nudge ${nudgeCount}/2${claimed ? `, narrowing to "${claimed}"` : ''}`);
+                    : (zeroToolClaim || detectClaimedTool(iterationContent, new Set(activeTools.map(t => t.name))));
+                  const what = fabricatedImageRefs.length > 0 ? `invented image ids: ${fabricatedImageRefs.join(', ')}`
+                    : creationClaim ? 'creation claim'
+                    : `completed-action claim → ${claimed}`;
+                  console.log(`   🚨 ${choomTag} Fabrication with ZERO tool calls this turn (${what}) — nudge ${nudgeCount}/2${claimed ? `, narrowing to "${claimed}"` : ''}`);
                   // C-32: keep the claim in history (discarding it measured
                   // WORSE), narrow the retry to the single claimed tool.
                   currentMessages.push({ role: 'assistant', content: iterationContent });
                   currentMessages.push({
                     role: 'user',
-                    content: `[System] STOP. Your reply presents images/results that were NEVER generated — you made no tool call at all this turn${fabricatedImageRefs.length > 0 ? ', and the image references in your reply are invented' : ''}. Never fabricate results. Make the real tool call NOW${claimed ? ` (${claimed})` : ''}, once per item you described.`,
+                    content: `[System] STOP. Your reply ${fabricatedImageRefs.length > 0 || creationClaim
+                      ? `presents images/results that were NEVER generated — you made no tool call at all this turn${fabricatedImageRefs.length > 0 ? ', and the image references in your reply are invented' : ''}`
+                      : 'claims you already ran or checked something, but you made NO tool call at all this turn — the results you presented are invented'}. Never fabricate results. Make the real tool call NOW${claimed ? ` (${claimed})` : ''}, then answer from its ACTUAL output.`,
                   });
                   if (claimed) phantomForcedTool = claimed;
                   forceToolCall = true;

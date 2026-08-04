@@ -40,6 +40,11 @@ export function detectClaimedTool(text: string, available: Set<string>): string 
     [/\b(?:analyz|look\w*|examin|check\w*)\w*\b[^.!?]{0,25}\b(?:the |that |this |your )?(?:image|photo|picture|screenshot|snapshot)\b/i, 'analyze_image'],
     [/\b(?:searched|looked)\b[^.!?]{0,30}\b(?:the )?web\b/i, 'web_search'],
     [/\b(?:wrote|saved|created)\b[^.!?]{0,30}\bfile\b/i, 'workspace_write_file'],
+    // "I just ran the scan — here's the breakdown of the workspace root" with
+    // an invented listing was the C-52 incident: no listing claim was in this
+    // table, so the zero-tool turn had nothing to narrow to.
+    [/\b(?:ran|run|did|completed|finished)\b[^.!?]{0,30}\b(?:the )?(?:scan|listing|file list)\b|\b(?:listed|scanned)\b[^.!?]{0,40}\b(?:files?|folders?|workspace|director(?:y|ies))\b|\bworkspace root\b/i, 'workspace_list_files'],
+    [/\b(?:read|opened|pulled up)\b[^.!?]{0,30}\b(?:the |your |that )?(?:file|document|pdf)\b/i, 'workspace_read_file'],
   ];
   for (const [re, tool] of CLAIMS) {
     if (re.test(text) && available.has(tool)) return tool;
@@ -61,4 +66,45 @@ export function findFabricatedImageRefs(text: string, priorContents: string[]): 
   const ids = [...text.matchAll(/\]\(image:([a-zA-Z0-9_-]+)\)/g)].map(m => m[1]);
   if (ids.length === 0) return [];
   return ids.filter(id => !priorContents.some(c => c && c.includes(`image:${id}`)));
+}
+
+// A completed-action claim about THIS turn ("I just ran the scan", "I've
+// checked the weather", "here's the breakdown"). Deliberately requires an
+// immediacy shape — bare narration ("let me check…") and future intent stay
+// out; those are the planning nudge's territory.
+const THIS_TURN_CLAIM = /\bi(?:'ve| have)? (?:just |now )?(?:ran|run|called|executed|checked|scanned|pulled(?: up)?|fetched|queried|listed|looked up|searched|grabbed|retrieved|updated|saved|stored|noted|logged)\b[^.!?\n]{0,80}|\bjust (?:ran|did|finished|completed|pulled|checked|scanned)\b[^.!?\n]{0,60}|\bhere(?:'s| is) (?:the|what) (?:breakdown|results?|listing|scan|report|readout)\b/i;
+
+// Honest recaps of PAST actions anchor themselves in time ("I already sent
+// that yesterday", "when I checked earlier"). A claim whose own sentence
+// carries a past anchor is conversation, not a fabrication of this turn.
+const PAST_ANCHOR = /\b(?:yesterday|earlier(?: today)?|last (?:night|week|month|time)|this morning|the other day|a while (?:ago|back)|previously|before(?: that)?|back (?:then|when)|already (?:did|done|sent|took)|when (?:we|you|i) (?:talked|spoke|did|were))\b/i;
+
+/**
+ * Zero-tool fabricated-success detector (C-52). The C-46 zero-tool check only
+ * catches IMAGE fabrication; a turn that claims "I just ran the scan" and
+ * presents an invented file listing sailed through with zero nudges (observed
+ * live at 82k prompt tokens). This is its linguistic counterpart, triple-gated
+ * to protect ordinary conversation:
+ *   1. the text must contain a completed-THIS-TURN action claim,
+ *   2. that claim's own sentence must not be anchored in the past,
+ *   3. the claim window must map to a specific available tool
+ *      (detectClaimedTool) — otherwise there is nothing to force and the
+ *      match is treated as conversation.
+ * Measured before wiring (2026-08-04): on all 333 real assistant messages in
+ * the DB, the only zero-tool turn it fires on is the actual fabrication
+ * incident; 0 false positives on honest past-recap sentences.
+ */
+export function detectZeroToolClaim(text: string, available: Set<string>): string | null {
+  const m = text.match(THIS_TURN_CLAIM);
+  if (!m || m.index === undefined) return null;
+  const idx = m.index;
+  const sentStart = Math.max(text.lastIndexOf('.', idx), text.lastIndexOf('!', idx), text.lastIndexOf('?', idx), text.lastIndexOf('\n', idx)) + 1;
+  const ends = [text.indexOf('.', idx), text.indexOf('!', idx), text.indexOf('?', idx), text.indexOf('\n', idx)].filter(i => i >= 0);
+  const sentEnd = ends.length ? Math.min(...ends) + 1 : text.length;
+  const sentence = text.slice(sentStart, sentEnd);
+  if (PAST_ANCHOR.test(sentence)) return null;
+  // Tool mapping is scoped to the claim's neighborhood so an unrelated
+  // keyword three paragraphs away can't select the wrong tool.
+  const window = sentence.length >= 200 ? sentence : text.slice(sentStart, idx + 200);
+  return detectClaimedTool(window, available);
 }
