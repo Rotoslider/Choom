@@ -68,7 +68,23 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
     const now = Date.now();
     const minMs = now + MIN_DELAY_MIN * 60 * 1000;
     const maxMs = now + MAX_DELAY_MIN * 60 * 1000;
-    const atRaw = (typeof args.at === 'string' ? args.at : '').trim();
+    // Alias rescue (C-42): models put the time under the wrong key — deepseek's
+    // nightly heartbeats sent `time` instead of `at` five turns running
+    // (08-01..08-03 traces), ate the param error each time, and the failure cap
+    // then disabled the tool mid-heartbeat. A perfectly good value under an
+    // obvious name is not an error: accept it and echo the real name back so
+    // the model learns (same pattern as requireStringArg's path aliases, C-50).
+    let aliasNote = '';
+    let atRaw = (typeof args.at === 'string' ? args.at : '').trim();
+    if (!atRaw) {
+      for (const k of ['time', 'when', 'at_time', 'datetime']) {
+        if (typeof args[k] === 'string' && (args[k] as string).trim()) {
+          atRaw = (args[k] as string).trim();
+          aliasNote = ` (heads-up: the parameter is named \`at\`, not \`${k}\` — accepted this time)`;
+          break;
+        }
+      }
+    }
 
     // Absolute time wins when provided — this is the path that spares a weak model
     // the minutes math and local-vs-UTC confusion.
@@ -84,14 +100,29 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
       let note = '';
       if (t < minMs) { t = minMs; note = ` (followups need a ${MIN_DELAY_MIN}-min minimum lead time, so bumped to ${fmtLocal(new Date(minMs))})`; }
       else if (t > maxMs) { t = maxMs; note = ' (capped to the 30-day maximum)'; }
-      return { triggerAt: new Date(t), note, effectiveMinutes: Math.round((t - now) / 60000) };
+      return { triggerAt: new Date(t), note: note + aliasNote, effectiveMinutes: Math.round((t - now) / 60000) };
     }
 
-    // Fallback: minutes-from-now.
-    const rawDelay = args.delay_minutes;
+    // Fallback: minutes-from-now (with the same alias tolerance).
+    let rawDelay = args.delay_minutes;
+    if (rawDelay === undefined || rawDelay === null || String(rawDelay).trim() === '') {
+      for (const k of ['minutes', 'delay', 'in_minutes', 'delayMinutes']) {
+        const v = args[k];
+        if (v !== undefined && v !== null && String(v).trim() !== '' && Number.isFinite(parseFloat(String(v)))) {
+          rawDelay = v;
+          aliasNote = ` (heads-up: the parameter is named \`delay_minutes\`, not \`${k}\` — accepted this time)`;
+          break;
+        }
+      }
+    }
     const hasDelay = rawDelay !== undefined && rawDelay !== null && String(rawDelay).trim() !== '';
     if (!hasDelay) {
-      return { error: 'Provide either `at` (an absolute time like "2026-06-26 2:05pm" in Donny\'s local time) or `delay_minutes` (minutes from now).' };
+      // Name the keys that DID arrive — "you sent X" beats "you sent nothing"
+      // when the model is staring at its own call wondering what was wrong.
+      const KNOWN = new Set(['at', 'delay_minutes', 'prompt', 'reason', 'room']);
+      const extras = Object.keys(args).filter(k => !KNOWN.has(k));
+      const sentNote = extras.length ? ` (you sent ${extras.map(k => `\`${k}\``).join(', ')}, which I can't read a time from)` : '';
+      return { error: `Provide either \`at\` (an absolute time like "2026-06-26 2:05pm" in Donny's local time) or \`delay_minutes\` (minutes from now)${sentNote}.` };
     }
     const delay = typeof rawDelay === 'number' ? rawDelay : parseFloat(String(rawDelay));
     if (!Number.isFinite(delay)) {
@@ -99,7 +130,7 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
     }
     const clamped = Math.max(MIN_DELAY_MIN, Math.min(MAX_DELAY_MIN, delay));
     const note = clamped !== delay ? ` (clamped from ${delay} to ${clamped} min)` : '';
-    return { triggerAt: new Date(now + clamped * 60 * 1000), note, effectiveMinutes: clamped };
+    return { triggerAt: new Date(now + clamped * 60 * 1000), note: note + aliasNote, effectiveMinutes: clamped };
   }
 
   // Resolve which group room a room-followup targets: the current room (if this
