@@ -19,12 +19,16 @@ import type { LLMSettings, ToolDefinition } from '../lib/types';
 // ─── Helpers ───────────────────────────────────────────────────────────
 
 const routePath = path.join(__dirname, '..', 'app', 'api', 'chat', 'route.ts');
+// Tool execution (executeToolCall + the image-gen lock) was carved out of
+// route.ts into its own module (C-22).
+const toolExecPath = path.join(__dirname, '..', 'lib', 'tool-execution.ts');
 const delegationHandlerPath = path.join(__dirname, '..', 'skills', 'core', 'choom-delegation', 'handler.ts');
 const pagePath = path.join(__dirname, '..', 'app', 'page.tsx');
 const typesPath = path.join(__dirname, '..', 'lib', 'types.ts');
 const logFilterPath = path.join(__dirname, '..', 'scripts', 'log-filter.js');
 
 let routeContent: string;
+let toolExecContent: string;
 let delegationContent: string;
 let pageContent: string;
 let typesContent: string;
@@ -32,6 +36,7 @@ let logFilterContent: string;
 
 beforeAll(() => {
   routeContent = readFileSync(routePath, 'utf-8');
+  toolExecContent = readFileSync(toolExecPath, 'utf-8');
   delegationContent = readFileSync(delegationHandlerPath, 'utf-8');
   pageContent = readFileSync(pagePath, 'utf-8');
   typesContent = readFileSync(typesPath, 'utf-8');
@@ -552,7 +557,7 @@ describe('11. Delegation Not Broken by Changes', () => {
 
 describe('12. Heartbeat and Cron Job Safety', () => {
   test('image generation uses a GPU lock (serialized)', () => {
-    expect(routeContent).toContain('withImageGenLock');
+    expect(toolExecContent).toContain('withImageGenLock');
   });
 
   test('suppressNotifications flag exists for heartbeats', () => {
@@ -872,7 +877,7 @@ describe('Edge Case: Concurrent Heartbeat + User Chat', () => {
   });
 
   test('image gen lock serializes GPU access across requests', () => {
-    expect(routeContent).toContain('withImageGenLock');
+    expect(toolExecContent).toContain('withImageGenLock');
   });
 
   test('each request gets its own agentic loop state', () => {
