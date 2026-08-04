@@ -17,9 +17,11 @@ import path from 'path';
 import { normalizeLocationQuery } from '../lib/weather-service';
 
 describe('Weather API key configuration', () => {
+  // Every file that builds a WeatherSettings default. The chat route's copy
+  // moved to lib/chat-defaults.ts in the C-22 carve-up.
   const roots = [
     path.join(__dirname, '..', 'app', 'api', 'weather', 'route.ts'),
-    path.join(__dirname, '..', 'app', 'api', 'chat', 'route.ts'),
+    path.join(__dirname, '..', 'lib', 'chat-defaults.ts'),
   ];
 
   test('the API key comes from the environment, never a hardcoded literal', () => {

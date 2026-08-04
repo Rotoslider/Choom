@@ -113,103 +113,16 @@ function clearGuiActivity(choomName: string) {
   } catch { /* non-critical */ }
 }
 
-// Default LLM settings (fallback if client doesn't send settings)
-const defaultLLMSettings: LLMSettings = {
-  endpoint: process.env.LLM_ENDPOINT || 'http://localhost:1234/v1',
-  model: process.env.LLM_MODEL || 'local-model',
-  temperature: 0.7,
-  maxTokens: 4096,
-  contextLength: 262144, // Qwen native max (256K); profiles override per-model
-  topP: 0.95,
-  frequencyPenalty: 0,
-  presencePenalty: 0,
-};
-
-// Default memory endpoint
-const DEFAULT_MEMORY_ENDPOINT = process.env.MEMORY_ENDPOINT || 'http://localhost:8100';
-
-// Default image generation endpoint
-const DEFAULT_IMAGE_GEN_ENDPOINT = process.env.IMAGE_GEN_ENDPOINT || 'http://localhost:7860';
-
-// Default weather settings
-const defaultWeatherSettings: WeatherSettings = {
-  apiKey: process.env.OPENWEATHER_API_KEY || '',
-  provider: 'openweathermap',
-  location: process.env.DEFAULT_WEATHER_LOCATION || '',
-  latitude: parseFloat(process.env.DEFAULT_WEATHER_LAT || '0'),
-  longitude: parseFloat(process.env.DEFAULT_WEATHER_LON || '0'),
-  useCoordinates: true,
-  units: 'imperial',
-  cacheMinutes: 30,
-};
-
-// Default search settings
-const defaultSearchSettings: SearchSettings = {
-  provider: 'brave',
-  braveApiKey: process.env.BRAVE_API_KEY || '',
-  searxngEndpoint: process.env.SEARXNG_ENDPOINT || '',
-  serpApiKey: process.env.SERP_API_KEY || '',
-  maxResults: 5,
-};
-
-// Default image generation settings
-const defaultImageGenSettings: ImageGenSettings = {
-  endpoint: DEFAULT_IMAGE_GEN_ENDPOINT,
-  defaultCheckpoint: '',
-  defaultSampler: 'Euler a',
-  defaultScheduler: 'Normal',
-  defaultSteps: 20,
-  defaultCfgScale: 7,
-  defaultDistilledCfg: 3.5,
-  defaultWidth: 1024,
-  defaultHeight: 1024,
-  defaultNegativePrompt: 'ugly, blurry, low quality, deformed, disfigured',
-  selfPortrait: {
-    enabled: false,
-    checkpoint: '',
-    sampler: 'Euler a',
-    scheduler: 'Normal',
-    steps: 25,
-    cfgScale: 7,
-    distilledCfg: 3.5,
-    width: 1024,
-    height: 1024,
-    negativePrompt: '',
-    loras: [],
-    promptPrefix: '',
-    promptSuffix: '',
-  },
-};
-
-// Default workspace settings
-import { WORKSPACE_ROOT } from '@/lib/config';
-
-const WORKSPACE_MAX_FILES_PER_SESSION = 50;
-const WORKSPACE_MAX_FILE_SIZE_KB = 1024;
-const WORKSPACE_ALLOWED_EXTENSIONS = [
-  // Documents & data
-  '.md', '.txt', '.json', '.csv', '.tsv', '.log', '.rst', '.tex', '.bib', '.diff', '.patch',
-  // Web & scripting
-  '.py', '.ts', '.tsx', '.js', '.jsx', '.html', '.css', '.scss', '.sass', '.less', '.graphql', '.gql',
-  // Shell & system
-  '.sh', '.bash', '.ps1', '.bat', '.cmd', '.conf', '.rules', '.service',
-  // Config
-  '.yaml', '.yml', '.xml', '.sql', '.toml', '.ini', '.cfg', '.env.example',
-  // Notebooks
-  '.r', '.R', '.ipynb',
-  // Systems programming
-  '.c', '.cpp', '.h', '.hpp', '.rs', '.go', '.java', '.kt', '.swift', '.rb', '.pl', '.lua', '.m',
-  // Microcontroller & embedded
-  '.ino', '.pde', '.s', '.S', '.asm', '.ld', '.dts', '.dtsi', '.kconfig', '.mk',
-  // FPGA
-  '.v', '.sv', '.tcl',
-  // Build & infra
-  '.proto', '.cmake', '.makefile', '.dockerfile', '.tf', '.hcl',
-  // ROS2
-  '.msg', '.srv', '.action', '.urdf', '.xacro', '.sdf', '.world', '.rviz', '.repos',
-];
-const WORKSPACE_IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp'];
-const WORKSPACE_DOWNLOAD_EXTENSIONS = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.pptx', '.zip', '.tar', '.gz', '.xml', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.log', '.sh', '.bash', '.sql', '.r', '.R', '.ipynb'];
+// Default client settings + workspace write policy — moved to shared modules
+// so the tool-execution module can use them without importing the route (C-22).
+import {
+  defaultLLMSettings, DEFAULT_MEMORY_ENDPOINT, DEFAULT_IMAGE_GEN_ENDPOINT,
+  defaultWeatherSettings, defaultSearchSettings, defaultImageGenSettings,
+} from '@/lib/chat-defaults';
+import {
+  WORKSPACE_ROOT, WORKSPACE_MAX_FILES_PER_SESSION, WORKSPACE_MAX_FILE_SIZE_KB,
+  WORKSPACE_ALLOWED_EXTENSIONS, WORKSPACE_IMAGE_EXTENSIONS, WORKSPACE_DOWNLOAD_EXTENSIONS,
+} from '@/lib/config';
 
 // Maximum agentic loop iterations
 const MAX_ITERATIONS = 50;
