@@ -66,7 +66,7 @@ nextjs-app/
     usage/page.tsx                  Token usage dashboard (by Choom, model, provider)
     rooms/page.tsx                  Group chat rooms (multi-Choom, turn-based, per-speaker TTS, keep-going)
     api/
-      chat/route.ts                 LLM streaming + agentic tool loop (dedup, nudge, image cap, model profile resolution)
+      chat/route.ts                 LLM streaming + agentic tool loop (dedup, nudge, image cap, model profile resolution); tool dispatch lives in lib/tool-execution.ts
       group-chat/route.ts           Group-room orchestrator (speaker selection, auto-rounds, image auto-save, SSE)
       group-chats/                  Group room CRUD (rooms, participants, messages)
       tts/route.ts                  TTS proxy
@@ -144,6 +144,7 @@ nextjs-app/
     homeassistant-service.ts        Home Assistant REST API client (states, services, history, prompt injection)
     web-search.ts                   Brave / SerpAPI / SearXNG (cascading fallback)
     tool-definitions.ts             LLM tool schemas + skill bridge functions
+    tool-execution.ts               Tool dispatch for the chat route: ToolContext, executeToolCall (~40 legacy tools), skill-dispatch wrapper + contractGate, tool-doc builders, image-gen lock
     vision-service.ts               Optic vision analysis (OpenAI vision API + sharp resize, configurable per-model dimensions)
     project-service.ts              Workspace project management (CRUD + rename)
     workspace-service.ts            Sandboxed file ops with path traversal prevention
