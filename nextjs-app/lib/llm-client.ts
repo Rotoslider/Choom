@@ -310,20 +310,27 @@ export class LLMClient {
   }
 }
 
-// Slim down a tool definition for the API request: truncate description,
-// strip parameter descriptions, and simplify enum lists. Saves ~40-60% of
-// the tokens spent on tool schemas, which matters for local models.
-function slimToolDefinition(t: ToolDefinition): Record<string, unknown> {
-  // Truncate description to first sentence or 120 chars
+// Slim down a tool definition for the API request. Still saves a large share
+// of the schema tokens, but no longer starves the model (C-28): the old
+// first-sentence/117-char cut + full param-doc strip delivered 30% of the
+// authored description text and 0% of the parameter docs — deleting exactly
+// the decision rules a 35B model cannot infer (measured: 43,245 chars of
+// authored guidance never reached the model). Now: whole sentences up to
+// 200 chars, and REQUIRED parameters keep their docs at up to 80 chars —
+// measured at ~+5k tokens across the full 131-tool set, on prompts that
+// run 80-90k in production.
+export function slimToolDefinition(t: ToolDefinition): Record<string, unknown> {
+  // Keep whole sentences while they fit in 200 chars.
   let desc = t.description;
-  const sentenceEnd = desc.indexOf('. ');
-  if (sentenceEnd > 0 && sentenceEnd < 120) {
-    desc = desc.slice(0, sentenceEnd + 1);
-  } else if (desc.length > 120) {
-    desc = desc.slice(0, 117) + '...';
+  if (desc.length > 200) {
+    let cut = -1;
+    for (let i = desc.indexOf('. '); i !== -1 && i < 200; i = desc.indexOf('. ', i + 1)) {
+      cut = i;
+    }
+    desc = cut > 0 ? desc.slice(0, cut + 1) : desc.slice(0, 197) + '...';
   }
 
-  // Slim down parameter properties: keep type, enum, required but drop descriptions
+  const required = new Set(t.parameters?.required ?? []);
   const slimProps: Record<string, Record<string, unknown>> = {};
   if (t.parameters?.properties) {
     for (const [key, param] of Object.entries(t.parameters.properties)) {
@@ -331,6 +338,13 @@ function slimToolDefinition(t: ToolDefinition): Record<string, unknown> {
       if (param.enum) slim.enum = param.enum;
       if (param.items) slim.items = param.items;
       if (param.default !== undefined) slim.default = param.default;
+      // Required params keep their docs — "what goes here" is the difference
+      // between a call that works and a param error (or a phantom narration).
+      if (required.has(key) && typeof param.description === 'string' && param.description) {
+        slim.description = param.description.length > 80
+          ? param.description.slice(0, 77) + '...'
+          : param.description;
+      }
       slimProps[key] = slim;
     }
   }
