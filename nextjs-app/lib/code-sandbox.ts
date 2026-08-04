@@ -5,6 +5,7 @@
  */
 
 import { exec } from 'child_process';
+import { existsSync, readdirSync } from 'fs';
 import { writeFile, unlink, access } from 'fs/promises';
 import path from 'path';
 import { randomBytes } from 'crypto';
@@ -95,6 +96,23 @@ export class CodeSandbox {
     if (!resolved.startsWith(this.workspaceRoot)) {
       throw new Error(`Path traversal blocked: "${projectFolder}" resolves outside workspace`);
     }
+    // C-54: a nonexistent cwd used to surface as a bare spawn ENOENT with
+    // EMPTY stdout/stderr in 3ms — Lissa read two of those in a row as "the
+    // workspace environment is completely non-functional" (17-iteration live
+    // incident). Name the real problem and the real folders instead.
+    if (!existsSync(resolved)) {
+      let folders: string[] = [];
+      try {
+        folders = readdirSync(this.workspaceRoot, { withFileTypes: true })
+          .filter(d => d.isDirectory() && !d.name.startsWith('.'))
+          .map(d => d.name).sort();
+      } catch { /* workspace root itself missing — the generic error below still helps */ }
+      throw new Error(
+        `Project folder "${projectFolder}" doesn't exist — don't guess folder names. ` +
+        `Folders that exist: ${folders.join(', ') || '(none yet)'}. ` +
+        `Use one of those, or create yours first with workspace_create_folder.`
+      );
+    }
     return resolved;
   }
 
@@ -169,7 +187,15 @@ export class CodeSandbox {
         const durationMs = Date.now() - start;
         const timedOut = error?.killed === true;
         const stdoutResult = this.truncateOutput(stdout || '');
-        const stderrResult = this.truncateOutput(stderr || '');
+        // A spawn-level failure (shell/cwd unavailable) produces NO stderr —
+        // an empty result that reads as a broken environment (C-54). Say what
+        // actually happened so the model doesn't have to guess. Spawn errors
+        // carry a STRING code ('ENOENT'); ordinary nonzero exits are numeric
+        // and keep whatever the command printed.
+        const stderrText = (error && typeof error.code === 'string' && !stderr && !stdout)
+          ? `spawn failed before the command ran (${error.code}): ${error.message}`
+          : (stderr || '');
+        const stderrResult = this.truncateOutput(stderrText);
 
         resolve({
           success: !error,
