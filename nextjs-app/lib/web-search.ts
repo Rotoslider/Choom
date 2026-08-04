@@ -9,89 +9,50 @@ export class WebSearchService {
     this.settings = settings;
   }
 
+  // Ordered failover over every CONFIGURED backend (C-07). The old chains
+  // only rotated on /(?:429|5\d\d)/ — so Brave 422 (a suspended subscription)
+  // took the whole search feature down for days while two healthy, configured
+  // backends sat idle. Any backend failure now rotates (a query that is
+  // genuinely bad fails on all three and the aggregate says so), and when
+  // every backend fails the error is CONFIG-class with per-backend detail
+  // instead of a generic failure the doctor can't act on.
   async search(query: string, maxResults?: number): Promise<SearchResponse> {
     const limit = maxResults || this.settings.maxResults;
 
-    if (this.settings.provider === 'serpapi') {
-      try {
-        return await this.searchSerpApi(query, limit);
-      } catch (error) {
-        // Auto-fallback: SerpAPI → Brave → SearXNG
-        const errMsg = error instanceof Error ? error.message : String(error);
-        if (this.settings.braveApiKey && /(?:429|5\d\d)/.test(errMsg)) {
-          console.warn(`   🔄 SerpAPI failed (${errMsg}), falling back to Brave`);
-          try {
-            return await this.searchBrave(query, limit);
-          } catch (braveError) {
-            const braveMsg = braveError instanceof Error ? braveError.message : String(braveError);
-            if (this.settings.searxngEndpoint && /(?:429|5\d\d)/.test(braveMsg)) {
-              console.warn(`   🔄 Brave also failed (${braveMsg}), falling back to SearXNG`);
-              return this.searchSearXNG(query, limit);
-            }
-            throw braveError;
-          }
-        }
-        if (this.settings.searxngEndpoint && /(?:429|5\d\d)/.test(errMsg)) {
-          console.warn(`   🔄 SerpAPI failed (${errMsg}), falling back to SearXNG`);
-          return this.searchSearXNG(query, limit);
-        }
-        throw error;
-      }
-    } else if (this.settings.provider === 'brave') {
-      try {
-        return await this.searchBrave(query, limit);
-      } catch (error) {
-        // Auto-fallback: Brave → SerpAPI → SearXNG
-        const errMsg = error instanceof Error ? error.message : String(error);
-        if (/(?:429|5\d\d)/.test(errMsg)) {
-          if (this.settings.serpApiKey) {
-            console.warn(`   🔄 Brave Search failed (${errMsg}), falling back to SerpAPI`);
-            try {
-              return await this.searchSerpApi(query, limit);
-            } catch (serpError) {
-              if (this.settings.searxngEndpoint) {
-                console.warn(`   🔄 SerpAPI also failed, falling back to SearXNG`);
-                return this.searchSearXNG(query, limit);
-              }
-              throw serpError;
-            }
-          } else if (this.settings.searxngEndpoint) {
-            console.warn(`   🔄 Brave Search failed (${errMsg}), falling back to SearXNG`);
-            return this.searchSearXNG(query, limit);
-          }
-        }
-        throw error;
-      }
-    } else {
-      // SearXNG-primary path. Fallback chain: SearXNG → Brave → SerpAPI when
-      // SearXNG returns a 429-shaped error (real 429, 5xx, OR our synthetic
-      // 'upstream engines blocked' detection from searchSearXNG above).
-      try {
-        return await this.searchSearXNG(query, limit);
-      } catch (error) {
-        const errMsg = error instanceof Error ? error.message : String(error);
-        if (!/(?:429|5\d\d|upstream engines blocked)/i.test(errMsg)) throw error;
+    const backends: Array<{ name: string; configured: boolean; run: () => Promise<SearchResponse> }> = [
+      { name: 'brave', configured: !!this.settings.braveApiKey, run: () => this.searchBrave(query, limit) },
+      { name: 'serpapi', configured: !!this.settings.serpApiKey, run: () => this.searchSerpApi(query, limit) },
+      { name: 'searxng', configured: !!this.settings.searxngEndpoint, run: () => this.searchSearXNG(query, limit) },
+    ];
+    // Primary first, then the rest in declaration order.
+    const primary = this.settings.provider === 'serpapi' ? 'serpapi'
+      : this.settings.provider === 'brave' ? 'brave'
+      : 'searxng';
+    backends.sort((a, b) => (a.name === primary ? -1 : b.name === primary ? 1 : 0));
 
-        if (this.settings.braveApiKey) {
-          console.warn(`   🔄 SearXNG failed (${errMsg.slice(0, 100)}), falling back to Brave`);
-          try {
-            return await this.searchBrave(query, limit);
-          } catch (braveError) {
-            const braveMsg = braveError instanceof Error ? braveError.message : String(braveError);
-            if (this.settings.serpApiKey && /(?:429|5\d\d)/.test(braveMsg)) {
-              console.warn(`   🔄 Brave also failed (${braveMsg}), falling back to SerpAPI`);
-              return this.searchSerpApi(query, limit);
-            }
-            throw braveError;
-          }
+    const configured = backends.filter(b => b.configured);
+    if (configured.length === 0) {
+      throw new Error('No search backend configured — set a Brave API key, SerpAPI key, or SearXNG endpoint in Settings.');
+    }
+
+    const failures: string[] = [];
+    for (const backend of configured) {
+      try {
+        const res = await backend.run();
+        if (failures.length) {
+          console.warn(`   🔄 Search served by ${backend.name} after: ${failures.join(' | ')}`);
         }
-        if (this.settings.serpApiKey) {
-          console.warn(`   🔄 SearXNG failed (${errMsg.slice(0, 100)}), falling back to SerpAPI`);
-          return this.searchSerpApi(query, limit);
-        }
-        throw error;
+        return res;
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        failures.push(`${backend.name}: ${msg.slice(0, 140)}`);
+        console.warn(`   🔄 Search backend ${backend.name} failed (${msg.slice(0, 100)}) — trying next`);
       }
     }
+    throw new Error(
+      `Web search is down: every configured backend failed — ${failures.join(' | ')}. ` +
+      `This is an api key / subscription / service configuration problem for the owner to fix, not something a different query will get around.`,
+    );
   }
 
   private async searchBrave(query: string, limit: number): Promise<SearchResponse> {
