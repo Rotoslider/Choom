@@ -120,7 +120,7 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
     const label = (r: typeof mine[number]) => r.title
       || r.participants.filter(p => p.active).map(p => p.choom.name).join(' & ') || '(unnamed room)';
     if (mine.length === 0) {
-      return { error: "You're not in any group rooms. Start one with talk_with_sisters first, then you can schedule a return." };
+      return { error: "You're not in any group rooms yet, so there's nothing to return to. Call list_my_rooms to see the rooms that exist and join_room to add yourself to one (you don't need an invite), or start a fresh one with talk_with_sisters — then you can schedule a return." };
     }
     if (roomArg && roomArg.trim()) {
       const q = roomArg.toLowerCase().replace(/\bthe\b/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
@@ -129,7 +129,7 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
         return t && (t.includes(q) || q.includes(t));
       });
       if (hit) return { id: hit.id, title: label(hit) };
-      return { error: `Couldn't find a room named "${roomArg}" that you're in. Your rooms: ${mine.map(label).join(', ')}.` };
+      return { error: `Couldn't find a room named "${roomArg}" that you're in. Your rooms: ${mine.map(label).join(', ')}. If the room exists but you're not in it, join_room adds you — then schedule the return.` };
     }
     if (ctx.groupRoomId) {
       const r = mine.find(m => m.id === ctx.groupRoomId);
