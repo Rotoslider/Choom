@@ -11,7 +11,7 @@ import {
   classifyToolError, type ToolErrorClass,
 } from '@/lib/tool-error-classification';
 import { classifyEndpoint, computeStreamTimeouts, isLocalEndpoint } from '@/lib/stream-timeouts';
-import { detectClaimedTool, detectZeroToolClaim, findFabricatedImageRefs } from '@/lib/phantom-claim';
+import { detectClaimedTool, detectZeroToolClaim, detectUncalledToolClaim, findFabricatedImageRefs } from '@/lib/phantom-claim';
 import { isNearVerbatimRepeat, stripRepeatedParagraphs } from '@/lib/repetition-guard';
 import {
   tryRepairJSON, createThinkFilter, createToolCallXmlFilter, createJsonToolCallFilter,
@@ -3249,6 +3249,31 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                   unfinishedSteps.push('read file (workspace_read_file)');
                 }
 
+                // C-55: fabricated RESULT from a tool that never ran THIS
+                // turn. The zero-tool gate (C-52) can't see it — the live
+                // incident quoted `{"success":true}` from workspace_delete_file
+                // in a turn where 5 OTHER tools really ran. Measured before
+                // wiring on all 556 real assistant messages with their own
+                // toolCalls as ground truth: 5 fires, all 5 genuine
+                // fabrications (both C-52 incident turns, the delete incident,
+                // and two previously undetected "saved this memory" phantoms) —
+                // zero false positives.
+                const uncalledClaimRaw = detectUncalledToolClaim(
+                  iterationContent, new Set(activeTools.map(t => t.name)), calledToolNames);
+                let uncalledClaim: string | null = null;
+                if (uncalledClaimRaw) {
+                  // Sibling exemption for PARAPHRASE mappings only: "checked
+                  // the weather" maps to get_weather but get_weather_forecast
+                  // ran — honest, skip. When the reply names the tool
+                  // LITERALLY there is no mapping ambiguity, so a same-skill
+                  // sibling having run proves nothing (the delete incident's
+                  // turn had three real workspace calls).
+                  const literalClaim = iterationContent.includes(uncalledClaimRaw);
+                  const skill = literalClaim ? null : getSkillRegistry().getSkillForTool(uncalledClaimRaw);
+                  const siblingCalled = !!skill && (skill.toolDefinitions || []).some(t => calledToolNames.has(t.name));
+                  uncalledClaim = siblingCalled ? null : uncalledClaimRaw;
+                }
+
                 const hasUnfinished = unfinishedSteps.length > 0;
                 consecutiveNoToolIters++;
                 // Check 3: gone quiet for 2+ iterations after tools were being called.
@@ -3258,15 +3283,18 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 // Fabricated success is the highest-priority case — user thinks the
                 // action happened when it didn't. Prioritize its nudge message over
                 // the others if multiple triggers fire.
-                if ((planningNext || hasUnfinished || hedgeGiveUp || hasGoneQuiet || fakeSuccess) && nudgeCount < 3 && iteration < maxIterations - 1) {
+                if ((planningNext || hasUnfinished || hedgeGiveUp || hasGoneQuiet || fakeSuccess || uncalledClaim) && nudgeCount < 3 && iteration < maxIterations - 1) {
                   nudgeCount++;
-                  const nudgeKind = fakeSuccess ? 'hedge_giveup' // reuse for telemetry (fake = lying about success)
+                  const nudgeKind = uncalledClaim ? 'phantom_fabrication'
+                    : fakeSuccess ? 'hedge_giveup' // reuse for telemetry (fake = lying about success)
                     : hasUnfinished ? 'unfinished_steps'
                     : hedgeGiveUp ? 'hedge_giveup'
                     : hasGoneQuiet ? 'gone_quiet'
                     : 'task_continuation';
                   traceBuilder.recordNudge(nudgeKind);
-                  const reason = fakeSuccess
+                  const reason = uncalledClaim
+                    ? `fabricated result from ${uncalledClaim} — never called this turn`
+                    : fakeSuccess
                     ? 'fabricated tool-call success (claimed action without calling tool)'
                     : hasUnfinished ? `unfinished steps: ${unfinishedSteps.join(', ')}`
                     : hedgeGiveUp ? 'hedging/giving up without trying alternatives'
@@ -3274,7 +3302,9 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                     : 'model indicated more steps pending';
                   console.log(`   🔄 ${choomTag} Task continuation nudge ${nudgeCount}/3 — ${reason}`);
                   currentMessages.push({ role: 'assistant', content: iterationContent });
-                  const nudgeMsg = fakeSuccess
+                  const nudgeMsg = uncalledClaim
+                    ? `[System] STOP. Your reply presents a result from "${uncalledClaim}", but ${uncalledClaim} was NOT called this turn — that result is invented. Call ${uncalledClaim} NOW and answer from its ACTUAL output. If you meant something from an earlier conversation, say that plainly instead of presenting it as this turn's result.`
+                    : fakeSuccess
                     ? `[System] STOP. You just claimed you called a service or completed an action, but you did NOT make a tool call this iteration. Never fabricate tool results. Either make the real tool call NOW, or say honestly that you haven't done it yet. The user's goal: "${(message || '').trim().slice(0, 300)}". Make the actual function call now — no more narration.`
                     : hasUnfinished
                       ? `[System] You have NOT completed all steps from the original instructions. Remaining: ${unfinishedSteps.join('; ')}. Call the next tool NOW.`
@@ -3297,7 +3327,10 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                   // Deliberately NOT paired with dropping the false claim from
                   // history — tested, and discarding it made recovery WORSE
                   // (83% vs 100%), so the claim stays in currentMessages above.
-                  if (fakeSuccess) {
+                  if (uncalledClaim) {
+                    phantomForcedTool = uncalledClaim;
+                    console.log(`   🚨 ${choomTag} Fabricated result for uncalled tool → forcing single tool "${uncalledClaim}" next iteration`);
+                  } else if (fakeSuccess) {
                     const claimed = detectClaimedTool(iterationContent, new Set(activeTools.map(t => t.name)));
                     if (claimed) {
                       phantomForcedTool = claimed;
