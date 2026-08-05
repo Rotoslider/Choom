@@ -19,9 +19,11 @@ RED='\033[0;31m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-# Use Genesis (GLM-4.7-flash on local) — fastest model for testing
-CHOOM_ID="cml8frtm300001149xgozcbh3"
-CHOOM_NAME="Genesis"
+# Target Choom — env-overridable. Default is Lissa (local qwen, FREE).
+# Genesis's old id is gone from here on purpose: she moved to a PAID
+# OpenRouter model in 2026-08, and this script fires ~15 real turns.
+CHOOM_ID="${CHOOM_ID:-cml8pzzsl0000fwe9s4gfivbf}"
+CHOOM_NAME="${CHOOM_NAME:-Lissa}"
 
 # Helper: send a chat message and capture the full SSE response to a temp file
 # Args: output_file, choom_id, message, [timeout_seconds]
@@ -449,7 +451,12 @@ chat_id=$(curl -sf "${BASE}/api/chats" -X POST \
   -d "{\"choomId\":\"${CHOOM_ID}\",\"title\":\"heartbeat test\"}" \
   | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])" 2>/dev/null)
 
-hb_response=$(timeout 90 curl -sN "${BASE}/api/chat" -X POST \
+# extract_content takes a FILE path — passing the response text itself made
+# grep treat the SSE body as a filename, so this test always read empty and
+# failed regardless of what the server did (found 2026-08-05; the route's
+# heartbeat turn was fine, the harness was not).
+hb_file=$(mktemp)
+timeout 90 curl -sN "${BASE}/api/chat" -X POST \
   -H 'Content-Type: application/json' \
   -d "{
     \"choomId\":\"${CHOOM_ID}\",
@@ -457,11 +464,12 @@ hb_response=$(timeout 90 curl -sN "${BASE}/api/chat" -X POST \
     \"message\":\"Just confirm you are online. Say: heartbeat OK\",
     \"settings\":{},
     \"isHeartbeat\":true
-  }" 2>/dev/null) || hb_response=""
+  }" > "$hb_file" 2>/dev/null || true
 
 curl -sf "${BASE}/api/chats/${chat_id}" -X DELETE >/dev/null 2>&1 || true
 
-hb_content=$(extract_content "$hb_response")
+hb_content=$(extract_content "$hb_file")
+rm -f "$hb_file"
 if [ ${#hb_content} -gt 0 ]; then
   run_test "Heartbeat request completed successfully" "pass"
 else
