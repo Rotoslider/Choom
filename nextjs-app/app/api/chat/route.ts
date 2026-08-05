@@ -21,6 +21,7 @@ import {
 import { ProjectService } from '@/lib/project-service';
 import type { LLMProviderConfig, LLMModelProfile } from '@/lib/types';
 import { findLLMProfile } from '@/lib/model-profiles';
+import { getLiveContextWindow } from '@/lib/model-metadata';
 import { allTools, getAllToolsFromSkills, useSkillDispatch } from '@/lib/tool-definitions';
 import { loadCoreSkills, loadCustomSkills } from '@/lib/skill-loader';
 import { getSkillRegistry } from '@/lib/skill-registry';
@@ -960,21 +961,38 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
     // HERE, BEFORE the compaction budget below — otherwise cross-turn compaction
     // would budget against the wrong (global) context and overflow a small model.
     // Mirrors the guard at "Profile application:" so behavior matches the API-call path.
+    // Resolved once here; the later "Profile application" block reuses it so a
+    // stale static profile can never overwrite the live endpoint's answer.
+    let resolvedCtxWindow: number | null = null;
     {
       const _globalModel = (clientLLMSettings as Record<string, unknown>)?.model as string || defaultLLMSettings.model;
-      const _ctxProfile = findLLMProfile(llmSettings.model, (settings?.modelProfiles as LLMModelProfile[]) || []);
-      if (_ctxProfile?.contextLength !== undefined) {
+      const _userProfiles = (settings?.modelProfiles as LLMModelProfile[]) || [];
+      const _ctxProfile = findLLMProfile(llmSettings.model, _userProfiles);
+      // Window authority, most to least trusted:
+      //   1. a user profile with the EXACT model id — the explicit override lever
+      //   2. the serving endpoint's live answer (LM Studio loaded_context_length /
+      //      OpenRouter context_length) — static profiles went stale on 12 of 33
+      //      models in the 2026-08-05 audit, so the endpoint is asked first
+      //   3. the static profile (built-in or normalized-matched user profile)
+      const _userExactCtx = _userProfiles.find(p => p.modelId === llmSettings.model)?.contextLength;
+      const _liveCtx = _userExactCtx === undefined
+        ? await getLiveContextWindow(llmSettings.model, llmSettings.endpoint)
+        : null;
+      const _window = _userExactCtx ?? _liveCtx ?? _ctxProfile?.contextLength;
+      const _windowSrc = _userExactCtx !== undefined ? 'user profile' : _liveCtx ? 'live endpoint' : 'static profile';
+      if (_window !== undefined && _window !== null) {
+        resolvedCtxWindow = _window;
         if (llmSettings.model !== _globalModel) {
-          llmSettings.contextLength = _ctxProfile.contextLength;
-          console.log(`   📏 ${choom.name} per-model context: ${llmSettings.model} → ${llmSettings.contextLength.toLocaleString()} (profile override of global)`);
-        } else if ((llmSettings.contextLength || 0) > _ctxProfile.contextLength) {
+          llmSettings.contextLength = _window;
+          console.log(`   📏 ${choom.name} per-model context: ${llmSettings.model} → ${_window.toLocaleString()} (${_windowSrc})`);
+        } else if ((llmSettings.contextLength || 0) > _window) {
           // Clamp (C-53): when the resolved model IS the global default, the
-          // client's store contextLength is used as-is — and the store default
-          // (262,144) can exceed the model's real window (gemma: 128k). A very
-          // long chat would then blow past the model's context before
-          // compaction ever triggers. Never budget beyond the profile window.
-          console.log(`   📏 ${choom.name} context clamp: client ${llmSettings.contextLength?.toLocaleString()} > profile window ${_ctxProfile.contextLength.toLocaleString()} for ${llmSettings.model} — clamping`);
-          llmSettings.contextLength = _ctxProfile.contextLength;
+          // client's store contextLength is used as-is — and it can exceed the
+          // model's real window. A very long chat would then blow past the
+          // model's context (the server silently drops oldest messages) before
+          // compaction ever triggers. Never budget beyond the real window.
+          console.log(`   📏 ${choom.name} context clamp: client ${llmSettings.contextLength?.toLocaleString()} > ${_windowSrc} window ${_window.toLocaleString()} for ${llmSettings.model} — clamping`);
+          llmSettings.contextLength = _window;
         }
       }
     }
@@ -1279,7 +1297,10 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
         if (profile.temperature !== undefined) llmSettings.temperature = profile.temperature;
         if (profile.topP !== undefined) llmSettings.topP = profile.topP;
         if (profile.maxTokens !== undefined) llmSettings.maxTokens = profile.maxTokens;
-        if (profile.contextLength !== undefined) llmSettings.contextLength = profile.contextLength;
+        // Context: the live-endpoint resolution above outranks the static
+        // profile value (which the 2026-08-05 audit caught stale on 12 models).
+        if (resolvedCtxWindow !== null) llmSettings.contextLength = resolvedCtxWindow;
+        else if (profile.contextLength !== undefined) llmSettings.contextLength = profile.contextLength;
         if (profile.frequencyPenalty !== undefined) llmSettings.frequencyPenalty = profile.frequencyPenalty;
         if (profile.presencePenalty !== undefined) llmSettings.presencePenalty = profile.presencePenalty;
         if (profile.topK !== undefined) llmSettings.topK = profile.topK;

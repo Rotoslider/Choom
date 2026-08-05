@@ -36,7 +36,7 @@ export const BUILTIN_LLM_PROFILES: LLMModelProfile[] = [
     temperature: 0.6,
     topP: 0.95,
     maxTokens: 4096,
-    contextLength: 131072,
+    contextLength: 1048576,
   },
   {
     modelId: 'deepseek-ai/deepseek-v4-flash',
@@ -45,7 +45,7 @@ export const BUILTIN_LLM_PROFILES: LLMModelProfile[] = [
     temperature: 0.6,
     topP: 0.95,
     maxTokens: 4096,
-    contextLength: 131072,
+    contextLength: 1048576,
   },
   {
     modelId: 'moonshotai/kimi-k2.6',
@@ -54,7 +54,7 @@ export const BUILTIN_LLM_PROFILES: LLMModelProfile[] = [
     temperature: 0.7,
     topP: 0.9,
     maxTokens: 4096,
-    contextLength: 131072,
+    contextLength: 262144,
   },
   {
     modelId: 'moonshotai/kimi-k2-instruct',
@@ -113,7 +113,7 @@ export const BUILTIN_LLM_PROFILES: LLMModelProfile[] = [
     temperature: 0.7,
     topP: 0.9,
     maxTokens: 4096,
-    contextLength: 131072,
+    contextLength: 202752,
     topK: 20,
   },
   {
@@ -123,7 +123,7 @@ export const BUILTIN_LLM_PROFILES: LLMModelProfile[] = [
     temperature: 0.6,
     topP: 0.95,
     maxTokens: 4096,
-    contextLength: 131072,
+    contextLength: 163840,
   },
   {
     modelId: 'z-ai/glm-5.1',
@@ -132,7 +132,7 @@ export const BUILTIN_LLM_PROFILES: LLMModelProfile[] = [
     temperature: 0.7,
     topP: 0.9,
     maxTokens: 4096,
-    contextLength: 131072,
+    contextLength: 204800,
     topK: 20,
   },
   {
@@ -192,7 +192,7 @@ export const BUILTIN_LLM_PROFILES: LLMModelProfile[] = [
     temperature: 0.7,
     topP: 0.9,
     maxTokens: 4096,
-    contextLength: 131072,
+    contextLength: 204800,
   },
   {
     modelId: 'minimaxai/minimax-m2.5',
@@ -201,7 +201,7 @@ export const BUILTIN_LLM_PROFILES: LLMModelProfile[] = [
     temperature: 0.7,
     topP: 0.9,
     maxTokens: 4096,
-    contextLength: 131072,
+    contextLength: 204800,
   },
   {
     modelId: 'minimaxai/minimax-m2.1',
@@ -210,7 +210,7 @@ export const BUILTIN_LLM_PROFILES: LLMModelProfile[] = [
     temperature: 0.7,
     topP: 0.9,
     maxTokens: 4096,
-    contextLength: 131072,
+    contextLength: 204800,
   },
   {
     modelId: 'stepfun-ai/step-3.5-flash',
@@ -219,7 +219,7 @@ export const BUILTIN_LLM_PROFILES: LLMModelProfile[] = [
     temperature: 0.7,
     topP: 0.9,
     maxTokens: 4096,
-    contextLength: 131072,
+    contextLength: 262144,
   },
   {
     modelId: 'meta/llama-3.1-405b-instruct',
@@ -256,7 +256,7 @@ export const BUILTIN_LLM_PROFILES: LLMModelProfile[] = [
     temperature: 0.7,
     topP: 0.95,
     maxTokens: 4096,
-    contextLength: 128000,
+    contextLength: 262144,
     topK: 40,
     repetitionPenalty: 1.0,
     enableThinking: false,
@@ -268,7 +268,7 @@ export const BUILTIN_LLM_PROFILES: LLMModelProfile[] = [
     temperature: 0.7,
     topP: 0.95,
     maxTokens: 4096,
-    contextLength: 128000,
+    contextLength: 262144,
     topK: 40,
     repetitionPenalty: 1.0,
     enableThinking: false,
@@ -483,7 +483,7 @@ export const BUILTIN_VISION_PROFILES: VisionModelProfile[] = [
  * "gemma-4-31b-it" — exact match misses, so the model fell through to the
  * store-default 262,144 contextLength when gemma's real window is 128k.
  */
-function normalizeModelId(modelId: string): string {
+export function normalizeModelId(modelId: string): string {
   let s = (modelId.split('/').pop() || modelId).toLowerCase();
   // Strip trailing variant markers, repeatedly ("…-it-qat" → base name).
   const VARIANT_SUFFIX =

@@ -17,20 +17,24 @@ describe('findLLMProfile', () => {
   test('exact match still wins', () => {
     const p = findLLMProfile('gemma-4-31b-it');
     expect(p).not.toBeNull();
-    expect(p!.contextLength).toBe(128000);
+    // 262,144 = gemma-4's real native window (the original 128,000 was a
+    // gemma-3-era guess — caught by the 2026-08-05 live audit). The window a
+    // LOCAL load actually has comes from LM Studio's loaded_context_length
+    // via lib/model-metadata, which outranks this static value.
+    expect(p!.contextLength).toBe(262144);
   });
 
   test('the -qat serving variant resolves the gemma profile (the Aloy case)', () => {
     const p = findLLMProfile('google/gemma-4-31b-qat');
     expect(p).not.toBeNull();
     expect(p!.modelId).toBe('gemma-4-31b-it');
-    expect(p!.contextLength).toBe(128000);
+    expect(p!.contextLength).toBe(262144);
   });
 
   test('org-prefixed variant of an unprefixed profile resolves', () => {
     const p = findLLMProfile('google/gemma-4-26b-a4b-it');
     expect(p).not.toBeNull();
-    expect(p!.contextLength).toBe(128000);
+    expect(p!.contextLength).toBe(262144);
   });
 
   test('unknown models still return null (no false matches)', () => {
