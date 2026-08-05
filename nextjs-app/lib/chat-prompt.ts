@@ -138,7 +138,14 @@ When presenting search results:
 - If multiple sources agree, synthesize the information rather than repeating it`;
 
     // Add choomDecides instructions if enabled for either mode
-    const choomImageSettings = choom.imageSettings ? JSON.parse(choom.imageSettings) : null;
+    // Guarded parse: one malformed value in this DB column would otherwise
+    // throw on EVERY turn for this Choom until the row is hand-fixed. The
+    // route's own imageSettings parse (settings-hierarchy log) is already
+    // defensive — mirror it.
+    let choomImageSettings: { selfPortrait?: { choomDecides?: boolean }; general?: { choomDecides?: boolean } } | null = null;
+    try {
+      choomImageSettings = choom.imageSettings ? JSON.parse(choom.imageSettings) : null;
+    } catch { /* malformed imageSettings — skip choomDecides block */ }
     let finalSystemPrompt = systemPrompt;
     if (choomImageSettings?.selfPortrait?.choomDecides || choomImageSettings?.general?.choomDecides) {
       finalSystemPrompt += `\n\n## IMAGE SIZE/ASPECT AUTONOMY\nWhen generating images, you should pick the most appropriate size and aspect ratio for the content. For example:
