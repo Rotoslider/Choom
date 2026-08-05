@@ -8,10 +8,16 @@ import path from 'path';
 
 describe('Agentic Loop Guards', () => {
   const routePath = path.join(__dirname, '..', 'app', 'api', 'chat', 'route.ts');
+  // C-22 POST split: the agentic loop lives in lib/agentic-loop.ts and the
+  // stream body in lib/chat-stream.ts — grep the concatenation.
+  const chatStreamPath = path.join(__dirname, '..', 'lib', 'chat-stream.ts');
+  const agenticLoopPath = path.join(__dirname, '..', 'lib', 'agentic-loop.ts');
   let routeContent: string;
 
   beforeAll(() => {
-    routeContent = readFileSync(routePath, 'utf-8');
+    routeContent = readFileSync(routePath, 'utf-8')
+      + readFileSync(chatStreamPath, 'utf-8')
+      + readFileSync(agenticLoopPath, 'utf-8');
   });
 
   describe('Consecutive Failure Counter', () => {
