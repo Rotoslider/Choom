@@ -101,18 +101,25 @@ async function main() {
     }
   };
 
-  const MODES = ['P0', 'P1', 'P2', 'P3', 'P4'];
-  const score: Record<string, { hit: number; any: number; n: number; tok: number }> = {};
-  for (const m of MODES) score[m] = { hit: 0, any: 0, n: 0, tok: 0 };
+  // EXP_MODES lets a rerun target specific placements (e.g. "P0" to redo the
+  // cold-prefill mode alone at CONC=1 after its first-run calls timed out
+  // under contention while P1-P4 rode P0's KV cache — the exact bias that made
+  // run #1's P0 look 2x worse than it is).
+  const MODES = (process.env.EXP_MODES || 'P0,P1,P2,P3,P4').split(',');
+  const score: Record<string, { hit: number; any: number; n: number; tok: number; err: number }> = {};
+  for (const m of MODES) score[m] = { hit: 0, any: 0, n: 0, tok: 0, err: 0 };
   const perTool: Record<string, Record<string, [number, number]>> = {};
 
   const jobs = cases.flatMap(c => Array.from({ length: TRIALS }, () => c));
-  console.log(`model=${MODEL}  cases=${cases.length} x ${TRIALS} trials  (tool-demanding turns only)\n`);
+  console.log(`model=${MODEL}  cases=${cases.length} x ${TRIALS} trials  modes=${MODES.join(',')}  (tool-demanding turns only)\n`);
 
   await mapLimit(jobs, CONC, async (c) => {
     const want = new Set([c.firstTool, ...c.allTools]);
     for (const m of MODES) {
       const r = await post(build(c, m), tools);
+      // Errors (timeouts, HTTP failures) are not model decisions — track them
+      // separately and keep them OUT of the correct/called-any denominators.
+      if (r.err) { score[m].err++; continue; }
       score[m].n++; score[m].tok += r.tok;
       if (r.calls.length) score[m].any++;
       const hit = r.calls.some(x => want.has(x));
@@ -128,10 +135,11 @@ async function main() {
     P0: 'system prompt only (production)', P1: 'appended to final user turn',
     P2: 'separate last user message', P3: 'ONLY at the end', P4: 'names the likely tool',
   };
-  console.log('  mode  placement                        correct   called-any   avg tok');
+  console.log('  mode  placement                        correct   called-any   avg tok   errors');
   for (const m of MODES) {
     const v = score[m];
-    console.log(`  ${m}    ${NAME[m].padEnd(32)} ${(100 * v.hit / v.n).toFixed(1).padStart(5)}%   ${(100 * v.any / v.n).toFixed(1).padStart(5)}%   ${Math.round(v.tok / v.n)}`);
+    const pct = (x: number) => v.n ? (100 * x / v.n).toFixed(1).padStart(5) : '  n/a';
+    console.log(`  ${m}    ${NAME[m].padEnd(32)} ${pct(v.hit)}%   ${pct(v.any)}%   ${v.n ? Math.round(v.tok / v.n) : 0}   ${v.err}`);
   }
   console.log('\n  per-tool correct (hit/total):');
   for (const [t, m] of Object.entries(perTool)) {
