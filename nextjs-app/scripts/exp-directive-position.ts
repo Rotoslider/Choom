@@ -30,7 +30,10 @@
 import { getAllToolsFromSkills } from '../lib/tool-definitions';
 import * as fs from 'fs';
 
-const CASES = '/tmp/claude-1000/-home-nuc1-projects-misc-freecad-mcp/7fe77c43-9c75-4fe0-aad8-cf7687b2a7a7/scratchpad/cases_v3.json';
+// Durable path — v1 of this file lived in a session /tmp scratchpad and was
+// lost with it, blocking the rerun (C-33). Regenerate with the same shape from
+// Message.toolCalls in the chat DB if it's ever lost again.
+const CASES = process.env.EXP_CASES || 'data/experiments/cases_v3.json';
 const TRIALS = Number(process.env.EXP_TRIALS || 2);
 const CONC = Number(process.env.EXP_CONC || 2);
 const MODEL = process.env.EXP_MODEL || 'qwen/qwen3.6-35b-a3b';
