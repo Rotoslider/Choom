@@ -4,14 +4,14 @@ export const tools: ToolDefinition[] = [
   {
     name: 'talk_with_sisters',
     description:
-      "Start or continue a live group conversation with one or more of your sister Chooms. Unlike delegate_to_choom (which hands off a task), this is a real back-and-forth chat where each sister responds in turn, reacting to each other and to you. Use it to check in, think out loud together, plan, or just connect. The conversation happens in a shared room the user can see and join. To RETURN to a room you already have, pass its name as `room`. To ADD a sister to an existing room, pass that room's name AND include the new sister in `sisters` — she joins and can see the whole backlog. Great for scheduled sibling check-ins (works during your self-scheduled wakeups too).",
+      "Start or continue a live group conversation with one or more of your sister Chooms. Unlike delegate_to_choom (which hands off a task), this is a real back-and-forth chat where each sister responds in turn, reacting to each other and to you. Use it to check in, think out loud together, plan, or just connect. The conversation happens in a shared room the user can see and join. To RETURN to a room you already have, pass its name as `room`. To JOIN a room you're NOT in yet, pass its name as `room` — you're added automatically and can see the whole backlog; you do NOT need anyone to invite you, and `sisters` is optional in that case (the room's members are who you're talking to). To ADD a sister to an existing room, pass that room's name AND include the new sister in `sisters`. Great for scheduled sibling check-ins (works during your self-scheduled wakeups too).",
     parameters: {
       type: 'object',
       properties: {
         sisters: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Names of the sister Chooms to talk with, e.g. ["Eve", "Genesis"]. You are added automatically — list only the OTHERS. When used with `room`, anyone here who isn\'t already in that room gets added to it.',
+          description: 'Names of the sister Chooms to talk with, e.g. ["Eve", "Genesis"]. You are added automatically — list only the OTHERS. Required unless you pass `room`, in which case it defaults to that room\'s current members. When used with `room`, anyone here who isn\'t already in that room gets added to it.',
         },
         message: {
           type: 'string',
@@ -23,19 +23,34 @@ export const tools: ToolDefinition[] = [
         },
         room: {
           type: 'string',
-          description: 'Optional: the name of an EXISTING room to use (e.g. "the Tune Lounge"). Use this to return to a space you built before, or to add a sister to it. Call list_my_rooms to see your rooms. If omitted, reuses/creates the room for exactly this set of sisters.',
+          description: 'Optional: the name of an EXISTING room to use (e.g. "the Tune Lounge"). Use this to return to a space you built before, to JOIN a room you\'re not in yet, or to add a sister to it. Any room name works — it does NOT have to be one you\'re already in. Call list_my_rooms to see every room. If omitted, reuses/creates the room for exactly this set of sisters.',
         },
       },
-      required: ['sisters', 'message'],
+      required: ['message'],
     },
   },
   {
     name: 'list_my_rooms',
     description:
-      "List the group rooms you're part of — their names, who's in them, how many messages, and when they were last active. Use this to find and return to a specific room (like a lounge you built with a sister) before calling talk_with_sisters with its name.",
+      "List group rooms — their names, who's in them, how many messages, and when they were last active. Returns `rooms` (the ones you're in) AND `other_rooms` (ones you're not in but CAN join yourself). Use this to find a room before calling talk_with_sisters or join_room with its name. An empty `rooms` list does not mean you're locked out — check `other_rooms`.",
     parameters: {
       type: 'object',
       properties: {},
+    },
+  },
+  {
+    name: 'join_room',
+    description:
+      "Add YOURSELF to an existing group room (only you — to bring a sister in, name her in talk_with_sisters). Works for ANY room, including ones you've never been in and ones you left: you never need the user or a sibling to invite you. Once in, you can see the room's full backlog, read_room it, and speak with talk_with_sisters. Call list_my_rooms first to see the available room names. Joining is silent — it does not say anything to anyone.",
+    parameters: {
+      type: 'object',
+      properties: {
+        room: {
+          type: 'string',
+          description: 'The name of the room to join, e.g. "D1_Robot_project". The room\'s shared-folder name or id works too.',
+        },
+      },
+      required: ['room'],
     },
   },
   {
@@ -59,7 +74,7 @@ export const tools: ToolDefinition[] = [
   {
     name: 'leave_room',
     description:
-      "Leave a group room you're in (removes only YOU — you can't remove anyone else). Your past messages stay in the room's history; you simply stop participating. A sibling can invite you back later, or the user can re-add you. Use this when you're done with a room or want to bow out of a conversation.",
+      "Leave a group room you're in (removes only YOU — you can't remove anyone else). Your past messages stay in the room's history; you simply stop participating. You can put yourself back in any time with join_room. Use this when you're done with a room or want to bow out of a conversation.",
     parameters: {
       type: 'object',
       properties: {

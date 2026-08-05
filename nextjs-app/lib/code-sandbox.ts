@@ -5,10 +5,12 @@
  */
 
 import { exec } from 'child_process';
+import { existsSync, readdirSync } from 'fs';
 import { writeFile, unlink, access } from 'fs/promises';
 import path from 'path';
 import { randomBytes } from 'crypto';
 import { markGpuBusy, markGpuFree } from './gpu-lock';
+import { buildSandboxEnv } from './sandbox-env';
 
 interface ExecutionResult {
   success: boolean;
@@ -94,6 +96,23 @@ export class CodeSandbox {
     if (!resolved.startsWith(this.workspaceRoot)) {
       throw new Error(`Path traversal blocked: "${projectFolder}" resolves outside workspace`);
     }
+    // C-54: a nonexistent cwd used to surface as a bare spawn ENOENT with
+    // EMPTY stdout/stderr in 3ms — Lissa read two of those in a row as "the
+    // workspace environment is completely non-functional" (17-iteration live
+    // incident). Name the real problem and the real folders instead.
+    if (!existsSync(resolved)) {
+      let folders: string[] = [];
+      try {
+        folders = readdirSync(this.workspaceRoot, { withFileTypes: true })
+          .filter(d => d.isDirectory() && !d.name.startsWith('.'))
+          .map(d => d.name).sort();
+      } catch { /* workspace root itself missing — the generic error below still helps */ }
+      throw new Error(
+        `Project folder "${projectFolder}" doesn't exist — don't guess folder names. ` +
+        `Folders that exist: ${folders.join(', ') || '(none yet)'}. ` +
+        `Use one of those, or create yours first with workspace_create_folder.`
+      );
+    }
     return resolved;
   }
 
@@ -153,7 +172,8 @@ export class CodeSandbox {
         timeout,
         maxBuffer: MAX_OUTPUT_BYTES * 2,
         shell: '/bin/bash',
-        env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
+        // C-48: deny-by-default env — the shell must not hold API keys.
+        env: buildSandboxEnv({ PYTHONDONTWRITEBYTECODE: '1' }),
       }, (error, stdout, stderr) => {
         if (isLongRunning && !isBackgroundGpu) markGpuFree();
         // Background GPU commands: don't release here — the process is still running.
@@ -167,7 +187,15 @@ export class CodeSandbox {
         const durationMs = Date.now() - start;
         const timedOut = error?.killed === true;
         const stdoutResult = this.truncateOutput(stdout || '');
-        const stderrResult = this.truncateOutput(stderr || '');
+        // A spawn-level failure (shell/cwd unavailable) produces NO stderr —
+        // an empty result that reads as a broken environment (C-54). Say what
+        // actually happened so the model doesn't have to guess. Spawn errors
+        // carry a STRING code ('ENOENT'); ordinary nonzero exits are numeric
+        // and keep whatever the command printed.
+        const stderrText = (error && typeof error.code === 'string' && !stderr && !stdout)
+          ? `spawn failed before the command ran (${error.code}): ${error.message}`
+          : (stderr || '');
+        const stderrResult = this.truncateOutput(stderrText);
 
         resolve({
           success: !error,
@@ -196,13 +224,19 @@ export class CodeSandbox {
       const venvPython = await this.findVenvPython(projectDir);
       const pythonBin = venvPython || 'python3';
 
-      return new Promise<ExecutionResult>((resolve) => {
+      // `return await` is load-bearing: a bare `return promise` inside
+      // try/finally runs the finally as soon as the promise is RETURNED,
+      // not when it settles — so the finally below unlinked the temp file
+      // ~1ms after spawn and python lost the race with
+      // "can't open file ... [Errno 2]". Intermittent, machine-load
+      // dependent, and it looked like a model error in the traces.
+      return await new Promise<ExecutionResult>((resolve) => {
         exec(`"${pythonBin}" "${tempFile}"`, {
           cwd: projectDir,
           timeout,
           maxBuffer: MAX_OUTPUT_BYTES * 2,
           shell: '/bin/bash',
-          env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
+          env: buildSandboxEnv({ PYTHONDONTWRITEBYTECODE: '1' }),
         }, (error, stdout, stderr) => {
           const durationMs = Date.now() - start;
           const timedOut = error?.killed === true;
@@ -235,12 +269,15 @@ export class CodeSandbox {
     try {
       await writeFile(tempFile, code, 'utf-8');
 
-      return new Promise<ExecutionResult>((resolve) => {
+      // `return await` — see executePython: without it the finally unlinks
+      // the temp file before node can open it.
+      return await new Promise<ExecutionResult>((resolve) => {
         exec(`node "${tempFile}"`, {
           cwd: projectDir,
           timeout,
           maxBuffer: MAX_OUTPUT_BYTES * 2,
           shell: '/bin/bash',
+          env: buildSandboxEnv(),
         }, (error, stdout, stderr) => {
           const durationMs = Date.now() - start;
           const timedOut = error?.killed === true;

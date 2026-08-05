@@ -97,30 +97,70 @@ export function tryRepairJSON(raw: string | undefined): Record<string, unknown> 
  */
 export function createThinkFilter(): (text: string) => string {
   let inThinkBlock = false;
+  // Tag fragment held across chunk boundaries. Without this, a '</think>'
+  // split across chunks while inside a block never matches, the filter stays
+  // inBlock forever, and every following token is swallowed — the same
+  // failure class as the split '</tool_call>' bug in the XML filter.
+  let carry = '';
+
+  const OPEN = '<think>';
+  const CLOSE = '</think>';
+
+  // Length of the longest suffix of `s` that is a strict prefix of a tag.
+  const partialTagSuffix = (s: string): number => {
+    const maxLen = Math.min(s.length, CLOSE.length - 1);
+    for (let len = maxLen; len > 0; len--) {
+      const tail = s.slice(s.length - len);
+      if (OPEN.startsWith(tail) || CLOSE.startsWith(tail)) return len;
+    }
+    return 0;
+  };
 
   return function filter(text: string): string {
-    if (!text) return '';
+    if (!text && !carry) return '';
+    text = carry + (text || '');
+    carry = '';
     let result = '';
     let pos = 0;
 
     while (pos < text.length) {
       if (inThinkBlock) {
-        const closeIdx = text.indexOf('</think>', pos);
+        const closeIdx = text.indexOf(CLOSE, pos);
         if (closeIdx !== -1) {
           inThinkBlock = false;
-          pos = closeIdx + 8; // '</think>'.length
+          pos = closeIdx + CLOSE.length;
         } else {
-          break; // rest is inside think block — discard
+          // Rest is inside the think block — discard, but hold a trailing
+          // partial '</think>' so a close tag split across chunks still
+          // terminates the block on the next call.
+          carry = text.slice(text.length - partialTagSuffix(text.slice(pos)));
+          return result;
         }
       } else {
-        const openIdx = text.indexOf('<think>', pos);
+        const openIdx = text.indexOf(OPEN, pos);
+        const strayCloseIdx = text.indexOf(CLOSE, pos);
+        // Unpaired '</think>' with no opening tag: qwen's chat template
+        // consumes the opening tag, so the close can arrive alone. Drop the
+        // tag itself, keep the text around it — a leaked tag defeats the
+        // exact-match dedup layers and ends up spoken by TTS (C-43).
+        if (strayCloseIdx !== -1 && (openIdx === -1 || strayCloseIdx < openIdx)) {
+          result += text.slice(pos, strayCloseIdx);
+          pos = strayCloseIdx + CLOSE.length;
+          continue;
+        }
         if (openIdx !== -1) {
           result += text.slice(pos, openIdx);
           inThinkBlock = true;
-          pos = openIdx + 7; // '<think>'.length
+          pos = openIdx + OPEN.length;
         } else {
-          result += text.slice(pos);
-          break;
+          let rest = text.slice(pos);
+          const held = partialTagSuffix(rest);
+          if (held > 0) {
+            carry = rest.slice(rest.length - held);
+            rest = rest.slice(0, rest.length - held);
+          }
+          result += rest;
+          return result;
         }
       }
     }

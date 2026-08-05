@@ -35,7 +35,7 @@ export const tools: ToolDefinition[] = [
         },
         player: {
           type: 'string',
-          description: 'Player name or ID to play on (e.g. "Home Assistant Voice", "living room"). If omitted, uses the first available player.',
+          description: 'Player name or ID. OMIT THIS unless the user named a specific speaker — the default player is used automatically. Never invent a name; call music_players first if you need the real list.',
         },
         enqueue: {
           type: 'string',
@@ -59,7 +59,7 @@ export const tools: ToolDefinition[] = [
         },
         player: {
           type: 'string',
-          description: 'Player name or ID. If omitted, uses the first available player.',
+          description: 'Player name or ID. OMIT THIS unless the user named a specific speaker. Never invent a name; call music_players to see real ones.',
         },
         value: {
           type: 'number',
@@ -77,7 +77,7 @@ export const tools: ToolDefinition[] = [
       properties: {
         player: {
           type: 'string',
-          description: 'Player name or ID. If omitted, returns info for all players.',
+          description: 'Player name or ID. OMIT THIS to cover all players. Never invent a name; call music_players to see real ones.',
         },
       },
     },

@@ -19,7 +19,7 @@ export const tools: ToolDefinition[] = [
       properties: {
         list_name: {
           type: 'string',
-          description: 'Name of the task list (e.g. "groceries", "hardware store", "to do")',
+          description: 'Name of the task list (e.g. "Groceries", "To Do", "Truck build")',
         },
       },
       required: ['list_name'],
@@ -34,7 +34,7 @@ export const tools: ToolDefinition[] = [
       properties: {
         list_name: {
           type: 'string',
-          description: 'Name of the task list (e.g. "groceries", "hardware store", "to do")',
+          description: 'Name of the task list (e.g. "Groceries", "To Do", "Truck build")',
         },
         item_title: {
           type: 'string',
@@ -57,7 +57,7 @@ export const tools: ToolDefinition[] = [
       properties: {
         list_name: {
           type: 'string',
-          description: 'Name of the task list (e.g. "groceries", "hardware store", "to do")',
+          description: 'Name of the task list (e.g. "Groceries", "To Do", "Truck build")',
         },
         item_title: {
           type: 'string',

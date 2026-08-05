@@ -80,8 +80,25 @@ async function resolvePlayer(nameOrId?: string): Promise<{ player_id: string; na
     return playerResult(players[0]);
   }
 
+  // The model invents speaker names it has never seen — "living_room",
+  // "living room", "media_player.living_room" account for most failures here,
+  // and none of them fuzzy-match the real devices. Hard-failing wastes the turn
+  // over a parameter that was optional in the first place.
+  //
+  // If exactly one REAL speaker is available (browser/web players are not
+  // speakers — they are whatever tab happens to be open), fall back to it and
+  // say so, rather than erroring. The user asked for music; play music.
+  const isBrowser = (p: Record<string, unknown>) =>
+    /\b(web|browser|firefox|chrome|safari)\b/i.test(String(p.display_name || p.name || '')) ||
+    String(p.provider || '').toLowerCase().includes('builtin');
+  const realSpeakers = players.filter(p => p.available && !isBrowser(p));
+  if (realSpeakers.length === 1) {
+    console.log(`   🎵 Player "${nameOrId}" not found — falling back to the only real speaker: ${realSpeakers[0].display_name || realSpeakers[0].name}`);
+    return playerResult(realSpeakers[0]);
+  }
+
   const names = players.map(p => `${p.display_name || p.name} (${p.player_id})`).join(', ');
-  throw new Error(`Player "${nameOrId}" not found. Available: ${names}`);
+  throw new Error(`Player "${nameOrId}" not found. Available: ${names}. Omit the player parameter to use the default.`);
 }
 
 export default class MusicAssistantHandler extends BaseSkillHandler {

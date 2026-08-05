@@ -305,8 +305,29 @@ export async function executeMemoryTool(
 
     case 'update_memory': {
       const memoryId = args.memory_id as string;
+      // Do not send her away to another tool for an id we can fetch ourselves.
+      // update_memory sat at 51% failure — 12x "memory_id is required" plus 6x
+      // called with no arguments at all — and both errors just said "go call
+      // search_memories first", which costs an iteration and is often ignored.
+      // Put the candidate ids IN the error so she can retry immediately.
       if (!memoryId || memoryId.trim().length === 0) {
-        return { success: false, reason: 'memory_id is required. Call search_memories or get_recent_memories first to find the ID of the memory you want to update.' };
+        let candidates = '';
+        try {
+          const recent = await client.getRecent(8, companionId) as unknown;
+          const list = Array.isArray(recent) ? recent : (recent as { data?: unknown[] })?.data;
+          if (Array.isArray(list) && list.length) {
+            candidates = '\n\nYour most recent memories — use one of these exact ids:\n' + list.slice(0, 8).map((m) => {
+              const r = m as Record<string, unknown>;
+              const id = String(r.id ?? r.memory_id ?? '');
+              const title = String(r.title ?? '').slice(0, 60);
+              return `  ${id}  ${title}`;
+            }).join('\n');
+          }
+        } catch { /* fall back to the plain message */ }
+        return {
+          success: false,
+          reason: `memory_id is required.${candidates || ' Call get_recent_memories or search_memories to find the id.'}`,
+        };
       }
       const result = await client.update(memoryId, {
         title: args.title as string,
@@ -318,7 +339,20 @@ export async function executeMemoryTool(
       if (result && typeof result === 'object' && 'success' in result && !(result as { success: boolean }).success) {
         const reason = (result as { reason?: string }).reason || '';
         if (reason.toLowerCase().includes('not found')) {
-          return { success: false, reason: `Memory "${memoryId}" not found. This ID may be incorrect — call search_memories to find valid IDs, or use remember to create a new memory instead.` };
+          let candidates = '';
+          try {
+            const recent = await client.getRecent(8, companionId) as unknown;
+            const list = Array.isArray(recent) ? recent : (recent as { data?: unknown[] })?.data;
+            if (Array.isArray(list) && list.length) {
+              candidates = '\n\nYour most recent memories — use one of these exact ids:\n' + list.slice(0, 8).map((m) => {
+                const r = m as Record<string, unknown>;
+                return `  ${String(r.id ?? r.memory_id ?? '')}  ${String(r.title ?? '').slice(0, 60)}`;
+              }).join('\n');
+            }
+          } catch { /* fall back */ }
+          // The trailing sentence gets its own line: run it onto the last list
+          // row and a 35B model reads it as part of that memory's title.
+          return { success: false, reason: `Memory "${memoryId}" not found — the id is wrong.${candidates || '\n\nCall search_memories to find valid ids.'}\n\nIf none of these is the one you meant, use remember to create a new memory instead.` };
         }
       }
       return result;

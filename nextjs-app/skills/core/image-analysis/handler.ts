@@ -145,6 +145,35 @@ export default class ImageAnalysisHandler extends BaseSkillHandler {
         model: result.model,
       });
     } catch (err) {
+      const raw = err instanceof Error ? err.message : 'Unknown error';
+
+      // Never dead-end on a wrong filename. analyze_image was 90 of the 309
+      // "not found, no list, no way to find one" errors in the trace corpus:
+      // the Choom names an image that does not exist, gets a bare ENOENT,
+      // retries the same fantasy path and burns the per-tool cap. In one real
+      // case the file was "chant_shadow_afternoon.png" and she asked for
+      // "chants_..." — one character off, unrecoverable without a listing.
+      // workspace_read_file already solves this; do the same here.
+      // Shared with route.ts's own copy of analyze_image — see
+      // formatImageNotFoundError. Two implementations of this tool exist and
+      // only this one used to list the directory (C-50).
+      if (/ENOENT|no such file/i.test(raw)) {
+        const wanted = (toolCall.arguments?.image_path as string) || '';
+        const { formatImageNotFoundError } = await import('../../../lib/dir-suggest');
+        const friendly = await formatImageNotFoundError(wanted);
+        if (friendly) {
+          console.log(`   🖼️  ${wanted} not found — auto-listed nearest directory`);
+          return this.error(toolCall, friendly);
+        }
+      }
+
+      // "fetch failed" = the vision endpoint is unreachable, not a bad request.
+      // Say so, so she stops rewording the prompt and reports the real problem.
+      if (/fetch failed|ECONNREFUSED|ETIMEDOUT/i.test(raw)) {
+        return this.error(toolCall,
+          `Vision service unreachable (${raw}). This is an availability problem, not a bad request — retrying with a different prompt or path will not help. Tell Donny the vision endpoint is down.`);
+      }
+
       console.error('   ❌ Vision error:', err instanceof Error ? err.message : err);
       return this.error(toolCall, `Vision analysis failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
     }

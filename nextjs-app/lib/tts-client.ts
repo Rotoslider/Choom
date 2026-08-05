@@ -13,6 +13,8 @@ export class StreamingTTS {
   private speed: number;
   private buffer: string = '';
   private audioQueue: QueueEntry[] = [];
+  // Bumped by reset()/stop(); closures capture it so stale queued work self-cancels.
+  private generation: number = 0;
   private isPlaying: boolean = false;
   private onSpeakingChange?: (isSpeaking: boolean) => void;
   private onAudioReady?: (audioBase64: string, audioElement: HTMLAudioElement) => boolean;
@@ -158,7 +160,12 @@ export class StreamingTTS {
     this.fullText = '';
     this.insideThinking = false;
     this.insideCodeBlock = false;
-    // Cancel pending TTS requests so queued-but-unsent sentences from previous iteration are dropped
+    // Drop queued-but-unsent sentences from the previous iteration.
+    // Reassigning ttsQueue alone does NOT do this — continuations already
+    // chained on the old promise still run (C-44: a loop-generating iteration
+    // queued ~a minute of speech that kept playing straight through the
+    // reset). The generation bump is what actually cancels them.
+    this.generation++;
     this.audioQueue = [];
     this.ttsQueue = Promise.resolve();
   }
@@ -173,23 +180,29 @@ export class StreamingTTS {
     }
 
     // Clear queue and state
+    this.generation++; // cancels continuations still chained on the old ttsQueue
     this.audioQueue = [];
     this.buffer = '';
     this.isPlaying = false;
     this.insideThinking = false;
     this.insideCodeBlock = false;
     this.fullText = '';
-    this.ttsQueue = Promise.resolve(); // Cancel pending TTS requests
+    this.ttsQueue = Promise.resolve();
     this.onSpeakingChange?.(false);
   }
 
   private sendToTTS(text: string) {
-    // Chain each TTS request so they execute one at a time (server can't handle concurrency)
-    this.ttsQueue = this.ttsQueue.then(() => this.doSendToTTS(text)).catch(() => {});
+    // Chain each TTS request so they execute one at a time (server can't
+    // handle concurrency). Capture the generation at enqueue time: reset()/
+    // stop() bump it, and a stale closure must do nothing — the old chain
+    // itself cannot be cancelled once .then() has attached to it.
+    const gen = this.generation;
+    this.ttsQueue = this.ttsQueue.then(() => this.doSendToTTS(text, gen)).catch(() => {});
   }
 
-  private async doSendToTTS(text: string) {
+  private async doSendToTTS(text: string, gen: number) {
     if (this.isMuted) return;
+    if (gen !== this.generation) return; // superseded by reset()/stop()
 
     const startTime = Date.now();
     log.ttsRequest(text, this.voiceId);
@@ -233,6 +246,10 @@ export class StreamingTTS {
         audio.onerror = () => resolve();
         audio.load();
       });
+
+      // The fetch + decode above take seconds; a reset()/stop() may have
+      // landed mid-flight. Never surface audio from a stale generation.
+      if (gen !== this.generation) return;
 
       // If onAudioReady is set AND returns true, it handled the audio (live mode).
       // Otherwise, queue for normal playback.

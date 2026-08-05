@@ -75,3 +75,65 @@ describe('recoverable error classification', () => {
     });
   });
 });
+
+/**
+ * Fine-grained error classes (C-09). Before these existed, ~58% of all failed
+ * calls aggregated in the doctor's report as an unactionable "other"
+ * (other: 1298 across all reports) — which hid, among other things, the C-01
+ * template crash entirely. Every string below is VERBATIM from data/traces.
+ *
+ * These classes refine the LABEL only. The paired behavior assertions pin that
+ * refining a label never changes what counts toward the failure cap or blocks
+ * a tool.
+ */
+describe('fine-grained error classes (C-09)', () => {
+  const classOf = (e: string, tool = 'some_tool') =>
+    classifyToolError(tool, e).errorClass;
+
+  test.each([
+    ['rate_limit', 'Web search failed: Brave Search error: 429'],
+    ['upstream_5xx', 'Home Assistant error: HA API 500: 500 Internal Server Error\n\nServer got itself in trouble'],
+    ['upstream_5xx', 'Music Assistant API error (500): Internal server error'],
+    ['upstream_4xx', 'Weather fetch failed: Weather API error: 404'],
+    ['upstream_4xx', 'Web search failed: Brave Search error: 422'],
+    ['upstream_4xx', 'Failed read_document: Docs API error (404): {\n  "error": {\n    "code": 404,\n    "message": "Requested entity was not found.",\n    "status": "NOT_FOUND"\n  }\n}'],
+    ['network', 'Vision analysis failed: fetch failed'],
+    ['network', 'Delegation to "Genesis" — could not connect to chat API within 30s'],
+    ['timeout', 'ForgeRAG request failed: The operation was aborted due to timeout'],
+    ['auth', 'Weather API error: 401 — OPENWEATHER_API_KEY is missing, invalid, or not yet active'],
+    ['auth', 'Calendar fetch failed: Calendar API error (403): Request had insufficient authentication scopes.'],
+    ['template', "LLM API error 400: System message must be at the beginning. raise_exception('System message must be at the beginning.')"],
+    ['permission_block', 'Blocked: choom_commons/ is a shared folder — never delete from it. If an entry is wrong, write a correction instead.'],
+    ['permission_block', "Blocked: cannot write into another Choom's folder (selfies_optic/). Your folder is selfies_aloy/."],
+    ['blocked_reissue', 'workspace_write_file has been disabled for this request because it failed repeatedly. Do NOT call workspace_write_file again. Tell the user what went wrong and suggest alternatives.'],
+    ['blocked_reissue', 'STOP. You have already called get_delegation_result with these exact arguments 5 times in this request.'],
+    ['blocked_reissue', 'Weather API error: 404 [This exact call already failed. Try a different approach or different arguments.]'],
+  ] as const)('classifies as %s: %s', (expected, err) => {
+    expect(classOf(err)).toBe(expected);
+  });
+
+  test('coarse classes are unchanged for errors that already had a name', () => {
+    expect(classOf('GPU is busy with another generation')).toBe('gpu_busy');
+    expect(classOf('workspace_write_file: path is required. Provide a relative file path')).toBe('param');
+    expect(classOf("ENOENT: no such file or directory, open '/tmp/x.png'")).toBe('path');
+    expect(classOf('Ollama is not configured for this Choom')).toBe('config');
+  });
+
+  test('relabeling must not change cap/blocking behavior', () => {
+    // auth (was config's "unauthorized" bucket) still blocks immediately…
+    expect(classifyToolError('t', 'Gmail API error: unauthorized').blockImmediately).toBe(true);
+    // …but a 401 that never matched CONFIG_ERROR still does NOT block (it
+    // counted toward the cap before, and must keep doing exactly that).
+    const weather401 = classifyToolError('t',
+      'Weather API error: 401 — OPENWEATHER_API_KEY is missing, invalid, or not yet active');
+    expect(weather401.blockImmediately).toBe(false);
+    expect(weather401.recoverable).toBe(false);
+    // permission_block keeps its recoverable-never-counts semantics
+    expect(classifyToolError('workspace_delete_file',
+      'Blocked: sibling_journal/ is archived').recoverable).toBe(true);
+  });
+
+  test('"Memory not found" is NOT mislabeled as an upstream 404', () => {
+    expect(classOf('Memory not found')).not.toBe('upstream_4xx');
+  });
+});

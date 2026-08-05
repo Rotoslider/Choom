@@ -1,12 +1,12 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FileText, RefreshCw, Pause, Play, Stethoscope, Music, Copy, Check } from 'lucide-react';
+import { FileText, RefreshCw, Pause, Play, Stethoscope, Music, Copy, Check, Terminal } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 
 type LogLevel = 'ALL' | 'DEBUG' | 'INFO' | 'WARNING' | 'ERROR';
-type LogSource = 'live' | 'doctor' | 'youtube';
+type LogSource = 'agent' | 'live' | 'doctor' | 'youtube';
 
 interface LiveLogResponse {
   path: string;
@@ -93,6 +93,201 @@ function CopyButton({ text }: { text: string }) {
       {copied ? <Check className="h-4 w-4 mr-1" /> : <Copy className="h-4 w-4 mr-1" />}
       {copied ? 'Copied' : 'Copy'}
     </Button>
+  );
+}
+
+// ====================================================================
+// AGENT CONSOLE — the dev server's own journal (what the terminal showed)
+// ====================================================================
+type AgentMode = 'agent' | 'highlights' | 'all';
+
+interface AgentLogLine {
+  ts: string;
+  source: string;
+  text: string;
+  cat: string;
+}
+
+interface AgentLogResponse {
+  unit?: string;
+  exists?: boolean;
+  total_in_window?: number;
+  lines?: AgentLogLine[];
+  message?: string;
+  error?: string;
+}
+
+// Same categories the API assigns from the line's emoji marker. The whole
+// point of this view: the terminal highlights, readable, without word-wrap.
+const CAT_CLASS: Record<string, string> = {
+  phantom: 'text-red-500 font-semibold',
+  error: 'text-red-400',
+  repeat: 'text-amber-500',
+  nudge: 'text-amber-400',
+  force: 'text-sky-400',
+  diag: 'text-purple-400',
+  salvage: 'text-teal-400',
+  tokens: 'text-muted-foreground',
+  image: 'text-pink-400',
+  ok: 'text-green-500',
+  media: 'text-cyan-600',
+  setup: 'text-muted-foreground',
+};
+
+function AgentConsole() {
+  const [resp, setResp] = useState<AgentLogResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [mode, setMode] = useState<AgentMode>('agent');
+  const [search, setSearch] = useState('');
+  const [limit, setLimit] = useState(400);
+  const [stickToBottom, setStickToBottom] = useState(true);
+  const scrollerRef = useRef<HTMLDivElement | null>(null);
+
+  const fetchLog = useCallback(
+    async (silent = false) => {
+      if (!silent) setRefreshing(true);
+      try {
+        const params = new URLSearchParams({ limit: String(limit), mode });
+        if (search) params.set('q', search);
+        const res = await fetch(`/api/server-log?${params}`, { cache: 'no-store' });
+        if (res.ok) setResp(await res.json());
+        else setResp({ error: `HTTP ${res.status}` });
+      } catch (err) {
+        setResp({ error: err instanceof Error ? err.message : 'fetch failed' });
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    },
+    [mode, search, limit],
+  );
+
+  useEffect(() => { fetchLog(); }, [fetchLog]);
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const id = setInterval(() => fetchLog(true), 4_000);
+    return () => clearInterval(id);
+  }, [autoRefresh, fetchLog]);
+
+  useEffect(() => {
+    if (!stickToBottom) return;
+    const el = scrollerRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [resp, stickToBottom]);
+
+  const onScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    setStickToBottom(el.scrollHeight - el.clientHeight - el.scrollTop < 40);
+  };
+
+  const allText = useMemo(
+    () => (resp?.lines || []).map((l) => `${l.ts.slice(11, 19)} ${l.text}`).join('\n'),
+    [resp],
+  );
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <p className="text-xs text-muted-foreground font-mono">
+          journalctl --user -u {resp?.unit || 'choom-dev'}
+        </p>
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            variant={autoRefresh ? 'default' : 'outline'}
+            onClick={() => setAutoRefresh((v) => !v)}
+            title={autoRefresh ? 'Pause auto-refresh' : 'Resume auto-refresh'}
+          >
+            {autoRefresh ? <Pause className="h-4 w-4 mr-1" /> : <Play className="h-4 w-4 mr-1" />}
+            {autoRefresh ? 'Live' : 'Paused'}
+          </Button>
+          {resp?.lines?.length ? <CopyButton text={allText} /> : null}
+          <Button size="sm" variant="ghost" onClick={() => fetchLog()} disabled={refreshing}>
+            <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
+          </Button>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex gap-1">
+          {([
+            ['agent', 'Agent'],
+            ['highlights', 'Highlights'],
+            ['all', 'Everything'],
+          ] as Array<[AgentMode, string]>).map(([m, label]) => (
+            <Button
+              key={m}
+              size="sm"
+              variant={mode === m ? 'default' : 'outline'}
+              onClick={() => setMode(m)}
+              className="h-7 px-2 text-xs"
+              title={
+                m === 'agent'
+                  ? 'Loop decisions only: nudges, phantom recovery, forced tools, errors'
+                  : m === 'highlights'
+                    ? 'All marker lines, incl. TTS/STT and turn setup'
+                    : 'Raw console, HTTP logs and all'
+              }
+            >
+              {label}
+            </Button>
+          ))}
+        </div>
+        <Input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Filter (e.g. [Genesis], Fabrication, generate_image)"
+          className="h-7 text-xs flex-1 min-w-[180px]"
+        />
+        <select
+          value={limit}
+          onChange={(e) => setLimit(Number(e.target.value))}
+          className="h-7 px-2 text-xs rounded border bg-background"
+          aria-label="Line limit"
+        >
+          <option value={200}>200 lines</option>
+          <option value={400}>400 lines</option>
+          <option value={1000}>1000 lines</option>
+          <option value={2000}>2000 lines</option>
+        </select>
+      </div>
+
+      {loading ? (
+        <p className="text-sm text-muted-foreground">Loading…</p>
+      ) : resp?.error ? (
+        <div className="text-sm text-red-500 p-3 border border-red-500/40 rounded">Error: {resp.error}</div>
+      ) : resp?.exists === false ? (
+        <div className="text-sm text-muted-foreground italic p-3 border rounded">{resp?.message}</div>
+      ) : (
+        <>
+          <div
+            ref={scrollerRef}
+            onScroll={onScroll}
+            className="font-mono text-[11px] leading-snug border rounded bg-muted/20 p-2 overflow-auto select-text"
+            style={{ height: '55vh', userSelect: 'text' }}
+          >
+            {resp?.lines && resp.lines.length > 0 ? (
+              // whitespace-pre + no wrap: long lines scroll horizontally
+              // instead of folding into the unreadable mush the user reported.
+              resp.lines.map((l, i) => (
+                <div key={i} className={`whitespace-pre ${CAT_CLASS[l.cat] || 'text-foreground'}`}>
+                  <span className="text-muted-foreground/60 select-none">{l.ts.slice(11, 19)} </span>
+                  {l.text}
+                </div>
+              ))
+            ) : (
+              <p className="text-muted-foreground italic">No lines match the current filter.</p>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Showing {resp?.lines?.length ?? 0} of {resp?.total_in_window ?? 0} matching lines
+            {!stickToBottom ? ' · auto-scroll paused (scroll to bottom to resume)' : ''}
+          </p>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -474,7 +669,7 @@ function YouTubeReports() {
 // MAIN: Logs hub with sub-tabs
 // ====================================================================
 export function BridgeLogSettings() {
-  const [source, setSource] = useState<LogSource>('live');
+  const [source, setSource] = useState<LogSource>('agent');
 
   return (
     <div className="space-y-4">
@@ -484,12 +679,24 @@ export function BridgeLogSettings() {
           Logs
         </h3>
         <p className="text-sm text-muted-foreground mt-1">
-          Live bridge log, nightly doctor reports, and YouTube downloader history. All views are
-          selectable — drag-highlight and Ctrl+C, or use the Copy button to grab the whole thing.
+          Agent console (the dev server&apos;s terminal output), live bridge log, nightly doctor
+          reports, and YouTube downloader history. All views are selectable — drag-highlight and
+          Ctrl+C, or use the Copy button to grab the whole thing.
         </p>
       </div>
 
       <div className="flex gap-1 border-b">
+        <button
+          onClick={() => setSource('agent')}
+          className={`px-3 py-2 text-sm flex items-center gap-1.5 border-b-2 -mb-px transition-colors ${
+            source === 'agent'
+              ? 'border-primary text-primary font-medium'
+              : 'border-transparent text-muted-foreground hover:text-foreground'
+          }`}
+        >
+          <Terminal className="h-4 w-4" />
+          Agent Console
+        </button>
         <button
           onClick={() => setSource('live')}
           className={`px-3 py-2 text-sm flex items-center gap-1.5 border-b-2 -mb-px transition-colors ${
@@ -525,6 +732,7 @@ export function BridgeLogSettings() {
         </button>
       </div>
 
+      {source === 'agent' && <AgentConsole />}
       {source === 'live' && <LiveBridgeLog />}
       {source === 'doctor' && <DoctorReports />}
       {source === 'youtube' && <YouTubeReports />}

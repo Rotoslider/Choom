@@ -19,12 +19,16 @@ import type { LLMSettings, ToolDefinition } from '../lib/types';
 // ─── Helpers ───────────────────────────────────────────────────────────
 
 const routePath = path.join(__dirname, '..', 'app', 'api', 'chat', 'route.ts');
+// Tool execution (executeToolCall + the image-gen lock) was carved out of
+// route.ts into its own module (C-22).
+const toolExecPath = path.join(__dirname, '..', 'lib', 'tool-execution.ts');
 const delegationHandlerPath = path.join(__dirname, '..', 'skills', 'core', 'choom-delegation', 'handler.ts');
 const pagePath = path.join(__dirname, '..', 'app', 'page.tsx');
 const typesPath = path.join(__dirname, '..', 'lib', 'types.ts');
 const logFilterPath = path.join(__dirname, '..', 'scripts', 'log-filter.js');
 
 let routeContent: string;
+let toolExecContent: string;
 let delegationContent: string;
 let pageContent: string;
 let typesContent: string;
@@ -32,6 +36,7 @@ let logFilterContent: string;
 
 beforeAll(() => {
   routeContent = readFileSync(routePath, 'utf-8');
+  toolExecContent = readFileSync(toolExecPath, 'utf-8');
   delegationContent = readFileSync(delegationHandlerPath, 'utf-8');
   pageContent = readFileSync(pagePath, 'utf-8');
   typesContent = readFileSync(typesPath, 'utf-8');
@@ -359,12 +364,15 @@ describe('6. Task Continuation Nudge (Loop Break Fix)', () => {
   });
 
   test('continuation nudge uses tool_choice=required', () => {
-    // After the planning detection, forceToolCall should be set
-    const nudgeBlock = routeContent.slice(
-      routeContent.indexOf('Task continuation nudge'),
-      routeContent.indexOf('Task continuation nudge') + 800
-    );
-    expect(nudgeBlock).toContain('forceToolCall = true');
+    // C-15: this used to slice a fixed 800 chars after the log line, so it
+    // broke the moment anything was inserted into the block (the C-46
+    // fabrication handling did it). Anchor on the block's real end — the
+    // `continue` that restarts the loop — instead of a magic byte count.
+    const start = routeContent.indexOf('Task continuation nudge');
+    expect(start).toBeGreaterThan(-1);
+    const end = routeContent.indexOf('continue;', start);
+    expect(end).toBeGreaterThan(start);
+    expect(routeContent.slice(start, end)).toContain('forceToolCall = true');
   });
 
   test('continuation nudge message tells model to call tool directly', () => {
@@ -525,7 +533,14 @@ describe('11. Delegation Not Broken by Changes', () => {
   });
 
   test('delegation gets its own wall-clock timeout (300s)', () => {
-    expect(routeContent).toContain('isDelegation ? 300000 : 180000');
+    // C-15/C-18: the literal 'isDelegation ? 300000 : 180000' stopped
+    // matching when group rooms added '|| isGroupTurn' to the same
+    // condition (bb18861) — the behaviour was always correct, the test was
+    // asserting one exact spelling of it, and had been failing ever since.
+    // Assert the invariant: the default turn timeout is chosen by
+    // isDelegation, giving 300000 to delegation and 180000 otherwise.
+    const m = routeContent.match(/DEFAULT_TIMEOUT_MS\s*=\s*\(?[^;]*isDelegation[^;]*\?\s*300000\s*:\s*180000/);
+    expect(m).not.toBeNull();
   });
 
   test('delegation iteration limit is preserved', () => {
@@ -542,7 +557,7 @@ describe('11. Delegation Not Broken by Changes', () => {
 
 describe('12. Heartbeat and Cron Job Safety', () => {
   test('image generation uses a GPU lock (serialized)', () => {
-    expect(routeContent).toContain('withImageGenLock');
+    expect(toolExecContent).toContain('withImageGenLock');
   });
 
   test('suppressNotifications flag exists for heartbeats', () => {
@@ -862,7 +877,7 @@ describe('Edge Case: Concurrent Heartbeat + User Chat', () => {
   });
 
   test('image gen lock serializes GPU access across requests', () => {
-    expect(routeContent).toContain('withImageGenLock');
+    expect(toolExecContent).toContain('withImageGenLock');
   });
 
   test('each request gets its own agentic loop state', () => {

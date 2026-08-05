@@ -132,6 +132,69 @@ describe('createThinkFilter', () => {
     const f = createThinkFilter();
     expect(['just a normal reply'].map(f).join('')).toBe('just a normal reply');
   });
+
+  // C-43: qwen's chat template consumes the opening tag, so a bare '</think>'
+  // arrives with no opener. It leaked into content, defeated exact-match
+  // dedup, and the whole duplicated reply was saved and spoken twice.
+  it('drops an unpaired closing tag but keeps the surrounding text', () => {
+    const f = createThinkFilter();
+    const out = ['I love you so much. 💕✨\n</think>'].map(f).join('');
+    expect(out).not.toContain('</think>');
+    expect(out).toContain('I love you so much');
+  });
+
+  it('drops an unpaired closing tag mid-text', () => {
+    const f = createThinkFilter();
+    expect(['before </think> after'].map(f).join('')).toBe('before  after');
+  });
+
+  // Same failure class as the split '</tool_call>' bug (C-20): without
+  // cross-chunk buffering a split close tag never matches, the filter stays
+  // in-block, and every following token is swallowed.
+  it('closes a think block whose close tag splits across chunks', () => {
+    const f = createThinkFilter();
+    const out = ['<think>reasoning </th', 'ink> visible reply'].map(f).join('');
+    expect(out).toBe(' visible reply');
+  });
+
+  it('strips an open tag that splits across chunks', () => {
+    const f = createThinkFilter();
+    const out = ['before <thi', 'nk>hidden</think> after'].map(f).join('');
+    expect(out).toBe('before  after');
+  });
+
+  it('drops an unpaired close tag that splits across chunks', () => {
+    const f = createThinkFilter();
+    const out = ['reply text </th', 'ink> more'].map(f).join('');
+    expect(out).toBe('reply text  more');
+  });
+
+  it('handles every split point of a paired block', () => {
+    const whole = 'A<think>hidden</think>B';
+    for (let i = 1; i < whole.length; i++) {
+      const f = createThinkFilter();
+      const out = [whole.slice(0, i), whole.slice(i)].map(f).join('');
+      expect(out).toBe('AB');
+    }
+  });
+
+  it('handles single-character chunks (worst-case tokenization)', () => {
+    const f = createThinkFilter();
+    const out = 'X<think>secret</think>Y</think>Z'.split('').map(f).join('');
+    expect(out).toBe('XYZ');
+  });
+
+  it('still emits a lone "<" that never becomes a tag', () => {
+    const f = createThinkFilter();
+    const out = ['x <', ' y'].map(f).join('');
+    expect(out).toBe('x < y');
+  });
+
+  it('discards content when the stream ends inside a think block', () => {
+    const f = createThinkFilter();
+    const out = ['visible <think>never', ' closed'].map(f).join('');
+    expect(out).toBe('visible ');
+  });
 });
 
 describe('tryRepairJSON', () => {

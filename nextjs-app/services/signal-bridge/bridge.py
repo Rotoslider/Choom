@@ -1185,6 +1185,10 @@ class SignalBridge:
                     spoken_paragraphs = [paragraphs[-1]]
                 tts_text = '\n\n'.join(spoken_paragraphs)
 
+                # Strip markdown IMAGE refs entirely — the alt text of a
+                # generated image is the full diffusion prompt (C-44). Must
+                # run before the link rule below, which would keep the alt.
+                tts_text = re.sub(r'!\[[^\]]*\]\([^)]*\)', '', tts_text)
                 # Strip markdown links for TTS (keep link text, remove URLs)
                 tts_text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', tts_text)
                 # Strip URLs that appear bare in text

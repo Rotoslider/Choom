@@ -245,8 +245,14 @@ export function stripForTTS(text: string): string {
     .replace(/`[^`]+`/g, '')
     // Remove lines that look like code (common programming patterns)
     .replace(/^[\s]*(?:import |from |def |class |function |const |let |var |return |if \(|for \(|while \(|print\(|console\.).+$/gm, '')
-    // Remove markdown image refs ![alt](url) → alt
-    .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
+    // Remove markdown image refs ENTIRELY — for generated images the alt
+    // text is the full diffusion prompt, so keeping it (the old '$1'
+    // behaviour) read entire Flux prompts aloud (C-44). The image renders
+    // in the bubble; speech gets nothing.
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+    // Dangling image markdown cut mid-stream by sentence-splitting — an
+    // unterminated "![alt..." or "![alt](url..." tail must not be spoken.
+    .replace(/!\[[^\]]*(?:\]\([^)]*)?$/, '')
     // Remove markdown links but keep text
     .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
     // Remove entire markdown tables (lines starting/ending with pipes, including separator rows)

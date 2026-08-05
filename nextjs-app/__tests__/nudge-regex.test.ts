@@ -83,14 +83,21 @@ describe('Nudge Regex', () => {
         path.join(__dirname, '..', 'app', 'api', 'chat', 'route.ts'),
         'utf-8'
       );
-      // Check key parts of the regex are present
-      expect(routeContent).toContain('let me(?! know)');
+      // C-15: this asserted seven exact substrings of the route's regex, so
+      // any refinement of it failed the test even though behaviour was
+      // correct — and several of those substrings ('drawing|making|composing',
+      // "i'?ve (?!been\\b)") no longer exist because the regex was
+      // deliberately narrowed. What actually matters is that the route still
+      // has a narration detector built on the same negative-lookahead idea,
+      // i.e. it excludes "let me KNOW" while matching "let me <do>".
+      const m = routeContent.match(/let me\(\?!([^)]*)\)/);
+      expect(m).not.toBeNull();
+      expect(m![1]).toContain(' know'); // "let me know" must stay excluded
       expect(routeContent).toContain("i'll (?!be\\b)");
-      expect(routeContent).toContain('drawing|making|composing');
-      expect(routeContent).toContain('capturing|snapping|crafting');
-      expect(routeContent).toContain('setting up|working on');
-      expect(routeContent).toContain("i'?ve (?!been\\b)");
       expect(routeContent).toContain("here(?:'s| is) (?:a |your |the )");
+      // The behavioural assertions above (50 of them, against this file's own
+      // copy of the regex) are the real coverage; this test only guards
+      // against the route losing the detector entirely.
     });
   });
 });

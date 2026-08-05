@@ -9,6 +9,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import type { ToolErrorClass } from './tool-error-classification';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -18,7 +19,7 @@ export interface ToolCallTrace {
   success: boolean;
   durationMs: number;
   error?: string;
-  errorClass?: 'config' | 'param' | 'path' | 'gpu_busy' | 'no_data' | 'timeout' | 'other';
+  errorClass?: ToolErrorClass;
   iteration: number;
   parallel: boolean;
   cached: boolean;
@@ -66,10 +67,14 @@ export interface ExecutionTrace {
   consecutiveFailuresMax: number;
   forceToolCallUsed: boolean;
 
-  // Token metrics
+  // Token metrics. promptTokens SUMS prompt usage across every LLM call in the
+  // turn — a 3-iteration turn at ~89k/call reports ~267k here, which reads
+  // misleadingly like a single giant prompt. maxPromptTokens is the largest
+  // single call, i.e. what actually went over the wire at once.
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
+  maxPromptTokens: number;
   tokensEstimated: boolean;
 
   // Content metrics
@@ -77,6 +82,21 @@ export interface ExecutionTrace {
 
   // Context management
   compactionTriggered: boolean;
+
+  // Phase timing (C-11): decomposition of durationMs. llmMs is wall time
+  // inside LLM streaming calls (failed calls and fallback attempts included —
+  // the user waited through them); llmPrefillMs is call-start → first SSE
+  // chunk (connection + prompt processing, the dominant cost for big
+  // local-model prompts); toolExecMs sums tool-call durations; prepMs is
+  // request start → first LLM call (prompt build, memory recall, compaction,
+  // planning). durationMs − (prepMs + llmMs + toolExecMs) ≈ streaming/dedup/
+  // persistence overhead. All 0 on traces from before this field existed.
+  llmMs: number;
+  llmPrefillMs: number;
+  llmCalls: number;
+  maxLlmCallMs: number;
+  toolExecMs: number;
+  prepMs: number;
 }
 
 // ── Trace Builder ──────────────────────────────────────────────────────────
@@ -129,9 +149,16 @@ export class TraceBuilder {
       promptTokens: 0,
       completionTokens: 0,
       totalTokens: 0,
+      maxPromptTokens: 0,
       tokensEstimated: false,
       responseLength: 0,
       compactionTriggered: false,
+      llmMs: 0,
+      llmPrefillMs: 0,
+      llmCalls: 0,
+      maxLlmCallMs: 0,
+      toolExecMs: 0,
+      prepMs: 0,
     };
   }
 
@@ -146,7 +173,7 @@ export class TraceBuilder {
   }
 
   /** Record a nudge event */
-  recordNudge(type: 'tool_use' | 'task_continuation' | 'unfinished_steps' | 'forced_tool_choice_ignored' | 'hedge_giveup' | 'gone_quiet' | 'cross_turn_repeat'): void {
+  recordNudge(type: 'tool_use' | 'task_continuation' | 'unfinished_steps' | 'forced_tool_choice_ignored' | 'hedge_giveup' | 'gone_quiet' | 'cross_turn_repeat' | 'phantom_fabrication'): void {
     this.trace.nudgeCount++;
     this.trace.nudgeTypes.push(type);
   }
@@ -228,9 +255,15 @@ export class TraceBuilder {
     durationMs: number;
     promptTokens: number;
     completionTokens: number;
+    maxPromptTokens?: number;
     tokensEstimated: boolean;
     responseLength: number;
     brokenTools: string[];
+    llmMs?: number;
+    llmPrefillMs?: number;
+    llmCalls?: number;
+    maxLlmCallMs?: number;
+    prepMs?: number;
   }): void {
     this.trace.iterations = data.iterations;
     this.trace.status = data.status;
@@ -238,10 +271,19 @@ export class TraceBuilder {
     this.trace.promptTokens = data.promptTokens;
     this.trace.completionTokens = data.completionTokens;
     this.trace.totalTokens = data.promptTokens + data.completionTokens;
+    this.trace.maxPromptTokens = data.maxPromptTokens || 0;
     this.trace.tokensEstimated = data.tokensEstimated;
     this.trace.responseLength = data.responseLength;
     this.trace.brokenTools = data.brokenTools;
     this.trace.consecutiveFailuresMax = this.maxConsecutiveFailures;
+    this.trace.llmMs = data.llmMs || 0;
+    this.trace.llmPrefillMs = data.llmPrefillMs || 0;
+    this.trace.llmCalls = data.llmCalls || 0;
+    this.trace.maxLlmCallMs = data.maxLlmCallMs || 0;
+    this.trace.prepMs = data.prepMs || 0;
+    // Tool execution time is already measured per call — roll it up here so
+    // the doctor doesn't have to re-sum toolCalls for every trace.
+    this.trace.toolExecMs = this.trace.toolCalls.reduce((s, tc) => s + (tc.durationMs || 0), 0);
 
     // Compute unique tools
     const toolSet = new Set(this.trace.toolCalls.map(tc => tc.tool));

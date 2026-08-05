@@ -44,6 +44,21 @@ const PRESETS: Record<string, Partial<LLMProviderConfig>> = {
       'meta/llama-3.3-70b-instruct',
     ],
   },
+  openrouter: {
+    name: 'OpenRouter',
+    type: 'openai',
+    // MUST end in /v1 — the client appends /chat/completions literally.
+    endpoint: 'https://openrouter.ai/api/v1',
+    // OpenRouter model IDs are namespaced (vendor/model). Edit freely or use
+    // "Fetch Models" to pull the live catalog (its /models endpoint is public).
+    models: [
+      'anthropic/claude-3.5-sonnet',
+      'openai/gpt-4o',
+      'google/gemini-2.0-flash-001',
+      'meta-llama/llama-3.3-70b-instruct',
+      'deepseek/deepseek-chat',
+    ],
+  },
   lmstudio: {
     name: 'Local LM Studio',
     type: 'openai',
@@ -138,6 +153,7 @@ export function ProvidersSettings() {
                 <SelectItem value="anthropic">Anthropic (Claude)</SelectItem>
                 <SelectItem value="openai">OpenAI (GPT)</SelectItem>
                 <SelectItem value="nvidia">NVIDIA Build</SelectItem>
+                <SelectItem value="openrouter">OpenRouter</SelectItem>
                 <SelectItem value="custom">Custom (OpenAI-compatible)</SelectItem>
               </SelectContent>
             </Select>

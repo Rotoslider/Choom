@@ -3,6 +3,8 @@ import type { ToolCall, ToolResult } from '@/lib/types';
 import { WorkspaceService } from '@/lib/workspace-service';
 import { WORKSPACE_ROOT } from '@/lib/config';
 import { scrapePage } from '@/lib/playwright-service';
+import { checkOutboundUrl } from '@/lib/outbound-guard';
+import { fenceUntrusted } from '@/lib/untrusted-content';
 const WORKSPACE_MAX_FILE_SIZE_KB = 1024;
 const WORKSPACE_ALLOWED_EXTENSIONS = ['.md', '.txt', '.json', '.py', '.ts', '.tsx', '.js', '.jsx', '.html', '.css', '.csv', '.sh', '.bash', '.yaml', '.yml', '.xml', '.sql', '.toml', '.ini', '.cfg', '.r', '.R', '.ipynb', '.log'];
 const WORKSPACE_IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp'];
@@ -45,6 +47,33 @@ function normalizeFetchUrl(raw: string): string {
   }
 }
 
+// Fetch with browser-like headers, falling back to a minimal UA on 403/406.
+// Both bot-detection realities exist: some hosts 403 a bare request (why the
+// Chrome UA was added in the first place), and some — W3C's CDN, measured
+// live (C-12) — 403 a Chrome UA whose connection doesn't fingerprint like a
+// real Chrome. One retry with a minimal 'Mozilla/5.0' and no Referer converts
+// that whole class of failure into success; everything else is untouched.
+export async function fetchBotFallback(
+  url: string,
+  opts: { timeoutMs: number; accept: string; referer?: string },
+  fetchImpl: typeof fetch = fetch,
+): Promise<Response> {
+  const attempt = (headers: Record<string, string>) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), opts.timeoutMs);
+    return fetchImpl(url, { signal: controller.signal, headers }).finally(() => clearTimeout(timer));
+  };
+  const first = await attempt({
+    'User-Agent': BROWSER_USER_AGENT,
+    'Accept': opts.accept,
+    'Accept-Language': 'en-US,en;q=0.9',
+    ...(opts.referer ? { Referer: opts.referer } : {}),
+  });
+  if (first.status !== 403 && first.status !== 406) return first;
+  console.log(`   🔁 HTTP ${first.status} with browser UA on ${url.slice(0, 80)} — retrying with minimal UA`);
+  return attempt({ 'User-Agent': 'Mozilla/5.0', 'Accept': opts.accept });
+}
+
 export default class WebScrapingHandler extends BaseSkillHandler {
   canHandle(toolName: string): boolean {
     return TOOL_NAMES.has(toolName);
@@ -82,19 +111,15 @@ export default class WebScrapingHandler extends BaseSkillHandler {
       if (!['http:', 'https:'].includes(parsedPageUrl.protocol)) {
         throw new Error('Only http/https URLs are allowed');
       }
+      // C-48: SSRF + per-domain burst cap on every model-chosen URL.
+      const guard = await checkOutboundUrl(pageUrl);
+      if (!guard.allowed) throw new Error(guard.reason!);
 
-      // Fetch the page HTML with browser-like headers
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 30000);
-      const response = await fetch(pageUrl, {
-        signal: controller.signal,
-        headers: {
-          'User-Agent': BROWSER_USER_AGENT,
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.9',
-        },
+      // Fetch the page HTML with browser-like headers (minimal-UA fallback on 403)
+      const response = await fetchBotFallback(pageUrl, {
+        timeoutMs: 30000,
+        accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       });
-      clearTimeout(timeout);
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -219,6 +244,8 @@ export default class WebScrapingHandler extends BaseSkillHandler {
       if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
         throw new Error('Only http/https URLs are allowed');
       }
+      const scrapeGuard = await checkOutboundUrl(url);
+      if (!scrapeGuard.allowed) throw new Error(scrapeGuard.reason!);
 
       console.log(`   🌐 Playwright scraping: ${url}${waitFor ? ` (wait for: ${waitFor})` : ''}`);
 
@@ -231,9 +258,11 @@ export default class WebScrapingHandler extends BaseSkillHandler {
       // Truncate text to avoid blowing up context
       const MAX_TEXT_CHARS = 15_000;
       const truncated = result.text.length > MAX_TEXT_CHARS;
-      const text = truncated
+      const rawScraped = truncated
         ? result.text.slice(0, MAX_TEXT_CHARS) + `\n\n[Truncated — ${result.wordCount} words total, showing first ${MAX_TEXT_CHARS} chars]`
         : result.text;
+      // C-48: scraped page text is untrusted — fence it as DATA.
+      const text = fenceUntrusted(rawScraped, { source: result.url || url, kind: 'web page content' });
 
       console.log(`   ✅ Scraped: "${result.title}" — ${result.wordCount} words, ${result.images.length} images`);
 
@@ -281,25 +310,20 @@ export default class WebScrapingHandler extends BaseSkillHandler {
       } catch {
         throw new Error(`Invalid URL: ${url}`);
       }
+      const imgGuard = await checkOutboundUrl(url);
+      if (!imgGuard.allowed) throw new Error(imgGuard.reason!);
 
       const { sessionFileCount } = ctx;
       if (sessionFileCount.created >= sessionFileCount.maxAllowed) {
         throw new Error(`Session file limit reached (${sessionFileCount.maxAllowed}). Cannot download more files.`);
       }
 
-      // Fetch with timeout and browser-like headers to avoid 403 blocks
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 30000);
-      const response = await fetch(url, {
-        signal: controller.signal,
-        headers: {
-          'User-Agent': BROWSER_USER_AGENT,
-          'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.9',
-          'Referer': parsedUrl.origin + '/',
-        },
+      // Fetch with timeout and browser-like headers (minimal-UA fallback on 403)
+      const response = await fetchBotFallback(url, {
+        timeoutMs: 30000,
+        accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+        referer: parsedUrl.origin + '/',
       });
-      clearTimeout(timeout);
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -384,25 +408,21 @@ export default class WebScrapingHandler extends BaseSkillHandler {
       } catch {
         throw new Error(`Invalid URL: ${url}`);
       }
+      const fileGuard = await checkOutboundUrl(url);
+      if (!fileGuard.allowed) throw new Error(fileGuard.reason!);
 
       const { sessionFileCount } = ctx;
       if (sessionFileCount.created >= sessionFileCount.maxAllowed) {
         throw new Error(`Session file limit reached (${sessionFileCount.maxAllowed}). Cannot download more files.`);
       }
 
-      // Fetch with timeout and browser-like headers
-      const fileController = new AbortController();
-      const timeout = setTimeout(() => fileController.abort(), 60000); // 60s for larger files
-      const response = await fetch(url, {
-        signal: fileController.signal,
-        headers: {
-          'User-Agent': BROWSER_USER_AGENT,
-          'Accept': '*/*',
-          'Accept-Language': 'en-US,en;q=0.9',
-          'Referer': fileParsedUrl.origin + '/',
-        },
+      // Fetch with timeout and browser-like headers (minimal-UA fallback on 403);
+      // 60s for larger files
+      const response = await fetchBotFallback(url, {
+        timeoutMs: 60000,
+        accept: '*/*',
+        referer: fileParsedUrl.origin + '/',
       });
-      clearTimeout(timeout);
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -450,19 +470,15 @@ export default class WebScrapingHandler extends BaseSkillHandler {
     const finalUrl = parsedUrl.href;
     const wasNormalized = finalUrl !== requestedUrl;
 
+    const fetchGuard = await checkOutboundUrl(finalUrl);
+    if (!fetchGuard.allowed) return this.error(toolCall, fetchGuard.reason!);
+
     try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 30000);
-      const response = await fetch(finalUrl, {
-        signal: controller.signal,
-        headers: {
-          'User-Agent': BROWSER_USER_AGENT,
-          'Accept': 'text/plain,text/*,application/json,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.9',
-          'Referer': parsedUrl.origin + '/',
-        },
+      const response = await fetchBotFallback(finalUrl, {
+        timeoutMs: 30000,
+        accept: 'text/plain,text/*,application/json,application/xml;q=0.9,*/*;q=0.8',
+        referer: parsedUrl.origin + '/',
       });
-      clearTimeout(timeout);
 
       if (!response.ok) {
         // Surface the real status so the model can self-correct (wrong path/branch, 404, rate-limit)
@@ -494,9 +510,12 @@ export default class WebScrapingHandler extends BaseSkillHandler {
 
       const fullText = Buffer.from(arrayBuffer).toString('utf-8');
       const truncated = fullText.length > maxChars;
-      const text = truncated
+      const rawText = truncated
         ? fullText.slice(0, maxChars) + `\n\n[Truncated — ${fullText.length} chars total, showing first ${maxChars}. Re-call with a larger max_chars to see more.]`
         : fullText;
+      // C-48: this is arbitrary text from the internet — fence it as DATA and
+      // strip invisible-character smuggling before the model sees it.
+      const text = fenceUntrusted(rawText, { source: finalUrl, kind: 'web page content' });
 
       console.log(`   📄 fetch_url: ${finalUrl}${wasNormalized ? ` (normalized from ${requestedUrl})` : ''} — ${fullText.length} chars, ${contentType}`);
 

@@ -637,12 +637,16 @@ export default function Home() {
                 }
                 break;
               case 'retract_partial':
-                // Primary model sent partial text before timing out and falling back.
-                // Remove the partial text so the fallback model starts clean.
+                // The server is disowning recently-streamed text: a primary
+                // model timed out mid-reply before fallback, or the mid-stream
+                // repetition abort trimmed loop-generated copies. Remove it
+                // from the bubble AND drop queued-but-unspoken speech — the
+                // retracted tail is exactly what's sitting in the TTS queue.
                 if (data.length && fullContent.length >= data.length) {
                   fullContent = fullContent.slice(0, fullContent.length - data.length);
                   setStreamingContent(fullContent);
                 }
+                ttsRef.current?.reset();
                 break;
               case 'tool_call':
                 // Log tool calls to activity log
@@ -684,8 +688,14 @@ export default function Home() {
                 break;
               case 'agent_iteration':
                 log.system(`Agent step ${data.iteration}/${data.maxIterations}`, 'info');
-                // Reset TTS buffer so previous iteration's preamble text isn't spoken again
-                ttsRef.current?.reset();
+                // Do NOT reset TTS here. Iteration-1 text is part of the final
+                // message (the server suppresses duplicate/near-verbatim later
+                // iterations before sending), so queued speech is legitimate.
+                // The old reset here never actually cancelled anything until
+                // the C-44 generation-counter fix made it work — at which point
+                // it cut every multi-iteration reply down to its first
+                // sentence or two (the rest was still queued behind slow TTS).
+                // Junk speech is handled by 'retract_partial' instead.
                 setAgentProgress(prev => ({
                   iteration: data.iteration || 1,
                   maxIterations: data.maxIterations || 10,

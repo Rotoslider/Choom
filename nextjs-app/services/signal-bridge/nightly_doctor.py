@@ -136,6 +136,87 @@ def load_historical_reports(lookback_days: int = 7, anchor_date: Optional[str] =
     return reports
 
 
+# ── Error-class refinement (mirrors lib/tool-error-classification.ts) ────────
+#
+# New traces carry fine-grained errorClass labels from the TS classifier, but
+# the historical corpus only has the coarse set — ~58% of all failures used to
+# aggregate as an unactionable "other" (C-09), and contract-gate blocks were
+# counted as tool failures (C-37). Refine here from the error text so reports
+# over OLD traces are just as sharp as reports over new ones.
+
+BLOCKED_REISSUE_RE = re.compile(
+    r"has been disabled for this request|\[This exact call already failed"
+    r"|^STOP\. You have already called", re.I)
+CONTRACT_BLOCK_RE = re.compile(r"^Blocked: ", re.I)
+AUTH_RE = re.compile(
+    r"\b40[13]\b|unauthorized|forbidden|api key|invalid.*(?:token|credential)"
+    r"|insufficient authentication|authentication (?:failed|required)", re.I)
+RATE_LIMIT_RE = re.compile(
+    r"\b429\b|rate.?limit|too many requests|quota exceeded|resource.?exhausted", re.I)
+TIMEOUT_RE = re.compile(
+    r"\btim(?:ed|e)[ -]?out\b|ETIMEDOUT|aborted due to timeout|deadline exceeded", re.I)
+NETWORK_RE = re.compile(
+    r"fetch failed|ECONNREFUSED|ECONNRESET|ENOTFOUND|EAI_AGAIN|socket hang up"
+    r"|could not connect|connection (?:refused|reset|closed|error)|network error"
+    r"|\bterminated\b", re.I)
+UPSTREAM_5XX_RE = re.compile(
+    r"\b50[0-4]\b|internal server error|bad gateway|service unavailable"
+    r"|gateway time.?out", re.I)
+UPSTREAM_4XX_RE = re.compile(r"\b4\d\d\b")
+TEMPLATE_RE = re.compile(
+    r"system message must be at the beginning|raise_exception"
+    r"|conversation roles must alternate|only user and assistant roles"
+    r"|chat.?template|jinja", re.I)
+
+# Classes the TS classifier emits that need no refinement when present.
+_FINE_CLASSES = {
+    "config", "auth", "param", "gpu_busy", "no_data", "permission_block",
+    "rate_limit", "timeout", "network", "upstream_4xx", "upstream_5xx",
+    "template", "blocked_reissue",
+}
+
+
+def refine_error_class(tc: Dict[str, Any]) -> str:
+    """Fine-grained class for a FAILED tool call, old traces included.
+
+    Trusts fine-grained labels written by new traces; for coarse/missing ones
+    ("other", "path", absent) re-derives from the error text with the same
+    patterns as the TS classifier. "path" needs a second look because old
+    traces lumped contract-gate permission blocks into it.
+    """
+    ec = tc.get("errorClass")
+    err = tc.get("error") or ""
+    if ec in _FINE_CLASSES:
+        return ec
+    # Synthetic loop refusals (disabled tool / repeat-call stop / cached
+    # failure). `blocked` is set on the pre-flight recording path; the text
+    # patterns catch traces from before that flag carried an errorClass.
+    if tc.get("blocked") or BLOCKED_REISSUE_RE.search(err):
+        return "blocked_reissue"
+    if CONTRACT_BLOCK_RE.search(err):
+        return "permission_block"
+    if ec == "path":
+        return "path"
+    if AUTH_RE.search(err):
+        return "auth"
+    if RATE_LIMIT_RE.search(err):
+        return "rate_limit"
+    if TEMPLATE_RE.search(err):
+        return "template"
+    if TIMEOUT_RE.search(err):
+        return "timeout"
+    # Status codes BEFORE transport patterns: "Weather fetch failed: Weather
+    # API error: 404" contains "fetch failed" as wrapper prose — the upstream
+    # status is the actual cause. Bare "fetch failed" stays network.
+    if UPSTREAM_5XX_RE.search(err):
+        return "upstream_5xx"
+    if UPSTREAM_4XX_RE.search(err):
+        return "upstream_4xx"
+    if NETWORK_RE.search(err):
+        return "network"
+    return ec or "other"
+
+
 def _normalize_error(error_msg: str) -> str:
     """Strip volatile bits (paths, IDs, timestamps) from an error message so
     that the same underlying issue clusters together across traces."""
@@ -174,10 +255,15 @@ def analyze_traces(traces: List[Dict[str, Any]]) -> Dict[str, Any]:
     response_lengths = []
     stuck_requests = 0  # requests with 4+ consecutive tool failures
 
-    # Per-tool tracking
-    tool_stats: Dict[str, Dict[str, int]] = {}  # tool_name -> {calls, successes, failures}
-    error_classes: Dict[str, int] = {}  # error_class -> count
+    # Per-tool tracking. "failures" counts REAL failures only: contract-gate
+    # permission blocks (intended protection working, C-37) and re-issues of
+    # already-disabled tools (model behavior, not tool health) are tracked in
+    # their own buckets and excluded from every failure-rate metric.
+    tool_stats: Dict[str, Dict[str, int]] = {}  # tool -> {calls, successes, failures, contract_blocks, reissues}
+    error_classes: Dict[str, int] = {}  # error_class -> count (ALL failed calls, fine-grained)
     broken_tools_seen: Dict[str, int] = {}  # tool_name -> times broken
+    contract_blocks_total = 0
+    reissues_total = 0
 
     # Per-choom tracking
     choom_stats: Dict[str, Dict[str, Any]] = {}  # choom_name -> metrics
@@ -188,15 +274,25 @@ def analyze_traces(traces: List[Dict[str, Any]]) -> Dict[str, Any]:
     failure_signatures: Dict[Tuple[str, str], Dict[str, Any]] = {}
 
     # Per-Choom × per-tool failure matrix
-    # choom_tool_stats[choom][tool] = { calls, failures }
+    # choom_tool_stats[choom][tool] = { calls, failures, excluded }
+    # ("excluded" = contract blocks + reissues, removed from rate denominators)
     choom_tool_stats: Dict[str, Dict[str, Dict[str, int]]] = defaultdict(
-        lambda: defaultdict(lambda: {"calls": 0, "failures": 0})
+        lambda: defaultdict(lambda: {"calls": 0, "failures": 0, "excluded": 0})
     )
 
     # Worst-trace tracking (kept as tuples of (metric_value, trace_ref))
     worst_by_iterations: Optional[Tuple[int, Dict[str, Any]]] = None
     worst_by_duration: Optional[Tuple[int, Dict[str, Any]]] = None
     worst_by_failures: Optional[Tuple[int, Dict[str, Any]]] = None
+    worst_by_prompt: Optional[Tuple[int, Dict[str, Any]]] = None
+    worst_by_llm_call: Optional[Tuple[int, Dict[str, Any]]] = None
+
+    # Phase-timing rollup (C-11) over traces that carry the new fields.
+    # "A 2-iteration request should not take 17 minutes" — this says where the
+    # minutes actually go: LLM prefill/decode vs tool execution vs prep vs
+    # unaccounted overhead.
+    phase_totals = {"llm_ms": 0, "prefill_ms": 0, "tool_ms": 0,
+                    "prep_ms": 0, "duration_ms": 0, "covered": 0}
 
     fallback_count = 0
     compaction_count = 0
@@ -248,49 +344,71 @@ def analyze_traces(traces: List[Dict[str, Any]]) -> Dict[str, Any]:
                                "total_iterations": 0, "nudges": 0, "errors": 0}
         choom_stats[cn]["requests"] += 1
         choom_stats[cn]["tool_calls"] += tc_count
-        choom_stats[cn]["failures"] += tc_fail
         choom_stats[cn]["total_iterations"] += iterations
         choom_stats[cn]["nudges"] += t.get("nudgeCount", 0)
         if status == "error":
             choom_stats[cn]["errors"] += 1
 
         # Per-tool stats
+        real_failures_this_trace = 0
         for tc in t.get("toolCalls", []):
             tool = tc.get("tool", "unknown")
             if tool not in tool_stats:
-                tool_stats[tool] = {"calls": 0, "successes": 0, "failures": 0}
+                tool_stats[tool] = {"calls": 0, "successes": 0, "failures": 0,
+                                    "contract_blocks": 0, "reissues": 0}
             tool_stats[tool]["calls"] += 1
             # Per-choom × per-tool tracking
             choom_tool_stats[cn][tool]["calls"] += 1
 
             if tc.get("success"):
                 tool_stats[tool]["successes"] += 1
-            else:
-                tool_stats[tool]["failures"] += 1
-                choom_tool_stats[cn][tool]["failures"] += 1
-                ec = tc.get("errorClass", "other")
-                if ec:
-                    error_classes[ec] = error_classes.get(ec, 0) + 1
+                continue
 
-                # Record failure signature for root-cause drill-in
-                err_raw = tc.get("error") or ""
-                err_norm = _normalize_error(err_raw)
-                sig_key = (tool, err_norm[:180])
-                if sig_key not in failure_signatures:
-                    failure_signatures[sig_key] = {
-                        "count": 0,
-                        "sample_error": err_raw[:200],
-                        "chooms": set(),
-                        "error_class": ec,
-                        "trace_files": [],
-                    }
-                sig = failure_signatures[sig_key]
-                sig["count"] += 1
-                sig["chooms"].add(cn)
-                if len(sig["trace_files"]) < 3:
-                    tf = t.get("_trace_file")
-                    if tf and tf not in sig["trace_files"]:
-                        sig["trace_files"].append(tf)
+            ec = refine_error_class(tc)
+            error_classes[ec] = error_classes.get(ec, 0) + 1
+
+            # Contract-gate blocks are the safety contract WORKING (C-37) and
+            # disabled-tool reissues are the model re-calling a tool the loop
+            # already refused — neither says anything about the tool's health,
+            # so neither may inflate failure rates, problem_tools, or hotspots.
+            if ec == "permission_block":
+                tool_stats[tool]["contract_blocks"] += 1
+                choom_tool_stats[cn][tool]["excluded"] += 1
+                contract_blocks_total += 1
+                continue
+            if ec == "blocked_reissue":
+                tool_stats[tool]["reissues"] += 1
+                choom_tool_stats[cn][tool]["excluded"] += 1
+                reissues_total += 1
+                continue
+
+            tool_stats[tool]["failures"] += 1
+            choom_tool_stats[cn][tool]["failures"] += 1
+            real_failures_this_trace += 1
+
+            # Record failure signature for root-cause drill-in
+            err_raw = tc.get("error") or ""
+            err_norm = _normalize_error(err_raw)
+            sig_key = (tool, err_norm[:180])
+            if sig_key not in failure_signatures:
+                failure_signatures[sig_key] = {
+                    "count": 0,
+                    "sample_error": err_raw[:200],
+                    "chooms": set(),
+                    "error_class": ec,
+                    "trace_files": [],
+                }
+            sig = failure_signatures[sig_key]
+            sig["count"] += 1
+            sig["chooms"].add(cn)
+            if len(sig["trace_files"]) < 3:
+                tf = t.get("_trace_file")
+                if tf and tf not in sig["trace_files"]:
+                    sig["trace_files"].append(tf)
+
+        # Per-Choom failures: real failures only (NOT the trace's raw
+        # toolFailureCount, which still counts blocks and reissues).
+        choom_stats[cn]["failures"] += real_failures_this_trace
 
         # Broken tools
         for bt in t.get("brokenTools", []):
@@ -303,15 +421,44 @@ def analyze_traces(traces: List[Dict[str, Any]]) -> Dict[str, Any]:
             "source": source,
             "iterations": iterations,
             "duration_ms": duration,
-            "failures": tc_fail,
+            "failures": real_failures_this_trace,
             "status": status,
         }
+        # Phase breakdown (attached BEFORE the worst-of comparisons below so
+        # every drill-in pointer carries it). Only new traces have llmMs.
+        llm_ms = t.get("llmMs", 0) or 0
+        if llm_ms > 0:
+            tool_ms = t.get("toolExecMs", 0) or 0
+            prep_ms = t.get("prepMs", 0) or 0
+            prefill_ms = t.get("llmPrefillMs", 0) or 0
+            trace_ref["phases"] = {
+                "llm_s": round(llm_ms / 1000, 1),
+                "prefill_s": round(prefill_ms / 1000, 1),
+                "tools_s": round(tool_ms / 1000, 1),
+                "prep_s": round(prep_ms / 1000, 1),
+                "other_s": round(max(0, duration - llm_ms - tool_ms - prep_ms) / 1000, 1),
+            }
+            phase_totals["llm_ms"] += llm_ms
+            phase_totals["prefill_ms"] += prefill_ms
+            phase_totals["tool_ms"] += tool_ms
+            phase_totals["prep_ms"] += prep_ms
+            phase_totals["duration_ms"] += duration
+            phase_totals["covered"] += 1
+            mlc = t.get("maxLlmCallMs", 0) or 0
+            if mlc > 0 and (worst_by_llm_call is None or mlc > worst_by_llm_call[0]):
+                worst_by_llm_call = (mlc, {**trace_ref, "max_llm_call_ms": mlc})
         if worst_by_iterations is None or iterations > worst_by_iterations[0]:
             worst_by_iterations = (iterations, trace_ref)
         if worst_by_duration is None or duration > worst_by_duration[0]:
             worst_by_duration = (duration, trace_ref)
-        if worst_by_failures is None or tc_fail > worst_by_failures[0]:
-            worst_by_failures = (tc_fail, trace_ref)
+        if worst_by_failures is None or real_failures_this_trace > worst_by_failures[0]:
+            worst_by_failures = (real_failures_this_trace, trace_ref)
+        # Largest single LLM call of the day (C-53): maxPromptTokens is the
+        # biggest per-call prompt, unlike promptTokens which SUMS every call in
+        # the turn and reads misleadingly like one giant prompt.
+        mpt = t.get("maxPromptTokens", 0) or 0
+        if mpt > 0 and (worst_by_prompt is None or mpt > worst_by_prompt[0]):
+            worst_by_prompt = (mpt, {**trace_ref, "max_prompt_tokens": mpt})
 
     # Compute aggregates
     def avg(lst):
@@ -334,20 +481,30 @@ def analyze_traces(traces: List[Dict[str, Any]]) -> Dict[str, Any]:
     # Global, calls-weighted tool success rate. Averaging per-request ratios
     # (the old approach) lets a 1-call request count as much as a 50-call one,
     # which badly skews the headline number. Weight by actual call volume.
+    # Contract blocks and reissues are neither success nor failure — they come
+    # out of the denominator so the rate measures real attempts only.
     total_tool_calls = sum(s["calls"] for s in tool_stats.values())
+    total_excluded = sum(
+        s["contract_blocks"] + s["reissues"] for s in tool_stats.values()
+    )
     total_tool_successes = sum(s["successes"] for s in tool_stats.values())
+    counted_calls = total_tool_calls - total_excluded
     global_success_rate = (
-        round(total_tool_successes / total_tool_calls * 100, 1)
-        if total_tool_calls else 100
+        round(total_tool_successes / counted_calls * 100, 1)
+        if counted_calls else 100
     )
 
-    # Find problematic tools (>30% failure rate with at least 3 calls)
+    # Find problematic tools (>30% REAL failure rate with at least 3 real
+    # attempts). Before the exclusion, workspace_delete_file sat here at "79%
+    # failure" when 33 of its 42 failures were the contract gate refusing
+    # shared-folder deletes — protection working, reported as breakage.
     problem_tools = []
     for tool, stats in tool_stats.items():
-        if stats["calls"] >= 3 and stats["failures"] / stats["calls"] > 0.3:
-            rate = stats["failures"] / stats["calls"] * 100
+        attempts = stats["calls"] - stats["contract_blocks"] - stats["reissues"]
+        if attempts >= 3 and stats["failures"] / attempts > 0.3:
+            rate = stats["failures"] / attempts * 100
             problem_tools.append(
-                f"{tool}: {rate:.0f}% failure ({stats['failures']}/{stats['calls']})"
+                f"{tool}: {rate:.0f}% failure ({stats['failures']}/{attempts})"
             )
 
     # Detect anomalies
@@ -423,12 +580,13 @@ def analyze_traces(traces: List[Dict[str, Any]]) -> Dict[str, Any]:
     choom_tool_hotspots: List[Dict[str, Any]] = []
     for cn, tools_map in choom_tool_stats.items():
         for tool, stats in tools_map.items():
-            if stats["calls"] >= 3 and stats["failures"] / stats["calls"] > 0.30:
-                rate = stats["failures"] / stats["calls"] * 100
+            attempts = stats["calls"] - stats.get("excluded", 0)
+            if attempts >= 3 and stats["failures"] / attempts > 0.30:
+                rate = stats["failures"] / attempts * 100
                 choom_tool_hotspots.append({
                     "choom": cn,
                     "tool": tool,
-                    "calls": stats["calls"],
+                    "calls": attempts,
                     "failures": stats["failures"],
                     "failure_rate": round(rate, 1),
                 })
@@ -451,6 +609,26 @@ def analyze_traces(traces: List[Dict[str, Any]]) -> Dict[str, Any]:
         worst_traces["by_duration"] = worst_by_duration[1]
     if worst_by_failures and worst_by_failures[0] > 0:
         worst_traces["by_failures"] = worst_by_failures[1]
+    if worst_by_prompt:
+        worst_traces["by_prompt_tokens"] = worst_by_prompt[1]
+    if worst_by_llm_call:
+        worst_traces["by_llm_call"] = worst_by_llm_call[1]
+
+    # Latency anomalies (C-11) — only meaningful once traces carry phases.
+    if worst_by_llm_call and worst_by_llm_call[0] > 300_000:
+        w = worst_by_llm_call[1]
+        anomalies.append(
+            f"Slow LLM call: a single call took {worst_by_llm_call[0] / 1000:.0f}s "
+            f"({w['choom']}/{w['source']}) — model wait, not a hang"
+        )
+    if worst_by_duration and worst_by_duration[1].get("phases"):
+        ph = worst_by_duration[1]["phases"]
+        dur_s = worst_by_duration[0] / 1000
+        if dur_s > 120 and ph["other_s"] > dur_s * 0.5:
+            anomalies.append(
+                f"Unaccounted time: {ph['other_s']:.0f}s of the {dur_s:.0f}s worst trace "
+                f"is outside LLM/tools/prep — possible hang between phases"
+            )
 
     # Build report
     report = {
@@ -469,14 +647,36 @@ def analyze_traces(traces: List[Dict[str, Any]]) -> Dict[str, Any]:
             "p95": round(p95(durations_list)),
             "max": max(durations_list) if durations_list else 0,
         },
+        # Where the wall-clock went, across traces that carry phase timing
+        # (C-11). other_ms = streaming/dedup/persistence overhead + anything
+        # unaccounted.
+        "phase_totals": {
+            **phase_totals,
+            "other_ms": max(0, phase_totals["duration_ms"] - phase_totals["llm_ms"]
+                            - phase_totals["tool_ms"] - phase_totals["prep_ms"]),
+        } if phase_totals["covered"] else None,
         "tool_calls": {
             "total": sum(tool_call_counts),
             "avg_per_request": round(avg(tool_call_counts), 1),
             "success_rate": global_success_rate,
         },
+        # Contract-gate blocks reported on their own (C-37): intended
+        # protection, excluded from every failure metric above.
+        "contract_blocks": {
+            "total": contract_blocks_total,
+            "by_tool": {
+                tool: s["contract_blocks"]
+                for tool, s in sorted(
+                    tool_stats.items(), key=lambda x: -x[1]["contract_blocks"]
+                )
+                if s["contract_blocks"] > 0
+            },
+        },
         "tokens": {
             "avg_total": round(avg(token_totals)),
             "total": sum(token_totals),
+            # Largest single-call prompt of the day (0 = only pre-C-53 traces)
+            "max_single_prompt": worst_by_prompt[0] if worst_by_prompt else 0,
         },
         "behavior": {
             "nudges_total": sum(nudge_counts),
@@ -488,6 +688,9 @@ def analyze_traces(traces: List[Dict[str, Any]]) -> Dict[str, Any]:
             "force_tool_count": force_tool_count,
             "plan_mode_count": plan_mode_count,
             "stuck_requests": stuck_requests,
+            # Times the model re-called a tool the loop had already disabled
+            # (or repeated an exact failed call) — a model-behavior signal.
+            "disabled_reissues": reissues_total,
         },
         "error_classes": error_classes,
         "problem_tools": problem_tools,
@@ -634,9 +837,29 @@ def format_report(report: Dict[str, Any]) -> str:
     lines.append(f"  Iterations: avg {iters['avg']}, median {iters['median']}, p95 {iters['p95']}, max {iters['max']}")
     lines.append(f"  Duration: avg {dur['avg']/1000:.1f}s, median {dur['median']/1000:.1f}s, p95 {dur['p95']/1000:.1f}s, max {dur['max']/1000:.1f}s")
 
+    # Phase split (C-11): where the wall-clock went, over traces that carry it
+    pt = report.get("phase_totals")
+    if pt and pt.get("duration_ms"):
+        total = pt["duration_ms"]
+        pct = lambda v: f"{v / total * 100:.0f}%"
+        prefill_share = (f" (prefill {pt['prefill_ms'] / pt['llm_ms'] * 100:.0f}% of it)"
+                         if pt["llm_ms"] else "")
+        lines.append(
+            f"  Time split ({pt['covered']} req): LLM {pct(pt['llm_ms'])}{prefill_share}, "
+            f"tools {pct(pt['tool_ms'])}, prep {pct(pt['prep_ms'])}, other {pct(pt['other_ms'])}"
+        )
+
     # Tools
     tc = report["tool_calls"]
     lines.append(f"\nTools: {tc['total']} calls ({tc['avg_per_request']}/req), {tc['success_rate']}% success")
+
+    # Contract-gate blocks: named separately so protection working never reads
+    # as tool breakage (they are excluded from the failure rates above).
+    cb = report.get("contract_blocks", {})
+    if cb.get("total"):
+        by_tool = cb.get("by_tool", {})
+        top = ", ".join(f"{t}: {n}" for t, n in list(by_tool.items())[:3])
+        lines.append(f"  Contract-gate blocks: {cb['total']} (intended protection, not failures) — {top}")
 
     # Behavior
     beh = report["behavior"]
@@ -651,6 +874,8 @@ def format_report(report: Dict[str, Any]) -> str:
         behavior_parts.append(f"{beh['plan_mode_count']} plan mode")
     if beh.get("stuck_requests", 0) > 0:
         behavior_parts.append(f"{beh['stuck_requests']} stuck")
+    if beh.get("disabled_reissues", 0) > 0:
+        behavior_parts.append(f"{beh['disabled_reissues']} disabled-tool reissues")
     if behavior_parts:
         lines.append(f"  Behavior: {', '.join(behavior_parts)}")
     # Nudge-type breakdown — explains WHY models needed nudging.
@@ -717,13 +942,26 @@ def format_report(report: Dict[str, Any]) -> str:
             )
         if "by_duration" in worst:
             w = worst["by_duration"]
+            ph = w.get("phases")
+            ph_str = (f" [llm {ph['llm_s']:.0f}s (prefill {ph['prefill_s']:.0f}s), tools {ph['tools_s']:.0f}s,"
+                      f" prep {ph['prep_s']:.0f}s, other {ph['other_s']:.0f}s]") if ph else ""
             lines.append(
-                f"  longest ({w['duration_ms']/1000:.0f}s): {w['choom']}/{w['source']} → {w['file']}"
+                f"  longest ({w['duration_ms']/1000:.0f}s){ph_str}: {w['choom']}/{w['source']} → {w['file']}"
             )
         if "by_failures" in worst:
             w = worst["by_failures"]
             lines.append(
                 f"  most fails ({w['failures']}): {w['choom']}/{w['source']} → {w['file']}"
+            )
+        if "by_prompt_tokens" in worst:
+            w = worst["by_prompt_tokens"]
+            lines.append(
+                f"  biggest single prompt ({w['max_prompt_tokens']:,} tok): {w['choom']}/{w['source']} → {w['file']}"
+            )
+        if "by_llm_call" in worst:
+            w = worst["by_llm_call"]
+            lines.append(
+                f"  slowest single LLM call ({w['max_llm_call_ms']/1000:.0f}s): {w['choom']}/{w['source']} → {w['file']}"
             )
 
     # Week-over-week trends (present when run_diagnostics attaches baseline)
