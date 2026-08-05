@@ -66,7 +66,7 @@ nextjs-app/
     usage/page.tsx                  Token usage dashboard (by Choom, model, provider)
     rooms/page.tsx                  Group chat rooms (multi-Choom, turn-based, per-speaker TTS, keep-going)
     api/
-      chat/route.ts                 LLM streaming + agentic tool loop (dedup, nudge, image cap, model profile resolution); tool dispatch lives in lib/tool-execution.ts
+      chat/route.ts                 Chat request prep: settings layering, provider/model + fallback resolution, history + compaction, project detection — then hands the turn to lib/chat-stream.ts
       group-chat/route.ts           Group-room orchestrator (speaker selection, auto-rounds, image auto-save, SSE)
       group-chats/                  Group room CRUD (rooms, participants, messages)
       tts/route.ts                  TTS proxy
@@ -145,6 +145,11 @@ nextjs-app/
     web-search.ts                   Brave / SerpAPI / SearXNG (cascading fallback)
     tool-definitions.ts             LLM tool schemas + skill bridge functions
     tool-execution.ts               Tool dispatch for the chat route: ToolContext, executeToolCall (~40 legacy tools), skill-dispatch wrapper + contractGate, tool-doc builders, image-gen lock
+    chat-stream.ts                  One chat turn over SSE: iteration caps, ToolContext + trace setup, planner phase, finalize (message save, token usage, execution trace)
+    agentic-loop.ts                 The agentic while-loop: LLM streaming w/ three-phase timeouts, fallback chain, tool-call parsing/salvage, nudge ladders, pre-flight guards, parallel/sequential execution
+    chat-context.ts                 Per-turn prompt context blocks: time, weather, HA summary, recent images, growth journal, auto-recalled memories, cross-session awareness
+    chat-prompt.ts                  System prompt assembly: persona + tool-usage/persistence directives + context blocks + group-room rules
+    chat-shared.ts                  Shared chat infrastructure: serverLog, contextBreakdown, smartMerge, GUI-activity markers, iteration constants
     vision-service.ts               Optic vision analysis (OpenAI vision API + sharp resize, configurable per-model dimensions)
     project-service.ts              Workspace project management (CRUD + rename)
     workspace-service.ts            Sandboxed file ops with path traversal prevention
