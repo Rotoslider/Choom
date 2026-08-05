@@ -22,6 +22,13 @@ const routePath = path.join(__dirname, '..', 'app', 'api', 'chat', 'route.ts');
 // Tool execution (executeToolCall + the image-gen lock) was carved out of
 // route.ts into its own module (C-22).
 const toolExecPath = path.join(__dirname, '..', 'lib', 'tool-execution.ts');
+// The C-22 POST split moved the stream body (planner + finalize) to
+// lib/chat-stream.ts and the agentic loop to lib/agentic-loop.ts. These
+// source-grep assertions read the CONCATENATION (route → stream → loop);
+// in-file ordering pairs all live within one segment, so indexOf ordering
+// checks stay valid.
+const chatStreamPath = path.join(__dirname, '..', 'lib', 'chat-stream.ts');
+const agenticLoopPath = path.join(__dirname, '..', 'lib', 'agentic-loop.ts');
 const delegationHandlerPath = path.join(__dirname, '..', 'skills', 'core', 'choom-delegation', 'handler.ts');
 const pagePath = path.join(__dirname, '..', 'app', 'page.tsx');
 const typesPath = path.join(__dirname, '..', 'lib', 'types.ts');
@@ -35,7 +42,9 @@ let typesContent: string;
 let logFilterContent: string;
 
 beforeAll(() => {
-  routeContent = readFileSync(routePath, 'utf-8');
+  routeContent = readFileSync(routePath, 'utf-8')
+    + readFileSync(chatStreamPath, 'utf-8')
+    + readFileSync(agenticLoopPath, 'utf-8');
   toolExecContent = readFileSync(toolExecPath, 'utf-8');
   delegationContent = readFileSync(delegationHandlerPath, 'utf-8');
   pageContent = readFileSync(pagePath, 'utf-8');
@@ -569,13 +578,15 @@ describe('12. Heartbeat and Cron Job Safety', () => {
   });
 
   test('stream close check at top of loop prevents zombie iterations', () => {
-    expect(routeContent).toContain('if (streamClosed)');
+    // C-22 POST split: `streamClosed` became the shared `sse.closed` holder
+    // so the loop module can see closes flagged by chat-stream's send().
+    expect(routeContent).toContain('if (sse.closed)');
     expect(routeContent).toContain('stopping agentic loop');
   });
 
   test('SSE close protection exists', () => {
-    // Verify streamClosed is set on client disconnect
-    expect(routeContent).toContain('streamClosed');
+    // Verify sse.closed is set on client disconnect
+    expect(routeContent).toContain('sse.closed = true');
   });
 });
 

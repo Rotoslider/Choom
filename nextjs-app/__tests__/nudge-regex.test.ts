@@ -79,8 +79,10 @@ describe('Nudge Regex', () => {
     test('route.ts contains the expected regex pattern', () => {
       const { readFileSync } = require('fs');
       const path = require('path');
+      // C-22 POST split: the narration detector lives in the agentic loop
+      // module now, not route.ts.
       const routeContent = readFileSync(
-        path.join(__dirname, '..', 'app', 'api', 'chat', 'route.ts'),
+        path.join(__dirname, '..', 'lib', 'agentic-loop.ts'),
         'utf-8'
       );
       // C-15: this asserted seven exact substrings of the route's regex, so
