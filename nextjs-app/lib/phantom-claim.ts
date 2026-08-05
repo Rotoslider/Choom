@@ -13,6 +13,13 @@
  * available this turn.
  */
 export function detectClaimedTool(text: string, available: Set<string>): string | null {
+  // A claim that literally names a registered tool ("workspace_delete_file
+  // returned {success:true}") IS the mapping — no paraphrase table needed.
+  // Checked first because it is exact. (C-55: the fabricated-delete incident
+  // named the tool verbatim and still mapped to nothing.)
+  for (const m of text.match(/[a-z][a-z0-9]*(?:_[a-z0-9]+)+/g) || []) {
+    if (available.has(m)) return m;
+  }
   const CLAIMS: Array<[RegExp, string]> = [
     [/\b(?:tower\s*cam|garage\s*cam|camera|webcam|snapshot)\b/i, 'ha_get_camera_snapshot'],
     [/\b(?:set|created|scheduled)\b[^.!?]{0,40}\breminder\b|\bremind(?:ed)? you\b/i, 'create_reminder'],
@@ -40,6 +47,8 @@ export function detectClaimedTool(text: string, available: Set<string>): string 
     [/\b(?:analyz|look\w*|examin|check\w*)\w*\b[^.!?]{0,25}\b(?:the |that |this |your )?(?:image|photo|picture|screenshot|snapshot)\b/i, 'analyze_image'],
     [/\b(?:searched|looked)\b[^.!?]{0,30}\b(?:the )?web\b/i, 'web_search'],
     [/\b(?:wrote|saved|created)\b[^.!?]{0,30}\bfile\b/i, 'workspace_write_file'],
+    // C-55: the fabricated-delete incident had no delete mapping at all.
+    [/\b(?:delete[ds]?|removed?|deleting)\b[^.!?]{0,40}\b(?:files?|notes?|entr(?:y|ies))\b|\ba delete\b/i, 'workspace_delete_file'],
     // "I just ran the scan — here's the breakdown of the workspace root" with
     // an invented listing was the C-52 incident: no listing claim was in this
     // table, so the zero-tool turn had nothing to narrow to.
@@ -107,4 +116,56 @@ export function detectZeroToolClaim(text: string, available: Set<string>): strin
   // keyword three paragraphs away can't select the wrong tool.
   const window = sentence.length >= 200 ? sentence : text.slice(sentStart, idx + 200);
   return detectClaimedTool(window, available);
+}
+
+// A tool-RESULT claim: the reply quotes what a call supposedly returned
+// ("returned {\"success\":true}", "came back with no error", "silently
+// succeeded"). The C-55 incident used exactly this shape and matched neither
+// THIS_TURN_CLAIM (no first-person completed verb — "when I TRIED to
+// delete") nor fakeSuccess. Past-tense verbs only, so hypothetical present
+// tense ("if you call it, it returns Blocked") stays out.
+const RESULT_CLAIM =
+  /\b(?:returned|came back with|responded with|reported back)\s*`?[^.!?\n]{0,60}?(?:success|true|false|error|no error|ok\b|\{|\d{3}\b)|\b(?:silently|quietly) (?:succeeded|passed|worked)\b|\bsucceeded (?:silently|cleanly|without)\b/i;
+
+/**
+ * Fabricated-result detector for turns where OTHER tools really ran (C-55).
+ * detectZeroToolClaim is gated on zero calls; the live incident had 5 real
+ * calls in the turn and a quoted {"success":true} from a workspace_delete_file
+ * that was never called — nothing checked the CLAIMED tool against the
+ * ACTUAL calls. Same gates as C-52 (this-turn/result claim shape, no past
+ * anchor, maps to an available tool) plus the new one: the mapped tool must
+ * be absent from this turn's executed calls. Honest claims map to called
+ * tools and return null.
+ *
+ * Every claim match is checked, not just the first — a long rundown mixes
+ * honest claims about called tools with the fabricated one. The mapping
+ * window extends LEFT of the claim verb because result claims name the tool
+ * before it ("workspace_delete_file ... returned ..."), and a path like
+ * `foo.md` ends the sentence-start scan early.
+ *
+ * Measured before wiring (2026-08-05) over all 556 real assistant messages
+ * with their own recorded toolCalls as ground truth: fires on the two
+ * fabrication sentences of the live incident; see the test file for the
+ * false-positive analysis.
+ */
+export function detectUncalledToolClaim(
+  text: string,
+  available: Set<string>,
+  calledThisTurn: Set<string>,
+): string | null {
+  for (const src of [THIS_TURN_CLAIM, RESULT_CLAIM]) {
+    for (const m of text.matchAll(new RegExp(src.source, 'gi'))) {
+      if (m.index === undefined) continue;
+      const idx = m.index;
+      const sentStart = Math.max(text.lastIndexOf('.', idx), text.lastIndexOf('!', idx), text.lastIndexOf('?', idx), text.lastIndexOf('\n', idx)) + 1;
+      const ends = [text.indexOf('.', idx), text.indexOf('!', idx), text.indexOf('?', idx), text.indexOf('\n', idx)].filter(i => i >= 0);
+      const sentEnd = ends.length ? Math.min(...ends) + 1 : text.length;
+      const sentence = text.slice(sentStart, sentEnd);
+      if (PAST_ANCHOR.test(sentence)) continue;
+      const window = text.slice(Math.max(0, idx - 120), idx + Math.max(200, sentence.length));
+      const tool = detectClaimedTool(window, available);
+      if (tool && !calledThisTurn.has(tool)) return tool;
+    }
+  }
+  return null;
 }
