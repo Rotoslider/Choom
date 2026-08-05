@@ -174,6 +174,18 @@ export default class ImageAnalysisHandler extends BaseSkillHandler {
           `Vision service unreachable (${raw}). This is an availability problem, not a bad request — retrying with a different prompt or path will not help. Tell Donny the vision endpoint is down.`);
       }
 
+      // LM Studio reachable but no model loaded: the upstream 400 body says
+      // "use the 'lms load' command", which reads like an instruction the
+      // Choom should follow — she can't, and the raw JSON blob taught nothing
+      // except to retry (Genesis 08-02, 3 rewordings against the same wall).
+      // Translate to what it IS: a machine-config problem only Donny can fix.
+      if (/No models loaded/i.test(raw)) {
+        return this.error(toolCall,
+          `Vision model is not loaded on the server (LM Studio has no vision model active). ` +
+          `This is a machine configuration problem — no tool call or reworded prompt can fix it. ` +
+          `Tell Donny the vision model needs loading, and work from context (image filenames, what was said about them) in the meantime.`);
+      }
+
       console.error('   ❌ Vision error:', err instanceof Error ? err.message : err);
       return this.error(toolCall, `Vision analysis failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
     }

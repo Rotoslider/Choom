@@ -25,6 +25,7 @@ import { computeImageDimensions } from '@/lib/types';
 import { findVisionProfile } from '@/lib/model-profiles';
 import { memoryTools } from '@/lib/tool-definitions';
 import { getSkillRegistry } from '@/lib/skill-registry';
+import { suggestToolNames } from '@/lib/tool-name-suggest';
 import type { SkillHandlerContext } from '@/lib/skill-handler';
 import { getGoogleClient } from '@/lib/google-client';
 import { waitForGpu } from '@/lib/gpu-lock';
@@ -2388,11 +2389,18 @@ export async function executeToolCallViaSkills(
       toolCall.name = resolved;
       skill = registry.getSkillForTool(resolved)!;
     } else {
+      const suggestions = suggestToolNames(
+        toolCall.name,
+        registry.getAllToolDefinitions().map(t => t.name),
+      );
+      const hint = suggestions.length
+        ? ` No tool by that name exists. Did you mean: ${suggestions.join(', ')}? Call one of those instead.`
+        : ' No tool by that name exists — check your tool list and call a real one.';
       return {
         toolCallId: toolCall.id,
         name: toolCall.name,
         result: null,
-        error: `Unknown tool: ${toolCall.name}`,
+        error: `Unknown tool: ${toolCall.name}.${hint}`,
       };
     }
   }

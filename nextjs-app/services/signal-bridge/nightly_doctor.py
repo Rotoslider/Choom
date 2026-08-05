@@ -235,6 +235,40 @@ def _normalize_error(error_msg: str) -> str:
     return s.strip()
 
 
+# Error classes where the error itself is part of a designed discovery
+# round-trip: the message lists what actually exists (files, entities,
+# folders, valid params) and the model is EXPECTED to retry with a corrected
+# value. A failure in one of these classes only signals a problem when the
+# model never recovered within the same request — otherwise it is the
+# discovery pattern working exactly as built (same spirit as C-37's
+# contract-block exclusion, one layer up).
+RECOVERABLE_CLASSES = {"path", "stale_ref", "param", "no_data", "gpu_busy"}
+
+# Guidance markers: an error that tells the model what exists / what to do
+# instead is a signpost; one without them is a blank wall. Kept deliberately
+# broad — these phrases are how every guided error in this codebase is
+# written (dir listings, entity lists, "Use X instead", either-or params).
+_GUIDANCE_RE = re.compile(
+    r"Use\s+\S+|Available|instead|Did you mean|closest existing|here'?s what|"
+    r"actually in it|that exist|don'?t guess|Your rooms|valid|options|"
+    r"Provide|Retry the call|Real \w+ entities|Folders|call \w+ to see",
+    re.IGNORECASE,
+)
+
+
+def _is_blank_wall(error_msg: str) -> bool:
+    """True when a failed call's error text gives the model nothing to work
+    with: no cause it can act on, no alternatives, no listing. These are the
+    errors that make a model retry blindly or give up confused."""
+    if not error_msg:
+        return True
+    if len(error_msg) >= 200:
+        # Long errors near-always carry context (listings, tracebacks the
+        # model can read, upstream bodies). Don't flag them.
+        return False
+    return not _GUIDANCE_RE.search(error_msg)
+
+
 def analyze_traces(traces: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Compute aggregate metrics and detect anomalies from traces."""
     if not traces:
@@ -259,7 +293,11 @@ def analyze_traces(traces: List[Dict[str, Any]]) -> Dict[str, Any]:
     # permission blocks (intended protection working, C-37) and re-issues of
     # already-disabled tools (model behavior, not tool health) are tracked in
     # their own buckets and excluded from every failure-rate metric.
-    tool_stats: Dict[str, Dict[str, int]] = {}  # tool -> {calls, successes, failures, contract_blocks, reissues}
+    # tool -> {calls, successes, failures, contract_blocks, reissues,
+    #          recoverable, recovered, hard} where failures = recoverable + hard
+    # and "recovered" counts recoverable failures answered by a LATER
+    # successful call of the same tool in the same trace (discovery worked).
+    tool_stats: Dict[str, Dict[str, int]] = {}
     error_classes: Dict[str, int] = {}  # error_class -> count (ALL failed calls, fine-grained)
     broken_tools_seen: Dict[str, int] = {}  # tool_name -> times broken
     contract_blocks_total = 0
@@ -351,11 +389,13 @@ def analyze_traces(traces: List[Dict[str, Any]]) -> Dict[str, Any]:
 
         # Per-tool stats
         real_failures_this_trace = 0
-        for tc in t.get("toolCalls", []):
+        trace_calls = t.get("toolCalls", [])
+        for idx, tc in enumerate(trace_calls):
             tool = tc.get("tool", "unknown")
             if tool not in tool_stats:
                 tool_stats[tool] = {"calls": 0, "successes": 0, "failures": 0,
-                                    "contract_blocks": 0, "reissues": 0}
+                                    "contract_blocks": 0, "reissues": 0,
+                                    "recoverable": 0, "recovered": 0, "hard": 0}
             tool_stats[tool]["calls"] += 1
             # Per-choom × per-tool tracking
             choom_tool_stats[cn][tool]["calls"] += 1
@@ -386,6 +426,30 @@ def analyze_traces(traces: List[Dict[str, Any]]) -> Dict[str, Any]:
             choom_tool_stats[cn][tool]["failures"] += 1
             real_failures_this_trace += 1
 
+            # Discovery round-trip accounting: a recoverable-class failure
+            # answered by a later SUCCESSFUL call of the same tool in this
+            # trace is the discovery pattern working — count it as recovered
+            # so it stops reading as tool breakage. What remains (hard classes
+            # + unrecovered recoverables) are the actual dead ends.
+            # Recovery is computed for EVERY failed call (visibility in the
+            # signature list), but only recoverable-class recoveries reduce
+            # the dead-end metric — a hard-class fail-then-succeed (flapping
+            # network, transient 500) still deserves attention.
+            recovered = any(
+                c2.get("success") and c2.get("tool") == tool
+                for c2 in trace_calls[idx + 1:]
+            )
+            if ec in RECOVERABLE_CLASSES:
+                tool_stats[tool]["recoverable"] += 1
+                if recovered:
+                    tool_stats[tool]["recovered"] += 1
+            else:
+                tool_stats[tool]["hard"] += 1
+            if not (recovered and ec in RECOVERABLE_CLASSES):
+                choom_tool_stats[cn][tool]["dead_ends"] = (
+                    choom_tool_stats[cn][tool].get("dead_ends", 0) + 1
+                )
+
             # Record failure signature for root-cause drill-in
             err_raw = tc.get("error") or ""
             err_norm = _normalize_error(err_raw)
@@ -393,13 +457,20 @@ def analyze_traces(traces: List[Dict[str, Any]]) -> Dict[str, Any]:
             if sig_key not in failure_signatures:
                 failure_signatures[sig_key] = {
                     "count": 0,
+                    "recovered": 0,
                     "sample_error": err_raw[:200],
                     "chooms": set(),
                     "error_class": ec,
+                    # Blank wall = error text with no actionable guidance
+                    # (no listing, no alternative, no cause). Judged on the
+                    # first occurrence's full text.
+                    "blank_wall": _is_blank_wall(err_raw),
                     "trace_files": [],
                 }
             sig = failure_signatures[sig_key]
             sig["count"] += 1
+            if recovered:
+                sig["recovered"] += 1
             sig["chooms"].add(cn)
             if len(sig["trace_files"]) < 3:
                 tf = t.get("_trace_file")
@@ -494,17 +565,29 @@ def analyze_traces(traces: List[Dict[str, Any]]) -> Dict[str, Any]:
         if counted_calls else 100
     )
 
-    # Find problematic tools (>30% REAL failure rate with at least 3 real
-    # attempts). Before the exclusion, workspace_delete_file sat here at "79%
-    # failure" when 33 of its 42 failures were the contract gate refusing
-    # shared-folder deletes — protection working, reported as breakage.
+    # Find problematic tools (>30% DEAD-END rate with at least 3 real
+    # attempts). Two exclusion layers now:
+    #   C-37: contract blocks + disabled reissues never count (protection /
+    #         model behavior, not tool health).
+    #   This pass: recoverable-class failures the model RECOVERED from in the
+    #         same trace don't count either — "File not found + here's the
+    #         listing → correct retry succeeds" is the designed discovery
+    #         round-trip, and counting it had workspace_read_file reading as
+    #         a problem tool on any file-exploration-heavy day.
     problem_tools = []
+    recoverable_total = 0
+    recovered_total = 0
+    hard_total = 0
     for tool, stats in tool_stats.items():
         attempts = stats["calls"] - stats["contract_blocks"] - stats["reissues"]
-        if attempts >= 3 and stats["failures"] / attempts > 0.3:
-            rate = stats["failures"] / attempts * 100
+        dead_ends = stats["hard"] + (stats["recoverable"] - stats["recovered"])
+        recoverable_total += stats["recoverable"]
+        recovered_total += stats["recovered"]
+        hard_total += stats["hard"]
+        if attempts >= 3 and dead_ends / attempts > 0.3:
+            rate = dead_ends / attempts * 100
             problem_tools.append(
-                f"{tool}: {rate:.0f}% failure ({stats['failures']}/{attempts})"
+                f"{tool}: {rate:.0f}% dead-end failure ({dead_ends}/{attempts})"
             )
 
     # Detect anomalies
@@ -569,25 +652,52 @@ def analyze_traces(traces: List[Dict[str, Any]]) -> Dict[str, Any]:
         top_failures.append({
             "tool": tool,
             "count": sig["count"],
+            "recovered": sig.get("recovered", 0),
             "chooms": sorted(sig["chooms"]),
             "error_class": sig.get("error_class"),
+            "blank_wall": sig.get("blank_wall", False),
             "sample_error": sig["sample_error"],
             "trace_files": sig["trace_files"],
         })
 
-    # Per-Choom × per-tool hot spots: single (choom, tool) pairs with >30% failure
-    # rate and at least 3 calls. These would otherwise hide in the global aggregate.
+    # Blank walls: failure signatures whose error text gives the model no
+    # guidance (no listing, no alternative, no actionable cause). These are
+    # the errors that leave a Choom retrying blindly — each one is a concrete
+    # error-message improvement to make at the tool's source.
+    blank_walls: List[Dict[str, Any]] = []
+    for (tool, _err_norm), sig in sorted_failures:
+        if not sig.get("blank_wall"):
+            continue
+        blank_walls.append({
+            "tool": tool,
+            "count": sig["count"],
+            "error_class": sig.get("error_class"),
+            "sample_error": sig["sample_error"],
+            "trace_files": sig["trace_files"],
+        })
+        if sig["count"] >= 3:
+            anomalies.append(
+                f"Opaque error (blank wall): {tool} failed {sig['count']}x with "
+                f"no guidance in the message — models can't self-correct from "
+                f"\"{sig['sample_error'][:90]}\". Improve the error text at the source."
+            )
+
+    # Per-Choom × per-tool hot spots: single (choom, tool) pairs with >30%
+    # DEAD-END rate and at least 3 calls. Recovered discovery round-trips are
+    # excluded here too — a Choom exploring the workspace by name-guessing is
+    # not a hotspot as long as her retries land.
     choom_tool_hotspots: List[Dict[str, Any]] = []
     for cn, tools_map in choom_tool_stats.items():
         for tool, stats in tools_map.items():
             attempts = stats["calls"] - stats.get("excluded", 0)
-            if attempts >= 3 and stats["failures"] / attempts > 0.30:
-                rate = stats["failures"] / attempts * 100
+            dead_ends = stats.get("dead_ends", 0)
+            if attempts >= 3 and dead_ends / attempts > 0.30:
+                rate = dead_ends / attempts * 100
                 choom_tool_hotspots.append({
                     "choom": cn,
                     "tool": tool,
                     "calls": attempts,
-                    "failures": stats["failures"],
+                    "failures": dead_ends,
                     "failure_rate": round(rate, 1),
                 })
     choom_tool_hotspots.sort(key=lambda x: -x["failure_rate"])
@@ -659,6 +769,14 @@ def analyze_traces(traces: List[Dict[str, Any]]) -> Dict[str, Any]:
             "total": sum(tool_call_counts),
             "avg_per_request": round(avg(tool_call_counts), 1),
             "success_rate": global_success_rate,
+            # Discovery-round-trip accounting: recoverable-class failures,
+            # how many the model recovered from in-trace, and the residual
+            # dead ends (hard failures + unrecovered recoverables) that the
+            # problem_tools/hotspot metrics now key off.
+            "recoverable_failures": recoverable_total,
+            "recovered_in_trace": recovered_total,
+            "hard_failures": hard_total,
+            "dead_ends": hard_total + (recoverable_total - recovered_total),
         },
         # Contract-gate blocks reported on their own (C-37): intended
         # protection, excluded from every failure metric above.
@@ -698,6 +816,7 @@ def analyze_traces(traces: List[Dict[str, Any]]) -> Dict[str, Any]:
         "choom_stats": choom_stats,
         # New smarter-doctor fields (additive — old consumers ignore them)
         "top_failures": top_failures,
+        "blank_walls": blank_walls,
         "choom_tool_hotspots": choom_tool_hotspots,
         "worst_traces": worst_traces,
         "anomalies": anomalies,
@@ -852,6 +971,15 @@ def format_report(report: Dict[str, Any]) -> str:
     # Tools
     tc = report["tool_calls"]
     lines.append(f"\nTools: {tc['total']} calls ({tc['avg_per_request']}/req), {tc['success_rate']}% success")
+    # Discovery accounting: failures the model recovered from in the same
+    # request are the lookup-by-error pattern working, not breakage. What the
+    # doctor now treats as signal is the dead-end residue.
+    if tc.get("recoverable_failures") or tc.get("hard_failures"):
+        lines.append(
+            f"  Failures: {tc.get('recoverable_failures', 0)} recoverable "
+            f"({tc.get('recovered_in_trace', 0)} recovered in-request), "
+            f"{tc.get('hard_failures', 0)} hard → {tc.get('dead_ends', 0)} dead ends"
+        )
 
     # Contract-gate blocks: named separately so protection working never reads
     # as tool breakage (they are excluded from the failure rates above).
@@ -927,9 +1055,19 @@ def format_report(report: Dict[str, Any]) -> str:
             if len(tf["chooms"]) > 3:
                 chooms_str += f"+{len(tf['chooms']) - 3}"
             err_preview = (tf.get("sample_error") or "").replace("\n", " ")[:120]
+            rec = tf.get("recovered", 0)
+            rec_str = f", {rec}/{tf['count']} recovered" if rec else ""
             lines.append(
-                f"  [{tf['count']}x] {tf['tool']} ({chooms_str}): {err_preview}"
+                f"  [{tf['count']}x{rec_str}] {tf['tool']} ({chooms_str}): {err_preview}"
             )
+
+    # Blank walls — errors that tell the model nothing actionable
+    blank_walls = report.get("blank_walls", [])
+    if blank_walls:
+        lines.append(f"\nBlank-wall errors (no guidance in the message — fix at source):")
+        for bw in blank_walls[:5]:
+            err_preview = (bw.get("sample_error") or "").replace("\n", " ")[:110]
+            lines.append(f"  [{bw['count']}x] {bw['tool']}: {err_preview}")
 
     # Worst traces — drill-in pointers
     worst = report.get("worst_traces", {})
