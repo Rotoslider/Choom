@@ -8,6 +8,7 @@ import { WorkspaceService } from '@/lib/workspace-service';
 import {
   CONFIG_ERROR, PARAM_ERROR, HA_SHAPE_ERROR, HA_DISCOVERY_ERROR, GPU_BUSY,
   NO_DATA, PATH_ERROR, STALE_REF_ERROR, PERMISSION_BLOCK,
+  classifyToolError, type ToolErrorClass,
 } from '@/lib/tool-error-classification';
 import { classifyEndpoint, computeStreamTimeouts, isLocalEndpoint } from '@/lib/stream-timeouts';
 import { detectClaimedTool, detectZeroToolClaim, findFabricatedImageRefs } from '@/lib/phantom-claim';
@@ -961,11 +962,19 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
     // Mirrors the guard at "Profile application:" so behavior matches the API-call path.
     {
       const _globalModel = (clientLLMSettings as Record<string, unknown>)?.model as string || defaultLLMSettings.model;
-      if (llmSettings.model !== _globalModel) {
-        const _ctxProfile = findLLMProfile(llmSettings.model, (settings?.modelProfiles as LLMModelProfile[]) || []);
-        if (_ctxProfile?.contextLength !== undefined) {
+      const _ctxProfile = findLLMProfile(llmSettings.model, (settings?.modelProfiles as LLMModelProfile[]) || []);
+      if (_ctxProfile?.contextLength !== undefined) {
+        if (llmSettings.model !== _globalModel) {
           llmSettings.contextLength = _ctxProfile.contextLength;
           console.log(`   📏 ${choom.name} per-model context: ${llmSettings.model} → ${llmSettings.contextLength.toLocaleString()} (profile override of global)`);
+        } else if ((llmSettings.contextLength || 0) > _ctxProfile.contextLength) {
+          // Clamp (C-53): when the resolved model IS the global default, the
+          // client's store contextLength is used as-is — and the store default
+          // (262,144) can exceed the model's real window (gemma: 128k). A very
+          // long chat would then blow past the model's context before
+          // compaction ever triggers. Never budget beyond the profile window.
+          console.log(`   📏 ${choom.name} context clamp: client ${llmSettings.contextLength?.toLocaleString()} > profile window ${_ctxProfile.contextLength.toLocaleString()} for ${llmSettings.model} — clamping`);
+          llmSettings.contextLength = _ctxProfile.contextLength;
         }
       }
     }
@@ -1726,6 +1735,10 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           // Token usage accumulator — captures usage from each LLM call across iterations
           let totalPromptTokens = 0;
           let totalCompletionTokens = 0;
+          // Largest single-call prompt (C-53). totalPromptTokens SUMS usage across
+          // every LLM call in the turn, so in traces it reads like one giant prompt
+          // when it's really 3×~89k — this field records what one call actually sent.
+          let maxPromptTokens = 0;
           // Freshness-tiered tool-output compression: when on, stale tool results
           // already in the transcript are trimmed before each re-send (the fresh
           // batch stays full). savedChars accumulates the context bytes trimmed.
@@ -2239,6 +2252,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                   if (chunk.usage) {
                     totalPromptTokens += chunk.usage.prompt_tokens || 0;
                     totalCompletionTokens += chunk.usage.completion_tokens || 0;
+                    maxPromptTokens = Math.max(maxPromptTokens, chunk.usage.prompt_tokens || 0);
                   }
                   continue;
                 }
@@ -2359,6 +2373,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 if (chunk.usage) {
                   totalPromptTokens += chunk.usage.prompt_tokens || 0;
                   totalCompletionTokens += chunk.usage.completion_tokens || 0;
+                  maxPromptTokens = Math.max(maxPromptTokens, chunk.usage.prompt_tokens || 0);
                 }
               }
               // Flush any buffered partial tag that was never completed.
@@ -2591,6 +2606,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                         if (chunk.usage) {
                           totalPromptTokens += chunk.usage.prompt_tokens || 0;
                           totalCompletionTokens += chunk.usage.completion_tokens || 0;
+                          maxPromptTokens = Math.max(maxPromptTokens, chunk.usage.prompt_tokens || 0);
                         }
                       }
                       // Flush any buffered partial tag
@@ -3566,7 +3582,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               }
 
               // Classify error (hoisted for trace logging)
-              let errorClass: 'config' | 'param' | 'gpu_busy' | 'no_data' | 'path' | 'other' | undefined;
+              let errorClass: ToolErrorClass | undefined;
 
               // Cache results (skip for tools whose output depends on real-world state)
               if (!result.error) {
@@ -3602,7 +3618,11 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 // mis-targeted writes disable workspace_write_file for the whole request —
                 // including the legitimate writes the model issues right after.
                 const isPermissionBlock = PERMISSION_BLOCK.test(result.error);
-                errorClass = isConfigError ? 'config' : isParamError ? 'param' : isGpuBusy ? 'gpu_busy' : isNoData ? 'no_data' : (isPathError || isPermissionBlock || isStaleRef) ? 'path' : 'other';
+                // The fine-grained label (auth/rate_limit/timeout/network/upstream_*/
+                // template/…) comes from the shared classifier; the boolean flags above
+                // keep driving cap/blocking behavior so refining a label can never
+                // change which errors disable a tool.
+                errorClass = classifyToolError(tc.name, result.error).errorClass;
                 failedCallCache.set(dedupKey, result.error);
 
                 // Capture "Use TOOL_NAME ..." guidance from error messages.
@@ -3841,6 +3861,10 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 traceBuilder.recordToolCall({
                   id: tc.id, name: tc.name, args: tc.arguments,
                   success: !skipped.error, error: skipped.error || undefined,
+                  // Pre-flight refusals classify as blocked_reissue — the doctor
+                  // must see "model re-called a disabled tool", not another
+                  // unnamed failure of the tool itself.
+                  errorClass: skipped.error ? classifyToolError(tc.name, skipped.error).errorClass : undefined,
                   iteration, parallel: false,
                   cached: !skipped.error, blocked: !!skipped.error,
                 });
@@ -4279,6 +4303,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             durationMs: elapsed,
             promptTokens: finalPromptTokens,
             completionTokens: finalCompletionTokens,
+            maxPromptTokens,
             tokensEstimated: isEstimatedTokens,
             responseLength: fullContent.length,
             brokenTools: [...brokenTools],

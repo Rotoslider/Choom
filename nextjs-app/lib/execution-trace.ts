@@ -9,6 +9,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import type { ToolErrorClass } from './tool-error-classification';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -18,7 +19,7 @@ export interface ToolCallTrace {
   success: boolean;
   durationMs: number;
   error?: string;
-  errorClass?: 'config' | 'param' | 'path' | 'gpu_busy' | 'no_data' | 'timeout' | 'other';
+  errorClass?: ToolErrorClass;
   iteration: number;
   parallel: boolean;
   cached: boolean;
@@ -66,10 +67,14 @@ export interface ExecutionTrace {
   consecutiveFailuresMax: number;
   forceToolCallUsed: boolean;
 
-  // Token metrics
+  // Token metrics. promptTokens SUMS prompt usage across every LLM call in the
+  // turn — a 3-iteration turn at ~89k/call reports ~267k here, which reads
+  // misleadingly like a single giant prompt. maxPromptTokens is the largest
+  // single call, i.e. what actually went over the wire at once.
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
+  maxPromptTokens: number;
   tokensEstimated: boolean;
 
   // Content metrics
@@ -129,6 +134,7 @@ export class TraceBuilder {
       promptTokens: 0,
       completionTokens: 0,
       totalTokens: 0,
+      maxPromptTokens: 0,
       tokensEstimated: false,
       responseLength: 0,
       compactionTriggered: false,
@@ -228,6 +234,7 @@ export class TraceBuilder {
     durationMs: number;
     promptTokens: number;
     completionTokens: number;
+    maxPromptTokens?: number;
     tokensEstimated: boolean;
     responseLength: number;
     brokenTools: string[];
@@ -238,6 +245,7 @@ export class TraceBuilder {
     this.trace.promptTokens = data.promptTokens;
     this.trace.completionTokens = data.completionTokens;
     this.trace.totalTokens = data.promptTokens + data.completionTokens;
+    this.trace.maxPromptTokens = data.maxPromptTokens || 0;
     this.trace.tokensEstimated = data.tokensEstimated;
     this.trace.responseLength = data.responseLength;
     this.trace.brokenTools = data.brokenTools;

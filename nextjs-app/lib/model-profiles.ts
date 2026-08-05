@@ -476,15 +476,40 @@ export const BUILTIN_VISION_PROFILES: VisionModelProfile[] = [
 // ============================================================================
 
 /**
+ * Normalize a model id for fallback matching: drop the org prefix and any
+ * trailing tune/quantization markers so serving-stack variants of the same
+ * weights land on one profile. The concrete failure this fixes (C-53): the
+ * client resolves "google/gemma-4-31b-qat" while the profile is keyed
+ * "gemma-4-31b-it" — exact match misses, so the model fell through to the
+ * store-default 262,144 contextLength when gemma's real window is 128k.
+ */
+function normalizeModelId(modelId: string): string {
+  let s = (modelId.split('/').pop() || modelId).toLowerCase();
+  // Strip trailing variant markers, repeatedly ("…-it-qat" → base name).
+  const VARIANT_SUFFIX =
+    /-(?:it|instruct|qat|gguf|awq|gptq|mlx|4bit|8bit|fp8|fp16|bf16|int[48]|q\d(?:_[a-z0-9]+)?)$/;
+  while (VARIANT_SUFFIX.test(s)) s = s.replace(VARIANT_SUFFIX, '');
+  return s;
+}
+
+/**
  * Find an LLM profile for a given modelId.
  * User profiles override built-in profiles (merged field-by-field).
+ * Exact modelId match wins; if nothing matches exactly, retry with normalized
+ * ids (org prefix and tune/quant suffixes stripped on both sides).
  */
 export function findLLMProfile(
   modelId: string,
   userProfiles?: LLMModelProfile[]
 ): LLMModelProfile | null {
-  const builtIn = BUILTIN_LLM_PROFILES.find(p => p.modelId === modelId);
-  const user = userProfiles?.find(p => p.modelId === modelId);
+  let builtIn = BUILTIN_LLM_PROFILES.find(p => p.modelId === modelId);
+  let user = userProfiles?.find(p => p.modelId === modelId);
+
+  if (!builtIn && !user) {
+    const norm = normalizeModelId(modelId);
+    builtIn = BUILTIN_LLM_PROFILES.find(p => normalizeModelId(p.modelId) === norm);
+    user = userProfiles?.find(p => normalizeModelId(p.modelId) === norm);
+  }
 
   if (!builtIn && !user) return null;
 

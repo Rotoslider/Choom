@@ -5,15 +5,9 @@
 // alternatives" and "the model knows what alternatives actually exist".
 
 import type { SkillRegistry } from './skill-registry';
+import type { ToolErrorClass as SharedToolErrorClass } from './tool-error-classification';
 
-export type ToolErrorClass =
-  | 'config'
-  | 'param'
-  | 'gpu_busy'
-  | 'no_data'
-  | 'path'
-  | 'other'
-  | undefined;
+export type ToolErrorClass = SharedToolErrorClass | undefined;
 
 export interface BuildPivotHintOpts {
   failedTool: string;
@@ -36,9 +30,16 @@ export function buildPivotHint(opts: BuildPivotHintOpts): string | null {
 
   // Don't hint for cases where alternatives don't help:
   // - param: model just needs to fix arguments on its next call
-  // - config: tool is broken (auth, endpoint missing); siblings likely same issue
+  // - config/auth: tool is broken (credentials, endpoint missing); siblings in
+  //   the same skill almost always share the same credentials
   // - no_data: informational, not a failure
-  if (errorClass === 'param' || errorClass === 'config' || errorClass === 'no_data') {
+  // - permission_block: the contract-gate message already says where to write
+  // - blocked_reissue: the refusal already carries its own "do X instead" line
+  if (
+    errorClass === 'param' || errorClass === 'config' || errorClass === 'auth' ||
+    errorClass === 'no_data' || errorClass === 'permission_block' ||
+    errorClass === 'blocked_reissue'
+  ) {
     return null;
   }
 
@@ -93,7 +94,7 @@ export function buildPivotHint(opts: BuildPivotHintOpts): string | null {
     }
   }
 
-  if (!suggestion && /rate.?limit|429|too many requests|quota/.test(lowerErr)) {
+  if (!suggestion && (errorClass === 'rate_limit' || /rate.?limit|429|too many requests|quota/.test(lowerErr))) {
     suggestion = `Suggested next: pause or switch providers. Rate-limited services often have alternative providers configured (e.g. brave_search → searxng, serpapi). Try a different tool in this skill or wait and retry.`;
   }
 
@@ -101,7 +102,7 @@ export function buildPivotHint(opts: BuildPivotHintOpts): string | null {
     suggestion = `Suggested next: do not retry the same tool — GPU is temporarily busy. Move on to a different sub-task or inform the user.`;
   }
 
-  if (!suggestion && /timeout|timed.?out|deadline/.test(lowerErr)) {
+  if (!suggestion && (errorClass === 'timeout' || /timeout|timed.?out|deadline/.test(lowerErr))) {
     suggestion = `Suggested next: try a narrower scope (smaller query, fewer items, single entity) or a different tool above. Don't retry the same call with the same shape.`;
   }
 

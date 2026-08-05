@@ -22,10 +22,19 @@
 
 export type ToolErrorClass =
   | 'config'
+  | 'auth'
   | 'param'
   | 'gpu_busy'
   | 'no_data'
   | 'path'
+  | 'permission_block'
+  | 'rate_limit'
+  | 'timeout'
+  | 'network'
+  | 'upstream_4xx'
+  | 'upstream_5xx'
+  | 'template'
+  | 'blocked_reissue'
   | 'other';
 
 /** Config/auth problems the model cannot fix by retrying. Block immediately. */
@@ -83,6 +92,46 @@ export const STALE_REF_ERROR = new RegExp(
 export const PERMISSION_BLOCK =
   /^Blocked: (?:cannot (?:write into|delete from) another Choom|sibling_journal\/ is archived|[^/]+\/ is a shared folder)/i;
 
+/**
+ * Fine-grained classes below only refine the LABEL recorded in traces (what
+ * the nightly doctor aggregates) — they deliberately do not change which
+ * errors count toward the failure cap or block a tool. ~58% of all failures
+ * were an unactionable "other" before these existed; every pattern is
+ * validated against verbatim strings from data/traces (see the test file).
+ */
+
+/** Synthetic re-issue echoes: the loop already refused the call (disabled
+ *  tool, repeat-call stop, cached failure). Model behavior, not tool health. */
+export const BLOCKED_REISSUE =
+  /has been disabled for this request|\[This exact call already failed|^STOP\. You have already called/i;
+
+/** Credentials rejected upstream: 401/403, expired/invalid keys or tokens. */
+export const AUTH_ERROR =
+  /\b40[13]\b|unauthorized|forbidden|api key|invalid.*(?:token|credential)|insufficient authentication|authentication (?:failed|required)/i;
+
+export const RATE_LIMIT =
+  /\b429\b|rate.?limit|too many requests|quota exceeded|resource.?exhausted/i;
+
+export const TIMEOUT_ERROR =
+  /\btim(?:ed|e)[ -]?out\b|ETIMEDOUT|aborted due to timeout|deadline exceeded/i;
+
+/** Transport never got a response: DNS/connect/reset, undici "fetch failed". */
+export const NETWORK_ERROR =
+  /fetch failed|ECONNREFUSED|ECONNRESET|ENOTFOUND|EAI_AGAIN|socket hang up|could not connect|connection (?:refused|reset|closed|error)|network error|\bterminated\b/i;
+
+export const UPSTREAM_5XX =
+  /\b50[0-4]\b|internal server error|bad gateway|service unavailable|gateway time.?out/i;
+
+/** Remaining upstream 4xx after auth/rate-limit/HA-shape have been peeled off
+ *  (Weather 404, Gmail 400, Docs/Sheets 404, camera_proxy 404, Brave 422…).
+ *  Numeric codes only — "Memory not found" is a stale ref, not an HTTP 404. */
+export const UPSTREAM_4XX = /\b4\d\d\b/;
+
+/** Strict chat-template crashes from the LLM wire format (the C-01 class):
+ *  Qwen/ChatML Jinja raise_exception on mid-conversation system messages. */
+export const TEMPLATE_ERROR =
+  /system message must be at the beginning|raise_exception|conversation roles must alternate|only user and assistant roles|chat.?template|jinja/i;
+
 export interface ToolErrorVerdict {
   errorClass: ToolErrorClass;
   /** True when the error must NOT count toward the per-tool failure cap. */
@@ -103,20 +152,48 @@ export function classifyToolError(toolName: string, error: string): ToolErrorVer
   const isStaleRef = STALE_REF_ERROR.test(error);
   const isPermissionBlock = PERMISSION_BLOCK.test(error);
 
-  const errorClass: ToolErrorClass = isConfig
-    ? 'config'
-    : isParam
-      ? 'param'
-      : isGpuBusy
-        ? 'gpu_busy'
-        : isNoData
-          ? 'no_data'
-          : isPath || isPermissionBlock || isStaleRef
-            ? 'path'
-            : 'other';
+  // Label precedence. The first tier preserves the original coarse classes
+  // (config split into auth/network/config; permission blocks get their own
+  // label so the doctor can report the contract gate WORKING instead of a 79%
+  // "failure rate"). The second tier subdivides what used to be "other".
+  const errorClass: ToolErrorClass = BLOCKED_REISSUE.test(error)
+    ? 'blocked_reissue'
+    : isConfig || AUTH_ERROR.test(error)
+      ? (AUTH_ERROR.test(error) ? 'auth' : /ECONNREFUSED/i.test(error) ? 'network' : 'config')
+      : isParam
+        ? 'param'
+        : isGpuBusy
+          ? 'gpu_busy'
+          : isNoData
+            ? 'no_data'
+            : isPermissionBlock
+              ? 'permission_block'
+              : isPath || isStaleRef
+                ? 'path'
+                : RATE_LIMIT.test(error)
+                  ? 'rate_limit'
+                  : TEMPLATE_ERROR.test(error)
+                    ? 'template'
+                    : TIMEOUT_ERROR.test(error)
+                      ? 'timeout'
+                      // Status codes BEFORE transport patterns: tool wrappers
+                      // like "Weather fetch failed: Weather API error: 404"
+                      // contain "fetch failed" as prose — when an upstream
+                      // status is present, IT is the actual cause. Bare
+                      // "fetch failed" (undici, no status) stays network.
+                      : UPSTREAM_5XX.test(error)
+                        ? 'upstream_5xx'
+                        : UPSTREAM_4XX.test(error)
+                          ? 'upstream_4xx'
+                          : NETWORK_ERROR.test(error)
+                            ? 'network'
+                            : 'other';
 
   return {
     errorClass,
+    // Cap/blocking behavior is unchanged by the fine-grained labels: recoverable
+    // and blockImmediately still key off the ORIGINAL coarse pattern sets, so an
+    // error that used to count toward the cap still does under its new name.
     recoverable: isPath || isStaleRef || isPermissionBlock || isNoData || isParam,
     blockImmediately: isConfig,
   };
