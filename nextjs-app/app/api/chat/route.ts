@@ -812,6 +812,11 @@ export async function POST(request: NextRequest) {
         llmSettings.model = projectModel;
         llmSettings.endpoint = provider.endpoint;
         usingCloudProvider = !isLocalEndpoint(provider.endpoint);
+        // Every other layer updates activeProviderId when it swaps providers;
+        // this one didn't, so traces + tokenUsage recorded the PRIOR provider
+        // for per-project-provider requests, and the same-model retry prepend
+        // inherited the wrong providerId.
+        activeProviderId = provider.id;
       }
     }
 

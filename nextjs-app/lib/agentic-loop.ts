@@ -578,10 +578,18 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
               }
               inactivityTimer = setTimeout(() => rejectInactivity(new Error(timeoutMsg)), currentTimeout);
             };
+            let wallClockTimer: ReturnType<typeof setTimeout> = undefined!;
             const wallClockPromise = new Promise<never>((_, reject) => {
-              setTimeout(() => reject(new Error('LLM response timeout')), timeoutMs);
+              wallClockTimer = setTimeout(() => reject(new Error('LLM response timeout')), timeoutMs);
             });
             wallClockPromise.catch(() => {}); // suppress unhandled rejection after race
+            // Abort handle for THIS primary stream. Without it, a timed-out
+            // stream keeps running in the background after the fallback takes
+            // over — appending to iterationContent, send()ing stale chunks,
+            // pouring late tool-call deltas into the fallback's accumulator,
+            // and double-counting usage. Found by the post-C-22 adversarial
+            // review; present in the monolith since the fallback chain landed.
+            const llmAbort = new AbortController();
 
             // Hard rule: a group turn NEVER sends tool_choice='required'. Beyond the
             // initial intent check, several mid-loop nudges (task-continuation,
@@ -689,7 +697,7 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                 }
                 return false;
               };
-              for await (const chunk of llmClient.streamChat(currentMessages, iterationTools, undefined, toolChoiceOverride, onConnected)) {
+              for await (const chunk of llmClient.streamChat(currentMessages, iterationTools, llmAbort.signal, toolChoiceOverride, onConnected)) {
                 if (streamAbortedForRepetition) break;
                 if (!chunk.choices || !chunk.choices[0]) {
                   // Final usage-only chunks have no choices; capture below.
@@ -855,6 +863,7 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
               await Promise.race([streamPromise, inactivityPromise, wallClockPromise]);
               // Stream succeeded — clean up timers to prevent leaks
               clearTimeout(inactivityTimer);
+              clearTimeout(wallClockTimer);
               recordLlmCall(llmCallStart, llmFirstChunkAt);
               // Empty response guard: model returned 200 OK but streamed 0 content
               // and no tool calls. Treat this the same as a timeout so the fallback
@@ -902,6 +911,13 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
               // sent to the user; we clear iterationContent and retry with the fallback.
               // Clean up primary model's timer to prevent memory leaks
               clearTimeout(inactivityTimer);
+              clearTimeout(wallClockTimer);
+              // Kill the primary stream BEFORE any fallback runs. On the
+              // empty-response path the stream already completed (abort is a
+              // no-op); on the timeout path this stops the zombie stream from
+              // interleaving with the fallback's reply. Its pending for-await
+              // rejects into the already-settled race — handled, not unhandled.
+              llmAbort.abort();
 
               let fallbackSucceeded = false;
               // If the currently-active fallback timed out (not the primary),
@@ -932,7 +948,11 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                     currentMessages.splice(i, 1);
                   } else if (m.role === 'user' && m.content?.startsWith('[System] You indicated you have more')) {
                     currentMessages.splice(i, 1);
-                  } else if (m.role === 'system' && m.content?.startsWith('[Tool guidance]')) {
+                  // role:'user', not 'system' — the guidance is PUSHED as a
+                  // user turn (strict chat templates 400 on late system
+                  // messages), so matching 'system' here meant the strip
+                  // never fired and fallbacks kept the primary's stale hint.
+                  } else if (m.role === 'user' && m.content?.startsWith('[Tool guidance]')) {
                     currentMessages.splice(i, 1);
                   }
                 }
@@ -955,6 +975,11 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                   }
 
                   let fbInactivityTimer: ReturnType<typeof setTimeout> = undefined!;
+                  let fbWallClockTimer: ReturnType<typeof setTimeout> = undefined!;
+                  // Hoisted like the timers so the catch can abort a stream
+                  // that failed mid-flight (same zombie-stream protection as
+                  // the primary).
+                  const fbAbort = new AbortController();
                   // Hoisted above the try so the catch can record the failed
                   // call's wall-clock (0 = failed before the stream started).
                   let fbCallStart = 0;
@@ -1019,7 +1044,7 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                       fbInactivityTimer = setTimeout(() => fbRejectInactivity(new Error(timeoutMsg)), currentTimeout);
                     };
                     const fbWallClockPromise = new Promise<never>((_, reject) => {
-                      setTimeout(() => reject(new Error('LLM response timeout')), fbTimeoutMs);
+                      fbWallClockTimer = setTimeout(() => reject(new Error('LLM response timeout')), fbTimeoutMs);
                     });
                     fbWallClockPromise.catch(() => {});
                     console.log(`   ⏱️  Fallback timeout: ${fbTimeoutMs / 1000}s wall-clock, ${fbConnectionMs / 1000}s connection, ${fbPrefillMs / 1000}s prefill, ${fbBetweenTokenMs / 1000}s between-token`);
@@ -1028,7 +1053,7 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                     const fbToolCallXmlFilter = createToolCallXmlFilter();
                     const fbJsonToolCallFilter = createJsonToolCallFilter();
                     const fbStreamPromise = (async () => {
-                      for await (const chunk of fbClient.streamChat(currentMessages, iterationTools, undefined, toolChoiceOverride, fbOnConnected)) {
+                      for await (const chunk of fbClient.streamChat(currentMessages, iterationTools, fbAbort.signal, toolChoiceOverride, fbOnConnected)) {
                         const fbDeltaAny = chunk.choices?.[0]?.delta as { reasoning_content?: string } | undefined;
                         const fbHasContent = !!(chunk.choices?.[0]?.delta?.content || chunk.choices?.[0]?.delta?.tool_calls ||
                           (typeof fbDeltaAny?.reasoning_content === 'string' && fbDeltaAny.reasoning_content.length > 0));
@@ -1081,6 +1106,7 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
 
                     await Promise.race([fbStreamPromise, fbInactivityPromise, fbWallClockPromise]);
                     clearTimeout(fbInactivityTimer); // clean up timer
+                    clearTimeout(fbWallClockTimer);
                     recordLlmCall(fbCallStart, fbFirstChunkAt);
 
                     // Fallback succeeded — switch llmClient for rest of this request
@@ -1116,6 +1142,8 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                   } catch (fbError) {
                     if (fbCallStart) recordLlmCall(fbCallStart, fbFirstChunkAt);
                     clearTimeout(fbInactivityTimer); // clean up timer
+                    clearTimeout(fbWallClockTimer);
+                    fbAbort.abort(); // stop a mid-flight stream before the next attempt
                     const fbErrMsg = fbError instanceof Error ? fbError.message : String(fbError);
                     console.warn(`   ⚠️  ${choomTag} Fallback #${fbIdx + 1} (${fb.label}) also failed: ${fbErrMsg}`);
                     fallbackAttempt = fbIdx + 1;
@@ -2248,7 +2276,13 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
 
               // Project metadata tracking
               const wsPath = (tc.arguments.path as string) || (tc.arguments.image_path as string) || '';
-              const topFolder = decodeURIComponent(wsPath.split('/')[0]);
+              // Guarded decode: a model-supplied path like "50%_off/notes.md"
+              // makes decodeURIComponent throw URIError AFTER the tool already
+              // ran — which used to kill the whole turn (error event, nothing
+              // saved). The raw segment is a fine fallback for folder lookup.
+              const rawTopFolder = wsPath.split('/')[0];
+              let topFolder = rawTopFolder;
+              try { topFolder = decodeURIComponent(rawTopFolder); } catch { /* keep raw */ }
 
               if (!projectIterationLimitApplied && topFolder) {
                 try {
