@@ -285,6 +285,14 @@ def analyze_traces(traces: List[Dict[str, Any]]) -> Dict[str, Any]:
     worst_by_duration: Optional[Tuple[int, Dict[str, Any]]] = None
     worst_by_failures: Optional[Tuple[int, Dict[str, Any]]] = None
     worst_by_prompt: Optional[Tuple[int, Dict[str, Any]]] = None
+    worst_by_llm_call: Optional[Tuple[int, Dict[str, Any]]] = None
+
+    # Phase-timing rollup (C-11) over traces that carry the new fields.
+    # "A 2-iteration request should not take 17 minutes" — this says where the
+    # minutes actually go: LLM prefill/decode vs tool execution vs prep vs
+    # unaccounted overhead.
+    phase_totals = {"llm_ms": 0, "prefill_ms": 0, "tool_ms": 0,
+                    "prep_ms": 0, "duration_ms": 0, "covered": 0}
 
     fallback_count = 0
     compaction_count = 0
@@ -416,6 +424,29 @@ def analyze_traces(traces: List[Dict[str, Any]]) -> Dict[str, Any]:
             "failures": real_failures_this_trace,
             "status": status,
         }
+        # Phase breakdown (attached BEFORE the worst-of comparisons below so
+        # every drill-in pointer carries it). Only new traces have llmMs.
+        llm_ms = t.get("llmMs", 0) or 0
+        if llm_ms > 0:
+            tool_ms = t.get("toolExecMs", 0) or 0
+            prep_ms = t.get("prepMs", 0) or 0
+            prefill_ms = t.get("llmPrefillMs", 0) or 0
+            trace_ref["phases"] = {
+                "llm_s": round(llm_ms / 1000, 1),
+                "prefill_s": round(prefill_ms / 1000, 1),
+                "tools_s": round(tool_ms / 1000, 1),
+                "prep_s": round(prep_ms / 1000, 1),
+                "other_s": round(max(0, duration - llm_ms - tool_ms - prep_ms) / 1000, 1),
+            }
+            phase_totals["llm_ms"] += llm_ms
+            phase_totals["prefill_ms"] += prefill_ms
+            phase_totals["tool_ms"] += tool_ms
+            phase_totals["prep_ms"] += prep_ms
+            phase_totals["duration_ms"] += duration
+            phase_totals["covered"] += 1
+            mlc = t.get("maxLlmCallMs", 0) or 0
+            if mlc > 0 and (worst_by_llm_call is None or mlc > worst_by_llm_call[0]):
+                worst_by_llm_call = (mlc, {**trace_ref, "max_llm_call_ms": mlc})
         if worst_by_iterations is None or iterations > worst_by_iterations[0]:
             worst_by_iterations = (iterations, trace_ref)
         if worst_by_duration is None or duration > worst_by_duration[0]:
@@ -580,6 +611,24 @@ def analyze_traces(traces: List[Dict[str, Any]]) -> Dict[str, Any]:
         worst_traces["by_failures"] = worst_by_failures[1]
     if worst_by_prompt:
         worst_traces["by_prompt_tokens"] = worst_by_prompt[1]
+    if worst_by_llm_call:
+        worst_traces["by_llm_call"] = worst_by_llm_call[1]
+
+    # Latency anomalies (C-11) — only meaningful once traces carry phases.
+    if worst_by_llm_call and worst_by_llm_call[0] > 300_000:
+        w = worst_by_llm_call[1]
+        anomalies.append(
+            f"Slow LLM call: a single call took {worst_by_llm_call[0] / 1000:.0f}s "
+            f"({w['choom']}/{w['source']}) — model wait, not a hang"
+        )
+    if worst_by_duration and worst_by_duration[1].get("phases"):
+        ph = worst_by_duration[1]["phases"]
+        dur_s = worst_by_duration[0] / 1000
+        if dur_s > 120 and ph["other_s"] > dur_s * 0.5:
+            anomalies.append(
+                f"Unaccounted time: {ph['other_s']:.0f}s of the {dur_s:.0f}s worst trace "
+                f"is outside LLM/tools/prep — possible hang between phases"
+            )
 
     # Build report
     report = {
@@ -598,6 +647,14 @@ def analyze_traces(traces: List[Dict[str, Any]]) -> Dict[str, Any]:
             "p95": round(p95(durations_list)),
             "max": max(durations_list) if durations_list else 0,
         },
+        # Where the wall-clock went, across traces that carry phase timing
+        # (C-11). other_ms = streaming/dedup/persistence overhead + anything
+        # unaccounted.
+        "phase_totals": {
+            **phase_totals,
+            "other_ms": max(0, phase_totals["duration_ms"] - phase_totals["llm_ms"]
+                            - phase_totals["tool_ms"] - phase_totals["prep_ms"]),
+        } if phase_totals["covered"] else None,
         "tool_calls": {
             "total": sum(tool_call_counts),
             "avg_per_request": round(avg(tool_call_counts), 1),
@@ -780,6 +837,18 @@ def format_report(report: Dict[str, Any]) -> str:
     lines.append(f"  Iterations: avg {iters['avg']}, median {iters['median']}, p95 {iters['p95']}, max {iters['max']}")
     lines.append(f"  Duration: avg {dur['avg']/1000:.1f}s, median {dur['median']/1000:.1f}s, p95 {dur['p95']/1000:.1f}s, max {dur['max']/1000:.1f}s")
 
+    # Phase split (C-11): where the wall-clock went, over traces that carry it
+    pt = report.get("phase_totals")
+    if pt and pt.get("duration_ms"):
+        total = pt["duration_ms"]
+        pct = lambda v: f"{v / total * 100:.0f}%"
+        prefill_share = (f" (prefill {pt['prefill_ms'] / pt['llm_ms'] * 100:.0f}% of it)"
+                         if pt["llm_ms"] else "")
+        lines.append(
+            f"  Time split ({pt['covered']} req): LLM {pct(pt['llm_ms'])}{prefill_share}, "
+            f"tools {pct(pt['tool_ms'])}, prep {pct(pt['prep_ms'])}, other {pct(pt['other_ms'])}"
+        )
+
     # Tools
     tc = report["tool_calls"]
     lines.append(f"\nTools: {tc['total']} calls ({tc['avg_per_request']}/req), {tc['success_rate']}% success")
@@ -873,8 +942,11 @@ def format_report(report: Dict[str, Any]) -> str:
             )
         if "by_duration" in worst:
             w = worst["by_duration"]
+            ph = w.get("phases")
+            ph_str = (f" [llm {ph['llm_s']:.0f}s (prefill {ph['prefill_s']:.0f}s), tools {ph['tools_s']:.0f}s,"
+                      f" prep {ph['prep_s']:.0f}s, other {ph['other_s']:.0f}s]") if ph else ""
             lines.append(
-                f"  longest ({w['duration_ms']/1000:.0f}s): {w['choom']}/{w['source']} → {w['file']}"
+                f"  longest ({w['duration_ms']/1000:.0f}s){ph_str}: {w['choom']}/{w['source']} → {w['file']}"
             )
         if "by_failures" in worst:
             w = worst["by_failures"]
@@ -885,6 +957,11 @@ def format_report(report: Dict[str, Any]) -> str:
             w = worst["by_prompt_tokens"]
             lines.append(
                 f"  biggest single prompt ({w['max_prompt_tokens']:,} tok): {w['choom']}/{w['source']} → {w['file']}"
+            )
+        if "by_llm_call" in worst:
+            w = worst["by_llm_call"]
+            lines.append(
+                f"  slowest single LLM call ({w['max_llm_call_ms']/1000:.0f}s): {w['choom']}/{w['source']} → {w['file']}"
             )
 
     # Week-over-week trends (present when run_diagnostics attaches baseline)

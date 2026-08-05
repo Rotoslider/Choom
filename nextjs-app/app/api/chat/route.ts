@@ -1739,6 +1739,24 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
           // every LLM call in the turn, so in traces it reads like one giant prompt
           // when it's really 3×~89k — this field records what one call actually sent.
           let maxPromptTokens = 0;
+          // Per-phase wall-clock (C-11): a 17-minute 2-iteration request is
+          // undiagnosable from durationMs alone. llmMsTotal counts time inside
+          // LLM streaming calls — failed calls and fallback attempts included,
+          // since their wall-clock is what the user waited through. Prefill =
+          // call start → first SSE chunk (connection + prompt processing, the
+          // dominant cost for big local-model prompts).
+          let llmMsTotal = 0;
+          let llmPrefillMsTotal = 0;
+          let llmCallCount = 0;
+          let maxLlmCallMs = 0;
+          let firstLlmCallAt = 0; // request start → this = prep (prompt build, memory, compaction, planning)
+          const recordLlmCall = (start: number, firstChunkAt: number) => {
+            const callMs = Date.now() - start;
+            llmMsTotal += callMs;
+            llmCallCount++;
+            if (callMs > maxLlmCallMs) maxLlmCallMs = callMs;
+            llmPrefillMsTotal += (firstChunkAt || Date.now()) - start;
+          };
           // Freshness-tiered tool-output compression: when on, stale tool results
           // already in the transcript are trimmed before each re-send (the fresh
           // batch stays full). savedChars accumulates the context bytes trimmed.
@@ -2088,6 +2106,9 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             const endpointTier = classifyEndpoint(llmSettings.endpoint, usingCloudProvider);
             const { connectionMs: CONNECTION_TIMEOUT_MS, prefillMs: PREFILL_TIMEOUT_MS, betweenTokenMs: BETWEEN_TOKEN_MS } =
               computeStreamTimeouts(endpointTier, timeoutMs);
+            const llmCallStart = Date.now();
+            if (!firstLlmCallAt) firstLlmCallAt = llmCallStart;
+            let llmFirstChunkAt = 0;
             let connectionEstablished = false;
             let firstTokenReceived = false;
             let lastChunkTime = Date.now();
@@ -2113,6 +2134,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             };
             const resetInactivity = (hasContent: boolean = false) => {
               clearTimeout(inactivityTimer);
+              if (!llmFirstChunkAt) llmFirstChunkAt = Date.now();
               lastChunkTime = Date.now();
               chunkCount++;
               if (!connectionEstablished) {
@@ -2411,6 +2433,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
               await Promise.race([streamPromise, inactivityPromise, wallClockPromise]);
               // Stream succeeded — clean up timers to prevent leaks
               clearTimeout(inactivityTimer);
+              recordLlmCall(llmCallStart, llmFirstChunkAt);
               // Empty response guard: model returned 200 OK but streamed 0 content
               // and no tool calls. Treat this the same as a timeout so the fallback
               // chain gets a chance. Without this, an empty response silently breaks
@@ -2447,6 +2470,8 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                 throw new Error('Empty response from model (0 characters, no tool calls)');
               }
             } catch (timeoutError) {
+              // The failed call's wall-clock still counts — it's time the user waited.
+              recordLlmCall(llmCallStart, llmFirstChunkAt);
               const errMsg = timeoutError instanceof Error ? timeoutError.message : String(timeoutError);
               console.warn(`   ⚠️  LLM response error on iteration ${iteration}: ${errMsg}`);
 
@@ -2508,6 +2533,10 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                   }
 
                   let fbInactivityTimer: ReturnType<typeof setTimeout> = undefined!;
+                  // Hoisted above the try so the catch can record the failed
+                  // call's wall-clock (0 = failed before the stream started).
+                  let fbCallStart = 0;
+                  let fbFirstChunkAt = 0;
                   try {
                     const { client: fbClient, settings: fbSettings } = await createClientForFallback(fb);
                     // Reset iteration state for the fallback attempt
@@ -2525,6 +2554,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                     const fbTier = classifyEndpoint(fbSettings.endpoint, !fbIsLocal);
                     const { connectionMs: fbConnectionMs, prefillMs: fbPrefillMs, betweenTokenMs: fbBetweenTokenMs } =
                       computeStreamTimeouts(fbTier, fbTimeoutMs);
+                    fbCallStart = Date.now();
                     let fbConnectionEstablished = false;
                     let fbFirstTokenReceived = false;
                     let fbRejectInactivity: (err: Error) => void;
@@ -2546,6 +2576,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                     };
                     const resetFbInactivity = (hasContent: boolean = false) => {
                       clearTimeout(fbInactivityTimer);
+                      if (!fbFirstChunkAt) fbFirstChunkAt = Date.now();
                       if (!fbConnectionEstablished) {
                         fbConnectionEstablished = true;
                         console.log(`   🔗 ${choomTag} Fallback connected — ${fbPrefillMs / 1000}s prefill timeout`);
@@ -2628,6 +2659,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
 
                     await Promise.race([fbStreamPromise, fbInactivityPromise, fbWallClockPromise]);
                     clearTimeout(fbInactivityTimer); // clean up timer
+                    recordLlmCall(fbCallStart, fbFirstChunkAt);
 
                     // Fallback succeeded — switch llmClient for rest of this request
                     llmClient = fbClient;
@@ -2660,6 +2692,7 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
                     console.log(`   ✅ ${choomTag} Fallback #${fbIdx + 1} succeeded: ${fb.label} (model=${fbSettings.model})`);
                     break;
                   } catch (fbError) {
+                    if (fbCallStart) recordLlmCall(fbCallStart, fbFirstChunkAt);
                     clearTimeout(fbInactivityTimer); // clean up timer
                     const fbErrMsg = fbError instanceof Error ? fbError.message : String(fbError);
                     console.warn(`   ⚠️  ${choomTag} Fallback #${fbIdx + 1} (${fb.label}) also failed: ${fbErrMsg}`);
@@ -4307,6 +4340,11 @@ Always include both \`size\` and \`aspect\` parameters when calling generate_ima
             tokensEstimated: isEstimatedTokens,
             responseLength: fullContent.length,
             brokenTools: [...brokenTools],
+            llmMs: llmMsTotal,
+            llmPrefillMs: llmPrefillMsTotal,
+            llmCalls: llmCallCount,
+            maxLlmCallMs,
+            prepMs: firstLlmCallAt ? firstLlmCallAt - requestStartTime : 0,
           });
           writeTrace(traceBuilder.getTrace());
 

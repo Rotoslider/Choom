@@ -82,6 +82,21 @@ export interface ExecutionTrace {
 
   // Context management
   compactionTriggered: boolean;
+
+  // Phase timing (C-11): decomposition of durationMs. llmMs is wall time
+  // inside LLM streaming calls (failed calls and fallback attempts included —
+  // the user waited through them); llmPrefillMs is call-start → first SSE
+  // chunk (connection + prompt processing, the dominant cost for big
+  // local-model prompts); toolExecMs sums tool-call durations; prepMs is
+  // request start → first LLM call (prompt build, memory recall, compaction,
+  // planning). durationMs − (prepMs + llmMs + toolExecMs) ≈ streaming/dedup/
+  // persistence overhead. All 0 on traces from before this field existed.
+  llmMs: number;
+  llmPrefillMs: number;
+  llmCalls: number;
+  maxLlmCallMs: number;
+  toolExecMs: number;
+  prepMs: number;
 }
 
 // ── Trace Builder ──────────────────────────────────────────────────────────
@@ -138,6 +153,12 @@ export class TraceBuilder {
       tokensEstimated: false,
       responseLength: 0,
       compactionTriggered: false,
+      llmMs: 0,
+      llmPrefillMs: 0,
+      llmCalls: 0,
+      maxLlmCallMs: 0,
+      toolExecMs: 0,
+      prepMs: 0,
     };
   }
 
@@ -238,6 +259,11 @@ export class TraceBuilder {
     tokensEstimated: boolean;
     responseLength: number;
     brokenTools: string[];
+    llmMs?: number;
+    llmPrefillMs?: number;
+    llmCalls?: number;
+    maxLlmCallMs?: number;
+    prepMs?: number;
   }): void {
     this.trace.iterations = data.iterations;
     this.trace.status = data.status;
@@ -250,6 +276,14 @@ export class TraceBuilder {
     this.trace.responseLength = data.responseLength;
     this.trace.brokenTools = data.brokenTools;
     this.trace.consecutiveFailuresMax = this.maxConsecutiveFailures;
+    this.trace.llmMs = data.llmMs || 0;
+    this.trace.llmPrefillMs = data.llmPrefillMs || 0;
+    this.trace.llmCalls = data.llmCalls || 0;
+    this.trace.maxLlmCallMs = data.maxLlmCallMs || 0;
+    this.trace.prepMs = data.prepMs || 0;
+    // Tool execution time is already measured per call — roll it up here so
+    // the doctor doesn't have to re-sum toolCalls for every trace.
+    this.trace.toolExecMs = this.trace.toolCalls.reduce((s, tc) => s + (tc.durationMs || 0), 0);
 
     // Compute unique tools
     const toolSet = new Set(this.trace.toolCalls.map(tc => tc.tool));
