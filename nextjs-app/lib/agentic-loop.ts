@@ -1958,6 +1958,12 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                 const looksLikeFraming =
                   /^\[?\s*you are\s+\w+\b[\s\S]{0,40}(?:reply as|not anyone else)/i.test(memContent) ||
                   /RIGHT NOW in the latest messages/i.test(memContent) ||
+                  // Delegated workers sometimes "remember" the task prompt itself —
+                  // caught live 2026-08-05: Aloy stored "[DELEGATED TASK from Lissa]
+                  // ## Context from orchestrator …" verbatim. The prompt is scaffolding,
+                  // never a memory.
+                  /^\[DELEGATED TASK\b/i.test(memContent) ||
+                  /## Context from orchestrator/i.test(memContent) ||
                   transcriptLines >= 2;
                 if (looksLikeFraming) {
                   console.log(`   🧹 ${choomTag} Skipping remember — content is the POV framing / room transcript, not a real memory`);
