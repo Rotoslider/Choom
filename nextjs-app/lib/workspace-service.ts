@@ -113,6 +113,32 @@ export class WorkspaceService {
           }
         }
 
+        // Room-slug redirect: Chooms know a group room by its bare slug —
+        // it's the `room` arg of talk_with_sisters and what list_my_rooms
+        // shows — but the folder lives at choom_commons/rooms/<slug>. A
+        // bare-slug path used to resolve at the workspace ROOT, where the
+        // auto-mkdir write silently created a duplicate room tree
+        // (2026-08-06: Edyta wrote the D1 power-up protocol into a phantom
+        // root copy, then Optic "reorganized" inside the same phantom).
+        // Only fires when nothing at the root matched, so an intentional
+        // root project can never be shadowed by a room.
+        if (ciMatches.length === 0) {
+          try {
+            const roomsRel = path.join('choom_commons', 'rooms');
+            const roomDirs = readdirSync(path.join(this.rootPath, roomsRel));
+            const normalize = (s: string) => s.replace(/[^a-z0-9]/gi, '').toLowerCase();
+            const room = roomDirs.find(r => r.toLowerCase() === segments[0].toLowerCase())
+              || (normalize(segments[0]).length >= 3
+                ? roomDirs.find(r => normalize(r) === normalize(segments[0]))
+                : undefined);
+            if (room) {
+              console.warn(`   ⚠️ Room-slug path redirect: "${segments[0]}" → "choom_commons/rooms/${room}"`);
+              segments.splice(0, 1, 'choom_commons', 'rooms', room);
+              cleaned = segments.join('/');
+            }
+          } catch { /* no rooms dir yet — nothing to redirect to */ }
+        }
+
         if (ciMatches.length === 1) {
           // Single match — use it regardless of casing
           segments[0] = ciMatches[0];

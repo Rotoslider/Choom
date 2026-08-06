@@ -1,6 +1,7 @@
 import type { TTSSettings } from './types';
 import { stripForTTS } from './utils';
 import { withAudioLock } from './audio-lock';
+import { registerAudioPlayer } from './audio-registry';
 
 // Split a block of text into sentence-sized chunks for snappy, incremental TTS.
 // Splits after sentence-ending punctuation followed by whitespace; very short
@@ -42,11 +43,16 @@ export class RoomTTSQueue {
   private epoch = 0; // bumped on stop(); loops from a prior epoch exit cleanly
   private currentAudio: HTMLAudioElement | null = null;
   private onSpeakingChange?: (speaking: boolean, voiceId: string | null) => void;
+  // stop() is not final — a detached SSE reader can enqueue() right after it
+  // and restart the pumps. dispose() makes the instance permanently inert.
+  private disposed = false;
+  private unregister: () => void;
 
   constructor(settings: TTSSettings, onSpeakingChange?: (speaking: boolean, voiceId: string | null) => void) {
     this.endpoint = settings.endpoint;
     this.speed = settings.speed;
     this.onSpeakingChange = onSpeakingChange;
+    this.unregister = registerAudioPlayer(this);
   }
 
   setMuted(muted: boolean) {
@@ -54,10 +60,17 @@ export class RoomTTSQueue {
     if (muted) this.stop();
   }
 
+  // Permanently kill this queue (component unmount). See StreamingTTS.dispose.
+  dispose() {
+    this.disposed = true;
+    this.stop();
+    this.unregister();
+  }
+
   // Queue a speaker's message. Split into sentences so the first one starts
   // synthesizing immediately; the synth loop then races ahead of playback.
   enqueue(text: string, voiceId: string | null) {
-    if (this.muted) return;
+    if (this.disposed || this.muted) return;
     const clean = stripForTTS(text || '');
     if (!clean.trim()) return;
     const voice = voiceId || 'sophie';

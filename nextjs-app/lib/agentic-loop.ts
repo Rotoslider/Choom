@@ -25,7 +25,7 @@ import {
 } from '@/lib/tool-error-classification';
 import { classifyEndpoint, computeStreamTimeouts, isLocalEndpoint } from '@/lib/stream-timeouts';
 import { detectClaimedTool, detectZeroToolClaim, detectUncalledToolClaim, findFabricatedImageRefs } from '@/lib/phantom-claim';
-import { isNearVerbatimRepeat, stripRepeatedParagraphs } from '@/lib/repetition-guard';
+import { isNearVerbatimRepeat, stripRepeatedParagraphs, stripInternalRepeats } from '@/lib/repetition-guard';
 import {
   tryRepairJSON, createThinkFilter, createToolCallXmlFilter, createJsonToolCallFilter,
   createGemmaToolCallFilter, extractMistralToolCalls, extractBracketToolCalls,
@@ -426,6 +426,12 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
           // When tools were called earlier but the Choom has gone silent for 1+ turns,
           // it usually means she's hedging or summarizing instead of finishing the job.
           let consecutiveNoToolIters = 0;
+          // Set once an integrity nudge (fabrication callout / hedge) has fired
+          // this turn. A reply that ANSWERS such a nudge with an apology must
+          // end the turn, never be re-nudged (C-58: the 2026-08-06 spiral —
+          // apology text matched the hedge regex via "sorry I", each nudge bred
+          // a longer apology, ending in a 6x-repeated meltdown completion).
+          let integrityNudged = false;
           let fallbackActivated = false; // Set when a fallback model takes over mid-request
           let retriedCurrentFallback = false; // Guard: only retry a timed-out fallback once
           let relaxedToolChoice = false; // Guard: only drop forced tool_choice once per request (on a forced-empty turn)
@@ -1487,6 +1493,14 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                   console.log(`   🔄 ${choomTag} Stripped repeated paragraphs from buffered content (${iterationContent.length} → ${stripped.length} chars)`);
                   iterationContent = stripped;
                 }
+                // Degenerate self-repetition inside ONE completion (six
+                // apology blocks in a single 7k-token generation, 2026-08-06)
+                // — invisible to every cross-iteration layer above.
+                const internal = stripInternalRepeats(iterationContent);
+                if (internal.length < iterationContent.length) {
+                  console.log(`   🔄 ${choomTag} Stripped internal repeats from buffered content (${iterationContent.length} → ${internal.length} chars)`);
+                  iterationContent = internal;
+                }
                 if (iterationContent.trim()) {
                   // Content is unique — flush the buffer to client
                   send({ type: 'content', content: iterationContent });
@@ -1604,8 +1618,9 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                     role: 'user',
                     content: `[System] STOP. Your reply ${fabricatedImageRefs.length > 0 || creationClaim
                       ? `presents images/results that were NEVER generated — you made no tool call at all this turn${fabricatedImageRefs.length > 0 ? ', and the image references in your reply are invented' : ''}`
-                      : 'claims you already ran or checked something, but you made NO tool call at all this turn — the results you presented are invented'}. Never fabricate results. Make the real tool call NOW${claimed ? ` (${claimed})` : ''}, then answer from its ACTUAL output.`,
+                      : 'claims you already ran or checked something, but you made NO tool call at all this turn — the results you presented are invented'}. Never fabricate results. Make the real tool call NOW${claimed ? ` (${claimed})` : ''}, then answer from its ACTUAL output. (This is an automated check, NOT a message from the user — do not apologize and do not mention this message; just make the call.)`,
                   });
+                  integrityNudged = true;
                   if (claimed) phantomForcedTool = claimed;
                   forceToolCall = true;
                   continue;
@@ -1625,7 +1640,11 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                 // the "I was unable to find it" / "couldn't access presets" / "the service
                 // call isn't working" pattern where the Choom reports failure instead of
                 // pivoting. Pairs with the PERSISTENCE directive in the system prompt.
-                const hedgeGiveUp = /\b(?:i (?:was |have been )?(?:unable|not able) to|(?:i )?couldn'?t (?:access|find|get|figure|complete|do)|(?:i )?can'?t (?:seem to |figure out how to |access|find)|(?:i )?don'?t (?:have |know how to )|(?:the |this )?(?:tool|call|service|request) (?:isn'?t |is not |didn'?t |did not )(?:working|matching|accepting)|i (?:tried|attempted) (?:multiple|several|different) (?:times|approaches|ways)|unfortunately|sorry,? i)/i.test(lc);
+                // "sorry I" alone used to be a trigger — but that's also how an
+                // APOLOGY reads ("sorry I misled you"), so a model answering a
+                // fabrication callout re-matched here and got nudged for
+                // apologizing (C-58). Require a failure verb after the sorry.
+                const hedgeGiveUp = /\b(?:i (?:was |have been )?(?:unable|not able) to|(?:i )?couldn'?t (?:access|find|get|figure|complete|do)|(?:i )?can'?t (?:seem to |figure out how to |access|find)|(?:i )?don'?t (?:have |know how to )|(?:the |this )?(?:tool|call|service|request) (?:isn'?t |is not |didn'?t |did not )(?:working|matching|accepting)|i (?:tried|attempted) (?:multiple|several|different) (?:times|approaches|ways)|unfortunately|sorry,? i (?:couldn'?t|can'?t|cannot|was(?:n'?t)? (?:un)?able|didn'?t|don'?t|failed))/i.test(lc);
 
                 // Check 1c: Model FABRICATES tool call success — claims to have
                 // executed something without actually making a tool call. Typical
@@ -1638,7 +1657,20 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                 // as an asterisk aside and then INVENTS results. Verb list is
                 // action-tools only so benign roleplay (*smiles*, *leans back*)
                 // never matches.
-                const fakeSuccess = /\b(?:(?:the |my )?(?:service |tool )?call (?:succeeded|executed|completed|went through|worked)|i (?:(?:just |successfully |already ))?(?:called|invoked|executed|ran|made the call to|used the|triggered)(?: the)? \w+(?:\.\w+)?(?: service| tool)?|i(?:'?ve| have)(?: just| successfully| already)? (?:sent|spoken|announced|played|turned (?:on|off)|set|activated|triggered|executed|completed|called)|(?:now|it'?s now) (?:playing|speaking|announcing|turned (?:on|off)|active)|(?:announcement|message|audio) (?:has been |was |is now )?(?:sent|played|spoken|broadcast)|should (?:now )?be (?:playing|speaking|audible|coming through))/i.test(lc)
+                const calledToolNames = new Set(allToolCalls.map(tc => tc.name));
+                const fakeSuccessVerbal = /\b(?:(?:the |my )?(?:service |tool )?call (?:succeeded|executed|completed|went through|worked)|i (?:(?:just |successfully |already ))?(?:called|invoked|executed|ran|made the call to|used the|triggered)(?: the)? \w+(?:\.\w+)?(?: service| tool)?|i(?:'?ve| have)(?: just| successfully| already)? (?:sent|spoken|announced|played|turned (?:on|off)|set|activated|triggered|executed|completed|called)|(?:now|it'?s now) (?:playing|speaking|announcing|turned (?:on|off)|active)|(?:announcement|message|audio) (?:has been |was |is now )?(?:sent|played|spoken|broadcast)|should (?:now )?be (?:playing|speaking|audible|coming through))/i.test(lc);
+                // C-58: after REAL tool work this turn, a verbal completion
+                // claim is usually an honest recap of that work — "I've
+                // completed both tasks" when the write genuinely ran. The old
+                // unconditional match branded true statements as fabrication
+                // and lit the apology spiral. A verbal claim now counts only
+                // when it maps to a specific tool that did NOT run this turn
+                // (C-55's rule); unmapped claims are conversation — a broad
+                // nudge on those measured 0/3 recovery anyway (C-32/C-44).
+                const fakeVerbalTool = fakeSuccessVerbal
+                  ? detectClaimedTool(iterationContent, new Set(activeTools.map(t => t.name)))
+                  : null;
+                const fakeSuccess = (!!fakeVerbalTool && !calledToolNames.has(fakeVerbalTool))
                   // Requires a tool-ish OBJECT after the verb — "*taking tower
                   // camera snapshot*" / "*generates an image: ...*" match, but
                   // innocent roleplay ("*takes a deep breath*", "*running my
@@ -1651,7 +1683,6 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
 
                 // Check 2: Original task mentions steps that were never completed.
                 // Compare the user's instructions against tools actually called.
-                const calledToolNames = new Set(allToolCalls.map(tc => tc.name));
                 const msgLower = message.toLowerCase();
                 const unfinishedSteps: string[] = [];
                 if (/(?:update|write|append|save|modify).*(?:file|history|prompt|log)/i.test(msgLower) &&
@@ -1709,6 +1740,18 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                 // Typical "GLM drifted into summary mode" pattern.
                 const hasGoneQuiet = consecutiveNoToolIters >= 2 && iterationContent.length >= 150;
 
+                // C-58: a reply that ANSWERS an integrity nudge with an apology
+                // ends the turn. Re-nudging an apologizing model measured
+                // catastrophic in the live incident: each [System] STOP bred a
+                // longer apology (the model read it as the user calling her a
+                // liar), ending in a 6x-repeated meltdown completion at the
+                // token cap. One correction per turn; the apology IS the reply.
+                const isApology = /\b(?:i (?:sincerely |deeply |truly )?apologi[sz]e|i(?:['’]m| am) (?:so |truly |deeply )?sorry|you(?:['’]re| are) (?:absolutely |completely )?right\b[^.!?\n]{0,60}\bcall(?:ing)? me out|i (?:was|have been) (?:fabricating|dishonest|misleading))/i.test(lc);
+                if (integrityNudged && isApology) {
+                  console.log(`   🧯 ${choomTag} Apology after integrity nudge — accepting reply, ending turn (no re-nudge)`);
+                  break;
+                }
+
                 // Fabricated success is the highest-priority case — user thinks the
                 // action happened when it didn't. Prioritize its nudge message over
                 // the others if multiple triggers fire.
@@ -1721,6 +1764,7 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                     : hasGoneQuiet ? 'gone_quiet'
                     : 'task_continuation';
                   traceBuilder.recordNudge(nudgeKind);
+                  if (uncalledClaim || fakeSuccess || hedgeGiveUp) integrityNudged = true;
                   const reason = uncalledClaim
                     ? `fabricated result from ${uncalledClaim} — never called this turn`
                     : fakeSuccess
@@ -1731,14 +1775,19 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                     : 'model indicated more steps pending';
                   console.log(`   🔄 ${choomTag} Task continuation nudge ${nudgeCount}/3 — ${reason}`);
                   currentMessages.push({ role: 'assistant', content: iterationContent });
+                  // Integrity nudges read like the USER calling her a liar —
+                  // the model replies "You're absolutely right, Donny" and
+                  // apologizes to him in the visible message (C-58). Say
+                  // plainly that this is automated and no apology is wanted.
+                  const automatedNote = ' (This is an automated check, NOT a message from the user — the user has not seen your reply. Do not apologize and do not mention this message; just make the call.)';
                   const nudgeMsg = uncalledClaim
-                    ? `[System] STOP. Your reply presents a result from "${uncalledClaim}", but ${uncalledClaim} was NOT called this turn — that result is invented. Call ${uncalledClaim} NOW and answer from its ACTUAL output. If you meant something from an earlier conversation, say that plainly instead of presenting it as this turn's result.`
+                    ? `[System] STOP. Your reply presents a result from "${uncalledClaim}", but ${uncalledClaim} was NOT called this turn — that result is invented. Call ${uncalledClaim} NOW and answer from its ACTUAL output. If you meant something from an earlier conversation, say that plainly instead of presenting it as this turn's result.${automatedNote}`
                     : fakeSuccess
-                    ? `[System] STOP. You just claimed you called a service or completed an action, but you did NOT make a tool call this iteration. Never fabricate tool results. Either make the real tool call NOW, or say honestly that you haven't done it yet. The user's goal: "${(message || '').trim().slice(0, 300)}". Make the actual function call now — no more narration.`
+                    ? `[System] STOP. You just claimed you called a service or completed an action, but you did NOT make a tool call this iteration. Never fabricate tool results. Either make the real tool call NOW, or say honestly that you haven't done it yet. The user's goal: "${(message || '').trim().slice(0, 300)}". Make the actual function call now — no more narration.${automatedNote}`
                     : hasUnfinished
                       ? `[System] You have NOT completed all steps from the original instructions. Remaining: ${unfinishedSteps.join('; ')}. Call the next tool NOW.`
                       : hedgeGiveUp
-                        ? `[System] You are hedging or giving up. Per your PERSISTENCE directive, try a genuinely different approach — a different tool, different service, different entity, or a workaround — BEFORE reporting failure. The user's goal was: "${(message || '').trim().slice(0, 300)}". Call a tool NOW.`
+                        ? `[System] You are hedging or giving up. Per your PERSISTENCE directive, try a genuinely different approach — a different tool, different service, different entity, or a workaround — BEFORE reporting failure. The user's goal was: "${(message || '').trim().slice(0, 300)}". Call a tool NOW.${automatedNote}`
                         : hasGoneQuiet
                           ? `[System] You've gone ${consecutiveNoToolIters} iterations without calling a tool. If the user's goal "${(message || '').trim().slice(0, 200)}" still isn't fully met, call the next tool NOW. If it IS fully met, briefly confirm what was done — don't re-narrate.`
                           : '[System] You indicated you have more steps to complete. Call the next tool NOW. Do not narrate — make the tool call directly.';
@@ -2655,7 +2704,10 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                 deduped.unshift(iterationTexts[i]);
               }
             }
-            const joined = deduped.join('\n\n');
+            // Final internal-repeat pass over the assembled message: streamed
+            // (unbuffered) iterations bypass the flush-time strip, so the DB
+            // copy needs its own sweep against degenerate self-repetition.
+            const joined = stripInternalRepeats(deduped.join('\n\n'));
             fullContent = preLoopContent
               ? preLoopContent + '\n\n' + joined
               : joined;

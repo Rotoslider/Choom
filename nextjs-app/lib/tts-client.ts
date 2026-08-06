@@ -2,6 +2,7 @@ import type { TTSSettings } from './types';
 import { isSentenceEnd, stripForTTS } from './utils';
 import { log } from './log-store';
 import { withAudioLock } from './audio-lock';
+import { registerAudioPlayer } from './audio-registry';
 
 interface QueueEntry {
   audio: HTMLAudioElement;
@@ -24,6 +25,12 @@ export class StreamingTTS {
   private insideCodeBlock: boolean = false; // Track if we're inside ``` fenced code blocks
   private fullText: string = ''; // Accumulates ALL tokens for reliable fence tracking
   private ttsQueue: Promise<void> = Promise.resolve(); // Serialize TTS requests
+  // stop() is NOT final: a still-running stream reader that calls onToken()
+  // afterward captures the post-bump generation and happily resumes speaking
+  // (that's how the orphaned-instance incident kept talking after unmount).
+  // dispose() is final — the instance goes permanently inert.
+  private disposed: boolean = false;
+  private unregister: () => void;
 
   constructor(
     settings: TTSSettings,
@@ -35,6 +42,7 @@ export class StreamingTTS {
     this.speed = settings.speed;
     this.onSpeakingChange = onSpeakingChange;
     this.onAudioReady = onAudioReady;
+    this.unregister = registerAudioPlayer(this);
   }
 
   setMuted(muted: boolean) {
@@ -44,13 +52,22 @@ export class StreamingTTS {
     }
   }
 
+  // Permanently kill this instance: stop audio, drop the queue, and make
+  // every future onToken()/flush() a no-op. Call on component unmount so a
+  // detached stream reader can't keep feeding an orphan.
+  dispose() {
+    this.disposed = true;
+    this.stop();
+    this.unregister();
+  }
+
   setVoice(voiceId: string) {
     this.voiceId = voiceId;
   }
 
   // Called for each token from the LLM stream
   onToken(token: string) {
-    if (this.isMuted) return;
+    if (this.disposed || this.isMuted) return;
 
     this.buffer += token;
     this.fullText += token;
@@ -145,6 +162,7 @@ export class StreamingTTS {
 
   // Flush any remaining buffered text
   flush() {
+    if (this.disposed) return;
     if (this.buffer.trim().length > 0) {
       const text = stripForTTS(this.buffer.trim());
       if (text.length > 0) {
@@ -201,7 +219,7 @@ export class StreamingTTS {
   }
 
   private async doSendToTTS(text: string, gen: number) {
-    if (this.isMuted) return;
+    if (this.disposed || this.isMuted) return;
     if (gen !== this.generation) return; // superseded by reset()/stop()
 
     const startTime = Date.now();
