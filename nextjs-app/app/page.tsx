@@ -10,6 +10,7 @@ import { ImageGallery } from '@/components/gallery/image-gallery';
 import { LogPanel } from '@/components/logs/log-panel';
 import { useAppStore } from '@/lib/store';
 import { StreamingTTS } from '@/lib/tts-client';
+import { broadcastMute } from '@/lib/audio-registry';
 import { log, useLogStore } from '@/lib/log-store';
 import type { Message, Choom, Chat, StreamingChatChunk, ServiceHealth } from '@/lib/types';
 import { cn } from '@/lib/utils';
@@ -114,13 +115,18 @@ export default function Home() {
       ttsRef.current.setMuted(ui.isMuted);
     }
     return () => {
-      ttsRef.current?.stop();
+      // dispose(), not stop(): a still-running stream reader outlives this
+      // component (by design — the server finishes the turn) and would
+      // otherwise keep feeding the orphaned instance new speech that the
+      // remounted page's mute button can't reach.
+      ttsRef.current?.dispose();
+      ttsRef.current = null;
     };
   }, [settings.tts, currentChoom?.voiceId]);
 
-  // Update TTS muted state
+  // Update TTS muted state — broadcast so orphaned players are silenced too
   useEffect(() => {
-    ttsRef.current?.setMuted(ui.isMuted);
+    broadcastMute(ui.isMuted);
   }, [ui.isMuted]);
 
   // Keep live mode refs in sync (avoids stale closures in TTS callback)

@@ -17,6 +17,7 @@ import { InputArea, type ImageAttachment } from '@/components/chat/input-area';
 import { TtsPlayButton } from '@/components/chat/tts-play-button';
 import { useAppStore } from '@/lib/store';
 import { RoomTTSQueue } from '@/lib/room-tts-queue';
+import { broadcastMute } from '@/lib/audio-registry';
 import { cn, isSentenceEnd, formatDayTime } from '@/lib/utils';
 import type { Choom } from '@/lib/types';
 
@@ -120,10 +121,16 @@ export default function RoomsPage() {
   // Init TTS queue once settings are available
   useEffect(() => {
     ttsRef.current = new RoomTTSQueue(settings.tts, (isSpeaking) => setSpeaking(isSpeaking));
-    return () => ttsRef.current?.stop();
+    return () => {
+      // dispose(), not stop(): a detached room-stream reader can enqueue()
+      // after unmount and restart a stopped queue the next page can't mute.
+      ttsRef.current?.dispose();
+      ttsRef.current = null;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  useEffect(() => { ttsRef.current?.setMuted(ui.isMuted); }, [ui.isMuted]);
+  // Broadcast so orphaned players (from either page) are silenced too
+  useEffect(() => { broadcastMute(ui.isMuted); }, [ui.isMuted]);
 
   // Load chooms + rooms on mount
   useEffect(() => {

@@ -3,9 +3,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { Loader2, Volume2, Square } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { registerAudioPlayer } from '@/lib/audio-registry';
 
 // Only one message plays at a time — starting a new one stops the current.
 let activeStop: (() => void) | null = null;
+
+// The global mute button must also silence per-message playback.
+registerAudioPlayer({ setMuted: (muted) => { if (muted) activeStop?.(); } });
 
 // Play/stop button for one saved message's TTS audio. First click fetches
 // /api/tts/message/<id> (server generates + caches the WAV in the author's
