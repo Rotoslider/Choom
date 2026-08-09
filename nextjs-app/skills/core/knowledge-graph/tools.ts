@@ -79,21 +79,28 @@ export const tools: ToolDefinition[] = [
   {
     name: 'search_engineering_docs',
     description:
-      'Search engineering documents by keyword or visual similarity. Use mode="keyword" for ' +
-      'exact codes/designations (C12000, QW-451.1, ASTM A 709). Use mode="visual" to find ' +
-      'pages with specific charts, tables, or diagrams. Returns page references with snippets ' +
+      'Search engineering documents. mode="keyword" for exact codes/designations ' +
+      '(C12000, QW-451.1, ASTM A 709); mode="semantic" for meaning-based text search; ' +
+      'mode="visual" to find pages with specific charts, tables, or diagrams; ' +
+      'mode="hybrid" for graph-aware fusion search (optional strategy: rrf, ' +
+      'graph_boosted, graph_first, community). Returns page references with snippets ' +
       'and image URLs — does NOT synthesize an answer (use ask_engineering_question for that).',
     parameters: {
       type: 'object',
       properties: {
         query: {
           type: 'string',
-          description: 'Search query — an exact code for keyword mode, or descriptive text for visual mode.',
+          description: 'Search query — an exact code for keyword mode, or descriptive text otherwise.',
         },
         mode: {
           type: 'string',
-          description: 'Search mode: "keyword" for exact text match, "visual" for ColPali visual retrieval.',
-          enum: ['keyword', 'visual'],
+          description: 'Search mode: keyword (exact text), semantic (meaning), visual (ColPali page images), hybrid (graph-aware fusion).',
+          enum: ['keyword', 'semantic', 'visual', 'hybrid'],
+        },
+        strategy: {
+          type: 'string',
+          description: 'Hybrid mode only: rrf (default), graph_boosted, graph_first, or community.',
+          enum: ['rrf', 'graph_boosted', 'graph_first', 'community'],
         },
         collection: {
           type: 'string',
