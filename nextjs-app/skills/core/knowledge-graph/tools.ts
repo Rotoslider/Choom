@@ -82,6 +82,7 @@ export const tools: ToolDefinition[] = [
       'Search engineering documents. mode="keyword" for exact codes/designations ' +
       '(C12000, QW-451.1, ASTM A 709); mode="semantic" for meaning-based text search; ' +
       'mode="visual" to find pages with specific charts, tables, or diagrams; ' +
+      'mode="summary" for TOC-level zoom-out (what a book/chapter covers); ' +
       'mode="hybrid" for graph-aware fusion search (optional strategy: rrf, ' +
       'graph_boosted, graph_first, community). Returns page references with snippets ' +
       'and image URLs — does NOT synthesize an answer (use ask_engineering_question for that).',
@@ -94,8 +95,8 @@ export const tools: ToolDefinition[] = [
         },
         mode: {
           type: 'string',
-          description: 'Search mode: keyword (exact text), semantic (meaning), visual (ColPali page images), hybrid (graph-aware fusion).',
-          enum: ['keyword', 'semantic', 'visual', 'hybrid'],
+          description: 'Search mode: keyword (exact text), semantic (meaning), summary (TOC zoom-out), visual (ColPali page images), hybrid (graph-aware fusion).',
+          enum: ['keyword', 'semantic', 'summary', 'visual', 'hybrid'],
         },
         strategy: {
           type: 'string',

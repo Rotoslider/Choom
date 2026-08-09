@@ -119,6 +119,20 @@ export class ForgeRAGClient {
   }
 
   /**
+   * RAPTOR-by-TOC summary search: section/chapter/whole-document level
+   * summaries for zoom-out questions ("what does this book cover").
+   */
+  async searchSummaries(
+    query: string,
+    options: { limit?: number } = {}
+  ): Promise<ForgeResult> {
+    return this.request('/search/summaries', 'POST', {
+      query,
+      limit: options.limit || 10,
+    });
+  }
+
+  /**
    * Graph-aware hybrid search. strategy: "rrf" (default — chunk dense +
    * BM25 + reranker fusion), "graph_boosted", "graph_first", "community".
    */
@@ -290,6 +304,9 @@ export async function executeForgeRAGTool(
       if (mode === 'semantic') {
         return client.searchSemantic(query, { limit });
       }
+      if (mode === 'summary') {
+        return client.searchSummaries(query, { limit });
+      }
       if (mode === 'hybrid') {
         return client.searchHybrid(query, {
           limit,
@@ -301,7 +318,7 @@ export async function executeForgeRAGTool(
       }
       return {
         success: false,
-        reason: `unknown mode "${mode}" — use keyword, semantic, visual, or hybrid`,
+        reason: `unknown mode "${mode}" — use keyword, semantic, summary, visual, or hybrid`,
       };
     }
 
