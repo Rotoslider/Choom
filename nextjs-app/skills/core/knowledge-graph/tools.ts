@@ -161,6 +161,33 @@ export const tools: ToolDefinition[] = [
     },
   },
   {
+    name: 'get_page_image',
+    description:
+      'Fetch a ForgeRAG page image into the workspace so you can visually inspect it with ' +
+      'analyze_image. Search results include image_url values like "/images/<hash>/<page>" — ' +
+      'those links are internal to ForgeRAG and NOT fetchable by vision or download tools ' +
+      'directly; this tool is the bridge. Pass the image_url from a search result (or ' +
+      'file_hash + page_number), then call analyze_image with the returned saved_path.',
+    parameters: {
+      type: 'object',
+      properties: {
+        image_url: {
+          type: 'string',
+          description: 'The image_url exactly as returned by a ForgeRAG search result, e.g. "/images/ab12…/763".',
+        },
+        file_hash: {
+          type: 'string',
+          description: 'Document file hash (alternative to image_url).',
+        },
+        page_number: {
+          type: 'number',
+          description: 'Page number within the document (with file_hash).',
+        },
+      },
+      required: [],
+    },
+  },
+  {
     name: 'query_knowledge_graph',
     description:
       'Look up relationships for SPECIFIC NAMED engineering entities (codes, standards, ' +
