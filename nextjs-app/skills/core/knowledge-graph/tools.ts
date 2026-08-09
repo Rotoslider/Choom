@@ -184,6 +184,15 @@ export const tools: ToolDefinition[] = [
           type: 'number',
           description: 'Page number within the document (with file_hash).',
         },
+        show_user: {
+          type: 'boolean',
+          description:
+            'Set true to display the page inline in the chat (and make it available to ' +
+            'text over Signal via send_notification). Use when the user asks to SEE a ' +
+            'page ("show me that page, plus one before and two after" = multiple calls ' +
+            'with show_user=true). Leave false/omit when fetching pages only for your ' +
+            'own visual analysis.',
+        },
       },
       required: [],
     },

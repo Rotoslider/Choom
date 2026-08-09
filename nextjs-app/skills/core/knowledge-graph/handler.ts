@@ -10,6 +10,7 @@ import type { ToolCall, ToolResult } from '@/lib/types';
 import { ForgeRAGClient, executeForgeRAGTool } from '@/lib/forgerag-client';
 import { WorkspaceService } from '@/lib/workspace-service';
 import { WORKSPACE_ROOT } from '@/lib/config';
+import prisma from '@/lib/db';
 
 const FORGERAG_TOOLS = new Set([
   'ask_engineering_question',
@@ -147,6 +148,42 @@ export default class KnowledgeGraphHandler extends BaseSkillHandler {
     sessionFileCount.created++;
     ctx.send({ type: 'file_created', path: savePath });
 
+    // show_user: display the page inline in the chat (and make it
+    // Signal-able) — same GeneratedImage + image_generated pattern as
+    // camera snapshots. Off by default so a Choom privately reading ten
+    // pages doesn't flood the conversation; set true when the user asks
+    // to SEE a page.
+    let savedImageId: string | undefined;
+    if (args.show_user === true) {
+      try {
+        const mime = ext === '.png' ? 'image/png' : 'image/jpeg';
+        const dataUrl = `data:${mime};base64,${buffer.toString('base64')}`;
+        const savedImage = await prisma.generatedImage.create({
+          data: {
+            choomId: ctx.choomId,
+            prompt: `ForgeRAG page ${page} (doc ${hash.slice(0, 12)}…)`,
+            imageUrl: dataUrl,
+            settings: JSON.stringify({
+              source: 'forgerag_page', file_hash: hash,
+              page_number: page, path: savePath,
+            }),
+          },
+        });
+        savedImageId = savedImage.id;
+        ctx.send({
+          type: 'image_generated',
+          imageUrl: dataUrl,
+          imageId: savedImage.id,
+          prompt: `ForgeRAG page ${page}`,
+        });
+      } catch (persistErr) {
+        console.warn(
+          '   ⚠️ Page image saved to workspace but chat display failed:',
+          persistErr instanceof Error ? persistErr.message : persistErr,
+        );
+      }
+    }
+
     return {
       toolCallId: toolCall.id,
       name: toolCall.name,
@@ -154,9 +191,14 @@ export default class KnowledgeGraphHandler extends BaseSkillHandler {
         saved_path: savePath,
         page_number: page,
         size_kb: Math.round(buffer.length / 1024),
+        ...(savedImageId ? { imageId: savedImageId, displayed_in_chat: true } : {}),
         next_step:
           `Page image saved. Call analyze_image with image_path="${savePath}" ` +
-          'to visually inspect it.',
+          'to visually inspect it.' +
+          (savedImageId
+            ? ' The page is displayed in the chat.'
+            : ' If the user asked to SEE this page, call get_page_image again with show_user=true.') +
+          ` To text it over Signal, use send_notification(file_paths=["${savePath}"]).`,
       },
     };
   }
