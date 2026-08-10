@@ -1986,22 +1986,30 @@ export async function executeToolCall(
   // Vision analysis (Optic)
   if (toolCall.name === 'analyze_image') {
     try {
-      const visionProviderId = (settings?.vision as Record<string, unknown>)?.visionProviderId as string | undefined;
-      let visionApiKey = (settings?.vision as Record<string, unknown>)?.apiKey as string | undefined;
-      let visionEndpoint = (settings?.vision as Record<string, unknown>)?.endpoint as string || process.env.VISION_ENDPOINT || 'http://localhost:1234';
+      // GUI settings persist server-side in bridge-config.json. Requests
+      // that carry no client settings (delegation, cron, heartbeat) must
+      // still honor what the user set in the GUI — bridge-config is the
+      // authority for them; VISION_ENDPOINT env is a bootstrap default,
+      // not an override. (2026-08-09: delegated vision silently ran on a
+      // stale env endpoint whose server answered with a different model.)
+      let bridgeCfg: Record<string, unknown> = {};
+      try {
+        const fs = await import('fs');
+        const path = await import('path');
+        const bridgePath = path.join(process.cwd(), 'services', 'signal-bridge', 'bridge-config.json');
+        if (fs.existsSync(bridgePath)) {
+          bridgeCfg = JSON.parse(fs.readFileSync(bridgePath, 'utf-8'));
+        }
+      } catch { /* ignore */ }
+      const visionCfg = (settings?.vision as Record<string, unknown>)
+        || (bridgeCfg.vision as Record<string, unknown>) || {};
+      const visionProviderId = visionCfg.visionProviderId as string | undefined;
+      let visionApiKey = visionCfg.apiKey as string | undefined;
+      let visionEndpoint = (visionCfg.endpoint as string) || process.env.VISION_ENDPOINT || 'http://localhost:1234';
       // Resolve providers: prefer client-sent, fall back to bridge-config.json
-      let visionProviders: LLMProviderConfig[] = (settings?.providers as LLMProviderConfig[]) || [];
-      if (visionProviders.length === 0) {
-        try {
-          const fs = await import('fs');
-          const path = await import('path');
-          const bridgePath = path.join(process.cwd(), 'services', 'signal-bridge', 'bridge-config.json');
-          if (fs.existsSync(bridgePath)) {
-            const bridgeCfg = JSON.parse(fs.readFileSync(bridgePath, 'utf-8'));
-            visionProviders = (bridgeCfg.providers || []) as LLMProviderConfig[];
-          }
-        } catch { /* ignore */ }
-      }
+      const visionProviders: LLMProviderConfig[] =
+        (settings?.providers as LLMProviderConfig[])
+        || (bridgeCfg.providers as LLMProviderConfig[]) || [];
       if (visionProviderId && visionProviders.length > 0) {
         const visionProvider = visionProviders.find(
           (p: LLMProviderConfig) => p.id === visionProviderId
@@ -2018,16 +2026,18 @@ export async function executeToolCall(
           console.warn(`   ⚠️  Vision provider "${visionProviderId}" not found in ${visionProviders.length} providers (available: ${visionProviders.map(p => p.id).join(', ')}). Falling back to endpoint: ${visionEndpoint}`);
         }
       }
-      const rawVisionModel = (settings?.vision as Record<string, unknown>)?.model as string;
-      const fallbackModel = ((settings?.llm as Record<string, unknown>)?.model as string) || defaultLLMSettings.model;
+      const rawVisionModel = visionCfg.model as string;
+      const fallbackModel = ((settings?.llm as Record<string, unknown>)?.model as string)
+        || ((bridgeCfg.llm as Record<string, unknown>)?.model as string)
+        || defaultLLMSettings.model;
       const visionModel = (rawVisionModel && rawVisionModel !== 'vision-model')
         ? rawVisionModel
         : fallbackModel; // Fall back to LLM model (multimodal models support vision natively)
       const visionSettings: VisionSettings = {
         endpoint: visionEndpoint,
         model: visionModel,
-        maxTokens: (settings?.vision as Record<string, unknown>)?.maxTokens as number || 1024,
-        temperature: (settings?.vision as Record<string, unknown>)?.temperature as number || 0.3,
+        maxTokens: visionCfg.maxTokens as number || 1024,
+        temperature: visionCfg.temperature as number || 0.3,
         apiKey: visionApiKey,
       };
       console.log(`   👁️  Vision config: model=${visionModel}, endpoint=${visionEndpoint}, provider=${visionProviderId || 'none'}, hasApiKey=${!!visionApiKey}`);
