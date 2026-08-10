@@ -1640,9 +1640,46 @@ BRAVE_SEARCH_API_KEY=your_key_here
 
 ### Run
 
-```bash
-npm run dev    # Next.js dev server + memory server
+The dev server should run as a **systemd user service** — the Agent
+Console (Settings → Logs) reads the server's console output back out of
+the `choom-dev` unit's journal, so a plain-terminal `npm run dev` starves
+that view silently (it keeps showing the journal's old history and
+"refresh" appears to do nothing; this bit us from 2026-07-28 to 08-09).
+
+One-time setup — create `~/.config/systemd/user/choom-dev.service`:
+
+```ini
+[Unit]
+Description=Choom Next dev server
+
+[Service]
+Type=exec
+WorkingDirectory=/path/to/Choom/nextjs-app
+Environment=PATH=/home/YOU/.local/share/pnpm/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/YOU/.local/share/pnpm/bin/pnpm dev
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
 ```
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now choom-dev   # start now + at boot
+loginctl enable-linger $USER              # user services survive logout/reboot
+```
+
+Day to day:
+
+```bash
+systemctl --user restart choom-dev   # restart after code/env changes
+systemctl --user status choom-dev    # is it running?
+journalctl --user -u choom-dev -f    # tail the raw console
+```
+
+(`npm run dev` in a terminal still works for quick hacking — just know
+the Agent Console goes stale until the unit runs again.)
 
 Open `http://localhost:3000`. Create your first Choom from the sidebar.
 
