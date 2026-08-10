@@ -122,9 +122,14 @@ export default class KnowledgeGraphHandler extends BaseSkillHandler {
     // Reduced JPEG first (right size for vision), full PNG as fallback.
     let buffer: Buffer | null = null;
     let ext = '.jpg';
+    const imageHeaders: Record<string, string> = process.env.FORGERAG_API_TOKEN
+      ? { Authorization: `Bearer ${process.env.FORGERAG_API_TOKEN}` }
+      : {};
     for (const [suffix, extension] of [['/reduced', '.jpg'], ['', '.png']] as const) {
       try {
-        const resp = await fetch(`${getEndpoint()}/images/${hash}/${page}${suffix}`);
+        const resp = await fetch(`${getEndpoint()}/images/${hash}/${page}${suffix}`, {
+          headers: imageHeaders,
+        });
         if (resp.ok) {
           buffer = Buffer.from(await resp.arrayBuffer());
           ext = extension;

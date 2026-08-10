@@ -28,9 +28,15 @@ export class ForgeRAGClient {
   ): Promise<ForgeResult> {
     const url = ensureEndpoint(this.endpoint, path);
     try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      // Localhost requests are auth-exempt server-side; the header only
+      // matters if ForgeRAG ever moves off-box.
+      if (process.env.FORGERAG_API_TOKEN) {
+        headers['Authorization'] = `Bearer ${process.env.FORGERAG_API_TOKEN}`;
+      }
       const response = await fetch(url, {
         method,
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: body ? JSON.stringify(body) : undefined,
         signal: AbortSignal.timeout(120000), // 2 min timeout for VLM answers
       });
