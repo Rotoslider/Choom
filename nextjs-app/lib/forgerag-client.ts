@@ -94,12 +94,16 @@ export class ForgeRAGClient {
 
   async searchKeyword(
     query: string,
-    options: { limit?: number; collection?: string; fuzzy?: boolean } = {}
+    options: { limit?: number; collection?: string; fuzzy?: boolean; prefer?: string } = {}
   ): Promise<ForgeResult> {
     return this.request('/search/keyword', 'POST', {
       query,
       limit: options.limit || 10,
       ...(options.fuzzy !== undefined ? { fuzzy: options.fuzzy } : {}),
+      // 'table' | 'figure': bias toward pages structurally containing one —
+      // for vision tasks where the goal is to OPEN the table/figure page,
+      // not the prose about it.
+      ...(options.prefer ? { prefer: options.prefer } : {}),
     });
   }
 
@@ -305,6 +309,8 @@ export async function executeForgeRAGTool(
           limit,
           collection: args.collection ? String(args.collection) : undefined,
           fuzzy: args.fuzzy === true ? true : undefined,
+          prefer: args.prefer === 'table' || args.prefer === 'figure'
+            ? String(args.prefer) : undefined,
         });
       }
       if (mode === 'semantic') {

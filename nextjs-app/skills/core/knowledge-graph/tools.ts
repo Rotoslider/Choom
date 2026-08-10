@@ -113,6 +113,15 @@ export const tools: ToolDefinition[] = [
             'Enable fuzzy matching for OCR typo tolerance. Useful when searching scanned ' +
             'documents where codes may have OCR errors (e.g., "C1200O" instead of "C12000").',
         },
+        prefer: {
+          type: 'string',
+          enum: ['table', 'figure'],
+          description:
+            'Keyword mode only: rank pages that structurally CONTAIN a table or figure ' +
+            'first. Use whenever you intend to OPEN the page image and read a table ' +
+            '(composition, properties) or figure (schematic, curve, drawing) — the best ' +
+            'TEXT match for a code is often the prose about it, not the table itself.',
+        },
         limit: {
           type: 'number',
           description: 'Max results (default 10).',
