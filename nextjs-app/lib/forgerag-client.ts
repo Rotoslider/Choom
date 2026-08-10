@@ -28,9 +28,15 @@ export class ForgeRAGClient {
   ): Promise<ForgeResult> {
     const url = ensureEndpoint(this.endpoint, path);
     try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      // Localhost requests are auth-exempt server-side; the header only
+      // matters if ForgeRAG ever moves off-box.
+      if (process.env.FORGERAG_API_TOKEN) {
+        headers['Authorization'] = `Bearer ${process.env.FORGERAG_API_TOKEN}`;
+      }
       const response = await fetch(url, {
         method,
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: body ? JSON.stringify(body) : undefined,
         signal: AbortSignal.timeout(120000), // 2 min timeout for VLM answers
       });
@@ -105,6 +111,45 @@ export class ForgeRAGClient {
       query,
       limit: options.limit || 5,
       candidate_pool: options.candidate_pool || 30,
+    });
+  }
+
+  async searchSemantic(
+    query: string,
+    options: { limit?: number } = {}
+  ): Promise<ForgeResult> {
+    return this.request('/search/semantic', 'POST', {
+      query,
+      limit: options.limit || 10,
+    });
+  }
+
+  /**
+   * RAPTOR-by-TOC summary search: section/chapter/whole-document level
+   * summaries for zoom-out questions ("what does this book cover").
+   */
+  async searchSummaries(
+    query: string,
+    options: { limit?: number } = {}
+  ): Promise<ForgeResult> {
+    return this.request('/search/summaries', 'POST', {
+      query,
+      limit: options.limit || 10,
+    });
+  }
+
+  /**
+   * Graph-aware hybrid search. strategy: "rrf" (default — chunk dense +
+   * BM25 + reranker fusion), "graph_boosted", "graph_first", "community".
+   */
+  async searchHybrid(
+    query: string,
+    options: { limit?: number; strategy?: string } = {}
+  ): Promise<ForgeResult> {
+    return this.request('/search/hybrid', 'POST', {
+      query,
+      limit: options.limit || 10,
+      strategy: options.strategy || 'rrf',
     });
   }
 
@@ -248,17 +293,39 @@ export async function executeForgeRAGTool(
     case 'search_engineering_docs': {
       const query = String(args.query || '');
       if (!query) return { success: false, reason: 'query is required' };
+      // Every mode routes to ITS OWN endpoint. The old fall-through sent
+      // everything that wasn't "keyword" — including "semantic" and
+      // "hybrid" — to visual search, silently. (Caught by a Choom running
+      // the search audit: semantic and hybrid returned byte-identical
+      // results because both were actually visual queries.)
       const mode = String(args.mode || 'keyword');
+      const limit = Number(args.limit) || 10;
       if (mode === 'keyword') {
         return client.searchKeyword(query, {
-          limit: Number(args.limit) || 10,
+          limit,
           collection: args.collection ? String(args.collection) : undefined,
           fuzzy: args.fuzzy === true ? true : undefined,
         });
       }
-      return client.searchVisual(query, {
-        limit: Number(args.limit) || 5,
-      });
+      if (mode === 'semantic') {
+        return client.searchSemantic(query, { limit });
+      }
+      if (mode === 'summary') {
+        return client.searchSummaries(query, { limit });
+      }
+      if (mode === 'hybrid') {
+        return client.searchHybrid(query, {
+          limit,
+          strategy: args.strategy ? String(args.strategy) : undefined,
+        });
+      }
+      if (mode === 'visual') {
+        return client.searchVisual(query, { limit: Number(args.limit) || 5 });
+      }
+      return {
+        success: false,
+        reason: `unknown mode "${mode}" — use keyword, semantic, summary, visual, or hybrid`,
+      };
     }
 
     case 'smart_search': {

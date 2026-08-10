@@ -27,21 +27,28 @@ export default class ImageAnalysisHandler extends BaseSkillHandler {
 
   private async analyzeImage(toolCall: ToolCall, ctx: SkillHandlerContext): Promise<ToolResult> {
     try {
-      // Resolve vision provider: prefer client-sent settings, fall back to bridge-config.json
-      const visionProviderId = (ctx.settings?.vision as Record<string, unknown>)?.visionProviderId as string | undefined;
-      let visionApiKey = (ctx.settings?.vision as Record<string, unknown>)?.apiKey as string | undefined;
-      let visionEndpoint = (ctx.settings?.vision as Record<string, unknown>)?.endpoint as string || process.env.VISION_ENDPOINT || 'http://localhost:1234';
+      // GUI settings persist server-side in bridge-config.json. Requests
+      // that carry no client settings (delegation, cron, heartbeat) must
+      // still honor what the user set in the GUI — bridge-config is the
+      // authority for them; VISION_ENDPOINT env is a bootstrap default,
+      // not an override. (2026-08-09: delegated vision silently ran on a
+      // stale env endpoint whose server answered with a different model.)
+      let bridgeCfg: Record<string, unknown> = {};
+      try {
+        const bridgePath = path.join(process.cwd(), 'services', 'signal-bridge', 'bridge-config.json');
+        if (fs.existsSync(bridgePath)) {
+          bridgeCfg = JSON.parse(fs.readFileSync(bridgePath, 'utf-8'));
+        }
+      } catch { /* ignore */ }
+      const visionCfg = (ctx.settings?.vision as Record<string, unknown>)
+        || (bridgeCfg.vision as Record<string, unknown>) || {};
+      const visionProviderId = visionCfg.visionProviderId as string | undefined;
+      let visionApiKey = visionCfg.apiKey as string | undefined;
+      let visionEndpoint = (visionCfg.endpoint as string) || process.env.VISION_ENDPOINT || 'http://localhost:1234';
 
-      let visionProviders: LLMProviderConfig[] = (ctx.settings?.providers as LLMProviderConfig[]) || [];
-      if (visionProviders.length === 0) {
-        try {
-          const bridgePath = path.join(process.cwd(), 'services', 'signal-bridge', 'bridge-config.json');
-          if (fs.existsSync(bridgePath)) {
-            const bridgeCfg = JSON.parse(fs.readFileSync(bridgePath, 'utf-8'));
-            visionProviders = (bridgeCfg.providers || []) as LLMProviderConfig[];
-          }
-        } catch { /* ignore */ }
-      }
+      const visionProviders: LLMProviderConfig[] =
+        (ctx.settings?.providers as LLMProviderConfig[])
+        || (bridgeCfg.providers as LLMProviderConfig[]) || [];
       if (visionProviderId && visionProviders.length > 0) {
         const visionProvider = visionProviders.find(
           (p: LLMProviderConfig) => p.id === visionProviderId
@@ -59,8 +66,10 @@ export default class ImageAnalysisHandler extends BaseSkillHandler {
       }
 
       // Vision model: fall back to LLM model (multimodal models support vision natively)
-      const rawVisionModel = (ctx.settings?.vision as Record<string, unknown>)?.model as string;
-      const fallbackModel = ((ctx.settings?.llm as Record<string, unknown>)?.model as string) || 'qwen2.5-7b-instruct';
+      const rawVisionModel = visionCfg.model as string;
+      const fallbackModel = ((ctx.settings?.llm as Record<string, unknown>)?.model as string)
+        || ((bridgeCfg.llm as Record<string, unknown>)?.model as string)
+        || 'qwen2.5-7b-instruct';
       const visionModel = (rawVisionModel && rawVisionModel !== 'vision-model')
         ? rawVisionModel
         : fallbackModel;
@@ -68,8 +77,8 @@ export default class ImageAnalysisHandler extends BaseSkillHandler {
       const visionSettings: VisionSettings = {
         endpoint: visionEndpoint,
         model: visionModel,
-        maxTokens: (ctx.settings?.vision as Record<string, unknown>)?.maxTokens as number || 1024,
-        temperature: (ctx.settings?.vision as Record<string, unknown>)?.temperature as number || 0.3,
+        maxTokens: visionCfg.maxTokens as number || 1024,
+        temperature: visionCfg.temperature as number || 0.3,
         apiKey: visionApiKey,
       };
       console.log(`   👁️  Vision config: model=${visionModel}, endpoint=${visionEndpoint}, provider=${visionProviderId || 'none'}, hasApiKey=${!!visionApiKey}`);

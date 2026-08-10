@@ -79,21 +79,29 @@ export const tools: ToolDefinition[] = [
   {
     name: 'search_engineering_docs',
     description:
-      'Search engineering documents by keyword or visual similarity. Use mode="keyword" for ' +
-      'exact codes/designations (C12000, QW-451.1, ASTM A 709). Use mode="visual" to find ' +
-      'pages with specific charts, tables, or diagrams. Returns page references with snippets ' +
+      'Search engineering documents. mode="keyword" for exact codes/designations ' +
+      '(C12000, QW-451.1, ASTM A 709); mode="semantic" for meaning-based text search; ' +
+      'mode="visual" to find pages with specific charts, tables, or diagrams; ' +
+      'mode="summary" for TOC-level zoom-out (what a book/chapter covers); ' +
+      'mode="hybrid" for graph-aware fusion search (optional strategy: rrf, ' +
+      'graph_boosted, graph_first, community). Returns page references with snippets ' +
       'and image URLs — does NOT synthesize an answer (use ask_engineering_question for that).',
     parameters: {
       type: 'object',
       properties: {
         query: {
           type: 'string',
-          description: 'Search query — an exact code for keyword mode, or descriptive text for visual mode.',
+          description: 'Search query — an exact code for keyword mode, or descriptive text otherwise.',
         },
         mode: {
           type: 'string',
-          description: 'Search mode: "keyword" for exact text match, "visual" for ColPali visual retrieval.',
-          enum: ['keyword', 'visual'],
+          description: 'Search mode: keyword (exact text), semantic (meaning), summary (TOC zoom-out), visual (ColPali page images), hybrid (graph-aware fusion).',
+          enum: ['keyword', 'semantic', 'summary', 'visual', 'hybrid'],
+        },
+        strategy: {
+          type: 'string',
+          description: 'Hybrid mode only: rrf (default), graph_boosted, graph_first, or community.',
+          enum: ['rrf', 'graph_boosted', 'graph_first', 'community'],
         },
         collection: {
           type: 'string',
@@ -150,6 +158,42 @@ export const tools: ToolDefinition[] = [
     parameters: {
       type: 'object',
       properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'get_page_image',
+    description:
+      'Fetch a ForgeRAG page image into the workspace so you can visually inspect it with ' +
+      'analyze_image. Search results include image_url values like "/images/<hash>/<page>" — ' +
+      'those links are internal to ForgeRAG and NOT fetchable by vision or download tools ' +
+      'directly; this tool is the bridge. Pass the image_url from a search result (or ' +
+      'file_hash + page_number), then call analyze_image with the returned saved_path.',
+    parameters: {
+      type: 'object',
+      properties: {
+        image_url: {
+          type: 'string',
+          description: 'The image_url exactly as returned by a ForgeRAG search result, e.g. "/images/ab12…/763".',
+        },
+        file_hash: {
+          type: 'string',
+          description: 'Document file hash (alternative to image_url).',
+        },
+        page_number: {
+          type: 'number',
+          description: 'Page number within the document (with file_hash).',
+        },
+        show_user: {
+          type: 'boolean',
+          description:
+            'Set true to display the page inline in the chat (and make it available to ' +
+            'text over Signal via send_notification). Use when the user asks to SEE a ' +
+            'page ("show me that page, plus one before and two after" = multiple calls ' +
+            'with show_user=true). Leave false/omit when fetching pages only for your ' +
+            'own visual analysis.',
+        },
+      },
       required: [],
     },
   },
