@@ -1125,7 +1125,7 @@ export const sandboxTools: ToolDefinition[] = [
   {
     name: 'run_command',
     description:
-      'Run a shell command in a project workspace folder. Use for git commands, file operations, running scripts, or any other shell tasks. If a Python venv exists, it is auto-activated.',
+      'Run a shell command in a project workspace folder. Use for git commands, file operations, running scripts, or other shell tasks. Use run_ssh_command, not this tool, for remote SSH access. If a Python venv exists, it is auto-activated.',
     parameters: {
       type: 'object',
       properties: {
@@ -1143,6 +1143,33 @@ export const sandboxTools: ToolDefinition[] = [
         },
       },
       required: ['project_folder', 'command'],
+    },
+  },
+  {
+    name: 'run_ssh_command',
+    description:
+      'Run a non-interactive command on a remote computer through this machine\'s OpenSSH client. Available only when this Choom\'s Remote SSH permission is enabled. Uses existing SSH keys and known hosts; never request or send passwords.',
+    parameters: {
+      type: 'object',
+      properties: {
+        target: {
+          type: 'string',
+          description: 'SSH target, such as "developer@192.0.2.42" or a configured SSH host alias',
+        },
+        command: {
+          type: 'string',
+          description: 'Non-interactive shell command to execute on the remote computer',
+        },
+        port: {
+          type: 'number',
+          description: 'Optional SSH port (default 22)',
+        },
+        timeout_seconds: {
+          type: 'number',
+          description: 'Execution timeout in seconds (default 330, max 600)',
+        },
+      },
+      required: ['target', 'command'],
     },
   },
 ];

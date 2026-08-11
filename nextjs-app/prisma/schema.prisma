@@ -15,6 +15,7 @@ model Choom {
   avatarUrl     String?
   systemPrompt  String    @default("")
   imageSettings String?   // JSON string - Choom-specific image gen settings
+  permissions   String?   // JSON per-Choom capability grants; defaults deny when absent
   voiceId       String?   // TTS voice ID (per-Choom)
   llmModel      String?   // LLM model override (per-Choom)
   llmEndpoint   String?   // Optional LLM endpoint override

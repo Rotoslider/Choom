@@ -27,6 +27,8 @@ import { memoryTools } from '@/lib/tool-definitions';
 import { getSkillRegistry } from '@/lib/skill-registry';
 import { suggestToolNames } from '@/lib/tool-name-suggest';
 import type { SkillHandlerContext } from '@/lib/skill-handler';
+import { choomHasSshPermission, REMOTE_SSH_DISABLED_MESSAGE } from '@/lib/choom-permissions';
+import { SshExecutor } from '@/lib/ssh-executor';
 import { getGoogleClient } from '@/lib/google-client';
 import { waitForGpu } from '@/lib/gpu-lock';
 import * as fs from 'fs';
@@ -1941,6 +1943,44 @@ export async function executeToolCall(
     }
   }
 
+  // Remote SSH is a separate, per-Choom capability in legacy dispatch too.
+  if (toolCall.name === 'run_ssh_command') {
+    if (!choomHasSshPermission(choom)) {
+      return {
+        toolCallId: toolCall.id,
+        name: toolCall.name,
+        result: null,
+        error: REMOTE_SSH_DISABLED_MESSAGE,
+      };
+    }
+    try {
+      const timeoutSeconds = toolCall.arguments.timeout_seconds;
+      const timeoutMs = typeof timeoutSeconds === 'number'
+        ? Math.min(timeoutSeconds * 1000, 600_000)
+        : undefined;
+      const ssh = new SshExecutor();
+      const result = await ssh.run(
+        toolCall.arguments.target,
+        toolCall.arguments.command,
+        timeoutMs,
+        toolCall.arguments.port,
+      );
+      console.log(`   🔐 run_ssh_command: "${String(toolCall.arguments.target).slice(0, 60)}" exit=${result.exitCode} ${result.durationMs}ms`);
+      return {
+        toolCallId: toolCall.id,
+        name: toolCall.name,
+        result,
+      };
+    } catch (err) {
+      return {
+        toolCallId: toolCall.id,
+        name: toolCall.name,
+        result: null,
+        error: `SSH command failed: ${err instanceof Error ? err.message : 'Unknown error'}`,
+      };
+    }
+  }
+
   // Proactive notification (Batch 5)
   if (toolCall.name === 'send_notification' && ctx.suppressNotifications) {
     console.log(`   🔇 send_notification suppressed (suppressNotifications=true)`);
@@ -2243,6 +2283,7 @@ Use workspace tools for writing reports, saving code, creating structured projec
 - \`create_venv\` - Create Python venv or npm init. Parameters: \`project_folder\`, \`runtime\` (required)
 - \`install_package\` - Install pip/npm packages. Parameters: \`project_folder\`, \`runtime\`, \`packages\` (required)
 - \`run_command\` - Run a shell command. Parameters: \`project_folder\`, \`command\` (required)
+- \`run_ssh_command\` - Run a non-interactive remote SSH command. Requires this Choom\'s Remote SSH permission. Parameters: \`target\`, \`command\` (required); \`port\`, \`timeout_seconds\` (optional)
 
 **Notifications:**
 - \`send_notification\` - Send a Signal message notification. Parameters: \`message\` (required)
@@ -2293,6 +2334,7 @@ Use workspace tools for writing reports, saving code, creating structured projec
  * Most contract items are enforced elsewhere (MAX_CALLS_PER_TOOL, delegation
  * tool stripping, send_notification suppression, image cap, schedule_self_followup
  * internal cap). This gate only handles the genuinely new cases:
+ *   - run_ssh_command: require the Choom's explicit Remote SSH grant
  *   - workspace_write_file: audit-log writes into shared top-level paths
  *   - workspace_delete_file: block deletes outside the Choom's own folder
  *     and block all deletes inside sibling_journal/
@@ -2303,6 +2345,15 @@ function contractGate(toolCall: ToolCall, ctx: ToolContext): ToolResult | null {
   const ownFolderPrefix = choomSlug ? `selfies_${choomSlug}/` : '';
 
   const SHARED_TOP = new Set(['choom_commons']);
+
+  if (toolCall.name === 'run_ssh_command' && !choomHasSshPermission(ctx.choom)) {
+    return {
+      toolCallId: toolCall.id,
+      name: toolCall.name,
+      error: REMOTE_SSH_DISABLED_MESSAGE,
+      result: null,
+    };
+  }
 
   if (toolCall.name === 'workspace_write_file') {
     const rawPath = (toolCall.arguments.path || toolCall.arguments.file_path || toolCall.arguments.filename) as string || '';

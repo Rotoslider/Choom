@@ -33,6 +33,7 @@
 | `workspace_delete_file` | gated | Blocked outside the Choom's own folder unless the path is inside an assigned home project. Never deletes from `sibling_journal/` or `choom_commons/`. |
 | `schedule_self_followup` | gated | New tool (see below). Rate-limited to 3 queued follow-ups per Choom at any time. Delay clamped to [5 min, 7 days]. |
 | `generate_image` | gated | Cost/disk: cap at 3 per request (already enforced). Selfies subject to anti-repetition (already enforced). |
+| `run_ssh_command` | gated | Available only when that Choom's Remote SSH permission is enabled. Runs a non-interactive command through the owner's configured OpenSSH client; target and optional port are validated. |
 
 ## Denied contexts
 
@@ -89,4 +90,4 @@ code, not served separately — so any change shows up in git diff.
 
 Both are protected from deletion. Writes into them are audit-logged. Cross-Choom writes into another Choom's `selfies_*/` are blocked.
 
-_Last revised: 2026-04-22_
+_Last revised: 2026-08-11_

@@ -11,6 +11,7 @@ import { getLiveContextWindow } from '@/lib/model-metadata';
 import { allTools, getAllToolsFromSkills, useSkillDispatch } from '@/lib/tool-definitions';
 import { loadCoreSkills, loadCustomSkills } from '@/lib/skill-loader';
 import { CompactionService } from '@/lib/compaction-service';
+import { choomHasSshPermission } from '@/lib/choom-permissions';
 
 import { buildChoomContext } from '@/lib/chat-context';
 import { buildSystemPrompt } from '@/lib/chat-prompt';
@@ -377,10 +378,12 @@ export async function POST(request: NextRequest) {
       choomMaxIterations = Math.max(3, parseInt(maxIterMatch[1]));
     }
 
-    // All tools are always available. slimToolDefinition() in llm-client.ts
-    // handles token overhead (~40-60% reduction). Filtering tools out of the
-    // array prevents the LLM from ever calling them — lesson learned twice.
-    console.log(`   🛠️  All ${activeTools.length} tools available (no filtering)`);
+    // Standard tools stay available; Remote SSH is an explicit per-Choom capability.
+    if (!choomHasSshPermission(choom)) {
+      activeTools = activeTools.filter((tool) => tool.name !== 'run_ssh_command');
+      console.log(`   🔒 Remote SSH disabled for ${choom.name}; removed run_ssh_command`);
+    }
+    console.log(`   🛠️  ${activeTools.length} tools available`);
 
     // noTools mode: strip ALL tools so the LLM can only produce text.
     // Used by scheduler briefings where all data is pre-fetched in the prompt.
