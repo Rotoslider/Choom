@@ -40,6 +40,12 @@ const BLOCKED_COMMAND_PATTERNS = [
   /\bdd\b\s.*of=\/dev/,  // raw disk write
 ];
 
+// SSH is a separately permission-gated capability. Keep it out of the
+// general shell path so profile grants are enforced at one execution point.
+const SSH_CLIENT_COMMAND_PATTERN = /(?:^|&&|\|\||[;|&])\s*(?:\/(?:[^\s;|&]+\/)*)?(?:ssh|scp|sftp)\b/i;
+const SSH_CLIENT_CODE_PATTERN =
+  /\b(?:subprocess\.(?:run|call|check_call|check_output|Popen)|os\.(?:system|popen)|(?:child_process\.)?(?:exec(?:File)?(?:Sync)?|spawn(?:Sync)?))\s*\(\s*(?:\[\s*)?['"`](?:\/(?:[^'"`\s]+\/)*)?(?:ssh|scp|sftp)\b/i;
+
 /**
  * Strip heredoc bodies and quoted strings from a command before pattern
  * matching. The blocked-pattern check should only scan the actual shell
@@ -67,6 +73,11 @@ function validateCommand(command: string): void {
   // shell still sees the original command at runtime — this only affects
   // our pre-flight regex screening.
   const scanned = stripQuotedAndHeredocs(command);
+  if (SSH_CLIENT_COMMAND_PATTERN.test(scanned)) {
+    throw new Error(
+      'Blocked: direct SSH shell commands are disabled. Use run_ssh_command; it is available only when Remote SSH is enabled in Edit Choom > Permissions.'
+    );
+  }
   for (const pattern of BLOCKED_COMMAND_PATTERNS) {
     if (pattern.test(scanned)) {
       throw new Error(
@@ -76,6 +87,14 @@ function validateCommand(command: string): void {
         `If this command requires elevated privileges, ask the user to run it manually.`
       );
     }
+  }
+}
+
+function validateCode(code: string): void {
+  if (SSH_CLIENT_CODE_PATTERN.test(code)) {
+    throw new Error(
+      'Blocked: direct SSH code invocations are disabled. Use run_ssh_command; it is available only when Remote SSH is enabled in Edit Choom > Permissions.'
+    );
   }
 }
 
@@ -213,6 +232,7 @@ export class CodeSandbox {
   /** Execute Python code in a project folder */
   async executePython(projectFolder: string, code: string, timeoutMs?: number): Promise<ExecutionResult> {
     const projectDir = this.resolveProject(projectFolder);
+    validateCode(code);
     const timeout = Math.min(timeoutMs || DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS);
     const tempFile = path.join(projectDir, `_choom_tmp_${randomBytes(4).toString('hex')}.py`);
     const start = Date.now();
@@ -262,6 +282,7 @@ export class CodeSandbox {
   /** Execute Node.js code in a project folder */
   async executeNode(projectFolder: string, code: string, timeoutMs?: number): Promise<ExecutionResult> {
     const projectDir = this.resolveProject(projectFolder);
+    validateCode(code);
     const timeout = Math.min(timeoutMs || DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS);
     const tempFile = path.join(projectDir, `_choom_tmp_${randomBytes(4).toString('hex')}.js`);
     const start = Date.now();

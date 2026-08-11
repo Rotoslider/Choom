@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
+import { normalizeChoomPermissions, serializeChoomPermissions } from '@/lib/choom-permissions';
 
 // Helper to parse Choom JSON fields
 function parseChoomData(choom: Record<string, unknown>) {
   return {
     ...choom,
     imageSettings: choom.imageSettings ? JSON.parse(choom.imageSettings as string) : null,
+    permissions: normalizeChoomPermissions(choom.permissions),
   };
 }
 
@@ -31,7 +33,7 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { name, description, avatarUrl, systemPrompt, voiceId, llmModel, llmEndpoint, llmProviderId, imageSettings, companionId, llmFallbackModel1, llmFallbackProvider1, llmFallbackModel2, llmFallbackProvider2, groupChatModel, groupChatProvider } = body;
+    const { name, description, avatarUrl, systemPrompt, voiceId, llmModel, llmEndpoint, llmProviderId, imageSettings, companionId, llmFallbackModel1, llmFallbackProvider1, llmFallbackModel2, llmFallbackProvider2, groupChatModel, groupChatProvider, permissions } = body;
 
     if (!name) {
       return NextResponse.json(
@@ -58,6 +60,7 @@ export async function POST(request: NextRequest) {
         groupChatProvider: groupChatProvider || null,
         companionId: companionId || null,
         imageSettings: imageSettings ? JSON.stringify(imageSettings) : null,
+        ...(permissions !== undefined && { permissions: serializeChoomPermissions(permissions) }),
       },
     });
 

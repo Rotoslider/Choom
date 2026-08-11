@@ -4,6 +4,10 @@
 // Entity Types (matching Prisma schema)
 // ============================================================================
 
+export interface ChoomPermissions {
+  ssh: boolean;
+}
+
 export interface Choom {
   id: string;
   companionId: string | null; // Custom memory ID - if null, uses id for memory isolation
@@ -12,6 +16,7 @@ export interface Choom {
   avatarUrl: string | null;
   systemPrompt: string;
   imageSettings: ImageSettings | null;
+  permissions?: ChoomPermissions;
   voiceId: string | null;
   llmModel: string | null;
   llmEndpoint: string | null;

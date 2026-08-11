@@ -4,7 +4,7 @@ A self-hosted AI companion framework with persistent memory, image generation, t
 
 Each AI persona ("Choom") can have its own LLM model, voice, image style, and memory space. Chooms are agentic — they autonomously chain tools across multi-step tasks, searching the web, writing files, generating images, running code, and managing your calendar without manual prompting between steps. **Chooms can also delegate tasks to each other** — an orchestrator Choom can assign research to one agent, coding to another, and image analysis to a third, then synthesize the results. They can also **hold live group conversations** — you and two-or-more Chooms in one shared, turn-based room, with cross-device continuity between the web app and Signal. Talk to them through the web UI or via Signal messages.
 
-All 115 tools are organized into 27 modular **skills** with progressive disclosure — the LLM only sees detailed documentation for skills relevant to the current request, saving ~3,400 tokens per message. Skills can be enabled/disabled, custom skills can be created via a visual builder, and external skills can be installed from GitHub with safety verification.
+All 116 tools are organized into 27 modular **skills** with progressive disclosure — the LLM only sees detailed documentation for skills relevant to the current request, saving ~3,400 tokens per message. Skills can be enabled/disabled, custom skills can be created via a visual builder, and external skills can be installed from GitHub with safety verification.
 
 ![Chat Interface](docs/screenshots/chat-interface.png)
 
@@ -22,7 +22,7 @@ All 115 tools are organized into 27 modular **skills** with progressive disclosu
 - **Smart Home (Home Assistant)**: Full integration with Home Assistant for reading sensors, controlling lights/switches/climate, viewing history trends, and ambient home awareness. Three-layer environmental awareness: system prompt injection (every LLM call knows the current home state), heartbeat monitoring (periodic checks with intelligent reasoning), and conditional automations (trigger actions based on sensor thresholds). Includes an Entity Browser in Settings and works from both the web UI and Signal. See the [Smart Home Guide](#smart-home-home-assistant-1) for setup and usage
 - **Scheduled Tasks**: Cron-driven morning briefings, weather checks, aurora forecasts, health heartbeats, and YouTube music downloads. Custom heartbeats support **per-task model routing** — assign a fast/cheap model to simple tasks (selfies, reminders) while keeping the Choom's primary model for complex work
 - **Google Integration**: Full Google Workspace access — Calendar (CRUD), Tasks, Sheets, Docs, Drive, Gmail (read/send/draft/search/archive/reply), Contacts (search/lookup), and YouTube (search/video details/channel info/playlists) — 35 tools via OAuth2
-- **Skills Architecture**: 115 tools organized into 27 modular skills with 3-level progressive disclosure — Level 1 (one-line summaries, always sent), Level 2 (full docs, injected on match), Level 3 (reference files, on demand). Custom skills via visual builder, external skills from GitHub with safety scanning. See the [Skills Guide](SKILLS-GUIDE.md) for details
+- **Skills Architecture**: 116 tools organized into 27 modular skills with 3-level progressive disclosure — Level 1 (one-line summaries, always sent), Level 2 (full docs, injected on match), Level 3 (reference files, on demand). Custom skills via visual builder, external skills from GitHub with safety scanning. See the [Skills Guide](SKILLS-GUIDE.md) for details
 - **Agentic Tool Loop**: Chooms autonomously execute up to 100 tool calls per turn (configurable per-Choom via `<!-- max_iterations: N -->`) — chaining memory lookups, web searches, image generation, file operations, calendar updates, and more in a single response. Includes automatic nudging (retries with `tool_choice=required` if the LLM describes a tool instead of calling it), tool call deduplication, parallel execution of read-only tools, and smart completion detection
 - **Planner Mode**: Complex multi-step requests (e.g., "research solar panels and write a comparison report") are automatically detected and broken into structured execution plans with real-time progress display, step-by-step watcher evaluation, and automatic retry/rollback on failure
 - **Automation Builder**: Visual drag-and-drop builder for creating scheduled task chains — combine any tools into multi-step automations with cron scheduling, interval triggers, template variables (`{{prev.result.field}}`), per-Choom targeting, and **conditional triggers** (weather, time range, day of week, calendar) with cooldown support. See the [Conditional Triggers Guide](CONDITIONAL-TRIGGERS.md) for details. Managed from Settings > Automations
@@ -31,6 +31,7 @@ All 115 tools are organized into 27 modular **skills** with progressive disclosu
 - **Image Attachment**: Attach images in the web GUI (paperclip, drag-and-drop, clipboard paste) or send via Signal for Optic analysis
 - **Project Management**: Live dashboard for workspace projects with per-project iteration limits, auto-refresh, automatic Choom assignment tracking, and project rename tool. **Per-chat working folder**: with no project active a Choom defaults to her own `selfies_<name>/` folder (and `choom_commons/` for cross-Choom work) — no forced "home project" leaking into unrelated chats. Pin a project for a whole conversation either from the **"Working in" dropdown** in the chat header or just by **saying "we're working in project X"** (the project is stored on the chat and persists across messages — and across the web↔Signal boundary, so you can set it from your phone). A Choom can still create a dedicated project with `workspace_create_project` whenever the work genuinely warrants one
 - **Code Sandbox**: Execute Python and Node.js code in workspace projects with venv/npm support, package installation, timeout enforcement, and output truncation
+- **Remote SSH Access**: Per-Choom opt-in SSH access through the owner's configured OpenSSH client, managed in **Edit Choom → Permissions**
 - **Web Scraping & Downloads**: Full JavaScript-rendered page scraping via headless Chromium (`scrape_page_content`) with text extraction and image discovery — works on SPAs, product pages, and dynamic sites. Also static HTML image scraping (`scrape_page_images`), image downloads with WebP-to-PNG auto-conversion (`download_web_image`), and file downloads (`download_web_file` for PDFs, docs, etc.)
 - **PDF Generation & Reading**: Markdown-to-PDF with embedded images (`![caption](path)` syntax + explicit images array) via pdfkit; text extraction from PDFs via `pdftotext` with optional page range
 - **Context Compaction**: Two-layer context window management — cross-turn summarization of old messages into a rolling LLM-generated summary, plus within-turn truncation of stale tool results during agentic loops
@@ -488,6 +489,15 @@ Hybrid SQLite + ChromaDB storage via a Python HTTP server on port 8100.
 - `create_venv` - Create a Python venv or initialize a Node.js project (`npm init`)
 - `install_package` - Install pip or npm packages with name validation
 - `run_command` - Run arbitrary shell commands in a project folder (with timeout)
+- `run_ssh_command` - Run a non-interactive command on a remote host. Available only when **Edit Choom → Permissions → Allow remote SSH** is enabled for that Choom.
+
+#### Remote SSH
+
+Remote SSH is disabled by default for every Choom. Enable **Allow remote SSH** only for a Choom that needs it, then have it call `run_ssh_command` with a `target` such as `developer@192.0.2.42` (or an SSH config alias), a remote `command`, and optional `port` and `timeout_seconds`.
+
+Commands run as the remote SSH account, with exactly that account's permissions. File reads, writes, package installation, and `sudo` work only to the extent the remote account permits them; password-prompted `sudo` cannot be completed by a Choom.
+
+The connection is non-interactive (`BatchMode=yes`). Configure a usable SSH key and trusted host key in the account running Choom before enabling access. Choom cannot answer an SSH password, key-passphrase, or unknown-host prompt. Direct SSH commands through the general shell and code-execution tools are rejected so the per-Choom permission gate remains the supported path.
 
 ### Google Integration (~35 tools)
 
@@ -670,7 +680,7 @@ skill-name/
 | `pdf-processing` | 2 | Markdown-to-PDF generation + PDF text extraction |
 | `web-scraping` | 3 | Page image scraping, image/file downloads |
 | `image-analysis` | 1 | Vision LLM analysis (workspace, URL, or base64) |
-| `code-execution` | 4 | Python + Node.js sandbox with venv/npm support |
+| `code-execution` | 5 | Python + Node.js sandbox with venv/npm support; permission-gated remote SSH |
 | `notifications` | 1 | Proactive Signal message delivery |
 | `reminders` | 2 | Timed Signal reminders (create + list) |
 | `plan-mode` | 3 | Structured multi-step plans: create, execute, adjust |
@@ -1741,7 +1751,7 @@ sudo systemctl start signal-bridge.service
 - Image generation capped at 5 per batch (per agentic loop iteration) to prevent runaway loops (heartbeat selfie spam, etc.); the counter resets each iteration so workflows can still generate more images later
 - Image resizing applied before vision analysis (max dimension per vision model profile: 768-2048px); very small details may be lost
 - Static page scraping (`scrape_page_images`) works with HTML only; for JavaScript-rendered content (SPAs, lazy-loaded galleries), use `scrape_page_content` which renders via headless Chromium. The Playwright browser uses ~100-200MB RAM per scrape and closes automatically after each call
-- Code sandbox has no network restrictions — Chooms can make HTTP requests and download packages
+- Code sandbox has no general network restrictions — Chooms can make HTTP requests and download packages. Remote SSH is separately permission-gated through `run_ssh_command`.
 - External LLM providers (Anthropic, OpenAI, NVIDIA Build) require separate API keys/subscriptions
 - NVIDIA Build API: large models (Qwen 3.5 397B, GLM-5, Kimi K2.5) may be overloaded or have high latency; some model IDs are periodically retired/renamed. Confirmed working: Nemotron Ultra 253B, Mistral Large 3 675B, DeepSeek V3.2, Llama 3.3 70B, Llama 405B
 - Some LLM APIs (Mistral, others) reject assistant messages with empty content and no tool_calls — LLMClient automatically sanitizes these out before sending

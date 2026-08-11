@@ -29,12 +29,13 @@ import {
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Separator } from '@/components/ui/separator';
-import type { Choom, LoraConfig, ImageModeSettings, ImageSize, ImageAspect, LLMProviderConfig } from '@/lib/types';
+import type { Choom, ChoomPermissions, LoraConfig, ImageModeSettings, ImageSize, ImageAspect, LLMProviderConfig } from '@/lib/types';
 import { IMAGE_SIZES, IMAGE_ASPECTS, computeImageDimensions } from '@/lib/types';
 import { useLiveModels } from '@/lib/hooks/use-live-models';
 import { Switch } from '@/components/ui/switch';
 import { useAppStore } from '@/lib/store';
 import { cn } from '@/lib/utils';
+import { normalizeChoomPermissions } from '@/lib/choom-permissions';
 
 interface ChoomEditPanelProps {
   choom: Choom | null;
@@ -555,6 +556,7 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave, onDelete }: 
   const [llmFallbackProvider2, setLlmFallbackProvider2] = useState('');
   const [groupChatModel, setGroupChatModel] = useState('');
   const [groupChatProvider, setGroupChatProvider] = useState('');
+  const [permissions, setPermissions] = useState<ChoomPermissions>({ ssh: false });
 
   // Image settings - now with two modes
   const [generalSettings, setGeneralSettings] = useState<ImageModeSettings>({ ...emptyModeSettings });
@@ -603,6 +605,7 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave, onDelete }: 
       setLlmFallbackProvider2(choom.llmFallbackProvider2 || (choom.llmFallbackModel2 ? '_local' : ''));
       setGroupChatModel(choom.groupChatModel || '');
       setGroupChatProvider(choom.groupChatProvider || (choom.groupChatModel ? '_local' : ''));
+      setPermissions(normalizeChoomPermissions(choom.permissions));
 
       // Parse image settings
       const imgSettings = choom.imageSettings;
@@ -784,6 +787,7 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave, onDelete }: 
         llmFallbackProvider2: (llmFallbackProvider2 && llmFallbackProvider2 !== '_local') ? llmFallbackProvider2 : null,
         groupChatModel: groupChatModel || null,
         groupChatProvider: (groupChatProvider && groupChatProvider !== '_local') ? groupChatProvider : null,
+        permissions,
         imageSettings: (cleanedGeneral || selfPortraitWithCharacter) ? {
           general: cleanedGeneral,
           selfPortrait: selfPortraitWithCharacter,
@@ -841,7 +845,7 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave, onDelete }: 
             </Button>
           </DialogTitle>
           <DialogDescription>
-            Configure personality, voice, model, and image generation settings.
+            Configure personality, voice, model, image generation, and access permissions.
           </DialogDescription>
         </DialogHeader>
 
@@ -849,6 +853,7 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave, onDelete }: 
           <TabsList className="w-full justify-start px-6 bg-transparent border-b rounded-none">
             <TabsTrigger value="basic">Basic</TabsTrigger>
             <TabsTrigger value="prompt">Prompt</TabsTrigger>
+            <TabsTrigger value="permissions">Permissions</TabsTrigger>
             <TabsTrigger value="voice-model">Voice/Model</TabsTrigger>
             <TabsTrigger value="image">Images</TabsTrigger>
           </TabsList>
@@ -964,6 +969,28 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave, onDelete }: 
                   </div>
                   <Input value={companionId} onChange={(e) => setCompanionId(e.target.value)} placeholder="Leave empty to use Choom ID" className="font-mono text-sm" />
                   <p className="text-xs text-muted-foreground">Current: {companionId || choom?.id || 'Not set'}</p>
+                </div>
+              </TabsContent>
+
+              {/* Capability Permissions Tab */}
+              <TabsContent value="permissions" className="mt-0 space-y-4">
+                <div className="rounded-lg border p-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="space-y-1.5">
+                      <h4 className="text-sm font-medium">Remote SSH</h4>
+                      <p className="text-xs text-muted-foreground">
+                        Allow this Choom to run non-interactive commands on computers reachable from this machine through SSH.
+                      </p>
+                    </div>
+                    <Switch
+                      checked={permissions.ssh}
+                      onCheckedChange={(ssh) => setPermissions({ ssh })}
+                      aria-label="Allow remote SSH"
+                    />
+                  </div>
+                  <p className="mt-3 rounded-md bg-muted/50 p-3 text-xs text-muted-foreground">
+                    Uses this machine&apos;s existing OpenSSH keys and known hosts. Enable only for work that needs remote access; SSH passwords and host-key prompts cannot be handled by a Choom.
+                  </p>
                 </div>
               </TabsContent>
 

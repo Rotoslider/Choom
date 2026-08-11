@@ -3,6 +3,8 @@ import type { ToolCall, ToolResult } from '@/lib/types';
 import { WORKSPACE_ROOT } from '@/lib/config';
 import * as fs from 'fs';
 import * as path from 'path';
+import { choomHasSshPermission, REMOTE_SSH_DISABLED_MESSAGE } from '@/lib/choom-permissions';
+import { SshExecutor } from '@/lib/ssh-executor';
 
 /**
  * Try to infer project_folder from code content by checking which workspace
@@ -45,6 +47,7 @@ const CODE_TOOLS = new Set([
   'create_venv',
   'install_package',
   'run_command',
+  'run_ssh_command',
 ]);
 
 export default class CodeExecutionHandler extends BaseSkillHandler {
@@ -62,6 +65,8 @@ export default class CodeExecutionHandler extends BaseSkillHandler {
         return this.installPackage(toolCall);
       case 'run_command':
         return this.runCommand(toolCall);
+      case 'run_ssh_command':
+        return this.runSshCommand(toolCall, ctx);
       default:
         return this.error(toolCall, `Unknown code execution tool: ${toolCall.name}`);
     }
@@ -161,6 +166,30 @@ export default class CodeExecutionHandler extends BaseSkillHandler {
     } catch (err) {
       console.error('   Command execution failed:', err instanceof Error ? err.message : err);
       return this.error(toolCall, `Command execution failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    }
+  }
+
+  private async runSshCommand(toolCall: ToolCall, ctx: SkillHandlerContext): Promise<ToolResult> {
+    if (!choomHasSshPermission(ctx.choom)) {
+      return this.error(toolCall, REMOTE_SSH_DISABLED_MESSAGE);
+    }
+
+    try {
+      const timeoutSeconds = toolCall.arguments.timeout_seconds;
+      const timeoutMs = typeof timeoutSeconds === 'number'
+        ? Math.min(timeoutSeconds * 1000, 600_000)
+        : undefined;
+      const ssh = new SshExecutor();
+      const result = await ssh.run(
+        toolCall.arguments.target,
+        toolCall.arguments.command,
+        timeoutMs,
+        toolCall.arguments.port,
+      );
+      return this.success(toolCall, result);
+    } catch (err) {
+      console.error('   SSH command failed:', err instanceof Error ? err.message : err);
+      return this.error(toolCall, `SSH command failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
     }
   }
 }

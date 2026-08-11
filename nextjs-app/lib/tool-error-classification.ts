@@ -88,9 +88,9 @@ export const STALE_REF_ERROR = new RegExp(
   'i',
 );
 
-/** Folder-ownership / shared-folder blocks — argument-specific, recoverable. */
+/** Permission-policy blocks — argument-specific and recoverable. */
 export const PERMISSION_BLOCK =
-  /^Blocked: (?:cannot (?:write into|delete from) another Choom|sibling_journal\/ is archived|[^/]+\/ is a shared folder)/i;
+  /^Blocked: (?:cannot (?:write into|delete from) another Choom|sibling_journal\/ is archived|[^/]+\/ is a shared folder|remote SSH is disabled|direct SSH shell commands are disabled)/i;
 
 /**
  * Fine-grained classes below only refine the LABEL recorded in traces (what

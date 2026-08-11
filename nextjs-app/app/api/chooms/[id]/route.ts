@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { readFileSync, writeFileSync } from 'fs';
 import path from 'path';
 import prisma from '@/lib/db';
+import { normalizeChoomPermissions, serializeChoomPermissions } from '@/lib/choom-permissions';
 
 // GET /api/chooms/[id] - Get a single choom
 export async function GET(
@@ -31,6 +32,7 @@ export async function GET(
     const parsedChoom = {
       ...choom,
       imageSettings: choom.imageSettings ? JSON.parse(choom.imageSettings) : null,
+      permissions: normalizeChoomPermissions(choom.permissions),
     };
 
     return NextResponse.json(parsedChoom);
@@ -48,6 +50,7 @@ function parseChoomData(choom: Record<string, unknown>) {
   return {
     ...choom,
     imageSettings: choom.imageSettings ? JSON.parse(choom.imageSettings as string) : null,
+    permissions: normalizeChoomPermissions(choom.permissions),
   };
 }
 
@@ -59,7 +62,7 @@ export async function PUT(
   try {
     const { id } = await params;
     const body = await request.json();
-    const { name, description, avatarUrl, systemPrompt, voiceId, llmModel, llmEndpoint, llmProviderId, llmTimeoutSec, imageSettings, companionId, llmFallbackModel1, llmFallbackProvider1, llmFallbackModel2, llmFallbackProvider2, groupChatModel, groupChatProvider } = body;
+    const { name, description, avatarUrl, systemPrompt, voiceId, llmModel, llmEndpoint, llmProviderId, llmTimeoutSec, imageSettings, companionId, llmFallbackModel1, llmFallbackProvider1, llmFallbackModel2, llmFallbackProvider2, groupChatModel, groupChatProvider, permissions } = body;
 
     const choom = await prisma.choom.update({
       where: { id },
@@ -81,6 +84,7 @@ export async function PUT(
         ...(groupChatProvider !== undefined && { groupChatProvider }),
         ...(companionId !== undefined && { companionId }),
         ...(imageSettings !== undefined && { imageSettings: imageSettings ? JSON.stringify(imageSettings) : null }),
+        ...(permissions !== undefined && { permissions: serializeChoomPermissions(permissions) }),
       },
     });
 
