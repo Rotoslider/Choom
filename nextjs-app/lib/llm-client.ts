@@ -1,5 +1,5 @@
 import type { LLMSettings, ToolDefinition, ToolCall } from './types';
-import { ensureEndpoint } from './utils';
+import { ensureEndpoint, openRouterAttributionHeaders } from './utils';
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -165,6 +165,7 @@ export class LLMClient {
 
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
+    Object.assign(headers, openRouterAttributionHeaders(this.endpoint));
 
     const response = await fetch(url, {
       method: 'POST',
@@ -254,6 +255,7 @@ export class LLMClient {
 
     const chatHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
     if (this.apiKey) chatHeaders['Authorization'] = `Bearer ${this.apiKey}`;
+    Object.assign(chatHeaders, openRouterAttributionHeaders(this.endpoint));
 
     const response = await fetch(url, {
       method: 'POST',

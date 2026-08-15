@@ -5,6 +5,7 @@
  */
 
 import type { LLMSettings, ToolDefinition, ToolCall } from './types';
+import { openRouterAttributionHeaders } from './utils';
 import type { ChatMessage, ChatCompletionChunk, TokenUsageData } from './llm-client';
 
 interface AnthropicTool {
@@ -213,6 +214,7 @@ export class AnthropicClient {
         'Content-Type': 'application/json',
         'x-api-key': this.apiKey,
         'anthropic-version': '2023-06-01',
+        ...openRouterAttributionHeaders(this.endpoint),
       },
       body: JSON.stringify(body),
       signal,
@@ -369,6 +371,7 @@ export class AnthropicClient {
         'Content-Type': 'application/json',
         'x-api-key': this.apiKey,
         'anthropic-version': '2023-06-01',
+        ...openRouterAttributionHeaders(this.endpoint),
       },
       body: JSON.stringify(body),
     });

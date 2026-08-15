@@ -140,6 +140,34 @@ export function ensureEndpoint(base: string, path: string): string {
 }
 
 // ============================================================================
+// OpenRouter app attribution
+// ============================================================================
+
+// OpenRouter attributes API usage to an app in its Activity dashboard /
+// rankings ONLY when requests carry HTTP-Referer — it is the app page's URL
+// and the single required identifier. A title header (X-OpenRouter-Title, with
+// X-Title accepted for backwards compatibility) sets the display name; it must
+// be paired with HTTP-Referer or the usage still lands under "Unknown".
+// X-OpenRouter-Categories is optional marketplace tagging (max 2 per request).
+// OpenRouter also renders the app's ICON in Activity from the referer site's
+// favicon, so the referer points at Choom's GitHub Pages site (which serves
+// the Choom "C" favicon from docs/) rather than the repo — github.com would
+// only ever resolve to GitHub's own octocat.
+// https://openrouter.ai/docs/app-attribution
+export const OPENROUTER_APP_URL = 'https://rotoslider.github.io/Choom';
+
+export function openRouterAttributionHeaders(endpoint: string): Record<string, string> {
+  return endpoint.includes('openrouter.ai')
+    ? {
+        'HTTP-Referer': OPENROUTER_APP_URL,
+        'X-OpenRouter-Title': 'Choom',
+        'X-Title': 'Choom',
+        'X-OpenRouter-Categories': 'personal-agent,general-chat',
+      }
+    : {};
+}
+
+// ============================================================================
 // Text processing utilities
 // ============================================================================
 
