@@ -1,3 +1,57 @@
 <!DOCTYPE html>
-<html><head><title>Choom - Privacy Policy</title></head>
-<body><h1>Privacy Policy</h1><p>Choom is a self-hosted application. All data stays on your local machine. No data is collected, shared, or transmitted to third parties.</p></body></html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Choom — Privacy Policy</title>
+<meta name="description" content="Choom is a self-hosted application. All data stays on your local machine.">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="icon" href="favicon-32x32.png" sizes="32x32" type="image/png">
+<link rel="icon" href="favicon-16x16.png" sizes="16x16" type="image/png">
+<link rel="icon" href="favicon.ico" sizes="48x48">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="theme-color" content="#0b0a13">
+<meta property="og:title" content="Choom — Privacy Policy">
+<meta property="og:description" content="Choom is a self-hosted application. All data stays on your local machine.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://rotoslider.github.io/Choom/privacy.html">
+<meta property="og:image" content="https://rotoslider.github.io/Choom/og-banner.png">
+<style>
+  :root {
+    --bg: #0b0a13; --text: #eceaf6; --muted: #9d97bd; --line: rgba(255,255,255,.08);
+    --grad: linear-gradient(135deg, #9333ea 0%, #ec4899 50%, #3b82f6 100%);
+    --card: #17142a;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--text); min-height: 100vh;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    line-height: 1.7; -webkit-font-smoothing: antialiased;
+  }
+  .glow { position: fixed; inset: 0; pointer-events: none; }
+  .glow::before { content: ""; position: absolute; width: 480px; height: 480px; top: -200px; right: -140px; border-radius: 50%; filter: blur(120px); opacity: .2; background: #3b82f6; }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 56px 24px 80px; position: relative; z-index: 1; }
+  .back { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: .92rem; margin-bottom: 34px; transition: color .15s; }
+  .back:hover { color: var(--text); }
+  h1 { font-size: 1.9rem; font-weight: 800; letter-spacing: -.015em; }
+  .rule { width: 64px; height: 4px; border-radius: 99px; background: var(--grad); margin: 18px 0 28px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 28px; }
+  p { color: var(--muted); }
+  p + p { margin-top: 14px; }
+  .foot { margin-top: 34px; color: var(--muted); font-size: .88rem; }
+</style>
+</head>
+<body>
+<div class="glow"></div>
+<div class="wrap">
+  <a class="back" href="index.html">← Back to Choom</a>
+  <h1>Privacy Policy</h1>
+  <div class="muted"></div>
+  <div class="card">
+    <p>Choom is a self-hosted application. All data stays on your local machine. No data is collected, shared, or transmitted to third parties.</p>
+    <p>The exception is whatever you explicitly configure: if you connect an external LLM provider (such as OpenRouter, Anthropic, or OpenAI), the messages you send to that provider travel through it — exactly like any API client.</p>
+  </div>
+  <p class="foot">© 2026 Choom · Self-hosted AI companion framework</p>
+</div>
+</body>
+</html>

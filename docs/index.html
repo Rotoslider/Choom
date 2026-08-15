@@ -1,18 +1,349 @@
 <!DOCTYPE html>
-<html><head>
+<html lang="en">
+<head>
 <meta charset="utf-8">
-<title>Choom</title>
-<meta name="description" content="A self-hosted AI companion framework.">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Choom — Self-Hosted AI Companion Framework</title>
+<meta name="description" content="Choom is a self-hosted AI companion framework: persistent memory, image generation, text-to-speech, and Signal messaging for as many distinct AI personas as you want.">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="icon" href="favicon-32x32.png" sizes="32x32" type="image/png">
 <link rel="icon" href="favicon-16x16.png" sizes="16x16" type="image/png">
 <link rel="icon" href="favicon.ico" sizes="48x48">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="theme-color" content="#0b0a13">
 <meta property="og:title" content="Choom">
-<meta property="og:description" content="A self-hosted AI companion framework.">
-<meta property="og:image" content="https://rotoslider.github.io/Choom/apple-touch-icon.png">
-<meta name="theme-color" content="#9333ea">
+<meta property="og:description" content="A self-hosted AI companion framework — persistent memory, image generation, voice, and Signal messaging for as many distinct AI personas as you want.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://rotoslider.github.io/Choom/">
+<meta property="og:image" content="https://rotoslider.github.io/Choom/og-banner.png">
+<meta name="twitter:card" content="summary_large_image">
+<style>
+  :root {
+    --bg: #0b0a13;
+    --bg-2: #131020;
+    --card: #191630;
+    --card-2: #201c3b;
+    --text: #efeef8;
+    --muted: #aba5c9;
+    --line: rgba(255, 255, 255, 0.1);
+    --grad: linear-gradient(135deg, #9333ea 0%, #ec4899 50%, #3b82f6 100%);
+    --radius: 16px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+  a { color: inherit; text-decoration: none; }
+
+  /* Ambient glows */
+  .glow { position: fixed; inset: 0; pointer-events: none; z-index: 0; }
+  .glow::before, .glow::after {
+    content: ""; position: absolute; border-radius: 50%; filter: blur(120px); opacity: .22;
+  }
+  .glow::before { width: 560px; height: 560px; top: -220px; left: -160px; background: #9333ea; }
+  .glow::after { width: 620px; height: 620px; bottom: -280px; right: -200px; background: #3b82f6; }
+
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; position: relative; z-index: 1; }
+
+  /* Header */
+  header { border-bottom: 1px solid var(--line); position: sticky; top: 0; background: rgba(11,10,19,.82); backdrop-filter: blur(12px); z-index: 10; }
+  .nav { display: flex; align-items: center; gap: 28px; height: 64px; flex-wrap: wrap; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 1.15rem; letter-spacing: .02em; }
+  .brand svg { width: 26px; height: 26px; border-radius: 6px; display: block; }
+  .nav-links { display: flex; gap: 22px; margin-left: auto; align-items: center; }
+  .nav-links a { color: var(--muted); font-size: .92rem; transition: color .15s; }
+  .nav-links a:hover { color: var(--text); }
+  .nav-links .btn { color: #fff; }
+
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: var(--grad); color: #fff; font-weight: 700; font-size: .95rem;
+    padding: 10px 20px; border-radius: 999px; border: 1px solid rgba(255,255,255,.14);
+    box-shadow: 0 4px 24px rgba(147,51,234,.35); transition: transform .15s, box-shadow .15s;
+  }
+  .btn:hover { transform: translateY(-1px); box-shadow: 0 8px 28px rgba(236,72,153,.4); }
+  .btn.ghost { background: rgba(255,255,255,.05); box-shadow: none; border-color: rgba(255,255,255,.2); }
+  .btn.ghost:hover { background: rgba(255,255,255,.1); box-shadow: none; }
+
+  /* Hero */
+  .hero { padding: 84px 0 56px; text-align: center; }
+  .hero .logo {
+    width: 92px; height: 92px; border-radius: 22px; margin: 0 auto 26px;
+    box-shadow: 0 16px 60px rgba(147,51,234,.45), inset 0 0 0 1px rgba(255,255,255,.16);
+  }
+  .hero h1 { font-size: clamp(2.6rem, 6vw, 4rem); font-weight: 800; letter-spacing: -.02em; line-height: 1.1; }
+  .hero h1 .grad { background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .hero .tagline { margin: 18px auto 0; max-width: 640px; color: var(--muted); font-size: 1.12rem; }
+  .hero .cta { margin-top: 34px; display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
+  .trust { margin-top: 44px; display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+  .trust span {
+    font-size: .82rem; color: var(--muted); border: 1px solid var(--line);
+    padding: 7px 14px; border-radius: 999px; background: rgba(255,255,255,.03);
+  }
+
+  /* Section scaffolding */
+  section { padding: 72px 0; }
+  .kicker { text-transform: uppercase; letter-spacing: .18em; font-size: .78rem; font-weight: 700; color: #c084fc; margin-bottom: 10px; }
+  h2 { font-size: clamp(1.7rem, 3.4vw, 2.3rem); font-weight: 800; letter-spacing: -.015em; line-height: 1.2; }
+  .sub { color: var(--muted); max-width: 620px; margin-top: 12px; }
+
+  /* Feature grid */
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 40px; }
+  .card {
+    background: linear-gradient(180deg, var(--card), var(--bg-2));
+    border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 24px; transition: transform .18s, border-color .18s, box-shadow .18s;
+  }
+  .card:hover { transform: translateY(-3px); border-color: rgba(236,72,153,.35); box-shadow: 0 10px 36px rgba(0,0,0,.45); }
+  .card .ic {
+    width: 40px; height: 40px; border-radius: 11px; background: var(--grad);
+    display: flex; align-items: center; justify-content: center; margin-bottom: 16px;
+    box-shadow: 0 6px 18px rgba(147,51,234,.35);
+  }
+  .card .ic svg { width: 20px; height: 20px; stroke: #fff; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .card h3 { font-size: 1.04rem; font-weight: 700; margin-bottom: 8px; }
+  .card p { color: var(--muted); font-size: .9rem; }
+
+  /* Screenshots */
+  .shots { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; margin-top: 40px; }
+  .shot { border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--bg-2); }
+  .shot img { display: block; width: 100%; height: auto; }
+  .shot .cap { padding: 13px 16px; font-size: .88rem; color: var(--muted); border-top: 1px solid var(--line); }
+  .shot .cap b { color: var(--text); font-weight: 600; }
+
+  /* Stack */
+  .stack { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 34px; }
+  .stack span {
+    font-size: .85rem; border: 1px solid var(--line); border-radius: 999px;
+    padding: 8px 16px; background: rgba(255,255,255,.03); color: #cfcadf;
+  }
+  .stack span::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--grad); margin-right: 9px; }
+
+  /* Setup steps */
+  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 40px; }
+  .step { border: 1px solid var(--line); border-radius: var(--radius); padding: 26px 24px; background: var(--bg-2); position: relative; }
+  .step .n {
+    font-size: .8rem; font-weight: 800; letter-spacing: .1em;
+    background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .step h3 { font-size: 1.05rem; margin: 10px 0 8px; }
+  .step p { color: var(--muted); font-size: .9rem; }
+
+  /* CTA band */
+  .band {
+    margin: 24px 0 80px; border-radius: 24px; border: 1px solid var(--line);
+    background: linear-gradient(135deg, rgba(147,51,234,.16), rgba(236,72,153,.12) 50%, rgba(59,130,246,.14));
+    padding: 56px 32px; text-align: center;
+  }
+  .band h2 { font-size: clamp(1.6rem, 3vw, 2.2rem); }
+  .band p { color: var(--muted); margin: 14px auto 0; max-width: 520px; }
+  .band .cta { margin-top: 30px; display: flex; gap: 14px; justify-content: center; }
+
+  /* Footer */
+  footer { border-top: 1px solid var(--line); padding: 34px 0 46px; }
+  .foot { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+  .foot .brand { font-size: 1rem; }
+  .foot .links { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+  .foot .links a { color: var(--muted); font-size: .92rem; transition: color .15s; }
+  .foot .links a:hover { color: var(--text); }
+  .foot small { color: var(--muted); margin-left: auto; text-align: right; }
+
+  @media (max-width: 860px) {
+    .grid, .steps { grid-template-columns: 1fr 1fr; }
+    .shots { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 560px) {
+    .grid, .steps { grid-template-columns: 1fr; }
+    .hero { padding: 60px 0 44px; }
+    section { padding: 52px 0; }
+    .nav-links { gap: 14px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    .card, .btn { transition: none; }
+  }
+</style>
 </head>
-<body><h1>Choom</h1><p>A self-hosted AI companion framework.</p>
-<p><a href="https://github.com/Rotoslider/Choom">GitHub</a></p>
-<p><a href="https://rotoslider.github.io/Choom/privacy.html">Privacy Policy</a></p></body></html>
+<body>
+<div class="glow"></div>
+
+<header>
+  <div class="wrap nav">
+    <a class="brand" href="#top">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="lg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#9333ea"/><stop offset="50%" stop-color="#ec4899"/><stop offset="100%" stop-color="#3b82f6"/></linearGradient></defs><rect width="32" height="32" rx="6" fill="url(#lg)"/><text x="50%" y="52%" dominant-baseline="central" text-anchor="middle" font-family="system-ui, sans-serif" font-size="24" font-weight="700" fill="#fff">C</text></svg>
+      Choom
+    </a>
+    <nav class="nav-links">
+      <a href="#features">Features</a>
+      <a href="#screenshots">Screenshots</a>
+      <a href="#setup">Setup</a>
+      <a href="https://github.com/Rotoslider/Choom" class="btn">GitHub ↗</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+  <div class="hero wrap">
+    <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="lg2" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#9333ea"/><stop offset="50%" stop-color="#ec4899"/><stop offset="100%" stop-color="#3b82f6"/></linearGradient></defs><rect width="32" height="32" rx="6" fill="url(#lg2)"/><text x="50%" y="52%" dominant-baseline="central" text-anchor="middle" font-family="system-ui, sans-serif" font-size="24" font-weight="700" fill="#fff">C</text></svg>
+    <h1>Meet your <span class="grad">Chooms</span>.</h1>
+    <p class="tagline">A self-hosted AI companion framework. Persistent memory, image generation, text-to-speech, and Signal messaging — for as many distinct AI personas as you want.</p>
+    <div class="cta">
+      <a class="btn" href="https://github.com/Rotoslider/Choom">View on GitHub</a>
+      <a class="btn ghost" href="#features">Explore the platform</a>
+    </div>
+    <div class="trust">
+      <span>Runs entirely on your own hardware</span>
+      <span>Open source · MIT</span>
+      <span>Your data stays local</span>
+    </div>
+  </div>
+
+  <section id="features">
+    <div class="wrap">
+      <div class="kicker">What Choom can do</div>
+      <h2>Companions that actually do things</h2>
+      <p class="sub">Every Choom is an agentic persona with her own LLM, voice, image style, and memory — chaining tools across multi-step tasks, talking to the world, and even delegating to each other.</p>
+      <div class="grid">
+        <div class="card">
+          <div class="ic"><svg><path d="M4 13v-2a8 8 0 0 1 8-8h0a8 8 0 0 1 8 8v2"/><rect x="4" y="13" width="16" height="10" rx="3"/><path d="M12 23v3"/></svg></div>
+          <h3>Multi-Choom personas</h3>
+          <p>Create distinct AI personas with custom system prompts, voices, LLM backends, and fully isolated memory spaces.</p>
+        </div>
+        <div class="card">
+          <div class="ic"><svg><path d="M12 3l1.9 5.8L20 10l-6.1 1.2L12 17l-1.9-5.8L4 10l6.1-1.2z"/><path d="M19 15l.9 2.6L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.4z"/></svg></div>
+          <h3>Persistent memory</h3>
+          <p>Vector-based semantic memory (SQLite + ChromaDB) with per-Choom isolation and automatic cross-session context digests.</p>
+        </div>
+        <div class="card">
+          <div class="ic"><svg><path d="M13 2L4.5 13.5H11L9.5 22 19 10.5h-6.5z"/></svg></div>
+          <h3>Agentic tool loop</h3>
+          <p>100+ tools across modular skills, chainable up to 100 calls per turn — web search, files, code, calendar, images, and more.</p>
+        </div>
+        <div class="card">
+          <div class="ic"><svg><path d="M17 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9.5" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg></div>
+          <h3>Multi-agent rooms</h3>
+          <p>Turn-based group conversations with two or more Chooms — per-speaker voices, bounded auto-rounds, and cross-device continuity.</p>
+        </div>
+        <div class="card">
+          <div class="ic"><svg><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10a7 7 0 0 1-14 0M12 17v4"/></svg></div>
+          <h3>Talk, don't type</h3>
+          <p>Streaming text-to-speech with per-Choom voices, Whisper speech-to-text, and photorealistic LivePortrait avatars.</p>
+        </div>
+        <div class="card">
+          <div class="ic"><svg><rect x="2" y="5" width="20" height="14" rx="3"/><path d="M7 19v1.5m10-1.5V20"/></svg></div>
+          <h3>Image generation</h3>
+          <p>Stable Diffusion Forge integration with selfie mode and LoRA support, plus Optic vision analysis of any image.</p>
+        </div>
+        <div class="card">
+          <div class="ic"><svg><path d="M3 11c3.6 0 6.4-2.4 7.5-6M21 13c-3.6 0-6.4 2.4-7.5 6M3 13h0M21 11h0M8 17l8-8"/></svg></div>
+          <h3>Signal bridge</h3>
+          <p>Two-way messaging through Signal — text, voice notes, and image forwarding for vision analysis, from your phone.</p>
+        </div>
+        <div class="card">
+          <div class="ic"><svg><path d="M3 9l9-6 9 6v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 21v-8h6v8"/></svg></div>
+          <h3>Smart home</h3>
+          <p>Full Home Assistant integration — sensors, lights, climate, history trends, and conditional automations with ambient awareness.</p>
+        </div>
+        <div class="card">
+          <div class="ic"><svg><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M8 4v16M2 9h20"/></svg></div>
+          <h3>Google Workspace</h3>
+          <p>35 tools via OAuth2 — Calendar, Gmail, Drive, Docs, Sheets, Tasks, Contacts, and YouTube, read and write.</p>
+        </div>
+        <div class="card">
+          <div class="ic"><svg><path d="M4 20h16M7 20v-7m5 7v-7m5 7v-7M4 10l8-6 8 6"/></svg></div>
+          <h3>Model flexibility</h3>
+          <p>Local (LM Studio) or cloud (OpenRouter, Anthropic, OpenAI, NVIDIA) per Choom — with up to two automatic fallback models.</p>
+        </div>
+        <div class="card">
+          <div class="ic"><svg><circle cx="12" cy="12" r="3"/><path d="M12 2v4m0 12v4M2 12h4m12 0h4M4.9 4.9l2.8 2.8m8.6 8.6l2.8 2.8M19.1 4.9l-2.8 2.8m-8.6 8.6l-2.8 2.8"/></svg></div>
+          <h3>Schedules & automations</h3>
+          <p>Cron briefings, heartbeats, and a visual automation builder with conditional triggers — per-task model routing included.</p>
+        </div>
+        <div class="card">
+          <div class="ic"><svg><path d="M4 17l6-6-4-4M12 19h8"/><path d="M14 7l3-3 4 4-3 3-4-4z" transform="translate(0 0)"/><path d="M14 8.5l4 4M14 12l4-4"/></svg></div>
+          <h3>Workspace & code</h3>
+          <p>Per-project folders, Python/Node sandboxes, remote SSH, headless-Chromium web scraping, and Markdown-to-PDF.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="screenshots" style="padding-top:0">
+    <div class="wrap">
+      <div class="kicker">See it running</div>
+      <h2>A home that feels alive</h2>
+      <p class="sub">A web UI for everything — chats, personas, skills, habits, token usage, rooms, and settings.</p>
+      <div class="shots">
+        <figure class="shot"><img loading="lazy" src="screenshots/web/chat-interface.webp" width="1280" height="1031" alt="Chat interface with a Choom"><figcaption class="cap"><b>Chat</b> — agentic conversations with live tool progress</figcaption></figure>
+        <figure class="shot"><img loading="lazy" src="screenshots/web/live-avatar-desktop.webp" width="1280" height="834" alt="Live avatar desktop window"><figcaption class="cap"><b>Live Avatar</b> — photorealistic talking-head window at 20+ fps</figcaption></figure>
+        <figure class="shot"><img loading="lazy" src="screenshots/web/sidebar-chooms.webp" width="1280" height="800" alt="Choom sidebar with multiple personas"><figcaption class="cap"><b>Personas</b> — distinct Chooms, side by side</figcaption></figure>
+        <figure class="shot"><img loading="lazy" src="screenshots/web/image-gallery.webp" width="786" height="819" alt="Generated image gallery"><figcaption class="cap"><b>Gallery</b> — images your Chooms have created</figcaption></figure>
+        <figure class="shot"><img loading="lazy" src="screenshots/web/skills-catalog.webp" width="1280" height="948" alt="Skills catalog page"><figcaption class="cap"><b>Skills</b> — 100+ tools in modular, auto-documented skills</figcaption></figure>
+        <figure class="shot"><img loading="lazy" src="screenshots/web/habit-tracker.webp" width="1280" height="880" alt="Habit tracker heatmap"><figcaption class="cap"><b>Habits</b> — tracked from chat, with streaks and heatmaps</figcaption></figure>
+        <figure class="shot"><img loading="lazy" src="screenshots/web/Token-Usage.webp" width="1280" height="1043" alt="Token usage dashboard"><figcaption class="cap"><b>Usage</b> — tokens per Choom, model, and provider</figcaption></figure>
+        <figure class="shot"><img loading="lazy" src="screenshots/web/settings-automations.webp" width="1280" height="800" alt="Automation builder"><figcaption class="cap"><b>Automations</b> — visual drag-and-drop task chains</figcaption></figure>
+      </div>
+    </div>
+  </section>
+
+  <section id="setup" style="padding-top:0">
+    <div class="wrap">
+      <div class="kicker">Get started</div>
+      <h2>Up and running in three steps</h2>
+      <div class="steps">
+        <div class="step">
+          <div class="n">STEP 01</div>
+          <h3>Run it on your hardware</h3>
+          <p>Clone the repo, bring a machine with a GPU, and start the Next.js app plus the Python services. Your data never leaves the box.</p>
+        </div>
+        <div class="step">
+          <div class="n">STEP 02</div>
+          <h3>Create your Chooms</h3>
+          <p>Each personality gets her own LLM (local or cloud), voice, image style, and memory space — configurable per Choom, per room, even per task.</p>
+        </div>
+        <div class="step">
+          <div class="n">STEP 03</div>
+          <h3>Talk from anywhere</h3>
+          <p>Chat in the browser, message over Signal, or join multi-Choom rooms. One conversation continues seamlessly across every surface.</p>
+        </div>
+      </div>
+      <div class="stack">
+        <span>Next.js</span><span>Prisma + SQLite</span><span>ChromaDB</span><span>Python Signal bridge</span>
+        <span>Stable Diffusion Forge</span><span>Whisper</span><span>Chatterbox TTS</span><span>LivePortrait</span>
+        <span>Home Assistant</span><span>OpenRouter / LM Studio</span>
+      </div>
+    </div>
+  </section>
+
+  <div class="wrap">
+    <div class="band">
+      <h2>Self-hosted. Open source. Yours.</h2>
+      <p>Choom runs on your hardware, keeps your data local, and gives you AI companions that look, sound, and remember exactly how you want them to.</p>
+      <div class="cta">
+        <a class="btn" href="https://github.com/Rotoslider/Choom">Get it on GitHub</a>
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer>
+  <div class="wrap foot">
+    <a class="brand" href="#top">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="lg3" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#9333ea"/><stop offset="50%" stop-color="#ec4899"/><stop offset="100%" stop-color="#3b82f6"/></linearGradient></defs><rect width="32" height="32" rx="6" fill="url(#lg3)"/><text x="50%" y="52%" dominant-baseline="central" text-anchor="middle" font-family="system-ui, sans-serif" font-size="24" font-weight="700" fill="#fff">C</text></svg>
+      Choom
+    </a>
+    <div class="links">
+      <a href="https://github.com/Rotoslider/Choom">GitHub</a>
+      <a href="privacy.html">Privacy Policy</a>
+    </div>
+    <small>© 2026 Choom · Self-hosted AI companion framework · MIT</small>
+  </div>
+</footer>
+</body>
+</html>
