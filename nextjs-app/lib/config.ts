@@ -25,6 +25,8 @@ export const WORKSPACE_ALLOWED_EXTENSIONS = [
   '.r', '.R', '.ipynb',
   // Systems programming
   '.c', '.cpp', '.h', '.hpp', '.rs', '.go', '.java', '.kt', '.swift', '.rb', '.pl', '.lua', '.m',
+  // LISP family
+  '.lisp', '.lsp', '.cl', '.asd', '.el', '.scm', '.ss', '.rkt', '.clj', '.cljs', '.cljc', '.edn',
   // Microcontroller & embedded
   '.ino', '.pde', '.s', '.S', '.asm', '.ld', '.dts', '.dtsi', '.kconfig', '.mk',
   // FPGA
@@ -35,4 +37,4 @@ export const WORKSPACE_ALLOWED_EXTENSIONS = [
   '.msg', '.srv', '.action', '.urdf', '.xacro', '.sdf', '.world', '.rviz', '.repos',
 ];
 export const WORKSPACE_IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp'];
-export const WORKSPACE_DOWNLOAD_EXTENSIONS = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.pptx', '.zip', '.tar', '.gz', '.xml', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.log', '.sh', '.bash', '.sql', '.r', '.R', '.ipynb'];
+export const WORKSPACE_DOWNLOAD_EXTENSIONS = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.pptx', '.zip', '.tar', '.gz', '.xml', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.log', '.sh', '.bash', '.sql', '.r', '.R', '.ipynb', '.lisp', '.lsp', '.cl', '.asd', '.el', '.scm', '.ss', '.rkt', '.clj', '.cljs', '.cljc', '.edn'];
