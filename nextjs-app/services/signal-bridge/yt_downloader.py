@@ -28,6 +28,11 @@ YT_DLP_COOKIES = os.path.join(os.path.dirname(__file__), "youtube-cookies.txt")
 YT_DLP_EXTRA_ARGS = [
     "--js-runtimes", "node",
     "--remote-components", "ejs:github",
+    # YouTube broke android_vr/tv media delivery on 2026-08-13/14 (HTTP 403:
+    # Forbidden on googlevideo URLs missing a PO token). The web_embedded player
+    # client still serves media URLs without a token; android_vr/tv/web/web_safari
+    # either 403, hit DRM, or return formats without URLs.
+    "--extractor-args", "youtube:player_client=web_embedded",
     *(["--cookies", YT_DLP_COOKIES] if os.path.exists(YT_DLP_COOKIES) else []),
 ]
 
@@ -126,7 +131,7 @@ class YouTubeDownloader:
                     return json.load(f)
             except Exception as e:
                 logger.warning(f"Corrupt history at {hist_path}: {e}")
-        return {"downloaded_ids": [], "members_only_ids": [], "last_check": None, "total_downloaded": 0}
+        return {"downloaded_ids": [], "members_only_ids": [], "unavailable_ids": [], "last_check": None, "total_downloaded": 0}
 
     def save_history(self, channel_dir: str, data: Dict[str, Any]):
         """Persist download history for a channel directory."""
@@ -384,7 +389,7 @@ class YouTubeDownloader:
         """
         name = channel_config.get("name", "Unknown")
         url = channel_config.get("url", "")
-        result = {"channel_name": name, "downloaded": [], "errors": [], "members_only": [], "skipped": 0}
+        result = {"channel_name": name, "downloaded": [], "errors": [], "members_only": [], "unavailable": [], "skipped": 0}
 
         if not url:
             result["errors"].append("No URL configured")
@@ -396,9 +401,11 @@ class YouTubeDownloader:
         history = self.load_history(channel_dir)
         known_ids = set(history.get("downloaded_ids", []))
         members_only_ids = set(history.get("members_only_ids", []))
-        # Videos we already have OR know are permanently gated — skip both so the
-        # listing window can reach still-downloadable tracks further down.
-        skip_ids = known_ids | members_only_ids
+        unavailable_ids = set(history.get("unavailable_ids", []))
+        # Videos we already have, are permanently gated, or are undownloadable
+        # (e.g. 24/7 livestreams) — skip them so the listing window can reach
+        # still-downloadable tracks further down.
+        skip_ids = known_ids | members_only_ids | unavailable_ids
 
         # List recent videos. We want up to max_videos *downloadable* tracks, but
         # recent uploads may be gated/unavailable, so pull well past everything we
@@ -456,6 +463,18 @@ class YouTubeDownloader:
                 continue
             consecutive_meta_failures = 0  # Reset on success
 
+            # 24/7 livestreams have no finite audio stream — attempting a
+            # download burns the 600s timeout and errors every run. Record
+            # once, skip forever (same pattern as members-only gating).
+            if meta.get("is_live"):
+                logger.info(f"  Skipping live video {vid_id}")
+                result["unavailable"].append(video["title"])
+                unavailable_ids.add(vid_id)
+                skip_ids.add(vid_id)
+                history["unavailable_ids"] = sorted(unavailable_ids)
+                self.save_history(channel_dir, history)
+                continue
+
             # Download as MP3
             mp3_path = self.download_as_mp3(vid_id, channel_dir)
             if not mp3_path:
@@ -503,7 +522,8 @@ class YouTubeDownloader:
 
         logger.info(
             f"Channel {name}: {len(result['downloaded'])} downloaded, "
-            f"{result['skipped']} skipped, {len(result['errors'])} errors"
+            f"{result['skipped']} skipped, {len(result['errors'])} errors, "
+            f"{len(result['unavailable'])} unavailable"
         )
         return result
 
@@ -535,6 +555,7 @@ class YouTubeDownloader:
             dl = r["downloaded"]
             errs = r["errors"]
             gated = r.get("members_only", [])
+            unavail = r.get("unavailable", [])
             total_downloaded += len(dl)
             total_errors += len(errs)
 
@@ -542,17 +563,25 @@ class YouTubeDownloader:
                 lines.append(f"{name}: {len(dl)} new")
                 for title in dl:
                     lines.append(f"  - {title}")
-                if gated:
-                    lines.append(f"  ({len(gated)} members-only, skipped)")
+                if gated or unavail:
+                    notes = []
+                    if gated:
+                        notes.append(f"{len(gated)} members-only")
+                    if unavail:
+                        notes.append(f"{len(unavail)} live")
+                    lines.append(f"  ({', '.join(notes)}, skipped)")
             elif errs:
                 lines.append(f"{name}: {len(errs)} error(s)")
                 for err in errs:
                     lines.append(f"  ! {err}")
-            elif gated:
-                # Newly-detected gated tracks — shown once, then recorded to
-                # history so later runs skip them silently ("Up to date").
-                lines.append(f"{name}: {len(gated)} members-only (skipped)")
-                for title in gated:
+            elif gated or unavail:
+                notes = []
+                if gated:
+                    notes.append(f"{len(gated)} members-only")
+                if unavail:
+                    notes.append(f"{len(unavail)} live")
+                lines.append(f"{name}: {', '.join(notes)} (skipped)")
+                for title in gated + unavail:
                     lines.append(f"  ~ {title}")
             else:
                 lines.append(f"{name}: Up to date")
