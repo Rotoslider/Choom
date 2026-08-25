@@ -237,11 +237,14 @@ describe('3. Three-Tier Timeout System', () => {
     expect(t.connectionMs).toBe(15_000);
   });
 
-  test('cloud-fast is tight on every phase', () => {
+  test('cloud-fast tolerates reasoning-model silences but still fails fast on connection', () => {
     const t = computeStreamTimeouts('cloud-fast', 180_000);
     expect(t.connectionMs).toBe(15_000);
-    expect(t.prefillMs).toBe(30_000);
-    expect(t.betweenTokenMs).toBe(15_000);
+    // 2026-08-25: hidden chain-of-thought on frontier models (OpenRouter
+    // stealth) is byte-silent well past the old 30s prefill / 15s gap, which
+    // false-dropped healthy primaries onto weaker fallbacks every turn.
+    expect(t.prefillMs).toBe(90_000);
+    expect(t.betweenTokenMs).toBe(30_000);
   });
 
   test('local endpoints get generous timeouts that scale with the budget', () => {
@@ -553,7 +556,12 @@ describe('11. Delegation Not Broken by Changes', () => {
   });
 
   test('delegation iteration limit is preserved', () => {
-    expect(routeContent).toContain('Delegation mode: maxIterations');
+    // The old literal matched a console.log ('Delegation mode: maxIterations')
+    // that the resolveMaxIterations refactor removed. Assert the invariant
+    // instead: a delegated worker's cap is LOCKED for the turn — the worker's
+    // own directive (or the default) is the whole budget, and mid-loop project
+    // re-detection may not move it.
+    expect(routeContent).toContain('let iterationCapLocked = iterationCap.locked || isDelegation');
   });
 
   test('delegation timeout in handler is 600s default, 900s max', () => {

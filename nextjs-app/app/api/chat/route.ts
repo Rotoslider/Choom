@@ -32,7 +32,8 @@ import {
 
 import { getHardcodedToolDocs, buildSkillToolDocs } from '@/lib/tool-execution';
 import {
-  serverLog, smartMerge, recordGuiActivity, MAX_ITERATIONS,
+  serverLog, smartMerge, recordGuiActivity,
+  parseChoomMaxIterations, resolveMaxIterations,
 } from '@/lib/chat-shared';
 import { runChatTurn } from '@/lib/chat-stream';
 
@@ -372,16 +373,12 @@ export async function POST(request: NextRequest) {
     let activeTools: ToolDefinition[] = allToolDefs;
 
     // <!-- max_iterations: N --> to cap agentic loop iterations per Choom
-    let choomMaxIterations = 0; // 0 = use default
-    const maxIterMatch = (choom.systemPrompt || '').match(/<!--\s*max_iterations:\s*(\d+)\s*-->/);
-    if (maxIterMatch) {
-      choomMaxIterations = Math.max(3, parseInt(maxIterMatch[1]));
-    }
+    const choomMaxIterations = parseChoomMaxIterations(choom.systemPrompt);
 
     // Standard tools stay available; Remote SSH is an explicit per-Choom capability.
     if (!choomHasSshPermission(choom)) {
-      activeTools = activeTools.filter((tool) => tool.name !== 'run_ssh_command');
-      console.log(`   🔒 Remote SSH disabled for ${choom.name}; removed run_ssh_command`);
+      activeTools = activeTools.filter((tool) => tool.name !== 'run_ssh_command' && tool.name !== 'ssh_copy_file');
+      console.log(`   🔒 Remote SSH disabled for ${choom.name}; removed run_ssh_command + ssh_copy_file`);
     }
     console.log(`   🛠️  ${activeTools.length} tools available`);
 
@@ -516,14 +513,27 @@ export async function POST(request: NextRequest) {
         if (llmSettings.model !== _globalModel) {
           llmSettings.contextLength = _window;
           console.log(`   📏 ${choom.name} per-model context: ${llmSettings.model} → ${_window.toLocaleString()} (${_windowSrc})`);
-        } else if ((llmSettings.contextLength || 0) > _window) {
-          // Clamp (C-53): when the resolved model IS the global default, the
-          // client's store contextLength is used as-is — and it can exceed the
-          // model's real window. A very long chat would then blow past the
-          // model's context (the server silently drops oldest messages) before
-          // compaction ever triggers. Never budget beyond the real window.
-          console.log(`   📏 ${choom.name} context clamp: client ${llmSettings.contextLength?.toLocaleString()} > ${_windowSrc} window ${_window.toLocaleString()} for ${llmSettings.model} — clamping`);
-          llmSettings.contextLength = _window;
+        } else {
+          const _clientCtx = llmSettings.contextLength || 0;
+          if (_clientCtx > _window) {
+            // Clamp (C-53): when the resolved model IS the global default, the
+            // client's store contextLength is used as-is — and it can exceed the
+            // model's real window. A very long chat would then blow past the
+            // model's context (the server silently drops oldest messages) before
+            // compaction ever triggers. Never budget beyond the real window.
+            console.log(`   📏 ${choom.name} context clamp: client ${llmSettings.contextLength?.toLocaleString()} > ${_windowSrc} window ${_window.toLocaleString()} for ${llmSettings.model} — clamping`);
+            llmSettings.contextLength = _window;
+          } else if (_liveCtx !== null && _liveCtx > _clientCtx && !isLocalEndpoint(llmSettings.endpoint)) {
+            // Adopt upward for CLOUD models: the settings slider caps at 256k,
+            // so a 1M-window model picked as the global model could never run
+            // at its real window — it silently compacted at the slider value
+            // (~8x early on stealth/ox-alpha). The endpoint's published window
+            // isn't a RAM lever there, so trust it over the capped slider.
+            // Local/LAN endpoints keep slider authority: a low value there is
+            // usually a deliberate RAM-capped load.
+            console.log(`   📏 ${choom.name} context adopt: client ${_clientCtx.toLocaleString()} < live window ${_liveCtx.toLocaleString()} for ${llmSettings.model} — adopting live`);
+            llmSettings.contextLength = _window;
+          }
         }
       }
     }
@@ -635,7 +645,11 @@ export async function POST(request: NextRequest) {
       // Group turns use the GROUP ROOM workspace block (injected above) instead
       // of per-Choom home-project detection, which would otherwise add a
       // conflicting "## YOUR WORKSPACE" block pointing at selfies_<name>/.
-      currentMessages[0].content += `\nYou have ${MAX_ITERATIONS} thinking rounds available. Each round can include multiple parallel tool calls — calling 5 tools in one round only uses 1 round, not 5.`;
+      // Tell speakers the SAME budget the loop will enforce (resolveMaxIterations
+      // precedence) instead of a hardcoded global — a speaker with a directive of
+      // e.g. 12 was previously told "50 rounds" and ran out mid-sentence.
+      const groupRounds = resolveMaxIterations({ maxIterationsOverride, choomMaxIterations }).maxIterations;
+      currentMessages[0].content += `\nYou have ${groupRounds} thinking rounds available. Each round can include multiple parallel tool calls — calling 5 tools in one round only uses 1 round, not 5.`;
     } else try {
       const projectService = new ProjectService(WORKSPACE_ROOT);
       const allProjects = await projectService.listProjects();
@@ -695,13 +709,15 @@ export async function POST(request: NextRequest) {
 
       // Inject project context so LLM uses the exact folder name
       if (detectedProject) {
-        // For explicit project detection, honor the project's maxIterations (dedicated work).
-        // For the home-fallback case, stick with the default iteration count — the home
-        // project is just a folder hint, not an invitation to spend 100 rounds on a
-        // "what's the weather?" query.
-        const projMaxIter = isAssignedFallback
-          ? MAX_ITERATIONS
-          : (detectedProject.metadata.maxIterations || MAX_ITERATIONS);
+        // Inject the SAME count the agentic loop will enforce: resolveMaxIterations
+        // precedence (override > <!-- max_iterations: N --> directive > this
+        // project's metadata > default). The old text ignored the Choom directive
+        // entirely and could advertise a budget the cap then overrode.
+        const projMaxIter = resolveMaxIterations({
+          maxIterationsOverride,
+          choomMaxIterations,
+          projectMaxIterations: detectedProject.metadata.maxIterations,
+        }).maxIterations;
         if (isAssignedFallback) {
           // Softer hint: this is the Choom's default workspace, not a hard lock.
           // They can still create a new project if the user asks for one explicitly.
@@ -719,7 +735,9 @@ export async function POST(request: NextRequest) {
         // the old "assigned home project" fallback that leaked a forced project
         // into unrelated chats.
         const selfiesFolder = `selfies_${choom.name.toLowerCase()}`;
-        currentMessages[0].content += `\n\n## YOUR WORKSPACE\nYour default workspace is \`${selfiesFolder}/\` — your own personal folder. When you save a file without a project being named, save it inside \`${selfiesFolder}/\` (e.g. \`${selfiesFolder}/notes/today.md\`). Don't spin up a new top-level folder for one-off saves — those belong in \`${selfiesFolder}/\`. But if what you're working on genuinely grows into its own body of work, use your judgment and create a dedicated project for it with \`workspace_create_project\` (the user can also name or pick one from the chat's project menu). One-off note → selfies; a real project worth keeping together → its own folder.\n\n**Shared folder — \`choom_commons/\`** (NOT inside your selfies folder): where ALL cross-Choom communication happens — letters, notes, delegation handoffs, shared drafts, research. Each sibling has a folder (e.g. \`choom_commons/for_eve/\`, \`choom_commons/for_aloy/\`); shared drafts go in \`choom_commons/drafts/\`. Write content FOR a sibling in their folder. You may NEVER write into another Choom's \`selfies_*/\` folder. Your \`growth_journal.md\` lives in \`${selfiesFolder}/growth_journal.md\`.\n\nYou have ${MAX_ITERATIONS} thinking rounds available. Each round can include multiple parallel tool calls — calling 5 tools in one round only uses 1 round, not 5.`;
+        const defaultRounds = resolveMaxIterations({ maxIterationsOverride, choomMaxIterations, isHeartbeat }).maxIterations;
+        // Same rule as everywhere else: advertise the budget resolveMaxIterations will actually enforce (heartbeat turns cap at 15, directives win).
+        currentMessages[0].content += `\n\n## YOUR WORKSPACE\nYour default workspace is \`${selfiesFolder}/\` — your own personal folder. When you save a file without a project being named, save it inside \`${selfiesFolder}/\` (e.g. \`${selfiesFolder}/notes/today.md\`). Don't spin up a new top-level folder for one-off saves — those belong in \`${selfiesFolder}/\`. But if what you're working on genuinely grows into its own body of work, use your judgment and create a dedicated project for it with \`workspace_create_project\` (the user can also name or pick one from the chat's project menu). One-off note → selfies; a real project worth keeping together → its own folder.\n\n**Shared folder — \`choom_commons/\`** (NOT inside your selfies folder): where ALL cross-Choom communication happens — letters, notes, delegation handoffs, shared drafts, research. Each sibling has a folder (e.g. \`choom_commons/for_eve/\`, \`choom_commons/for_aloy/\`); shared drafts go in \`choom_commons/drafts/\`. Write content FOR a sibling in their folder. You may NEVER write into another Choom's \`selfies_*/\` folder. Your \`growth_journal.md\` lives in \`${selfiesFolder}/growth_journal.md\`.\n\nYou have ${defaultRounds} thinking rounds available. Each round can include multiple parallel tool calls — calling 5 tools in one round only uses 1 round, not 5.`;
         console.log(`   🪪 ${choom.name} — no active project; default workspace ${selfiesFolder}/`);
       }
     } catch { /* ignore project detection errors */ }
@@ -740,11 +758,30 @@ export async function POST(request: NextRequest) {
       try {
         const imageExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'];
         const ws = new WorkspaceService(WORKSPACE_ROOT, WORKSPACE_MAX_FILE_SIZE_KB, WORKSPACE_ALLOWED_EXTENSIONS);
+        // Caps: this injection lands in EVERY agentic-loop iteration's prompt,
+        // so it must stay bounded. 2026-08-23: a group-room message tripped the
+        // keyword regexes with no project detected → the scanner walked ALL
+        // top-level folders and injected ALL 1,999 workspace image paths into
+        // Eve's prompt with an "analyze each" directive — ~20k tokens of paths
+        // per iteration, 750k+ prompt tokens burned before the run aborted.
+        // Newest-first caps keep the hint useful (recent selfies are what
+        // "look at my photos" means) and the prompt bounded.
+        const MAX_IMAGE_PATHS = 25;
+        const MAX_TREE_ENTRIES = 120;
 
         // Scope scanning to detected project folder, or scan all top-level dirs
         const scanDirs: string[] = detectedProject ? [detectedProject.folder] : [];
-        const allFilePaths: string[] = [];
-        const imagePaths: string[] = [];
+        const treeEntries: string[] = [];
+        const imageCandidates: Array<{ path: string; mtimeMs: number }> = [];
+
+        const statImage = async (relPath: string): Promise<{ path: string; mtimeMs: number }> => {
+          try {
+            const s = await fs.promises.stat(path.join(WORKSPACE_ROOT, relPath));
+            return { path: relPath, mtimeMs: s.mtimeMs };
+          } catch {
+            return { path: relPath, mtimeMs: 0 };
+          }
+        };
 
         if (scanDirs.length === 0) {
           // No project detected — scan top-level to find all dirs
@@ -752,39 +789,49 @@ export async function POST(request: NextRequest) {
           for (const entry of topLevel) {
             if (entry.type === 'directory') scanDirs.push(entry.name);
             else if (entry.type === 'file') {
-              allFilePaths.push(`📄 ${entry.name} (${entry.size} bytes)`);
+              treeEntries.push(`📄 ${entry.name} (${entry.size} bytes)`);
               if (imageExts.some(ext => entry.name.toLowerCase().endsWith(ext))) {
-                imagePaths.push(entry.name);
+                imageCandidates.push(await statImage(entry.name));
               }
             }
           }
         }
 
         for (const dir of scanDirs) {
-          allFilePaths.push(`📁 ${dir}/`);
+          treeEntries.push(`📁 ${dir}/`);
           const subFiles = await ws.listFiles(dir);
           for (const f of subFiles) {
             if (f.type === 'file') {
-              allFilePaths.push(`  📄 ${dir}/${f.name} (${f.size} bytes)`);
+              treeEntries.push(`  📄 ${dir}/${f.name} (${f.size} bytes)`);
               if (imageExts.some(ext => f.name.toLowerCase().endsWith(ext))) {
-                imagePaths.push(`${dir}/${f.name}`);
+                imageCandidates.push(await statImage(`${dir}/${f.name}`));
               }
             } else if (f.type === 'directory') {
-              allFilePaths.push(`  📁 ${dir}/${f.name}/`);
+              treeEntries.push(`  📁 ${dir}/${f.name}/`);
             }
           }
         }
 
-        if (mentionsImages && mentionsReview && imagePaths.length > 0) {
-          // Image-specific: inject image paths with analyze_image instructions (only when user asks to review/analyze)
-          const fileList = imagePaths.map(p => `- ${p}`).join('\n');
-          enrichedMessage = `${enrichedMessage}\n\n[System: Found ${imagePaths.length} image(s) in ${detectedProject ? `project "${detectedProject.folder}"` : 'workspace'}:\n${fileList}\nUse the analyze_image tool with image_path for each image listed above.]`;
-          console.log(`   🖼️  Pre-injected ${imagePaths.length} workspace image paths into message${detectedProject ? ` (scoped to ${detectedProject.folder})` : ''}`);
-        } else if (allFilePaths.length > 0) {
-          // General listing: inject workspace tree
-          const tree = allFilePaths.join('\n');
-          enrichedMessage = `${enrichedMessage}\n\n[System: Current ${detectedProject ? `project "${detectedProject.folder}"` : 'workspace'} contents:\n${tree}\n]`;
-          console.log(`   📂  Pre-injected workspace listing (${allFilePaths.length} entries) into message`);
+        if (mentionsImages && mentionsReview && imageCandidates.length > 0) {
+          // Image-specific: newest first, hard-capped (see MAX_IMAGE_PATHS above).
+          const sorted = imageCandidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
+          const shown = sorted.slice(0, MAX_IMAGE_PATHS);
+          const fileList = shown.map(c => `- ${c.path}`).join('\n');
+          const more = sorted.length - shown.length;
+          const moreLine = more > 0
+            ? `\n…${more.toLocaleString()} more not listed (newest shown). Use workspace_list_files on a specific folder to explore.`
+            : '';
+          enrichedMessage = `${enrichedMessage}\n\n[System: Found ${sorted.length.toLocaleString()} image(s) in ${detectedProject ? `project "${detectedProject.folder}"` : 'workspace'} — the ${shown.length} most recent:\n${fileList}${moreLine}\nAnalyze ONLY the ones relevant to the request with analyze_image.]`;
+          console.log(`   🖼️  Pre-injected ${shown.length} of ${sorted.length.toLocaleString()} workspace image paths (newest-first, capped)${detectedProject ? ` (scoped to ${detectedProject.folder})` : ''}`);
+        } else if (treeEntries.length > 0) {
+          // General listing: inject a bounded workspace tree
+          const shownTree = treeEntries.slice(0, MAX_TREE_ENTRIES);
+          const treeNote = treeEntries.length > shownTree.length
+            ? `\n…${(treeEntries.length - shownTree.length).toLocaleString()} more entries not listed — use workspace_list_files per folder.`
+            : '';
+          const tree = shownTree.join('\n');
+          enrichedMessage = `${enrichedMessage}\n\n[System: Current ${detectedProject ? `project "${detectedProject.folder}"` : 'workspace'} contents:\n${tree}${treeNote}\n]`;
+          console.log(`   📂  Pre-injected workspace listing (${shownTree.length} of ${treeEntries.length.toLocaleString()} entries, capped) into message`);
         }
       } catch (err) {
         console.warn('   ⚠️  Failed to pre-list workspace files:', err);
@@ -884,7 +931,7 @@ export async function POST(request: NextRequest) {
     // Build fallback model configurations (tried in order if primary times out or errors)
     // retryDelayMs: when set, the fallback loop sleeps this long before the attempt —
     // used by the same-model local retry so the local server can settle.
-    type FallbackConfig = { model: string; providerId: string | null; label: string; retryDelayMs?: number };
+    type FallbackConfig = { model: string; providerId: string | null; label: string; retryDelayMs?: number; sameModelRetry?: boolean };
     const fallbackConfigs: FallbackConfig[] = [];
 
     // When a task override is active (heartbeat/cron using a different model than the

@@ -427,9 +427,37 @@ export async function runSpeakerTurn(opts: {
   // "Images shared in this room" reference block.
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  // Watchdog: kill a turn when it goes STALE, not merely because wall-clock
+  // time passed. 2026-08-23: the old flat 300s setTimeout guillotined healthy
+  // tool-heavy turns mid-flight — Eve's room run died at iteration 12 (~458k
+  // prompt tokens of work discarded) at exactly ~305s, twice in one day, both
+  // times while streaming tool results (SSH to Sprout's Raspberry Pi). Speakers
+  // legitimately run many minutes; the direct-chat path already tolerates up to
+  // 270s between tokens on cloud models. So:
+  //   • idle ≥ 5 min with zero stream bytes → hung backend, abort
+  //   • absolute ceiling (timeoutMs from the orchestrator, 15 min) regardless
+  //     of activity → runaway guard. Polling every 5s avoids per-chunk timers.
+  const TURN_IDLE_MS = 300000;
+  const startedAt = Date.now();
+  let lastStreamActivity = Date.now();
+  let abortReason: string | null = null;
+  const watchdog = setInterval(() => {
+    const idleMs = Date.now() - lastStreamActivity;
+    if (idleMs >= TURN_IDLE_MS) {
+      abortReason = `no stream output for ${Math.round(idleMs / 1000)}s`;
+      controller.abort();
+    } else if (Date.now() - startedAt >= timeoutMs) {
+      abortReason = `turn ceiling ${Math.round(timeoutMs / 60000)}min reached`;
+      controller.abort();
+    }
+  }, 5000);
 
   const result: GroupSpeakerResult = { passed: false, windingDown: false, content: '', imageUrl: null, imageId: null, toolCalls: [] };
+  // Stream accumulators live OUTSIDE the try so an abort/failure mid-read can
+  // still salvage what the speaker already said (2026-08-25: Eve's whole turn
+  // vanished when the 15-min ceiling fired — the old catch couldn't see these).
+  let content = '';
+  let doneContent = '';
 
   try {
     let response: Awaited<ReturnType<typeof undiciFetch>>;
@@ -460,7 +488,7 @@ export async function runSpeakerTurn(opts: {
         dispatcher: groupDispatcher,
       });
     } catch (fetchErr) {
-      clearTimeout(timeout);
+      clearInterval(watchdog);
       const isAbort = (fetchErr as Error).name === 'AbortError';
       result.error = isAbort
         ? `${speakerName} timed out connecting to the chat API`
@@ -469,7 +497,7 @@ export async function runSpeakerTurn(opts: {
     }
 
     if (!response.ok) {
-      clearTimeout(timeout);
+      clearInterval(watchdog);
       const errText = await response.text().catch(() => '');
       result.error = `${speakerName} chat API error (${response.status}): ${errText.slice(0, 200)}`;
       return result;
@@ -477,19 +505,18 @@ export async function runSpeakerTurn(opts: {
 
     const reader = response.body?.getReader();
     if (!reader) {
-      clearTimeout(timeout);
+      clearInterval(watchdog);
       result.error = `No response stream from ${speakerName}`;
       return result;
     }
 
     const decoder = new TextDecoder();
-    let content = '';
-    let doneContent = '';
     let buffer = '';
 
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
+      lastStreamActivity = Date.now();
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
       buffer = lines.pop() || '';
@@ -535,7 +562,7 @@ export async function runSpeakerTurn(opts: {
       }
     }
 
-    clearTimeout(timeout);
+    clearInterval(watchdog);
     let finalContent = (doneContent || content).trim();
     // Cut off any "[Your turn, …]" instruction the model kept writing past its
     // own reply (it sometimes continues the script into the next turn's prompt).
@@ -610,9 +637,22 @@ export async function runSpeakerTurn(opts: {
     }
     return result;
   } catch (streamErr) {
-    clearTimeout(timeout);
-    result.error = `${speakerName} stream error: ${(streamErr as Error).message}`;
-    // Preserve any partial content captured before the failure.
+    clearInterval(watchdog);
+    // Salvage: a ceiling/idle abort or mid-stream failure must not vaporize
+    // what the speaker already streamed to the room. Apply the same essential
+    // cleanup as the happy path (minus PASS/echo handling — those judge
+    // COMPLETE replies) and let the orchestrator commit the partial.
+    let partial = (doneContent || content).trim();
+    if (partial) {
+      partial = partial.split(/\[\s*your turn\b/i)[0].trim();
+      partial = partial.replace(/^\s*\[\s*you are\s+[^\]]*\]\s*/i, '').trim();
+      partial = stripSpeakerPrefix(partial, [...participantNames, 'Donny', 'You']);
+      partial = dedupeParagraphs(partial).trim();
+    }
+    if (partial) result.content = partial;
+    result.error = abortReason
+      ? `${speakerName} turn stopped: ${abortReason}`
+      : `${speakerName} stream error: ${(streamErr as Error).message}`;
     return result;
   }
 }

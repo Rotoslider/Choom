@@ -48,6 +48,7 @@ const CODE_TOOLS = new Set([
   'install_package',
   'run_command',
   'run_ssh_command',
+  'ssh_copy_file',
 ]);
 
 export default class CodeExecutionHandler extends BaseSkillHandler {
@@ -67,6 +68,8 @@ export default class CodeExecutionHandler extends BaseSkillHandler {
         return this.runCommand(toolCall);
       case 'run_ssh_command':
         return this.runSshCommand(toolCall, ctx);
+      case 'ssh_copy_file':
+        return this.runSshCopyFile(toolCall, ctx);
       default:
         return this.error(toolCall, `Unknown code execution tool: ${toolCall.name}`);
     }
@@ -190,6 +193,37 @@ export default class CodeExecutionHandler extends BaseSkillHandler {
     } catch (err) {
       console.error('   SSH command failed:', err instanceof Error ? err.message : err);
       return this.error(toolCall, `SSH command failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    }
+  }
+
+  private async runSshCopyFile(toolCall: ToolCall, ctx: SkillHandlerContext): Promise<ToolResult> {
+    if (!choomHasSshPermission(ctx.choom)) {
+      return this.error(toolCall, REMOTE_SSH_DISABLED_MESSAGE);
+    }
+
+    try {
+      const timeoutSeconds = toolCall.arguments.timeout_seconds;
+      const timeoutMs = typeof timeoutSeconds === 'number'
+        ? Math.min(timeoutSeconds * 1000, 600_000)
+        : undefined;
+      const result = await new SshExecutor().copy({
+        direction: toolCall.arguments.direction,
+        target: toolCall.arguments.target,
+        remotePath: toolCall.arguments.remote_path,
+        localPath: toolCall.arguments.local_path,
+        timeoutMs,
+        port: toolCall.arguments.port,
+      });
+      console.log(`   🔐 ssh_copy_file ${toolCall.arguments.direction} "${String(toolCall.arguments.remote_path).slice(0, 60)}" ↔ ${result.localPath} exit=${result.exitCode} ${result.durationMs}ms`);
+      return this.success(toolCall, {
+        ...result,
+        message: result.success
+          ? `${result.localPath}: ${toolCall.arguments.direction === 'pull' ? 'pulled from' : 'pushed to'} ${String(toolCall.arguments.target)}:${String(toolCall.arguments.remote_path)}`
+          : undefined,
+      });
+    } catch (err) {
+      console.error('   SSH copy failed:', err instanceof Error ? err.message : err);
+      return this.error(toolCall, `SSH copy failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
     }
   }
 }

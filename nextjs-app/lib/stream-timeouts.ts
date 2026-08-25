@@ -76,6 +76,13 @@ export function computeStreamTimeouts(tier: EndpointTier, timeoutMs: number): St
       return { connectionMs: 15_000, prefillMs: 60_000, betweenTokenMs: 15_000 };
     case 'cloud-fast':
     default:
-      return { connectionMs: 15_000, prefillMs: 30_000, betweenTokenMs: 15_000 };
+      // 2026-08-25: frontier REASONING models on plain cloud APIs (OpenRouter
+      // stealth models especially) routinely stay byte-silent past 30s on large
+      // prompts — hidden chain-of-thought produces no deltas at all, so a
+      // healthy request looks dead (OpenRouter's own dashboard shows it running).
+      // The old 30s/15s pair kept false-dropping the primary onto a weaker
+      // fallback every turn. Genuinely dead endpoints still fail fast at the
+      // 15s connection phase or the per-request wall clock.
+      return { connectionMs: 15_000, prefillMs: 90_000, betweenTokenMs: 30_000 };
   }
 }

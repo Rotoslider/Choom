@@ -2,11 +2,9 @@ import { BaseSkillHandler, SkillHandlerContext } from '@/lib/skill-handler';
 import type { ToolCall, ToolResult } from '@/lib/types';
 import prisma from '@/lib/db';
 import { Agent, fetch as undiciFetch } from 'undici';
-import { WORKSPACE_ROOT } from '@/lib/config';
+import { WORKSPACE_ROOT, WORKSPACE_MAX_FILE_SIZE_KB, WORKSPACE_ALLOWED_EXTENSIONS } from '@/lib/config';
 import { verifyDelegationClaims, formatVerificationBlock } from '@/lib/claim-verifier';
 
-const DELEG_WORKSPACE_MAX_FILE_KB = 1024;
-const DELEG_WORKSPACE_EXTS = ['.md', '.txt', '.json', '.jsonl', '.py', '.ts', '.tsx', '.js', '.jsx', '.html', '.css', '.csv', '.tsv', '.sh', '.bash', '.yaml', '.yml', '.xml', '.sql', '.toml', '.ini', '.cfg', '.log'];
 
 const TOOL_NAMES = new Set(['delegate_to_choom', 'list_team', 'get_delegation_result']);
 
@@ -646,7 +644,7 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
             if (workerProjectFolder && (toolResultTexts.length > 0 || content.trim().length > 50)) {
               try {
                 const { WorkspaceService } = await import('@/lib/workspace-service');
-                const ws = new WorkspaceService(WORKSPACE_ROOT, DELEG_WORKSPACE_MAX_FILE_KB, DELEG_WORKSPACE_EXTS);
+                const ws = new WorkspaceService(WORKSPACE_ROOT, WORKSPACE_MAX_FILE_SIZE_KB, WORKSPACE_ALLOWED_EXTENSIONS);
                 const progressContent = [
                   `# Delegation Progress — ${targetChoom.name}`,
                   `**Task:** ${task.slice(0, 200)}`,

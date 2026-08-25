@@ -14,7 +14,14 @@ import { CUSTOM_SKILLS_ROOT } from './config';
 // so `new Function('p','return require(p)')` fails with "require is not defined".
 // createRequire creates a proper CJS require function that works in ESM contexts.
 import { createRequire } from 'module';
-const nodeRequire = createRequire(import.meta.url || __filename);
+import { pathToFileURL } from 'url';
+// createRequire loads custom skill handler.js files at runtime. Turbopack
+// compiles server code as ESM where bare `require` is not defined.
+// jest/ts-jest compiles CJS where `import.meta` cannot be PARSED — hence eval.
+const nodeRequire = createRequire(
+  (typeof __filename !== 'undefined' && __filename)
+  || pathToFileURL(eval('import.meta.url') as string).href,
+);
 
 // Import all core skill tools
 import { tools as memoryTools } from '@/skills/core/memory-management/tools';

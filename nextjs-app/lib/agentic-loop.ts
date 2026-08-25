@@ -85,7 +85,7 @@ export interface AgenticLoopParams {
   systemPromptWithSummary: string;
   planFullySucceeded: boolean;
   maxIterations: number;
-  projectIterationLimitApplied: boolean;
+  iterationCapLocked: boolean;
   fullContent: string;
   allToolCalls: ToolCall[];
   allToolResults: ToolResult[];
@@ -125,7 +125,7 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
   let usingCloudProvider = params.usingCloudProvider;
   let resolvedProvider = params.resolvedProvider;
   let maxIterations = params.maxIterations;
-  let projectIterationLimitApplied = params.projectIterationLimitApplied;
+  let iterationCapLocked = params.iterationCapLocked;
   let fullContent = params.fullContent;
   let allToolCalls = params.allToolCalls;
   let fallbackAttempt = 0; // Tracks which fallback to try next (0 = try #1, 1 = try #2)
@@ -211,6 +211,7 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
           const dedupHitCounts = new Map<string, number>(); // How many times each dedup key was hit
           let loopBreakRequested = false; // Set when a tight repeat-call loop is detected
           const failedCallCache = new Map<string, string>(); // Cache: dedupKey → error message
+          const cachedFailureHits = new Map<string, number>(); // Re-serves of each failed dedupKey (same-args retry pressure)
           const toolCallCounts = new Map<string, number>(); // Per-tool name call counter
           const brokenTools = new Set<string>(); // Tool names blocked due to config/auth errors
           const toolReplacementHints = new Map<string, string>(); // failedTool → "use X with Y" extracted from error messages
@@ -222,8 +223,6 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
           // same failing approach; a targeted nudge unlocks alternate paths.
           let reflectionNudgesUsed = 0;
           const MAX_REFLECTION_NUDGES = 2;
-          const MAX_CALLS_PER_TOOL = 50; // Max times any single tool can be called per request
-          const MAX_CALLS_PER_READONLY_TOOL = 50; // Higher limit for read-only (PARALLEL_SAFE) tools
           const MAX_FAILURES_PER_TOOL = 2; // Block tool after this many failures (any error)
           // Iterative tools where errors ARE the workflow (write code → error →
           // read traceback → fix) get extra headroom before blocking; a cap of 2
@@ -303,7 +302,17 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
           if (forceToolCall && intentToolHint && activeTools.some(t => t.name === intentToolHint)) {
             intentForcedTool = intentToolHint;
           }
-          if (intentToolHint && activeTools.length > 0) {
+          if (!isGroupTurn && forceToolCall && intentForcedTool && activeTools.length > 0) {
+            // Guidance is only honest when it is ENFORCED: 1:1 turns where
+            // tool_choice forces the hinted tool AND that tool is exposed.
+            //
+            // NEVER in group rooms: `message` there is the siblings' chatter,
+            // so the hint regexes trip on stray words ("stop", "track",
+            // "resume" + "playing/speaker") and this line then commanded
+            // music_control all turn long — three sightings across two
+            // sisters before anyone traced it (2026-08-25). Rooms get no
+            // tool_choice forcing either (see above), so the guidance would
+            // be unbacked pressure with a fabricated "user's request".
             // Must NOT be role:'system'. Strict chat templates (Qwen/ChatML via
             // LM Studio) hard-400 the whole request on any system turn after
             // index 0 ("System message must be at the beginning"). A user-role
@@ -376,33 +385,38 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
             }
           }
 
-          // Same-model local retry: when the primary is a LOCAL model, an empty
-          // response (200 OK, 0 chars, no tool calls) is almost always a transient
-          // server hiccup — common under back-to-back, large-context group-chat load
-          // where LM Studio churns its KV cache. Escalating straight to a cloud
-          // fallback (NVIDIA, etc.) is wrong when every Choom shares one local model.
-          // Prepend a retry of the SAME local model as fallback #0 (with a short
-          // settle delay) so we give the local server a second chance before paying
-          // for — and waiting on — a cloud provider. Skipped when a task override
-          // already prepended the primary (heartbeat/cron) to avoid a double retry.
+          // Same-model retry: an empty response (200 OK, 0 chars, no tool calls)
+          // is almost always transient — local servers hiccup under KV-cache
+          // churn on big group loads; cloud reasoning models (OpenRouter
+          // stealth) emit empty bodies during upstream churn. Either way,
+          // escalating straight to a DIFFERENT — usually lesser — fallback
+          // model throws away work a second attempt would very likely finish
+          // (2026-08-25: Eve's ox-alpha turn jumped empty → deepseek-v4-flash).
+          // So prepend ONE retry of the SAME model as fallback #0 with a short
+          // settle delay. Skipped when a task override already prepended the
+          // choom's primary (heartbeat/cron) to avoid a double retry.
           {
             const primaryIsLocal = !usingCloudProvider || isLocalEndpoint(llmSettings.endpoint);
-            if (primaryIsLocal && !taskOverrideActive) {
+            if (!taskOverrideActive) {
               fallbackConfigs.unshift({
                 model: llmSettings.model,
                 providerId: (resolvedProvider && resolvedProvider !== 'local') ? resolvedProvider : null,
-                label: `local/${llmSettings.model} (retry)`,
-                retryDelayMs: 1500,
+                label: primaryIsLocal ? `local/${llmSettings.model} (retry)` : `${llmSettings.model} (same-model retry)`,
+                retryDelayMs: primaryIsLocal ? 1500 : 2000,
+                sameModelRetry: true,
               });
-              console.log(`   🔁 ${choomTag} Prepended same-model local retry as fallback #0 (local primary — empty responses retry before cloud escalation)`);
+              console.log(`   🔁 ${choomTag} Prepended same-model retry as fallback #0 (${primaryIsLocal ? 'local' : 'cloud'} primary — transient failures retry before model escalation)`);
             }
           }
 
           // If plan fully succeeded, allow some follow-up iterations for summary, cleanup,
           // and handling incomplete delegations. Don't cap too aggressively — delegation
           // results are often partial and the orchestrator needs room to continue work.
-          // Never override a per-project or request-level maxIterations setting.
-          if (planFullySucceeded && !projectIterationLimitApplied && !maxIterationsOverride) {
+          // NEVER touches a locked cap (request override, <!-- max_iterations: N -->
+          // directive, or project metadata) — those were set deliberately and the
+          // loop must honor them verbatim. Previously this reduction silently cut
+          // a Choom's directive of e.g. 100 down to 15 whenever the plan succeeded.
+          if (planFullySucceeded && !iterationCapLocked) {
             const postPlanCap = 15;
             maxIterations = Math.min(maxIterations, postPlanCap);
             console.log(`   📋 Post-plan iteration cap: ${maxIterations}`);
@@ -967,6 +981,14 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                 }
                 for (let fbIdx = fallbackAttempt; fbIdx < fallbackConfigs.length; fbIdx++) {
                   const fb = fallbackConfigs[fbIdx];
+                  // Patience was already exercised on a TIMEOUT — retrying the
+                  // same model just burns its full budget twice before any
+                  // escalation. Retry transient failures (empty bodies etc.);
+                  // escalate stalls.
+                  if (fb.sameModelRetry && /LLM response timeout|LLM connection timeout/.test(String(timeoutError instanceof Error ? timeoutError.message : timeoutError ?? ''))) {
+                    console.log(`   ⏭️  ${choomTag} Skipping same-model retry (${fb.label}) — primary already consumed its full timeout budget; escalating`);
+                    continue;
+                  }
                   console.log(`   🔄 ${choomTag} Trying fallback #${fbIdx + 1}: ${fb.label}`);
                   traceBuilder.recordFallback(fb.label);
                   // Log fallback switch server-side only — don't send as content
@@ -2093,7 +2115,13 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
               // --- Per-tool call counter ---
               const currentToolCount = (toolCallCounts.get(tc.name) || 0) + 1;
               toolCallCounts.set(tc.name, currentToolCount);
-              const effectiveLimit = PARALLEL_SAFE.has(tc.name) ? MAX_CALLS_PER_READONLY_TOOL : MAX_CALLS_PER_TOOL;
+              // Per-tool budget tracks the turn's iteration cap — a Choom allowed N
+              // rounds may legitimately need one tool N times. The old flat 50
+              // strangled tool-driven work mid-turn even when maxIterations was
+              // higher (Genesis 2026-08-25: run_ssh_command blocked at 51/50 on
+              // iteration ~11 of /100), and the retry spiral that followed killed
+              // the whole turn via the repeat-loop guard.
+              const effectiveLimit = maxIterations;
               if (tc.name !== 'generate_image' && currentToolCount > effectiveLimit) {
                 console.log(`   🛑 Tool call limit reached for ${tc.name} (${currentToolCount}/${effectiveLimit})`);
                 return { toolCallId: tc.id, name: tc.name, result: { success: false, message: `Tool ${tc.name} has been called ${currentToolCount} times this request (limit: ${effectiveLimit}). You must try a different approach or present your results to the user.` } };
@@ -2123,8 +2151,13 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
               // succeeds after the parts are moved — same args, different world)
               const cachedError = NO_DEDUP_TOOLS.has(tc.name) ? undefined : failedCallCache.get(dedupKey);
               if (cachedError) {
-                console.log(`   🔁 Returning cached failure for ${tc.name} (same args already failed)`);
-                return { toolCallId: tc.id, name: tc.name, result: null, error: `${cachedError} [This exact call already failed. Try a different approach or different arguments.]` };
+                const priorFails = (cachedFailureHits.get(dedupKey) || 0) + 1;
+                cachedFailureHits.set(dedupKey, priorFails);
+                console.log(`   🔁 Returning cached failure for ${tc.name} (same args already failed, re-serve #${priorFails})`);
+                const retryLine = priorFails >= 3
+                  ? `Do NOT call this tool with these arguments again — pick a DIFFERENT tool or approach, or summarize your progress.`
+                  : `Try a different approach or different arguments.`;
+                return { toolCallId: tc.id, name: tc.name, result: null, error: `${cachedError} [This exact call already failed${priorFails >= 3 ? ` ${priorFails} times` : ''}. ${retryLine}]` };
               }
 
               return null; // Proceed with execution
@@ -2333,19 +2366,18 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
               let topFolder = rawTopFolder;
               try { topFolder = decodeURIComponent(rawTopFolder); } catch { /* keep raw */ }
 
-              if (!projectIterationLimitApplied && topFolder) {
+              if (!iterationCapLocked && topFolder) {
                 try {
                   const projectService = new ProjectService(WORKSPACE_ROOT);
                   const project = await projectService.getProject(topFolder);
                   if (project?.metadata.maxIterations && project.metadata.maxIterations > 0) {
-                    if (maxIterations > project.metadata.maxIterations) {
-                      projectIterationLimitApplied = true; // Don't check again
-                      console.log(`   📂 Project "${topFolder}": maxIterations ${project.metadata.maxIterations} skipped (current limit is higher: ${maxIterations})`);
-                    } else {
-                      maxIterations = project.metadata.maxIterations;
-                      projectIterationLimitApplied = true;
-                      console.log(`   📂 Project "${topFolder}": maxIterations overridden to ${maxIterations}`);
-                    }
+                    // Bidirectional: a project's cap applies whether tighter or looser
+                    // than the running default — "limit by project" must work in both
+                    // directions. Explicit caps (override/directive/an already-applied
+                    // project) never reach this branch: iterationCapLocked is true.
+                    maxIterations = project.metadata.maxIterations;
+                    iterationCapLocked = true; // Don't re-check on every tool result
+                    console.log(`   📂 Project "${topFolder}": maxIterations → ${maxIterations} (mid-turn project detection)`);
                   }
                 } catch { /* ignore project read errors */ }
               }
@@ -2543,7 +2575,14 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                 if (r.error && TEMPORARY_ERROR.test(r.error)) return false; // temporary — not a real failure
                 return true; // real failure
               });
-            if (allFailedThisIteration && failedCallCache.size >= 2) {
+            // Fire the ladder on EITHER several distinct failures OR one failure
+            // re-served repeatedly — a stubborn same-args retry loop needs the
+            // lateral-thinking prompt exactly as much (Genesis 2026-08-25: a
+            // single run_ssh_command arg-set was re-served 70× while the old
+            // failedCallCache.size>=2 gate froze the ladder at 0/2 and the abort
+            // gate below waited on it forever).
+            const totalCachedFailureReturns = Array.from(cachedFailureHits.values()).reduce((a, b) => a + b, 0);
+            if (allFailedThisIteration && (failedCallCache.size >= 2 || totalCachedFailureReturns >= 3)) {
               if (reflectionNudgesUsed < MAX_REFLECTION_NUDGES) {
                 // Before stripping tools, prompt lateral thinking. Most Chooms will
                 // retry the same failing approach unless explicitly asked to consider
@@ -2676,6 +2715,16 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
               // Strip all tools so the LLM physically cannot call them on the next iteration.
               activeTools = [];
               console.log(`   🛑 ${consecutiveFailures} consecutive failures (reflection exhausted) — stripped tools, 1 final iteration to summarize`);
+            } else if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES * 3) {
+              // Absolute backstop: 18 straight real failures is proof of stuckness
+              // even if the ladder somehow cannot advance (e.g. temporary-error
+              // mixes keep allFailedThisIteration false). Never burn a whole turn.
+              currentMessages.push({
+                role: 'user',
+                content: `[System] ${consecutiveFailures} tool calls in a row have failed. STOP retrying. Do NOT call any more tools. Summarize what you accomplished and what went wrong.`,
+              });
+              activeTools = [];
+              console.log(`   🛑 ${consecutiveFailures} consecutive failures (backstop) — stripped tools, final iteration to summarize`);
             } else if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
               console.log(`   ⏸️  ${consecutiveFailures} consecutive failures — deferring strip, reflection ladder active (${reflectionNudgesUsed}/${MAX_REFLECTION_NUDGES} used)`);
             }
@@ -2751,7 +2800,7 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
 
             fullContent += progressNote;
             send({ type: 'content', content: progressNote });
-            console.log(`   ⚠️  Hit maxIterations (${maxIterations}${projectIterationLimitApplied ? ' — per-project override' : ''}) — injected progress summary (${allToolCalls.length} tool calls)`);
+            console.log(`   ⚠️  Hit maxIterations (${maxIterations}${iterationCapLocked ? ' — explicit cap' : ''}) — injected progress summary (${allToolCalls.length} tool calls)`);
           }
   return {
     iteration, maxIterations, fullContent, allToolCalls, resolvedProvider,

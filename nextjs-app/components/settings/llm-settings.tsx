@@ -382,7 +382,7 @@ export function LLMSettings() {
             onChange={(e) => updateLLMSettings({ contextLength: parseInt(e.target.value) || 131072 })}
             className="w-28 h-8 text-sm"
             min={1024}
-            max={262144}
+            max={2097152}
             step={1024}
           />
         </div>
@@ -390,7 +390,7 @@ export function LLMSettings() {
           value={[llm.contextLength || 131072]}
           onValueChange={([v]) => updateLLMSettings({ contextLength: v })}
           min={1024}
-          max={262144}
+          max={2097152}
           step={1024}
           className="hover:cursor-pointer"
         />
@@ -877,7 +877,7 @@ function ProfileEditor({
         <Slider
           value={[draft.contextLength ?? 131072]}
           onValueChange={([v]) => setDraft(d => ({ ...d, contextLength: v }))}
-          min={1024} max={262144} step={1024}
+          min={1024} max={2097152} step={1024}
           className="hover:cursor-pointer"
         />
       </div>

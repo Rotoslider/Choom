@@ -2,9 +2,10 @@ import { BaseSkillHandler, SkillHandlerContext } from '@/lib/skill-handler';
 import type { ToolCall, ToolResult } from '@/lib/types';
 import { WorkspaceService } from '@/lib/workspace-service';
 import { ProjectService } from '@/lib/project-service';
-import { WORKSPACE_ROOT } from '@/lib/config';
-const WORKSPACE_MAX_FILE_SIZE_KB = 1024;
-const WORKSPACE_ALLOWED_EXTENSIONS = ['.md', '.txt', '.json', '.jsonl', '.py', '.ts', '.tsx', '.js', '.jsx', '.html', '.css', '.csv', '.tsv', '.sh', '.bash', '.yaml', '.yml', '.xml', '.sql', '.toml', '.ini', '.cfg', '.r', '.R', '.ipynb', '.log'];
+// Canonical workspace write policy — do NOT shadow it with a local copy.
+// A stale private list here silently blocked .lisp writes (Genesis, 2026-08-25)
+// even though lib/config.ts allowed them.
+import { WORKSPACE_ROOT, WORKSPACE_MAX_FILE_SIZE_KB, WORKSPACE_ALLOWED_EXTENSIONS } from '@/lib/config';
 
 const TOOL_NAMES = new Set([
   'workspace_write_file',

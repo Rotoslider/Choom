@@ -9,7 +9,7 @@ tools:
   - install_package
   - run_command
   - run_ssh_command
-dependencies: []
+  - ssh_copy_file
 ---
 
 # Code Execution (Sandbox)
@@ -20,6 +20,7 @@ dependencies: []
 - Install packages → `install_package`
 - Shell commands → `run_command`
 - Remote SSH command → `run_ssh_command` (only when Remote SSH is enabled for this Choom)
+- Copy files workspace ↔ remote host → `ssh_copy_file` (`direction: "pull"` remote→workspace, `"push"` workspace→remote; binary-safe scp)
 
 ## Important
 - Timeout: default 30s, max 120s

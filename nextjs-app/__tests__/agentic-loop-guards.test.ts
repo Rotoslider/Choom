@@ -53,12 +53,14 @@ describe('Agentic Loop Guards', () => {
       expect(routeContent).toContain('const toolCallCounts = new Map<string, number>()');
     });
 
-    test('MAX_CALLS_PER_TOOL is defined', () => {
-      expect(routeContent).toMatch(/const MAX_CALLS_PER_TOOL = \d+/);
-    });
-
-    test('MAX_CALLS_PER_READONLY_TOOL is defined', () => {
-      expect(routeContent).toMatch(/const MAX_CALLS_PER_READONLY_TOOL = \d+/);
+    test('per-tool call budget derives from maxIterations (no flat constant)', () => {
+      // 2026-08-25: the flat MAX_CALLS_PER_TOOL = 50 blocked a Choom with a
+      // <!-- max_iterations: N --> directive above 50 — run_ssh_command hit
+      // 51/50 while she still had ~90 rounds left, and the retry spiral killed
+      // the turn. The budget now IS the iteration cap.
+      expect(routeContent).not.toMatch(/const MAX_CALLS_PER_TOOL = \d+/);
+      expect(routeContent).not.toMatch(/const MAX_CALLS_PER_READONLY_TOOL = \d+/);
+      expect(routeContent).toContain('const effectiveLimit = maxIterations');
     });
 
     test('tool calls are counted', () => {
@@ -77,8 +79,30 @@ describe('Agentic Loop Guards', () => {
       expect(routeContent).toContain("tc.name !== 'generate_image' && currentToolCount > effectiveLimit");
     });
 
-    test('read-only tools use higher limit (PARALLEL_SAFE)', () => {
-      expect(routeContent).toContain('PARALLEL_SAFE.has(tc.name) ? MAX_CALLS_PER_READONLY_TOOL : MAX_CALLS_PER_TOOL');
+    test('PARALLEL_SAFE still gates parallel-vs-sequential execution', () => {
+      // The per-tool CALL BUDGET no longer branches on PARALLEL_SAFE — it is
+      // simply maxIterations for every tool. The set itself remains the
+      // read-only marker deciding which calls in a batch run in parallel.
+      expect(routeContent).toContain('const sequentialCalls = pendingCalls.filter(tc => !PARALLEL_SAFE.has(tc.name))');
+    });
+
+    test('same-args failure retries are counted and escalate', () => {
+      // Genesis 2026-08-25: one failing arg-set re-served 70+ times while the
+      // reflection ladder waited for >=2 DISTINCT failures that never came.
+      expect(routeContent).toContain('const cachedFailureHits = new Map<string, number>()');
+      expect(routeContent).toContain('cachedFailureHits.set(dedupKey, priorFails)');
+      // From re-serve #3 the returned error demands a different approach.
+      expect(routeContent).toContain('pick a DIFFERENT tool or approach');
+    });
+
+    test('reflection ladder fires on a single REPEATING failure too', () => {
+      expect(routeContent).toContain('(failedCallCache.size >= 2 || totalCachedFailureReturns >= 3)');
+    });
+
+    test('consecutive-failure abort has an absolute backstop', () => {
+      // Deferral must never be unbounded: 18 straight real failures end the
+      // turn even if the ladder cannot advance.
+      expect(routeContent).toContain('consecutiveFailures >= MAX_CONSECUTIVE_FAILURES * 3');
     });
   });
 
@@ -100,7 +124,11 @@ describe('Agentic Loop Guards', () => {
     });
 
     test('cached failure message tells LLM to try different args', () => {
-      expect(routeContent).toContain('This exact call already failed. Try a different approach or different arguments.');
+      // First re-serves get the soft nudge; from #3 the wording hardens —
+      // identical retries have proven the model is ignoring the soft one.
+      expect(routeContent).toContain('This exact call already failed');
+      expect(routeContent).toContain('`Try a different approach or different arguments.`');
+      expect(routeContent).toContain('pick a DIFFERENT tool or approach');
     });
   });
 

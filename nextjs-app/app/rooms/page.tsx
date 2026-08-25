@@ -363,7 +363,20 @@ export default function RoomsPage() {
               setActiveSpeaker(null);
               break;
             case 'error':
+              // A run-level failure used to be console-only: the room just went
+              // silent with no explanation (2026-08-25 stall). Show it inline.
               console.error('Room error:', data.error);
+              setMessages(prev => [...prev, {
+                id: `sys_err_${Date.now()}`,
+                role: 'assistant',
+                authorChoomId: '',
+                authorName: 'system',
+                content: `⚠️ Room run stopped: ${data.error}`,
+                imageUrl: null,
+                createdAt: new Date().toISOString(),
+              }]);
+              setActiveSpeaker(null);
+              setStreamingText('');
               break;
           }
         }

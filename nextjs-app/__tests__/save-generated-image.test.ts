@@ -58,10 +58,11 @@ describe('save_generated_image Tool', () => {
       expect(handlerContent).toContain("import { WorkspaceService }");
     });
 
-    test('handler defines image extensions', () => {
-      expect(handlerContent).toContain('WORKSPACE_IMAGE_EXTENSIONS');
-      expect(handlerContent).toContain('.png');
-      expect(handlerContent).toContain('.jpg');
+    test('handler uses the canonical workspace extension policy', () => {
+      // Extension lists live only in lib/config.ts now; local shadow copies
+      // drifted and silently rejected files the policy allows (.lisp).
+      expect(handlerContent).toContain("WORKSPACE_ALLOWED_EXTENSIONS, WORKSPACE_IMAGE_EXTENSIONS } from '@/lib/config'");
+      expect(handlerContent).not.toMatch(/const WORKSPACE_IMAGE_EXTENSIONS = \[/);
     });
 
     test('handler uses writeFileBuffer (not writeFile)', () => {

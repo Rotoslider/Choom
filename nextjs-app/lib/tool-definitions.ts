@@ -1172,6 +1172,42 @@ export const sandboxTools: ToolDefinition[] = [
       required: ['target', 'command'],
     },
   },
+  {
+    name: 'ssh_copy_file',
+    description:
+      'Copy a file between this machine\'s Choom workspace and a remote computer (binary-safe, via scp). direction="pull" brings a remote file INTO the workspace; direction="push" sends a workspace file OUT to the remote host. Available only when this Choom\'s Remote SSH permission is enabled.',
+    parameters: {
+      type: 'object',
+      properties: {
+        direction: {
+          type: 'string',
+          enum: ['pull', 'push'],
+          description: '"pull" = remote → workspace, "push" = workspace → remote',
+        },
+        target: {
+          type: 'string',
+          description: 'SSH target, such as "developer@192.0.2.42" or a configured SSH host alias',
+        },
+        remote_path: {
+          type: 'string',
+          description: 'Plain absolute or ~-relative path on the remote computer (no shell metacharacters)',
+        },
+        local_path: {
+          type: 'string',
+          description: 'Workspace-relative path, e.g. "myproject/data.bin" (pull destination or push source)',
+        },
+        port: {
+          type: 'number',
+          description: 'Optional SSH port (default 22)',
+        },
+        timeout_seconds: {
+          type: 'number',
+          description: 'Transfer timeout in seconds (default 330, max 600)',
+        },
+      },
+      required: ['direction', 'target', 'remote_path', 'local_path'],
+    },
+  },
 ];
 
 // ============================================================================

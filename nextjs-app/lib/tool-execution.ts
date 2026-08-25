@@ -1981,6 +1981,38 @@ export async function executeToolCall(
     }
   }
 
+  // ssh_copy_file shares run_ssh_command's per-Choom Remote SSH grant.
+  if (toolCall.name === 'ssh_copy_file') {
+    if (!choomHasSshPermission(choom)) {
+      return {
+        toolCallId: toolCall.id,
+        name: toolCall.name,
+        result: null,
+        error: REMOTE_SSH_DISABLED_MESSAGE,
+      };
+    }
+    try {
+      const timeoutSeconds = toolCall.arguments.timeout_seconds;
+      const result = await new SshExecutor().copy({
+        direction: toolCall.arguments.direction,
+        target: toolCall.arguments.target,
+        remotePath: toolCall.arguments.remote_path,
+        localPath: toolCall.arguments.local_path,
+        timeoutMs: typeof timeoutSeconds === 'number' ? Math.min(timeoutSeconds * 1000, 600_000) : undefined,
+        port: toolCall.arguments.port,
+      });
+      console.log(`   🔐 ssh_copy_file ${toolCall.arguments.direction} "${String(toolCall.arguments.remote_path).slice(0, 60)}" ↔ ${result.localPath} exit=${result.exitCode} ${result.durationMs}ms`);
+      return { toolCallId: toolCall.id, name: toolCall.name, result };
+    } catch (err) {
+      return {
+        toolCallId: toolCall.id,
+        name: toolCall.name,
+        result: null,
+        error: `SSH copy failed: ${err instanceof Error ? err.message : 'Unknown error'}`,
+      };
+    }
+  }
+
   // Proactive notification (Batch 5)
   if (toolCall.name === 'send_notification' && ctx.suppressNotifications) {
     console.log(`   🔇 send_notification suppressed (suppressNotifications=true)`);
@@ -2282,8 +2314,8 @@ Use workspace tools for writing reports, saving code, creating structured projec
 - \`execute_code\` - Execute Python or Node.js code. Parameters: \`project_folder\`, \`language\`, \`code\` (required)
 - \`create_venv\` - Create Python venv or npm init. Parameters: \`project_folder\`, \`runtime\` (required)
 - \`install_package\` - Install pip/npm packages. Parameters: \`project_folder\`, \`runtime\`, \`packages\` (required)
-- \`run_command\` - Run a shell command. Parameters: \`project_folder\`, \`command\` (required)
 - \`run_ssh_command\` - Run a non-interactive remote SSH command. Requires this Choom\'s Remote SSH permission. Parameters: \`target\`, \`command\` (required); \`port\`, \`timeout_seconds\` (optional)
+- \`ssh_copy_file\` - Copy a file between the workspace and a remote computer (binary-safe). Requires Remote SSH permission. Parameters: \`direction\` ("pull" = remote → workspace, "push" = workspace → remote), \`target\`, \`remote_path\`, \`local_path\` (required); \`port\`, \`timeout_seconds\` (optional). Prefer this over shell workarounds — it needs no quotes/escaping and handles binaries.
 
 **Notifications:**
 - \`send_notification\` - Send a Signal message notification. Parameters: \`message\` (required)

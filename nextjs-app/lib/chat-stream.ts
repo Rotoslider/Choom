@@ -23,7 +23,7 @@ import { defaultImageGenSettings } from '@/lib/chat-defaults';
 import { WORKSPACE_MAX_FILES_PER_SESSION } from '@/lib/config';
 import {
   serverLog, contextBreakdown, smartMerge, clearGuiActivity,
-  MAX_ITERATIONS, HEARTBEAT_DEFAULT_MAX_ITERATIONS,
+  resolveMaxIterations,
   type FallbackConfig, type DetectedProject,
 } from '@/lib/chat-shared';
 import { runAgenticLoop } from '@/lib/agentic-loop';
@@ -112,48 +112,29 @@ export async function runChatTurn(params: ChatTurnParams): Promise<void> {
         let allToolCalls: ToolCall[] = [];
         const allToolResults: ToolResult[] = [];
         const sessionFileCount = { created: 0, maxAllowed: WORKSPACE_MAX_FILES_PER_SESSION };
-        let maxIterations = MAX_ITERATIONS;
-        let projectIterationLimitApplied = false;
+        // Iteration-cap resolution — single source of truth in resolveMaxIterations
+        // (chat-shared). Precedence: request override > <!-- max_iterations: N -->
+        // directive > project .choom-project.json metadata > defaults (heartbeat
+        // 15, global 50). An explicit setting LOCKS the cap: neither the post-plan
+        // reduction nor mid-turn project re-detection inside the agentic loop may
+        // move it. The old inline ladder let a project silently LOOSEN a Choom's
+        // directive and never let one TIGHTEN the default below 50.
+        const iterationCap = resolveMaxIterations({
+          maxIterationsOverride,
+          choomMaxIterations,
+          projectMaxIterations: detectedProject?.metadata?.maxIterations,
+          isHeartbeat,
+        });
+        let maxIterations = iterationCap.maxIterations;
+        // iterationCapLocked doubles as "don't re-derive the cap mid-turn".
+        // Delegation keeps it true unconditionally: the worker's own directive (or
+        // the global default) is the whole budget for that task.
+        let iterationCapLocked = iterationCap.locked || isDelegation;
 
-        // Heartbeat default cap: tight enough to stop runaway repetition loops but
-        // generous enough for a 10-step heartbeat with a couple retries. An explicit
-        // maxIterationsOverride from the scheduler still wins below.
-        if (isHeartbeat) {
-          maxIterations = HEARTBEAT_DEFAULT_MAX_ITERATIONS;
-          console.log(`   💓 [${choom.name}] Heartbeat mode: maxIterations → ${maxIterations}`);
+        for (const shadowedSource of iterationCap.shadowed) {
+          console.log(`   🔒 [${choom.name}] ${shadowedSource} maxIterations ignored — ${iterationCap.source} takes precedence`);
         }
-
-        // Apply per-Choom iteration limit (from <!-- max_iterations: N --> in system prompt)
-        if (choomMaxIterations > 0) {
-          maxIterations = choomMaxIterations;
-          console.log(`   🔒 [${choom.name}] maxIterations → ${maxIterations} (from system prompt directive)`);
-        }
-
-        // Request-level override (e.g., scheduler goal_review sends maxIterationsOverride=100)
-        // Takes priority over system prompt directive but NOT over delegation cap
-        if (maxIterationsOverride && typeof maxIterationsOverride === 'number' && maxIterationsOverride > 0) {
-          maxIterations = maxIterationsOverride;
-          console.log(`   🔒 [${choom.name}] maxIterations → ${maxIterations} (from request override)`);
-        }
-
-        // Apply per-project iteration limit from pre-detected project (detected above from message or chat history)
-        // Only apply if neither the Choom directive nor a request override already set a HIGHER limit
-        if (detectedProject?.metadata?.maxIterations && detectedProject.metadata.maxIterations > 0) {
-          if (maxIterations > detectedProject.metadata.maxIterations) {
-            console.log(`   📂 Project "${detectedProject.folder}": maxIterations ${detectedProject.metadata.maxIterations} skipped (current limit is higher: ${maxIterations})`);
-          } else {
-            maxIterations = detectedProject.metadata.maxIterations;
-            projectIterationLimitApplied = true;
-            console.log(`   📂 Project "${detectedProject.folder}": maxIterations → ${maxIterations}`);
-          }
-        }
-
-        // Delegation mode: use the Choom's own directive as the cap (or global default).
-        // Don't override lower — the system prompt directive IS the intended limit.
-        if (isDelegation) {
-          projectIterationLimitApplied = true; // Prevent mid-loop project detection from overriding
-          console.log(`   🔒 [${choom.name}] Delegation mode: maxIterations = ${maxIterations}`);
-        }
+        console.log(`   🔒 [${choom.name}] maxIterations → ${maxIterations} (${iterationCap.source})`);
 
         // Build tool context
         const ctx: ToolContext = {
@@ -368,7 +349,7 @@ export async function runChatTurn(params: ChatTurnParams): Promise<void> {
             isGroupTurn, isHeartbeat, isDelegation, noTools, suppressNotifications, freshContext,
             maxIterationsOverride, detectedProject, skillDispatch,
             compactionService, systemPromptWithSummary, planFullySucceeded,
-            maxIterations, projectIterationLimitApplied,
+            maxIterations, iterationCapLocked,
             fullContent, allToolCalls, allToolResults,
           });
           const {

@@ -14,7 +14,7 @@ export const WORKSPACE_MAX_FILES_PER_SESSION = 50;
 export const WORKSPACE_MAX_FILE_SIZE_KB = 1024;
 export const WORKSPACE_ALLOWED_EXTENSIONS = [
   // Documents & data
-  '.md', '.txt', '.json', '.csv', '.tsv', '.log', '.rst', '.tex', '.bib', '.diff', '.patch',
+  '.md', '.txt', '.json', '.jsonl', '.csv', '.tsv', '.log', '.rst', '.tex', '.bib', '.diff', '.patch',
   // Web & scripting
   '.py', '.ts', '.tsx', '.js', '.jsx', '.html', '.css', '.scss', '.sass', '.less', '.graphql', '.gql',
   // Shell & system

@@ -47,6 +47,19 @@ export const BUILTIN_LLM_PROFILES: LLMModelProfile[] = [
     maxTokens: 4096,
     contextLength: 1048576,
   },
+  // OpenRouter stealth tier. Window is OpenRouter's published context_length
+  // (1,048,576, verified live 2026-08-23). Without a profile the model was
+  // invisible in Model Profiles and — when set as the global model — ran at
+  // the client slider's value (UI-capped at 256k), compacting ~8x early.
+  {
+    modelId: 'stealth/ox-alpha',
+    label: 'Ox Alpha (Stealth)',
+    builtIn: true,
+    temperature: 0.7,
+    topP: 0.95,
+    maxTokens: 4096,
+    contextLength: 1048576,
+  },
   {
     modelId: 'moonshotai/kimi-k2.6',
     label: 'Kimi K2.6',

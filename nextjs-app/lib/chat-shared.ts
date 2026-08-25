@@ -86,6 +86,79 @@ export function clearGuiActivity(choomName: string) {
 export const MAX_ITERATIONS = 50;
 export const HEARTBEAT_DEFAULT_MAX_ITERATIONS = 15;
 
+// Parse the <!-- max_iterations: N --> directive from a Choom's system prompt.
+// Returns 0 when absent (caller falls back to project/default caps).
+export function parseChoomMaxIterations(systemPrompt: string | null | undefined): number {
+  const m = (systemPrompt || '').match(/<!--\s*max_iterations:\s*(\d+)\s*-->/);
+  return m ? Math.max(3, parseInt(m[1], 10)) : 0;
+}
+
+export type IterationCapSource =
+  | 'request-override'
+  | 'choom-directive'
+  | 'project'
+  | 'heartbeat-default'
+  | 'global-default';
+
+export interface ResolvedIterationCap {
+  maxIterations: number;
+  source: IterationCapSource;
+  /**
+   * True when an EXPLICIT setting (request override, Choom directive, project
+   * metadata) chose the cap. A locked cap is honored verbatim: neither the
+   * post-plan reduction nor mid-turn project re-detection in the agentic loop
+   * may raise or lower it.
+   */
+  locked: boolean;
+  /** Lower-priority settings that lost the precedence race (for transparent logging). */
+  shadowed: IterationCapSource[];
+}
+
+/**
+ * Single source of truth for the agentic-loop iteration cap (one iteration =
+ * one LLM round that may batch several parallel tool calls). Precedence:
+ *   request override > <!-- max_iterations: N --> directive > project
+ *   .choom-project.json metadata > defaults (heartbeat 15, global 50)
+ *
+ * Explicit settings win over contextual ones and are never moved by a
+ * lower-priority source — before this resolver a project could silently
+ * LOOSEN a Choom's directive, and could never TIGHTEN the global default,
+ * so "limit by project" simply didn't work below 50.
+ */
+export function resolveMaxIterations(opts: {
+  maxIterationsOverride?: unknown;
+  choomMaxIterations?: number;
+  projectMaxIterations?: number | null;
+  isHeartbeat?: boolean;
+}): ResolvedIterationCap {
+  const override = typeof opts.maxIterationsOverride === 'number' && Number.isFinite(opts.maxIterationsOverride) && opts.maxIterationsOverride > 0
+    ? opts.maxIterationsOverride : 0;
+  const directive = typeof opts.choomMaxIterations === 'number' && Number.isFinite(opts.choomMaxIterations) && opts.choomMaxIterations > 0
+    ? opts.choomMaxIterations : 0;
+  const project = typeof opts.projectMaxIterations === 'number' && Number.isFinite(opts.projectMaxIterations) && opts.projectMaxIterations > 0
+    ? opts.projectMaxIterations : 0;
+
+  if (override > 0) {
+    const shadowed: IterationCapSource[] = [];
+    if (directive > 0) shadowed.push('choom-directive');
+    if (project > 0) shadowed.push('project');
+    return { maxIterations: override, source: 'request-override', locked: true, shadowed };
+  }
+  if (directive > 0) {
+    return {
+      maxIterations: directive, source: 'choom-directive', locked: true,
+      shadowed: project > 0 ? ['project'] : [],
+    };
+  }
+  if (project > 0) {
+    return { maxIterations: project, source: 'project', locked: true, shadowed: [] };
+  }
+  if (opts.isHeartbeat) {
+    return { maxIterations: HEARTBEAT_DEFAULT_MAX_ITERATIONS, source: 'heartbeat-default', locked: false, shadowed: [] };
+  }
+  return { maxIterations: MAX_ITERATIONS, source: 'global-default', locked: false, shadowed: [] };
+}
+
 // Server-side activity logging - writes directly to DB so both Signal and web GUI get logged
 export async function serverLog(
   choomId: string, chatId: string,
@@ -111,7 +184,7 @@ export async function serverLog(
 // route.ts builds these in prep; the stream modules consume them. The route
 // keeps its own structurally-identical local type — TypeScript structural
 // typing makes them interchangeable.
-export type FallbackConfig = { model: string; providerId: string | null; label: string; retryDelayMs?: number };
+export type FallbackConfig = { model: string; providerId: string | null; label: string; retryDelayMs?: number; sameModelRetry?: boolean };
 
 // Project detection result shape shared by route prep and the stream modules.
 export type DetectedProject = {

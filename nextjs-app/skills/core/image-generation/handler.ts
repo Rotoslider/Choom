@@ -4,7 +4,7 @@ import { WorkspaceService } from '@/lib/workspace-service';
 import prisma from '@/lib/db';
 import { computeImageDimensions } from '@/lib/types';
 import type { ImageSize, ImageAspect, ImageGenSettings, ToolCall, ToolResult } from '@/lib/types';
-import { WORKSPACE_ROOT } from '@/lib/config';
+import { WORKSPACE_ROOT, WORKSPACE_ALLOWED_EXTENSIONS, WORKSPACE_IMAGE_EXTENSIONS } from '@/lib/config';
 import { waitForGpu } from '@/lib/gpu-lock';
 
 // ============================================================================
@@ -60,9 +60,9 @@ const defaultImageGenSettings: ImageGenSettings = {
     promptSuffix: '',
   },
 };
+// Canonical lists from lib/config — no local shadow copies (they drift and
+// silently reject extensions the workspace policy actually allows).
 
-const WORKSPACE_IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'];
-const WORKSPACE_ALL_EXTENSIONS = ['.md', '.txt', '.json', '.py', '.ts', '.tsx', '.js', '.jsx', '.html', '.css', '.csv', '.sh', '.bash', '.yaml', '.yml', '.xml', '.sql', '.toml', '.ini', '.cfg', '.r', '.R', '.ipynb', '.log', ...WORKSPACE_IMAGE_EXTENSIONS];
 const MAX_IMAGE_FILE_SIZE_KB = 10 * 1024; // 10MB
 
 /**
@@ -482,8 +482,8 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
       }
 
       // Write to workspace with image extensions allowed
-      const ws = new WorkspaceService(WORKSPACE_ROOT, MAX_IMAGE_FILE_SIZE_KB, WORKSPACE_ALL_EXTENSIONS);
-      const result = await ws.writeFileBuffer(normalizedPath, imageBuffer, WORKSPACE_ALL_EXTENSIONS);
+      const ws = new WorkspaceService(WORKSPACE_ROOT, MAX_IMAGE_FILE_SIZE_KB, [...WORKSPACE_ALLOWED_EXTENSIONS, ...WORKSPACE_IMAGE_EXTENSIONS]);
+      const result = await ws.writeFileBuffer(normalizedPath, imageBuffer, [...WORKSPACE_ALLOWED_EXTENSIONS, ...WORKSPACE_IMAGE_EXTENSIONS]);
 
       ctx.sessionFileCount.created++;
       ctx.send({ type: 'file_created', path: normalizedPath });

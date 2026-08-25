@@ -10,7 +10,14 @@ import type { SkillMetadata, LoadedSkill, BaseSkillHandler } from './skill-handl
 // createRequire for loading custom skill files at runtime.
 // Turbopack compiles server code as ESM where bare `require` is not defined.
 import { createRequire } from 'module';
-const nodeRequire = createRequire(import.meta.url || __filename);
+import { pathToFileURL } from 'url';
+// CJS contexts (jest/ts-jest) cannot even PARSE `import.meta`, so it is only
+// referenced through eval — ESM/Turbopack evaluates it, jest falls back to
+// __filename. Bare `require` is unavailable under the Turbopack ESM build.
+const nodeRequire = createRequire(
+  (typeof __filename !== 'undefined' && __filename)
+  || pathToFileURL(eval('import.meta.url') as string).href,
+);
 
 // ============================================================================
 // Skill Registry Singleton
@@ -419,17 +426,21 @@ export class SkillRegistry {
       if (!skill.metadata.enabled) return;
       let score = 0;
 
-      // Check if any tool names are mentioned
+      // Tool names mentioned in the message are a STRONG signal (+10 each form).
       for (const toolName of skill.metadata.tools) {
         if (msgLower.includes(toolName.replace(/_/g, ' '))) score += 10;
         if (msgLower.includes(toolName)) score += 10;
       }
 
-      // Check description keywords
-      const descWords = skill.metadata.description.toLowerCase().split(/\s+/);
-      for (const word of descWords) {
-        if (word.length > 3 && msgLower.includes(word)) score += 1;
-      }
+      // Description keywords are a WEAK signal. Count DISTINCT word hits and
+      // cap the contribution — one incidental overlap ("control", "assistant",
+      // "play") used to give music-assistant score ≥1 and with it a Level-2
+      // doc injection into completely unrelated conversations, which then
+      // self-reinforced as soon as anyone mentioned the misfire.
+      const descWords = [...new Set(skill.metadata.description.toLowerCase().split(/\s+/))]
+        .filter(w => w.length > 3);
+      const descHits = descWords.filter(w => msgLower.includes(w)).length;
+      score += Math.min(descHits, 2);
 
       // Keyword-based pattern matching for common intents
       const patterns: [RegExp, string[]][] = [
@@ -443,13 +454,14 @@ export class SkillRegistry {
         [/\b(document|doc|report|letter|write)\b/i, ['google-docs']],
         [/\b(drive|upload|download|backup|cloud)\b/i, ['google-drive']],
         [/\b(file|folder|workspace|project|save|read)\b/i, ['workspace-files']],
-        [/\b(pdf|convert|export)\b/i, ['pdf-processing']],
+        [/\b(music|songs?|tracks?|albums?|playlists?|spotify|radio|speakers?)\b|\bplay (?:some |the |a )?(?:music|jazz|song|songs|playlist|track|album|artist|radio|lofi|classical|rock|pop)\b|\b(now playing|pause|resume|skip track|shuffle)\b/i, ['music-assistant']],
         [/\b(scrape|download|web image|page images)\b/i, ['web-scraping']],
         [/\b(analyze|vision|look at|describe image|examine)\b/i, ['image-analysis']],
         [/\b(code|python|node|execute|run|sandbox|pip|npm)\b/i, ['code-execution']],
         [/\b(notify|notification|signal|alert)\b/i, ['notifications']],
         [/\b(remind|reminder|alarm)\b/i, ['reminders']],
         [/\b(home assistant|smart home|lights?|switch|sensor|thermostat|heater|motion|door|window|fan|climate|turn on|turn off|brightness|hvac|camera|snapshot|ptz|preset|driveway cam|garage cam)\b/i, ['home-assistant']],
+        [/\b(music|song|track|album|playlist|spotify|radio|now playing|pause|resume|skip track|shuffle|turn (?:the )?music)\b/i, ['music-assistant']],
         [/\b(email|gmail|inbox|send email|draft|compose)\b/i, ['google-gmail']],
         [/\b(contacts?|phone number|address book)\b/i, ['google-contacts']],
         [/\b(youtube|video|channel|playlist)\b/i, ['google-youtube']],
@@ -463,7 +475,10 @@ export class SkillRegistry {
         }
       }
 
-      if (score > 0) {
+      if (score >= 5) {
+        // Relevance floor: pattern matches (+5) and tool-name mentions (+10)
+        // qualify; description-word overlap alone maxes out at +2 and must
+        // NEVER reach injection on its own.
         scored.push({ skill, score });
       }
     });

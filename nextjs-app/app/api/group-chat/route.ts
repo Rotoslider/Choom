@@ -14,7 +14,11 @@ import { getOwnerIdentity } from '@/lib/owner';
 import { getRoomCreatorModel } from '@/lib/group-model-config';
 
 const baseUrl = process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
-const TURN_TIMEOUT_MS = 300000; // per-speaker wait ceiling
+const TURN_CEILING_MS = 900000; // per-speaker ABSOLUTE cap (15min). Stalls are
+// cut earlier by the runner's idle watchdog (5 min of zero stream bytes) — the
+// old flat 300s ceiling killed healthy tool-heavy turns mid-flight (2026-08-23:
+// Eve's room run aborted at ~305s / iteration 12, twice, discarding ~460-750k
+// prompt tokens of real work each time).
 
 // ── Per-room run lock (in-process) ─────────────────────────────────────────
 // Every orchestration — whether kicked off from the web /rooms page, a Choom's
@@ -259,6 +263,11 @@ export async function POST(request: NextRequest) {
         } catch { /* stream closed */ }
       };
 
+      // Diagnostics context for the outer catch — declared HERE because the
+      // catch sits outside the round-loop scope that owns these variables.
+      let currentSpeakerName = '(before first speaker)';
+      let lastRound = -1;
+
       try {
         if (userMsg) {
           send({ type: 'user_saved', messageId: userMsg.id, authorName: ownerName, content: message, imageUrl });
@@ -300,6 +309,8 @@ export async function POST(request: NextRequest) {
           let speakerIdx = -1;
           for (const p of speakers) {
             speakerIdx++;
+            lastRound = round;
+            currentSpeakerName = p.choom.name;
             if (cancelled) break;
             if (priorTurnRan) await new Promise(res => setTimeout(res, 800));
             priorTurnRan = true;
@@ -340,7 +351,7 @@ export async function POST(request: NextRequest) {
                 ? DIVERGENCE_DIRECTIVES[speakerIdx % DIVERGENCE_DIRECTIVES.length]
                 : undefined,
               settings,
-              timeoutMs: TURN_TIMEOUT_MS,
+              timeoutMs: TURN_CEILING_MS,
               send,
             };
             let result = await runSpeakerTurn(turnOpts);
@@ -364,10 +375,19 @@ export async function POST(request: NextRequest) {
             }
 
             if (result.error) {
-              send({ type: 'speaker_error', speakerChoomId: p.choomId, speakerName: p.choom.name, error: result.error });
-              continue;
+              const salvage = (result.content || '').trim();
+              if (!salvage) {
+                send({ type: 'speaker_error', speakerChoomId: p.choomId, speakerName: p.choom.name, error: result.error });
+                continue;
+              }
+              // A ceiling/idle abort or stream failure used to vaporize the whole
+              // turn (2026-08-25: Eve's 17-iteration pie session vanished when the
+              // 15-min ceiling fired mid-fallback). The runner salvages the partial
+              // text — commit it as a real message so the room keeps her work.
+              console.log(`   💾 [${p.choom.name}] ${result.error} — committing partial turn (${salvage.length} chars)`);
+              result.content = `${salvage}\n\n_(turn cut off — ${result.error.replace(/^\[?\w+\]? turn stopped: /, '')})_`;
             }
-            if (result.passed || !result.content) {
+            if (!result.content || (result.passed && !result.error)) {
               send({ type: 'passed', speakerChoomId: p.choomId, speakerName: p.choom.name });
               continue;
             }
@@ -383,17 +403,29 @@ export async function POST(request: NextRequest) {
               }
             }
 
-            const saved = await prisma.groupMessage.create({
-              data: {
-                roomId,
-                role: 'assistant',
-                authorChoomId: p.choomId,
-                authorName: p.choom.name,
-                content: savedContent,
-                imageUrl: result.imageUrl,
-                toolCalls: result.toolCalls.length ? JSON.stringify(result.toolCalls) : null,
-              },
-            });
+            // Persistence + delivery for THIS speaker. A failure here used to
+            // throw into the OUTER try, which closes the stream and silences
+            // the room mid-conversation (Eve 2026-08-25: her turn finalized
+            // cleanly — tokens logged — then nothing; a DB hiccup after
+            // finalize killed every remaining speaker). Now: deliver to the
+            // room even if persistence fails, and let the round-robin live.
+            let savedId = '';
+            try {
+              const saved = await prisma.groupMessage.create({
+                data: {
+                  roomId,
+                  role: 'assistant',
+                  authorChoomId: p.choomId,
+                  authorName: p.choom.name,
+                  content: savedContent,
+                  imageUrl: result.imageUrl,
+                  toolCalls: result.toolCalls.length ? JSON.stringify(result.toolCalls) : null,
+                },
+              });
+              savedId = saved.id;
+            } catch (persistErr) {
+              console.error(`   💾 [${p.choom.name}] FAILED to persist room message (delivering anyway):`, persistErr instanceof Error ? persistErr.message : persistErr);
+            }
             // Append to the in-memory transcript so later speakers in THIS round
             // (and later rounds) see what was just said.
             transcript.push({ authorChoomId: p.choomId, authorName: p.choom.name, content: savedContent });
@@ -422,7 +454,7 @@ export async function POST(request: NextRequest) {
               speakerChoomId: p.choomId,
               speakerName: p.choom.name,
               avatarUrl: p.choom.avatarUrl || null,
-              messageId: saved.id,
+              messageId: savedId,
               content: result.content,
               imageUrl: result.imageUrl,
               voiceId: p.choom.voiceId || null,
@@ -465,6 +497,10 @@ export async function POST(request: NextRequest) {
         await prisma.groupRoom.update({ where: { id: roomId }, data: { updatedAt: new Date() } });
         send({ type: 'done' });
       } catch (err) {
+        // This catch ends the ENTIRE room run (stream closes below). Name the
+        // round + speaker so "the room went silent" is diagnosable from the
+        // server log alone.
+        console.error(`   💥 [group-chat] room "${room.title || roomId}" round ${lastRound} after "${currentSpeakerName}" — aborting run:`, err instanceof Error ? err.stack || err.message : err);
         send({ type: 'error', error: (err as Error).message });
       } finally {
         releaseLock();
