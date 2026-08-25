@@ -1656,7 +1656,13 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                 const lc = iterationContent.toLowerCase();
 
                 // Check 1: Model narrates its next step ("now let me update...")
-                const planningNext = /(?:now (?:let me|i'?ll|i need to|i should|i'?m going to)|next,? i'?ll|next step|then i'?ll|i(?:'ll| will) (?:also|now|then)|let me (?:also|now|update|write|save|send|notify)|updating|writing the|saving the|appending|i still need to)/i.test(lc);
+                // Announced-pending-work forms included deliberately: "Last recon
+                // before I write the patch" (Eve 2026-08-25) promised three more
+                // tool calls and then ENDED THE TURN because nothing here matched.
+                // Completion claims ("all checks pass") are excluded below so a
+                // done-model isn't force-nudged into a junk call.
+                const completionClaim = /\ball (?:done|checks? (?:pass(?:ed)?|green)|complete)|everything (?:is )?(?:work(?:ing|s)|pass(?:ing|ed)|green)|(?:task|investigation|recon) complete\b|\bcompletes? the\b|\bwrapp(?:ing|ed) (?:this |it )?up\b/i.test(lc);
+                const planningNext = !completionClaim && /(?:now (?:let me|i'?ll|i need to|i should|i'?m going to)|next,? i'?ll|next step|then i(?:'?ll| will)|i(?:'m| am) going to|i still need to|(?:last|final) (?:recon|sweep|check|verification|pass|step|look)\b|before i (?:write|call|run|make|save|send|update|patch|deploy|test|check|verify|grab|pull|extract)|let me (?:also|now|update|write|save|send|notify|finish|verify)|updating|writing the|saving the|appending|next up\b)/i.test(lc);
 
                 // Check 1b: Model hedges/gives-up without trying alternatives. Catches
                 // the "I was unable to find it" / "couldn't access presets" / "the service
