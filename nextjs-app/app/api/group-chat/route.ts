@@ -14,11 +14,17 @@ import { getOwnerIdentity } from '@/lib/owner';
 import { getRoomCreatorModel } from '@/lib/group-model-config';
 
 const baseUrl = process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
-const TURN_CEILING_MS = 900000; // per-speaker ABSOLUTE cap (15min). Stalls are
-// cut earlier by the runner's idle watchdog (5 min of zero stream bytes) — the
-// old flat 300s ceiling killed healthy tool-heavy turns mid-flight (2026-08-23:
-// Eve's room run aborted at ~305s / iteration 12, twice, discarding ~460-750k
-// prompt tokens of real work each time).
+// Per-speaker ABSOLUTE turn ceiling (default 15min). Overridable via
+// GROUP_TURN_CEILING_MS for deep-work rooms — Eve's multi-file Lisp recon
+// sessions legitimately run past 15min, and partial turns are salvaged with
+// a visible "(turn cut off …)" note on expiry either way. Stalls are still
+// cut earlier by the runner's idle watchdog (5 min of zero stream bytes) —
+// the old flat 300s ceiling killed healthy tool-heavy turns mid-flight
+// (2026-08-23: Eve's room run aborted at ~305s / iteration 12, twice,
+// discarding ~460-750k prompt tokens of real work each time).
+const TURN_CEILING_MS = Number(process.env.GROUP_TURN_CEILING_MS) > 0
+  ? Number(process.env.GROUP_TURN_CEILING_MS)
+  : 900_000;
 
 // ── Per-room run lock (in-process) ─────────────────────────────────────────
 // Every orchestration — whether kicked off from the web /rooms page, a Choom's
