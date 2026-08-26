@@ -1662,7 +1662,7 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                 // Completion claims ("all checks pass") are excluded below so a
                 // done-model isn't force-nudged into a junk call.
                 const completionClaim = /\ball (?:done|checks? (?:pass(?:ed)?|green)|complete)|everything (?:is )?(?:work(?:ing|s)|pass(?:ing|ed)|green)|(?:task|investigation|recon) complete\b|\bcompletes? the\b|\bwrapp(?:ing|ed) (?:this |it )?up\b/i.test(lc);
-                const planningNext = !completionClaim && /(?:now (?:let me|i'?ll|i need to|i should|i'?m going to)|next,? i'?ll|next step|then i(?:'?ll| will)|i(?:'m| am) going to|i still need to|(?:last|final) (?:recon|sweep|check|verification|pass|step|look)\b|before i (?:write|call|run|make|save|send|update|patch|deploy|test|check|verify|grab|pull|extract)|let me (?:also|now|update|write|save|send|notify|finish|verify)|updating|writing the|saving the|appending|next up\b)/i.test(lc);
+                const planningNext = !completionClaim && /(?:now (?:let me|i'?ll|i need to|i should|i'?m going to)|next,? i'?ll|next step|then i(?:'?ll| will)|i(?:'m| am) going to|i still need to|\bi need to\b|(?:last|final) (?:recon|sweep|check|verification|pass|step|look)\b|before i (?:write|call|run|make|save|send|update|patch|deploy|test|check|verify|grab|pull|extract)|\bbefore (?:i )?(?:writing|calling|running|making|saving|sending|updating|patching|deploying|testing|checking|reading)\b|\b(?:i|we) haven'?t (?:actually )?(?:read|checked|verified|tested|run|examined)\b|let me (?:also|now|update|write|save|send|notify|finish|verify)|updating|writing the|saving the|appending|next up\b)/i.test(lc);
 
                 // Check 1b: Model hedges/gives-up without trying alternatives. Catches
                 // the "I was unable to find it" / "couldn't access presets" / "the service
@@ -1767,6 +1767,10 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                 // Check 3: gone quiet for 2+ iterations after tools were being called.
                 // Typical "GLM drifted into summary mode" pattern.
                 const hasGoneQuiet = consecutiveNoToolIters >= 2 && iterationContent.length >= 150;
+                // finish_reason=length on a TEXT-ONLY reply: the model was cut
+                // off mid-thought (trailing colon / half a list). The existing
+                // length-recovery above only handles dropped TOOL calls.
+                const truncatedByLength = finishReason === 'length';
 
                 // C-58: a reply that ANSWERS an integrity nudge with an apology
                 // ends the turn. Re-nudging an apologizing model measured
@@ -1779,14 +1783,11 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                   console.log(`   🧯 ${choomTag} Apology after integrity nudge — accepting reply, ending turn (no re-nudge)`);
                   break;
                 }
-
-                // Fabricated success is the highest-priority case — user thinks the
-                // action happened when it didn't. Prioritize its nudge message over
-                // the others if multiple triggers fire.
-                if ((planningNext || hasUnfinished || hedgeGiveUp || hasGoneQuiet || fakeSuccess || uncalledClaim) && nudgeCount < 3 && iteration < maxIterations - 1) {
+                if ((planningNext || hasUnfinished || hedgeGiveUp || hasGoneQuiet || fakeSuccess || uncalledClaim || truncatedByLength) && nudgeCount < 3 && iteration < maxIterations - 1) {
                   nudgeCount++;
                   const nudgeKind = uncalledClaim ? 'phantom_fabrication'
                     : fakeSuccess ? 'hedge_giveup' // reuse for telemetry (fake = lying about success)
+                    : truncatedByLength ? 'truncated_output'
                     : hasUnfinished ? 'unfinished_steps'
                     : hedgeGiveUp ? 'hedge_giveup'
                     : hasGoneQuiet ? 'gone_quiet'
@@ -1797,6 +1798,8 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                     ? `fabricated result from ${uncalledClaim} — never called this turn`
                     : fakeSuccess
                     ? 'fabricated tool-call success (claimed action without calling tool)'
+                    : truncatedByLength
+                    ? 'reply cut off by output token limit (finish_reason=length)'
                     : hasUnfinished ? `unfinished steps: ${unfinishedSteps.join(', ')}`
                     : hedgeGiveUp ? 'hedging/giving up without trying alternatives'
                     : hasGoneQuiet ? `${consecutiveNoToolIters} iterations without a tool call`
@@ -1812,7 +1815,9 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                     ? `[System] STOP. Your reply presents a result from "${uncalledClaim}", but ${uncalledClaim} was NOT called this turn — that result is invented. Call ${uncalledClaim} NOW and answer from its ACTUAL output. If you meant something from an earlier conversation, say that plainly instead of presenting it as this turn's result.${automatedNote}`
                     : fakeSuccess
                     ? `[System] STOP. You just claimed you called a service or completed an action, but you did NOT make a tool call this iteration. Never fabricate tool results. Either make the real tool call NOW, or say honestly that you haven't done it yet. The user's goal: "${(message || '').trim().slice(0, 300)}". Make the actual function call now — no more narration.${automatedNote}`
-                    : hasUnfinished
+                    : truncatedByLength
+                      ? `[System] Your reply was cut off mid-sentence by the output token limit. Do not restate what you already said. Either make the NEXT tool call directly, or continue EXACTLY where the text stopped — same list, same sentence.${automatedNote}`
+                      : hasUnfinished
                       ? `[System] You have NOT completed all steps from the original instructions. Remaining: ${unfinishedSteps.join('; ')}. Call the next tool NOW.`
                       : hedgeGiveUp
                         ? `[System] You are hedging or giving up. Per your PERSISTENCE directive, try a genuinely different approach — a different tool, different service, different entity, or a workaround — BEFORE reporting failure. The user's goal was: "${(message || '').trim().slice(0, 300)}". Call a tool NOW.${automatedNote}`

@@ -46,6 +46,14 @@ describe('planningNext announces-pending-work detection', () => {
     expect(planningNext.test('Next, I\'ll check the dispatch table.')).toBe(true);
   });
 
+  test("Eve's second incident: gerund + unmet-need phrasing fires", () => {
+    expect(planningNext.test(
+      "Before writing the patch I need the two pieces I haven't actually read: register-action's body (is it idempotent?) and whether cold-start forcing exists anywhere in the bandit file:",
+    )).toBe(true);
+    expect(planningNext.test("I haven't actually read register-action's body yet.")).toBe(true);
+    expect(planningNext.test('Before deploying, checking the hash one more time.')).toBe(true);
+  });
+
   test('completion claims are suppressed, not re-nudged', () => {
     const done1 = 'All checks pass — everything is green.';
     const done2 = 'That completes the investigation; the patch is written.';
@@ -57,5 +65,14 @@ describe('planningNext announces-pending-work detection', () => {
 
   test('ordinary past-tense recaps stay conversational', () => {
     expect(planningNext.test('I read the vision module and found four mismatches.')).toBe(false);
+  });
+});
+
+describe('finish_reason=length continuation (source contract)', () => {
+  test('text-only truncation triggers its own nudge branch', () => {
+    expect(src).toContain("const truncatedByLength = finishReason === 'length';");
+    expect(src).toContain('|| truncatedByLength) && nudgeCount < 3');
+    expect(src).toContain("'reply cut off by output token limit (finish_reason=length)'");
+    expect(src).toContain('cut off mid-sentence by the output token limit');
   });
 });
