@@ -14,6 +14,8 @@
  *     are checkable in one glance
  *   • path-validation rules keeping metacharacters away from scp's remote shell
  */
+import { readFileSync } from 'fs';
+import path from 'path';
 import CodeExecutionHandler from '../skills/core/code-execution/handler';
 import { REMOTE_SSH_DISABLED_MESSAGE } from '../lib/choom-permissions';
 import {
@@ -161,5 +163,16 @@ describe('validateSshRemotePath', () => {
     expect(() => validateSshRemotePath('a`id`b')).toThrow(/metacharacters/);
     expect(() => validateSshRemotePath('/tmp/a|b')).toThrow(/metacharacters/);
     expect(() => validateSshRemotePath('/tmp/a&b')).toThrow(/metacharacters/);
+  });
+});
+
+describe('stateful-tool dedup exemption', () => {
+  const loopSrc = readFileSync(path.join(__dirname, '..', 'lib', 'agentic-loop.ts'), 'utf-8');
+
+  test('SSH tools are exempt from stale-result caching', () => {
+    // Eve re-ran the SAME verification command between patch attempts and was
+    // served cached pre-patch output — then the repeat detector killed her turn
+    // for "looping" on what were legitimate re-verifications of a changed world.
+    expect(loopSrc).toContain("'run_ssh_command', 'ssh_copy_file',");
   });
 });

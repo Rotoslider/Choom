@@ -2044,6 +2044,11 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
             // reason against a stale snapshot of the document.
             const NO_DEDUP_TOOLS = new Set([
               'ha_get_camera_snapshot',
+              // Remote machines are stateful worlds: Eve re-ran the SAME hash/
+              // grep command between patch attempts and was served the cached
+              // pre-patch output — her verifications looked like no-ops, then
+              // the repeat detector killed the turn for "looping" (2026-08-25).
+              'run_ssh_command', 'ssh_copy_file',
               'start_freecad', 'create_freecad_document', 'create_freecad_part',
               'edit_freecad_object', 'delete_freecad_object', 'list_freecad_objects',
               'freecad_view', 'save_freecad_document', 'close_freecad_document',
