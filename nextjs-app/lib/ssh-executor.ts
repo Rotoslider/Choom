@@ -4,7 +4,12 @@ import * as path from 'path';
 import { buildSandboxEnv } from '@/lib/sandbox-env';
 import { WORKSPACE_ROOT } from '@/lib/config';
 
-const DEFAULT_TIMEOUT_MS = 330_000;
+// 240s: must stay UNDER the group-room idle watchdog (300s of zero stream
+// bytes kills the whole speaker turn — 2026-08-25: Eve's hung run_ssh_command
+// produced 304s of silence, so the watchdog fired 4s before this timeout
+// could return a clean, model-actionable error). Explicit timeout_seconds may
+// exceed it, but rooms will reap such calls at 300s regardless.
+const DEFAULT_TIMEOUT_MS = 240_000;
 const MAX_TIMEOUT_MS = 600_000;
 const MAX_OUTPUT_BYTES = 50 * 1024;
 const MAX_REMOTE_COMMAND_BYTES = 32 * 1024;

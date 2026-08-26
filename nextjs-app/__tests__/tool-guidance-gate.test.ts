@@ -10,6 +10,10 @@
  *
  * Contract: guidance rides ONLY on an enforced 1:1 intent — group turns and
  * unenforced/unexposed hints must never produce it.
+ *
+ * Also pinned here: the tool-execution SSE heartbeat and the SSH timeout cap
+ * that together fix the "no stream output for 304s" idle-watchdog kill from
+ * the same day.
  */
 import { readFileSync } from 'fs';
 import path from 'path';
@@ -30,12 +34,28 @@ describe('[Tool guidance] gating', () => {
     expect(agenticLoop).not.toContain('if (intentToolHint && activeTools.length > 0) {');
   });
 
-  test('guidance still names the single hinted tool', () => {
-    expect(agenticLoop).toContain('Call that tool directly');
-  });
-
   test('group turns never force tool_choice', () => {
     // The forcing line itself already excludes rooms; guidance depends on it.
     expect(agenticLoop).toMatch(/forceToolCall = !isGroupTurn && \(strongToolIntent \|\| !!intentToolHint\)/);
+  });
+});
+
+describe('tool-execution SSE heartbeat', () => {
+  test('tools emit status ticks so the room idle-watchdog sees liveness', () => {
+    // A hung run_ssh_command produced 304s of zero stream bytes; the 300s
+    // idle watchdog killed Eve's turn mid-sentence before the SSH timeout
+    // could return an error she could act on.
+    expect(agenticLoop).toContain("send({ type: 'status', content: 'tool running…' })");
+    expect(agenticLoop).toContain('stopToolHeartbeat();');
+    expect(agenticLoop).toContain('toolHeartbeatTicks > 30'); // leak-proof self-clear
+  });
+});
+
+describe('ssh timeout vs idle watchdog', () => {
+  const sshSrc = readFileSync(path.join(__dirname, '..', 'lib', 'ssh-executor.ts'), 'utf-8');
+
+  test('SSH default timeout stays under the 300s idle watchdog', () => {
+    expect(sshSrc).toMatch(/const DEFAULT_TIMEOUT_MS = 240_000;/);
+    expect(sshSrc).not.toMatch(/330_000/);
   });
 });

@@ -2511,6 +2511,31 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
 
             // Execute parallel-safe (non-search) tools concurrently
             const parallelResults = new Map<string, ToolResult>();
+            // SSE heartbeat while tools are in flight: long operations (SSH to
+            // the pie, image generation, document ops) can run minutes without
+            // emitting anything, and the group-room idle watchdog kills a
+            // speaker turn after 300s of zero stream bytes — unable to tell a
+            // busy TOOL from a hung MODEL (2026-08-25: Eve's recon died at 304s
+            // of silence mid-sentence). Tick every 20s; self-clears after 30
+            // ticks or stream close so a throw can never leak the timer.
+            let toolHeartbeat: NodeJS.Timeout | undefined;
+            let toolHeartbeatTicks = 0;
+            if (pendingCalls.length > 0) {
+              toolHeartbeat = setInterval(() => {
+                toolHeartbeatTicks++;
+                if (toolHeartbeatTicks > 30 || sse.closed) {
+                  clearInterval(toolHeartbeat);
+                  toolHeartbeat = undefined;
+                  return;
+                }
+                send({ type: 'status', content: 'tool running…' });
+              }, 20_000);
+            }
+            const stopToolHeartbeat = () => {
+              clearInterval(toolHeartbeat);
+              toolHeartbeat = undefined;
+            };
+
             if (parallelCalls.length > 1) {
               console.log(`   ⚡ Executing ${parallelCalls.length} read-only tools in parallel: ${parallelCalls.map(tc => tc.name).join(', ')}`);
               const results = await Promise.all(parallelCalls.map(tc => executeAndProcess(tc, true)));
@@ -2547,6 +2572,7 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
               sequentialResults.set(tc.id, result);
               allToolResults.push(result);
             }
+            stopToolHeartbeat();
 
             // Merge results in original tool call order (handling dedup aliases + cap)
             for (const tc of toolCalls) {
