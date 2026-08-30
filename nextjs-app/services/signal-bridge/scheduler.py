@@ -10,6 +10,8 @@ import re
 import shutil
 import sqlite3
 import tempfile
+import threading
+import uuid
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -40,6 +42,8 @@ class ScheduledTaskManager:
         self.tts = get_tts_client()
         self.owner_phone = config.OWNER_PHONE_NUMBER
         self.default_choom = config.DEFAULT_CHOOM_NAME
+        self._manual_trigger_lock = threading.Lock()
+        self._active_manual_trigger_keys = set()
 
     def start(self):
         """Start the scheduler"""
@@ -1245,37 +1249,105 @@ Be practical. Only work on things that can actually be accomplished with the too
             logger.error(f"Failed to reload cron tasks: {e}")
 
     def _check_triggers(self):
-        """Check for manual triggers from the web GUI"""
+        """Queue manual triggers without blocking the ten-second poller."""
         try:
             config = load_task_config()
             triggers = config.get("pending_triggers", [])
             if not triggers:
                 return
 
-            # Process each trigger
-            for trigger in triggers:
-                task_id = trigger.get("taskId", "")
-                task_type = trigger.get("taskType", "")
-                logger.info(f"Processing manual trigger: {task_id} (type={task_type})")
+            to_queue = []
+            with self._manual_trigger_lock:
+                for trigger in triggers:
+                    trigger_key = json.dumps(
+                        trigger, sort_keys=True, separators=(",", ":")
+                    )
+                    if trigger_key in self._active_manual_trigger_keys:
+                        continue
+                    self._active_manual_trigger_keys.add(trigger_key)
+                    to_queue.append((trigger_key, trigger))
 
-                try:
-                    if task_type == "cron":
-                        self._run_cron_task(task_id)
-                    elif task_type == "heartbeat":
-                        self._run_heartbeat_task(task_id)
-                    elif task_type == "automation":
-                        self._run_automation_task(task_id)
-                    else:
-                        logger.warning(f"Unknown trigger type: {task_type}")
-                except Exception as e:
-                    logger.error(f"Trigger execution failed for {task_id}: {e}")
+            if not to_queue:
+                return
 
-            # Clear all processed triggers
-            config["pending_triggers"] = []
-            save_task_config(config)
+            try:
+                self.scheduler.add_job(
+                    self._process_manual_trigger_batch,
+                    "date",
+                    run_date=datetime.now(timezone.utc),
+                    args=[to_queue],
+                    id=f"manual_trigger_{uuid.uuid4().hex}",
+                    replace_existing=False,
+                    misfire_grace_time=300,
+                )
+            except Exception:
+                with self._manual_trigger_lock:
+                    for trigger_key, _ in to_queue:
+                        self._active_manual_trigger_keys.discard(trigger_key)
+                logger.exception(
+                    "Failed to queue %d manual trigger(s)", len(to_queue)
+                )
+                return
+
+            logger.info(
+                "Queued %d manual trigger(s) for background execution",
+                len(to_queue),
+            )
 
         except Exception as e:
             logger.error(f"Trigger check failed: {e}")
+
+    def _process_manual_trigger_batch(self, queued_triggers):
+        """Run one claimed trigger batch sequentially off the polling job."""
+        for trigger_key, trigger in queued_triggers:
+            self._process_manual_trigger(trigger, trigger_key)
+
+    def _process_manual_trigger(self, trigger: Dict[str, Any], trigger_key: str):
+        """Execute a claimed manual trigger and remove it when finished."""
+        try:
+            if not isinstance(trigger, dict):
+                logger.warning("Ignoring malformed manual trigger: expected an object")
+                return
+
+            task_id = trigger.get("taskId", "")
+            task_type = trigger.get("taskType", "")
+            logger.info(f"Processing manual trigger: {task_id} (type={task_type})")
+
+            try:
+                if task_type == "cron":
+                    self._run_cron_task(task_id)
+                elif task_type == "heartbeat":
+                    self._run_heartbeat_task(task_id)
+                elif task_type == "automation":
+                    self._run_automation_task(task_id)
+                else:
+                    logger.warning(f"Unknown trigger type: {task_type}")
+            except Exception as e:
+                logger.error(f"Trigger execution failed for {task_id}: {e}")
+        finally:
+            with self._manual_trigger_lock:
+                self._active_manual_trigger_keys.discard(trigger_key)
+
+                try:
+                    config = load_task_config()
+                    pending = config.get("pending_triggers", [])
+                    remaining = [
+                        pending_trigger
+                        for pending_trigger in pending
+                        if json.dumps(
+                            pending_trigger, sort_keys=True, separators=(",", ":")
+                        ) != trigger_key
+                    ]
+                    if len(remaining) != len(pending):
+                        config["pending_triggers"] = remaining
+                        if not save_task_config(config):
+                            logger.error(
+                                "Failed to persist completion of manual trigger: %s",
+                                trigger_key,
+                            )
+                except Exception as e:
+                    logger.error(f"Failed to remove completed manual trigger: {e}")
+
 
     def _run_cron_task(self, task_id: str):
         """Run a cron task on demand"""
