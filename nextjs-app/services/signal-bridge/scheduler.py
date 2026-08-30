@@ -2,12 +2,17 @@
 Scheduler Service
 Handles heartbeats, cron jobs, and scheduled tasks
 """
+import glob
+import json
 import logging
 import os
-import json
 import re
-import glob
+import shutil
+import sqlite3
+import tempfile
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from zoneinfo import ZoneInfo
 from typing import Callable, Optional, Dict, Any, List
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -2390,11 +2395,32 @@ Be practical. Only work on things that can actually be accomplished with the too
             return result['id']
         return None
 
-    def _create_local_snapshot(self):
-        """Create a local timestamped snapshot of all config/state files"""
-        import shutil
-        from pathlib import Path
+    @staticmethod
+    def _snapshot_sqlite_database(source: Path, destination: Path) -> None:
+        """Atomically snapshot a SQLite database, including its WAL state."""
+        if not source.is_file():
+            raise FileNotFoundError(source)
 
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            dir=destination.parent,
+            prefix=f".{destination.name}-",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary_file:
+            temporary_path = Path(temporary_file.name)
+
+        try:
+            source_uri = f"{source.resolve().as_uri()}?mode=ro"
+            with closing(sqlite3.connect(source_uri, uri=True, timeout=60)) as source_connection:
+                with closing(sqlite3.connect(temporary_path, timeout=60)) as destination_connection:
+                    source_connection.backup(destination_connection)
+            temporary_path.replace(destination)
+        finally:
+            temporary_path.unlink(missing_ok=True)
+
+    def _create_local_snapshot(self) -> Dict[str, Path]:
+        """Create a local snapshot of config, state, and SQLite databases."""
         date_stamp = datetime.now().strftime('%Y-%m-%d')
         app_root = Path("/home/nuc1/projects/Choom/nextjs-app")
         snapshot_dir = app_root / "data" / "backups" / "daily" / date_stamp
@@ -2420,6 +2446,32 @@ Be practical. Only work on things that can actually be accomplished with the too
             if src_dir.is_dir():
                 shutil.copytree(str(src_dir), str(snapshot_dir / name), dirs_exist_ok=True)
 
+        memory_data_dir = Path(
+            os.environ.get(
+                "CHOOM_MEMORY_DATA_DIR",
+                str(Path.home() / "Documents" / "ai_Choom_memory"),
+            )
+        )
+        database_files = [
+            (app_root / "prisma/dev.db", "dev.db"),
+            (memory_data_dir / "memory_db/memories.db", "memories.db"),
+        ]
+        database_snapshots: Dict[str, Path] = {}
+        for source, name in database_files:
+            if not source.is_file():
+                logger.error("Local database snapshot skipped; source does not exist: %s", source)
+                continue
+
+            destination = snapshot_dir / name
+            try:
+                self._snapshot_sqlite_database(source, destination)
+            except Exception as e:
+                logger.error("Local database snapshot failed for %s: %s", source, e)
+                continue
+
+            database_snapshots[name] = destination
+            logger.info("Local database snapshot created: %s", destination)
+
         # Rotate: keep 14 days
         backups_root = app_root / "data" / "backups" / "daily"
         snapshots = sorted([d for d in backups_root.iterdir() if d.is_dir()], reverse=True)
@@ -2427,6 +2479,7 @@ Be practical. Only work on things that can actually be accomplished with the too
             shutil.rmtree(str(old), ignore_errors=True)
 
         logger.info(f"Local snapshot created: {snapshot_dir}")
+        return database_snapshots
 
     def _backup_databases(self):
         """Back up databases, configs, and state to Google Drive + local snapshot"""
@@ -2436,23 +2489,18 @@ Be practical. Only work on things that can actually be accomplished with the too
 
         logger.info("Running daily full data backup")
 
-        # Local snapshot first (fast, no network dependency)
+        # Local snapshot first (fast, no network dependency). Google Drive receives
+        # only these consistent SQLite snapshots, never a live database file.
+        database_snapshots: Dict[str, Path] = {}
         try:
-            self._create_local_snapshot()
+            database_snapshots = self._create_local_snapshot()
         except Exception as e:
             logger.error(f"Local snapshot failed: {e}")
 
-        db_files = [
-            ("/home/nuc1/projects/Choom/nextjs-app/prisma/dev.db", "dev.db"),
-            ("/home/nuc1/Documents/ai_Choom_memory/memory_db/memories.db", "memories.db"),
-        ]
-
         try:
             import tarfile
-            import tempfile
-            from pathlib import Path
-
             google = get_google_client()
+
             # Force token refresh before upload to avoid expiry mid-transfer
             if google.creds and google.creds.expired and google.creds.refresh_token:
                 from google.auth.transport.requests import Request
@@ -2465,14 +2513,18 @@ Be practical. Only work on things that can actually be accomplished with the too
             date_stamp = datetime.now().strftime('%Y-%m-%d')
             uploaded = []
 
-            # Upload database files
-            for file_path, base_name in db_files:
-                if not Path(file_path).exists():
-                    logger.warning(f"Backup file not found: {file_path}")
+            # Upload transactionally consistent database snapshots.
+            for base_name in ("dev.db", "memories.db"):
+                file_path = database_snapshots.get(base_name)
+                if file_path is None or not file_path.is_file():
+                    logger.error(
+                        "Skipping Google Drive backup for %s; local SQLite snapshot is unavailable",
+                        base_name,
+                    )
                     continue
 
                 drive_name = f"{base_name.replace('.db', '')}-{date_stamp}.db"
-                result = google.upload_to_drive(file_path, folder_id, drive_name)
+                result = google.upload_to_drive(str(file_path), folder_id, drive_name)
                 if result:
                     uploaded.append(drive_name)
                     logger.info(f"Backed up {base_name} as {drive_name}")

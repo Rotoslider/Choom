@@ -32,6 +32,7 @@ from logging.handlers import TimedRotatingFileHandler
 import asyncio
 import sys
 import atexit
+from threading import Lock
 from fastmcp import FastMCP
 
 
@@ -56,11 +57,12 @@ except ImportError as e:
     sys.exit(1)
 
 # Configuration
-# You can override the data folder by setting the AI_COMPANION_DATA_DIR environment variable.
-# Example (PowerShell): $env:AI_COMPANION_DATA_DIR = "D:\a.i. apps\long_term_memory_mcp\data"
-
+# CHOOM_MEMORY_DATA_DIR may override the standard Choom memory location.
 DATA_FOLDER = Path(
-    os.environ.get("AI_COMPANION_DATA_DIR", str(Path.home() / "Documents" / "ai_companion_memory"))
+    os.environ.get(
+        "CHOOM_MEMORY_DATA_DIR",
+        str(Path.home() / "Documents" / "ai_Choom_memory"),
+    )
 )
 
 # -------- Lazy Decay Configuration --------
@@ -344,10 +346,11 @@ class RobustMemorySystem:
                 "VALUES ('schema_version', '1.1', CURRENT_TIMESTAMP)"
             )
 
-            # Normalize last_backup to an ISO UTC string
+            # Initialize the timestamp only for a new database. Replacing it on
+            # every restart would indefinitely postpone the 24-hour backup.
             now_iso = datetime.now(timezone.utc).isoformat()
             self.sqlite_conn.execute(
-                "INSERT OR REPLACE INTO memory_stats (key, value, updated_at)"
+                "INSERT OR IGNORE INTO memory_stats (key, value, updated_at)"
                 "VALUES ('last_backup', ?, ?)",
                 (now_iso, now_iso),
             )
@@ -1368,11 +1371,17 @@ class RobustMemorySystem:
                   total count of memories indexed.
         """
         try:
-            # wipe collection to avoid duplicates
-            try:
-                self.chroma_collection.delete(where={})
-            except Exception as e:
-                self.logger.warning("Chroma wipe warning: %s", e)
+            # Chroma rejects an empty where clause. Recreate the collection so a
+            # rebuild starts from no vectors instead of trying to add duplicates.
+            self.chroma_client.delete_collection(name="ai_companion_memories")
+            self.chroma_collection = self.chroma_client.get_or_create_collection(
+                name="ai_companion_memories",
+                metadata={
+                    "description": "Long-term memory for AI companion",
+                    "hnsw:space": "cosine",
+                },
+                embedding_function=None,
+            )
 
             rows = self.sqlite_conn.execute(
                 "SELECT id, title, content, timestamp, importance, memory_type, "
@@ -1630,8 +1639,28 @@ class RobustMemorySystem:
             return None
 
 
-# Initialize the memory system
-memory_system = RobustMemorySystem()
+# FastMCP tools are independent from the HTTP server. Keep their singleton lazy
+# so importing this module does not open a second memory database.
+_memory_system: Optional[RobustMemorySystem] = None
+_memory_system_lock = Lock()
+
+
+def get_memory_system() -> RobustMemorySystem:
+    """Return the singleton used by FastMCP tools."""
+    global _memory_system
+    with _memory_system_lock:
+        if _memory_system is None:
+            _memory_system = RobustMemorySystem()
+        return _memory_system
+
+
+def close_memory_system() -> None:
+    """Close the FastMCP singleton when it was initialized."""
+    global _memory_system
+    with _memory_system_lock:
+        if _memory_system is not None:
+            _memory_system.close()
+            _memory_system = None
 
 # FastMCP setup
 mcp = FastMCP("RobustMemory")
@@ -1702,7 +1731,7 @@ def remember(
     - “Please save this: truck camping next weekend.”
     """
     tag_list = [tag.strip() for tag in tags.split(",") if tag.strip()] if tags else []
-    res = memory_system.remember(title, content, tag_list, importance, memory_type, companion_id=companion_id)
+    res = get_memory_system().remember(title, content, tag_list, importance, memory_type, companion_id=companion_id)
     return _jsonify_result(res)
 
 
@@ -1746,9 +1775,9 @@ def search_memories(
     - "Do you remember what I said about camping?"
     """
     if search_type == "semantic":
-        res = memory_system.search_semantic(query, limit, companion_id=companion_id)
+        res = get_memory_system().search_semantic(query, limit, companion_id=companion_id)
     else:
-        res = memory_system.search_structured(limit=limit, companion_id=companion_id)
+        res = get_memory_system().search_structured(limit=limit, companion_id=companion_id)
     return _jsonify_result(res)
 
 
@@ -1785,7 +1814,7 @@ def search_by_type(memory_type: str, limit: int = 20, companion_id: str = None) 
     - "List the facts you know about me."
     - "What events have we discussed?"
     """
-    res = memory_system.search_structured(memory_type=memory_type, limit=limit, companion_id=companion_id)
+    res = get_memory_system().search_structured(memory_type=memory_type, limit=limit, companion_id=companion_id)
     return _jsonify_result(res)
 
 
@@ -1817,7 +1846,7 @@ def search_by_tags(tags: str, limit: int = 20, companion_id: str = None) -> dict
     - "What do you have tagged as personal?"
     """
     tag_list = [tag.strip() for tag in tags.split(",") if tag.strip()]
-    res = memory_system.search_structured(tags=tag_list, limit=limit)
+    res = get_memory_system().search_structured(tags=tag_list, limit=limit)
     return _jsonify_result(res)
 
 
@@ -1848,7 +1877,7 @@ def get_recent_memories(limit: int = 20, companion_id: str = None) -> dict:
     - "Remind me what we covered last night."
     - "What's been happening lately?"
     """
-    res = memory_system.get_recent(limit, companion_id=companion_id)
+    res = get_memory_system().get_recent(limit, companion_id=companion_id)
     return _jsonify_result(res)
 
 
@@ -1886,7 +1915,7 @@ def update_memory(
     - "Update the camping note to type 'event'."
     """
     tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else None
-    res = memory_system.update_memory(
+    res = get_memory_system().update_memory(
         memory_id=memory_id,
         title=title,
         content=content,
@@ -1918,7 +1947,7 @@ def delete_memory(memory_id: str) -> dict:
     - "Delete that memory about my ex."
     - "Erase what I told you earlier about my school."
     """
-    res = memory_system.delete_memory(memory_id)
+    res = get_memory_system().delete_memory(memory_id)
     return _jsonify_result(res)
 
 
@@ -1954,7 +1983,7 @@ def get_memory_stats() -> dict:
     - "Show me your storage stats."
     - "How much have you remembered so far?"
     """
-    res = memory_system.get_statistics()
+    res = get_memory_system().get_statistics()
     return _jsonify_result(res)
 
 
@@ -1987,7 +2016,7 @@ def create_backup() -> dict:
     - "Create a backup of my memories."
     - "Back up the system."
     """
-    res = memory_system.create_backup()
+    res = get_memory_system().create_backup()
     return _jsonify_result(res)
 
 
@@ -2032,10 +2061,10 @@ def search_by_date_range(
     """
     if date_to is None:
         date_to = datetime.now(timezone.utc).isoformat()
-    res = memory_system.search_structured(
-        date_from=date_from, 
-        date_to=date_to, 
-        limit=limit, 
+    res = get_memory_system().search_structured(
+        date_from=date_from,
+        date_to=date_to,
+        limit=limit,
         companion_id=companion_id
     )
     return _jsonify_result(res)
@@ -2047,14 +2076,14 @@ def rebuild_vectors() -> dict:
     One-time repair: rebuild vector index from SQLite memories.
     Use if semantic search isn't working but structured search is.
     """
-    res = memory_system.rebuild_vector_index()
+    res = get_memory_system().rebuild_vector_index()
     return _jsonify_result(res)
 
 
 # Cleanup on exit
 
 
-atexit.register(memory_system.close)
+atexit.register(close_memory_system)
 
 if __name__ == "__main__":
     try:
@@ -2063,7 +2092,7 @@ if __name__ == "__main__":
         asyncio.run(mcp.run_stdio_async(show_banner=False))
     except KeyboardInterrupt:
         print("\nShutting down memory system...")
-        memory_system.close()
+        close_memory_system()
     except Exception as e:
         print(f"Error running MCP server: {e}")
-        memory_system.close()
+        close_memory_system()

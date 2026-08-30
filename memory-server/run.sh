@@ -13,8 +13,9 @@ fi
 # Activate virtual environment
 source venv/bin/activate
 
-# Run the server
+# Run the server against Choom's canonical long-term memory folder.
+export CHOOM_MEMORY_DATA_DIR="${CHOOM_MEMORY_DATA_DIR:-$HOME/Documents/ai_Choom_memory}"
 echo "Starting Choom Memory Server..."
-echo "Data folder: ~/Documents/ai_Choom_memory"
+echo "Data folder: $CHOOM_MEMORY_DATA_DIR"
 echo ""
 python run.py "$@"

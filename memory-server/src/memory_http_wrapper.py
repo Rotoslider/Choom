@@ -4,8 +4,6 @@ Exposes the memory functionality via FastAPI endpoints.
 """
 
 import os
-import sys
-from pathlib import Path
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
@@ -14,20 +12,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-# Import the memory system from local module
-from .memory_mcp import RobustMemorySystem
-
-# ============================================================================
-# Configuration
-# ============================================================================
-
-# Use existing memory database
-DATA_FOLDER = Path(
-    os.environ.get(
-        "AI_COMPANION_DATA_DIR",
-        str(Path.home() / "Documents" / "ai_Choom_memory")
-    )
-)
+# Import the shared memory configuration and implementation.
+from .memory_mcp import DATA_FOLDER, RobustMemorySystem
 
 # Initialize memory system
 memory_system: Optional[RobustMemorySystem] = None

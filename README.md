@@ -334,12 +334,17 @@ server stay friction-free.
 
 The server-side `deepMerge` refuses to let a blank string or empty array
 overwrite a real value — only an explicit `null` clears a field (the UI's
-deliberate-clear path sends `value || null`, never `''`). And two backup trails
-feed **Settings → Backup**:
+deliberate-clear path sends `value || null`, never `''`). The daily trail has
+both local and off-site copies:
 
-- **Daily full backup** (5am cron) → `data/backups/daily/<date>/` — copies
+- **Daily full backup** (5am cron) → `data/backups/daily/<date>/` — creates
+  transactionally consistent SQLite snapshots of `prisma/dev.db` (chats and
+  generated-image data) and
+  `~/Documents/ai_Choom_memory/memory_db/memories.db`, alongside
   `bridge-config.json`, the `.env` files, credentials, `token.json`, and
-  `self_followups/` (custom heartbeats). Runs every day regardless of edits.
+  `self_followups/`. The same database snapshots are uploaded to the Google
+  Drive **Choom Backup** folder. Local snapshots retain 14 days; Drive retains
+  five copies of each database. Runs every day regardless of edits.
 - **Pre-change snapshot** → `data/backups/bridge-config/` — taken right before
   any settings write (last 10 kept).
 
@@ -403,9 +408,9 @@ Per-Choom voice: set `voiceId` on the Choom to override the default.
 
 Every saved Choom response — assistant messages in 1:1 chats and Choom-authored group-room messages — has a play/stop button next to its timestamp. Audio is served by `GET /api/tts/message/<id>[?kind=group]`: the message text is stripped for speech, synthesized **sequentially** in sentence chunks (burst load crashes Chatterbox), stitched into a single WAV, and cached in `data/tts-cache/` keyed by text + voice + speed. First play generates (a few seconds; ~25s for very long messages), replays are instant, and only one message plays at a time. Handy for catching up on group-room conversations by listening instead of reading — each Choom speaks in her own voice.
 
-## Memory System (memory.db & dev.db)
+## Memory System (`memories.db` & `dev.db`)
 
-Hybrid SQLite + ChromaDB storage via a Python HTTP server on port 8100.
+Long-term memories use SQLite plus ChromaDB in the memory server; chats, settings, and generated-image data use Prisma's SQLite database in the Next.js app. The memory server listens on port 8100.
 
 ### Memory Types
 - `conversation` - Chat snippets
