@@ -768,7 +768,7 @@ class ChoomClient:
                     "memory": config.MEMORY_ENDPOINT,
                     "tts": config.TTS_ENDPOINT,
                     "stt": config.STT_ENDPOINT,
-                    "imageGen": "http://localhost:7860",
+                    "imageGen": config.IMAGE_GEN_ENDPOINT,
                     "searxng": config.SEARXNG_ENDPOINT,
                 },
                 "weather": {

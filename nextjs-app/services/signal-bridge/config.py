@@ -69,6 +69,7 @@ NGROK_URL = os.getenv("NGROK_URL", "https://your-subdomain.ngrok-free.app")
 STT_ENDPOINT = os.getenv("STT_ENDPOINT", "http://localhost:5000")
 TTS_ENDPOINT = os.getenv("TTS_ENDPOINT", "http://localhost:8004")
 MEMORY_ENDPOINT = os.getenv("MEMORY_ENDPOINT", "http://localhost:8100")
+IMAGE_GEN_ENDPOINT = os.getenv("IMAGE_GEN_ENDPOINT", "http://localhost:7860")
 
 # Default Choom (used if no name specified)
 DEFAULT_CHOOM_NAME = os.getenv("DEFAULT_CHOOM_NAME", "Choom")

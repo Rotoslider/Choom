@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import time
 from datetime import datetime
@@ -23,7 +24,18 @@ PROJECT_DIR = os.path.join(WORKSPACE_ROOT, PROJECT_NAME)
 # cluster of gated/unavailable uploads can't starve a run of downloadable tracks.
 LISTING_HEADROOM = 30
 
-YT_DLP_BIN = "/usr/bin/yt-dlp"
+# Locate yt-dlp rather than assuming the Debian package path. Homebrew puts it
+# in /opt/homebrew/bin on Apple Silicon, and pipx/pip installs land in ~/.local.
+# Override with $YT_DLP_BIN.
+YT_DLP_BIN = (
+    os.getenv("YT_DLP_BIN")
+    or shutil.which("yt-dlp")
+    or next(
+        (c for c in ("/opt/homebrew/bin/yt-dlp", "/usr/local/bin/yt-dlp", "/usr/bin/yt-dlp")
+         if os.path.exists(c)),
+        "/usr/bin/yt-dlp",
+    )
+)
 YT_DLP_COOKIES = os.path.join(os.path.dirname(__file__), "youtube-cookies.txt")
 YT_DLP_EXTRA_ARGS = [
     "--js-runtimes", "node",
