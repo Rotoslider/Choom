@@ -18,6 +18,7 @@ interface FileEntry {
 
 export class WorkspaceService {
   private rootPath: string;
+  private realRootPath: string | null = null;
   private maxFileSizeKB: number;
   private allowedExtensions: string[];
 
@@ -25,6 +26,37 @@ export class WorkspaceService {
     this.rootPath = path.resolve(rootPath);
     this.maxFileSizeKB = maxFileSizeKB;
     this.allowedExtensions = allowedExtensions;
+  }
+
+  /**
+   * The workspace root with symlinks resolved, memoized.
+   *
+   * path.resolve() normalises "..", but does not follow symlinks. macOS reaches
+   * several ordinary directories through them — /tmp -> /private/tmp,
+   * /var -> /private/var, so os.tmpdir() is "/var/folders/..." whose realpath is
+   * "/private/var/folders/..." — and the containment checks below compare
+   * realpath()'d file paths. Comparing those against an unresolved root rejects
+   * every write under such a root as symlink traversal.
+   */
+  private async getRealRoot(): Promise<string> {
+    if (this.realRootPath === null) {
+      try {
+        this.realRootPath = await realpath(this.rootPath);
+      } catch {
+        this.realRootPath = this.rootPath; // not created yet — nothing to resolve
+      }
+    }
+    return this.realRootPath;
+  }
+
+  /**
+   * Assert an already-realpath()'d path lies inside the workspace.
+   * The trailing separator matters: a bare startsWith() also accepts a sibling
+   * that merely shares the root as a string prefix ("<root>-evil").
+   */
+  private async assertInsideRoot(realPath: string): Promise<boolean> {
+    const root = await this.getRealRoot();
+    return realPath === root || realPath.startsWith(root + path.sep);
   }
 
   /**
@@ -220,7 +252,7 @@ export class WorkspaceService {
 
     // Verify the written file is still within workspace (symlink check)
     const realWrittenPath = await realpath(fullPath);
-    if (!realWrittenPath.startsWith(this.rootPath)) {
+    if (!(await this.assertInsideRoot(realWrittenPath))) {
       await unlink(fullPath);
       throw new Error(`Symlink traversal blocked: file resolves outside workspace`);
     }
@@ -248,7 +280,7 @@ export class WorkspaceService {
     await writeFile(fullPath, buffer);
 
     const realWrittenPath = await realpath(fullPath);
-    if (!realWrittenPath.startsWith(this.rootPath)) {
+    if (!(await this.assertInsideRoot(realWrittenPath))) {
       await unlink(fullPath);
       throw new Error(`Symlink traversal blocked: file resolves outside workspace`);
     }
@@ -262,7 +294,7 @@ export class WorkspaceService {
 
     // Verify real path is within workspace
     const realFilePath = await realpath(fullPath);
-    if (!realFilePath.startsWith(this.rootPath)) {
+    if (!(await this.assertInsideRoot(realFilePath))) {
       throw new Error(`Symlink traversal blocked: file resolves outside workspace`);
     }
 
@@ -345,7 +377,7 @@ export class WorkspaceService {
 
     // Verify real path is within workspace
     const realFilePath = await realpath(fullPath);
-    if (!realFilePath.startsWith(this.rootPath)) {
+    if (!(await this.assertInsideRoot(realFilePath))) {
       throw new Error(`Symlink traversal blocked: file resolves outside workspace`);
     }
 
@@ -386,7 +418,7 @@ export class WorkspaceService {
 
     // Verify real path is within workspace
     const realFilePath = await realpath(fullPath);
-    if (!realFilePath.startsWith(this.rootPath)) {
+    if (!(await this.assertInsideRoot(realFilePath))) {
       throw new Error(`Symlink traversal blocked: file resolves outside workspace`);
     }
 
@@ -399,7 +431,7 @@ export class WorkspaceService {
 
     // Verify real path is within workspace
     const realFilePath = await realpath(fullPath);
-    if (!realFilePath.startsWith(this.rootPath)) {
+    if (!(await this.assertInsideRoot(realFilePath))) {
       throw new Error(`Symlink traversal blocked: file resolves outside workspace`);
     }
 

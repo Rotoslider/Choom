@@ -30,7 +30,11 @@ function loadCorpus(): string[] | null {
       ].join('\n')],
       { maxBuffer: 256 * 1024 * 1024 },
     ).toString();
-    return JSON.parse(out);
+    const rows: string[] = JSON.parse(out);
+    // A present-but-empty DB (fresh `db push` + seed, e.g. on a newly migrated
+    // host) is the same situation as no DB at all — there is nothing to replay.
+    // Return null so the test skips rather than failing the length assertion.
+    return rows.length > 0 ? rows : null;
   } catch {
     return null;
   }
