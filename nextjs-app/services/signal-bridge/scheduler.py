@@ -23,6 +23,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 import requests
 
 import config
+from paths import APP_ROOT, MEMORY_DATA_DIR, WORKSPACE_ROOT
 from signal_handler import get_signal_handler
 from choom_client import get_choom_client, get_tts_client
 from google_client import get_google_client
@@ -2494,7 +2495,7 @@ Be practical. Only work on things that can actually be accomplished with the too
     def _create_local_snapshot(self) -> Dict[str, Path]:
         """Create a local snapshot of config, state, and SQLite databases."""
         date_stamp = datetime.now().strftime('%Y-%m-%d')
-        app_root = Path("/home/nuc1/projects/Choom/nextjs-app")
+        app_root = Path(APP_ROOT)
         snapshot_dir = app_root / "data" / "backups" / "daily" / date_stamp
         snapshot_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2518,12 +2519,10 @@ Be practical. Only work on things that can actually be accomplished with the too
             if src_dir.is_dir():
                 shutil.copytree(str(src_dir), str(snapshot_dir / name), dirs_exist_ok=True)
 
-        memory_data_dir = Path(
-            os.environ.get(
-                "CHOOM_MEMORY_DATA_DIR",
-                str(Path.home() / "Documents" / "ai_Choom_memory"),
-            )
-        )
+        # Resolved in paths.py so this agrees with the memory server on every
+        # platform; the old inline ~/Documents default silently skipped
+        # memories.db on macOS, where the store lives elsewhere.
+        memory_data_dir = Path(MEMORY_DATA_DIR)
         database_files = [
             (app_root / "prisma/dev.db", "dev.db"),
             (memory_data_dir / "memory_db/memories.db", "memories.db"),
@@ -2604,7 +2603,7 @@ Be practical. Only work on things that can actually be accomplished with the too
                     logger.error(f"Failed to back up {base_name}")
 
             # Config bundle — all small config/state files in one tar.gz
-            app_root = Path("/home/nuc1/projects/Choom/nextjs-app")
+            app_root = Path(APP_ROOT)
             bundle_files = [
                 (app_root / "services/signal-bridge/bridge-config.json", "bridge-config.json"),
                 (app_root / ".env", "nextjs-app.env"),
@@ -2670,8 +2669,8 @@ Be practical. Only work on things that can actually be accomplished with the too
             import tempfile
             from pathlib import Path
 
-            selfies_root = Path("/home/nuc1/choom-projects")
-            marker_path = Path("/home/nuc1/projects/Choom/nextjs-app/data/backups/.selfie_last_backup")
+            selfies_root = Path(WORKSPACE_ROOT)
+            marker_path = Path(APP_ROOT) / "data/backups/.selfie_last_backup"
             marker_path.parent.mkdir(parents=True, exist_ok=True)
 
             # Determine cutoff time for incremental backup

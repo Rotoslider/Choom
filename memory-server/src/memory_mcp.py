@@ -61,7 +61,14 @@ except ImportError as e:
 DATA_FOLDER = Path(
     os.environ.get(
         "CHOOM_MEMORY_DATA_DIR",
-        str(Path.home() / "Documents" / "ai_Choom_memory"),
+        # macOS keeps the store out of ~/Documents: that folder is TCC-gated and
+        # a launchd agent has no session to answer the consent prompt, so open()
+        # under it blocks forever. Mirrors run.sh and the bridge's paths.py.
+        str(
+            Path.home() / "Library" / "Application Support" / "Choom" / "ai_Choom_memory"
+            if sys.platform == "darwin"
+            else Path.home() / "Documents" / "ai_Choom_memory"
+        ),
     )
 )
 
