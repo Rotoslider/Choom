@@ -12,6 +12,12 @@
     <string>http</string>
     <string>3000</string>
     <string>--url=__NGROK_DOMAIN__</string>
+    <!-- Choom has no auth of its own: there is no middleware, and
+         NGROK_WEBHOOK_SECRET in config.py is defined but never read. Without a
+         policy this tunnel publishes the whole UI, API and code sandbox to
+         anyone with the URL. ngrok v3 dropped --basic-auth in favour of this.
+         The file lives outside the repo because it holds a credential. -->
+    <string>--traffic-policy-file=__TRAFFIC_POLICY__</string>
   </array>
 
   <key>EnvironmentVariables</key>

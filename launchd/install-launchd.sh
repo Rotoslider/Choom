@@ -59,6 +59,7 @@ SIGNAL_PHONE_NUMBER=""
 SIGNAL_SOCKET_PATH=""
 NGROK=""
 NGROK_DOMAIN=""
+TRAFFIC_POLICY=""
 
 # Which numbers signal-cli has registered, read straight from its account file.
 #
@@ -90,6 +91,7 @@ render() {  # render <template> <installed-plist-name>
       -e "s|__SIGNAL_SOCKET_PATH__|$SIGNAL_SOCKET_PATH|g" \
       -e "s|__NGROK__|$NGROK|g" \
       -e "s|__NGROK_DOMAIN__|$NGROK_DOMAIN|g" \
+      -e "s|__TRAFFIC_POLICY__|$TRAFFIC_POLICY|g" \
       "$src" > "$dest"
   plutil -lint "$dest" > /dev/null
   echo -e "${GREEN}  wrote $dest${NC}"
@@ -174,8 +176,14 @@ fi
 if [ "$WITH_NGROK" = true ]; then
   NGROK="$(command -v ngrok || true)"
   NGROK_DOMAIN="$(env_get NGROK_URL | sed 's|^https\?://||')"
+  # Kept out of the repo: it holds the basic-auth credential and the repo is public.
+  TRAFFIC_POLICY="${CHOOM_NGROK_POLICY:-$HOME/Library/Application Support/Choom/ngrok-traffic-policy.yml}"
   if [ -z "$NGROK" ] || [ -z "$NGROK_DOMAIN" ]; then
     echo -e "${YELLOW}Skipping ngrok: need the ngrok binary and NGROK_URL in the bridge .env.${NC}"
+  elif [ ! -f "$TRAFFIC_POLICY" ]; then
+    echo -e "${YELLOW}Skipping ngrok: no traffic policy at $TRAFFIC_POLICY.${NC}"
+    echo -e "${YELLOW}  Choom has no auth of its own — refusing to expose it unprotected.${NC}"
+    echo -e "${YELLOW}  Write a basic-auth policy there, or set \$CHOOM_NGROK_POLICY.${NC}"
   else
     echo -e "\n${GREEN}Installing com.choom.ngrok...${NC}"
     render com.choom.ngrok.plist.template com.choom.ngrok.plist
