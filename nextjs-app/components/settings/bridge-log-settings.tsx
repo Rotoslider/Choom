@@ -191,7 +191,7 @@ function AgentConsole() {
     <div className="space-y-3">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <p className="text-xs text-muted-foreground font-mono">
-          journalctl --user -u {resp?.unit || 'choom-dev'}
+          {resp?.unit || 'choom-dev'}
         </p>
         <div className="flex items-center gap-2">
           <Button

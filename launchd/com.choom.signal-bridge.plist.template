@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Signal Bridge — macOS counterpart of signal-bridge.service.
+
+  launchd has no Requires=, so it cannot express "start the signal-cli daemon
+  first". The bridge retries the socket on its own (SIGNAL_DAEMON_CONNECT_TIMEOUT
+  / SIGNAL_DAEMON_RECONNECT_INTERVAL), so ordering is not required — but load
+  com.choom.signal-cli-daemon first to avoid a startup retry loop.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.choom.signal-bridge</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__PROJECT_PATH__/nextjs-app/services/signal-bridge/venv/bin/python</string>
+    <string>bridge.py</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__PROJECT_PATH__/nextjs-app/services/signal-bridge</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>__PROJECT_PATH__/nextjs-app/services/signal-bridge/venv/bin:__HOMEBREW_BIN__:/usr/local/bin:/usr/bin:/bin</string>
+    <key>HOME</key>
+    <string>__HOME__</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>StandardOutPath</key>
+  <string>__PROJECT_PATH__/nextjs-app/data/logs/signal-bridge.log</string>
+  <key>StandardErrorPath</key>
+  <string>__PROJECT_PATH__/nextjs-app/data/logs/signal-bridge.log</string>
+</dict>
+</plist>

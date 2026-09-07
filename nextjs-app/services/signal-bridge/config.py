@@ -2,18 +2,53 @@
 Signal Bridge Configuration
 """
 import os
+import shutil
+import sys
+import tempfile
 from dotenv import load_dotenv
 
 load_dotenv()
 
+_IS_MACOS = sys.platform == "darwin"
+
+
+def _default_signal_cli_path() -> str:
+    """Locate signal-cli without assuming the Linux tarball layout.
+
+    On Linux setup.sh symlinks /usr/local/bin/signal-cli; Homebrew on Apple
+    Silicon puts it in /opt/homebrew/bin. Fall back to whatever is on $PATH.
+    """
+    found = shutil.which("signal-cli")
+    if found:
+        return found
+    for candidate in ("/opt/homebrew/bin/signal-cli", "/usr/local/bin/signal-cli"):
+        if os.path.exists(candidate):
+            return candidate
+    return "/usr/local/bin/signal-cli"
+
+
+def _default_signal_socket_path() -> str:
+    """Default JSON-RPC socket path.
+
+    Linux uses the per-user runtime dir (/run/user/$UID); macOS has no such
+    thing, so fall back to the per-user temp dir launchd hands us.
+    """
+    if _IS_MACOS:
+        return os.path.join(tempfile.gettempdir(), "signal-cli", "socket")
+    return f"/run/user/{os.getuid()}/signal-cli/socket"
+
+
+def _default_temp_dir(name: str) -> str:
+    return os.path.join(tempfile.gettempdir(), "signal-bridge", name)
+
 # Signal Configuration
 # SIGNAL_PHONE_NUMBER is the Choom's number (sends messages)
 SIGNAL_PHONE_NUMBER = os.getenv("SIGNAL_PHONE_NUMBER", "+10000000000")
-SIGNAL_CLI_PATH = os.getenv("SIGNAL_CLI_PATH", "/usr/local/bin/signal-cli")
+SIGNAL_CLI_PATH = os.getenv("SIGNAL_CLI_PATH") or _default_signal_cli_path()
 SIGNAL_CONFIG_PATH = os.getenv("SIGNAL_CONFIG_PATH", os.path.expanduser("~/.local/share/signal-cli"))
 
 # signal-cli daemon socket (JSON-RPC mode)
-SIGNAL_SOCKET_PATH = os.getenv("SIGNAL_SOCKET_PATH", "/run/user/1000/signal-cli/socket")
+SIGNAL_SOCKET_PATH = os.getenv("SIGNAL_SOCKET_PATH") or _default_signal_socket_path()
 SIGNAL_DAEMON_CONNECT_TIMEOUT = int(os.getenv("SIGNAL_DAEMON_CONNECT_TIMEOUT", "30"))
 SIGNAL_DAEMON_RECONNECT_INTERVAL = int(os.getenv("SIGNAL_DAEMON_RECONNECT_INTERVAL", "5"))
 
@@ -63,8 +98,8 @@ MORNING_BRIEFING_TIME = "07:00"
 SYSTEM_HEALTH_INTERVAL = 30
 
 # Paths for temporary files
-TEMP_AUDIO_PATH = "/tmp/signal-bridge/audio"
-TEMP_IMAGE_PATH = "/tmp/signal-bridge/images"
+TEMP_AUDIO_PATH = os.getenv("TEMP_AUDIO_PATH") or _default_temp_dir("audio")
+TEMP_IMAGE_PATH = os.getenv("TEMP_IMAGE_PATH") or _default_temp_dir("images")
 
 # Logging
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")

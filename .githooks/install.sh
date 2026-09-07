@@ -18,7 +18,15 @@ if ! command -v gitleaks >/dev/null 2>&1 && [ ! -x "$HOME/.local/bin/gitleaks" ]
     armv7l)        arch=armv7 ;;
     *)             arch="$(uname -m)" ;;
   esac
-  url="https://github.com/gitleaks/gitleaks/releases/download/v${VER}/gitleaks_${VER}_linux_${arch}.tar.gz"
+  # The OS matters as much as the arch: hardcoding "linux" here put an ELF
+  # binary in ~/.local/bin on macOS, and since the hook fails closed that
+  # blocked every commit with a "potential secret" error that was really
+  # "cannot execute binary file".
+  case "$(uname -s)" in
+    Darwin) os=darwin ;;
+    *)      os=linux ;;
+  esac
+  url="https://github.com/gitleaks/gitleaks/releases/download/v${VER}/gitleaks_${VER}_${os}_${arch}.tar.gz"
   echo "Installing gitleaks ${VER} (${arch}) → ~/.local/bin …"
   curl -fsSL "$url" | tar -xz -C "$HOME/.local/bin" gitleaks
   chmod +x "$HOME/.local/bin/gitleaks"

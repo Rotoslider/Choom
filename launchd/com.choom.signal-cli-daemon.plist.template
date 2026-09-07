@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  signal-cli JSON-RPC daemon — macOS counterpart of signal-cli-daemon.service.
+
+  The Linux unit puts the socket in /run/user/$UID, which does not exist on
+  macOS; the socket path here must match SIGNAL_SOCKET_PATH in
+  nextjs-app/services/signal-bridge/.env.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.choom.signal-cli-daemon</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>-c</string>
+    <!-- Clean orphaned native libs from previous subprocess invocations, the
+         way the systemd unit's ExecStartPre does. -->
+    <string>mkdir -p "$(dirname __SIGNAL_SOCKET_PATH__)" &amp;&amp; rm -rf "${TMPDIR:-/tmp}"/libsignal_jni_* &amp;&amp; exec __SIGNAL_CLI__ --config __HOME__/.local/share/signal-cli -a __SIGNAL_PHONE_NUMBER__ daemon --socket __SIGNAL_SOCKET_PATH__ --receive-mode=on-start</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>__HOMEBREW_BIN__:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>HOME</key>
+    <string>__HOME__</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>5</integer>
+
+  <key>StandardOutPath</key>
+  <string>__PROJECT_PATH__/nextjs-app/data/logs/signal-cli-daemon.log</string>
+  <key>StandardErrorPath</key>
+  <string>__PROJECT_PATH__/nextjs-app/data/logs/signal-cli-daemon.log</string>
+</dict>
+</plist>

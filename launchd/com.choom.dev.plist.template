@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Choom dev server (Next.js + memory server) — the macOS counterpart of the
+  choom-dev systemd user unit.
+
+  launchd has no journal, so stdout is redirected to a file and log-filter.js
+  stamps each line (CHOOM_LOG_TIMESTAMPS=1). Settings → Logs → Agent Console
+  reads that file back via /api/server-log. Run `pnpm dev` in a plain terminal
+  for quick hacking, but know the Agent Console goes stale until this agent
+  runs again — the same caveat as the Linux unit.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.choom.dev</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__PNPM__</string>
+    <string>dev</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__PROJECT_PATH__/nextjs-app</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>__HOMEBREW_BIN__:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>CHOOM_LOG_TIMESTAMPS</key>
+    <string>1</string>
+    <key>HOME</key>
+    <string>__HOME__</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>StandardOutPath</key>
+  <string>__PROJECT_PATH__/nextjs-app/data/logs/choom-dev.log</string>
+  <key>StandardErrorPath</key>
+  <string>__PROJECT_PATH__/nextjs-app/data/logs/choom-dev.log</string>
+</dict>
+</plist>

@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "concurrently --kill-others-on-fail --names \"memory,next\" --prefix-colors \"yellow,blue\" \"pnpm run memory:start\" \"next dev 2>&1 | node scripts/log-filter.js\"",
+    "dev": "concurrently --kill-others-on-fail --names \"memory,next\" --prefix-colors \"yellow,blue\" \"pnpm run memory:start 2>&1 | node scripts/log-filter.js\" \"next dev 2>&1 | node scripts/log-filter.js\"",
     "dev:verbose": "pnpm run memory:start & next dev",
     "dev:app": "next dev",
     "build": "next build",
@@ -18,8 +18,8 @@
     "memory:start": "cd ../memory-server && ./run.sh",
     "memory:stop": "pkill -f 'python run.py' || true",
     "services:check": "./services/signal-bridge/start.sh",
-    "signal:logs": "journalctl -u signal-bridge -f",
-    "signal:restart": "sudo systemctl restart signal-bridge",
+    "signal:logs": "./services/signal-bridge/servicectl.sh logs signal-bridge",
+    "signal:restart": "./services/signal-bridge/servicectl.sh restart signal-bridge",
     "db:seed": "pnpm dlx tsx prisma/seed.ts"
   },
   "prisma": {
@@ -45,7 +45,7 @@
     "@types/three": "^0.183.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "esbuild": "^0.27.3",
+    "esbuild": "^0.28.2",
     "lucide-react": "^0.460.0",
     "next": "^16.2.6",
     "pdfkit": "^0.17.2",
@@ -55,7 +55,7 @@
     "react-markdown": "^10.1.0",
     "react-syntax-highlighter": "^16.1.0",
     "recharts": "^3.8.0",
-    "sharp": "^0.34.5",
+    "sharp": "^0.35.4",
     "tailwind-merge": "^2.6.1",
     "three": "^0.183.2",
     "undici": "^8.1.0",

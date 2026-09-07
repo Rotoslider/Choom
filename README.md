@@ -1554,10 +1554,16 @@ SQLite via Prisma ORM. (dev.db)
 
 ## Getting Started
 
+> **On macOS?** The instructions below assume Linux (systemd, `apt`,
+> `/run/user`). See **[MAC-SETUP.md](MAC-SETUP.md)** for the Apple Silicon
+> equivalents — launchd agents, Homebrew paths, the `~/Documents` TCC trap, and
+> migrating a Signal account and memory store off a Linux host.
+
 ### Prerequisites
 
 - Node.js 18+ (20+ recommended for Next.js 16 / Turbopack)
-- Python 3.11+ (for Signal bridge and memory server)
+- Python 3.11–3.12 (Signal bridge and memory server; `pydub` needs the
+  `audioop` module, which 3.13 removed from the stdlib)
 - External services: LLM server, memory server, TTS, STT, Stable Diffusion Forge
 - Optional: `yt-dlp` (YouTube music downloads), `pdftotext` from `poppler-utils` (PDF text extraction)
 
@@ -1588,9 +1594,10 @@ BRAVE_SEARCH_API_KEY=your_key_here
 
 ### Run
 
-The dev server should run as a **systemd user service** — the Agent
-Console (Settings → Logs) reads the server's console output back out of
-the `choom-dev` unit's journal, so a plain-terminal `npm run dev` starves
+The dev server should run as a **systemd user service** (a **launchd user
+agent** on macOS — see [MAC-SETUP.md](MAC-SETUP.md#6-running-the-services))
+— the Agent Console (Settings → Logs) reads the server's console output back
+out of the `choom-dev` unit's journal, so a plain-terminal `npm run dev` starves
 that view silently (it keeps showing the journal's old history and
 "refresh" appears to do nothing; this bit us from 2026-07-28 to 08-09).
 
@@ -1635,11 +1642,15 @@ Open `http://localhost:3000`. Create your first Choom from the sidebar.
 
 ```bash
 cd services/signal-bridge
-python -m venv venv && source venv/bin/activate
+python3 -m venv --copies venv && source venv/bin/activate
 pip install -r requirements.txt
-# Edit config.py with your phone numbers
+cp .env.example .env   # set SIGNAL_PHONE_NUMBER / OWNER_PHONE_NUMBER
 sudo systemctl start signal-bridge.service
 ```
+
+`--copies` is required: a symlinked venv inside the Next.js tree breaks
+`next build`. On macOS use `./servicectl.sh start signal-bridge` instead of
+`systemctl`.
 
 ## NPM Scripts
 
@@ -1652,8 +1663,8 @@ sudo systemctl start signal-bridge.service
 | `npm run db:push` | Sync Prisma schema |
 | `npm run db:studio` | Prisma Studio UI |
 | `npm run db:views` | Create SQLite views with readable timestamps |
-| `npm run signal:logs` | View Signal bridge logs |
-| `npm run signal:restart` | Restart Signal bridge |
+| `npm run signal:logs` | View Signal bridge logs (systemd or launchd) |
+| `npm run signal:restart` | Restart Signal bridge (systemd or launchd) |
 | `npm run services:check` | Health check all services |
 
 ## Troubleshooting

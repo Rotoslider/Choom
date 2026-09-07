@@ -6,3 +6,10 @@ apscheduler==3.10.4
 pydub==0.25.1
 watchdog==3.0.0
 mutagen>=1.46.0
+
+# Google integration (Calendar, Sheets, Docs, Drive, Gmail, Contacts, YouTube).
+# google_client.py has always needed these; they were installed by hand on the
+# original host and missing here, so a fresh venv could not import scheduler.py.
+google-auth>=2.28.0
+google-auth-oauthlib>=1.2.0
+google-api-python-client>=2.120.0

@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Ngrok tunnel for Choom — macOS counterpart of ngrok.service. Optional. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.choom.ngrok</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__NGROK__</string>
+    <string>http</string>
+    <string>3000</string>
+    <string>--url=__NGROK_DOMAIN__</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>__HOMEBREW_BIN__:/usr/local/bin:/usr/bin:/bin</string>
+    <key>HOME</key>
+    <string>__HOME__</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>StandardOutPath</key>
+  <string>__PROJECT_PATH__/nextjs-app/data/logs/ngrok.log</string>
+  <key>StandardErrorPath</key>
+  <string>__PROJECT_PATH__/nextjs-app/data/logs/ngrok.log</string>
+</dict>
+</plist>
