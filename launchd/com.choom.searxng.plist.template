@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  SearXNG — macOS counterpart of searxng.service.
+
+  Binds 127.0.0.1:8888 per settings.yml, so it is reachable only from this Mac.
+  That is deliberate: it is an unauthenticated search proxy and Choom runs on
+  the same host. To share it with another machine, change bind_address in
+  settings.yml and be aware you are exposing an open proxy to your LAN.
+
+  SEARXNG_SETTINGS_PATH layers our settings.yml over SearXNG's packaged
+  defaults. Do not point it at searxng-src/searx/settings.yml, and do not
+  replace that file — see the note in setup.sh.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.choom.searxng</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__PROJECT_PATH__/nextjs-app/services/searxng/venv/bin/python</string>
+    <string>-m</string>
+    <string>searx.webapp</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__PROJECT_PATH__/nextjs-app/services/searxng/searxng-src</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>__PROJECT_PATH__/nextjs-app/services/searxng/venv/bin:__HOMEBREW_BIN__:/usr/local/bin:/usr/bin:/bin</string>
+    <key>HOME</key>
+    <string>__HOME__</string>
+    <key>SEARXNG_SETTINGS_PATH</key>
+    <string>__PROJECT_PATH__/nextjs-app/services/searxng/settings.yml</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <!-- The systemd unit waits 30s between restarts to avoid hammering the CPU
+       when a bad settings file makes startup fail immediately. Same idea. -->
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+
+  <key>StandardOutPath</key>
+  <string>__PROJECT_PATH__/nextjs-app/data/logs/searxng.log</string>
+  <key>StandardErrorPath</key>
+  <string>__PROJECT_PATH__/nextjs-app/data/logs/searxng.log</string>
+</dict>
+</plist>

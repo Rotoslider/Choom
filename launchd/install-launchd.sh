@@ -9,6 +9,7 @@
 #   ./install-launchd.sh              # install dev + signal services
 #   ./install-launchd.sh --dev-only   # just the Next.js/memory dev server
 #   ./install-launchd.sh --with-ngrok # also install the ngrok tunnel
+#   ./install-launchd.sh --no-searxng # skip the local SearXNG instance
 
 set -euo pipefail
 
@@ -22,10 +23,12 @@ GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
 
 DEV_ONLY=false
 WITH_NGROK=false
+WITH_SEARXNG=true
 for arg in "$@"; do
   case "$arg" in
     --dev-only)   DEV_ONLY=true ;;
     --with-ngrok) WITH_NGROK=true ;;
+    --no-searxng) WITH_SEARXNG=false ;;
     *) echo -e "${RED}Unknown option: $arg${NC}"; exit 1 ;;
   esac
 done
@@ -57,6 +60,19 @@ SIGNAL_SOCKET_PATH=""
 NGROK=""
 NGROK_DOMAIN=""
 
+# Which numbers signal-cli has registered, read straight from its account file.
+#
+# Do NOT shell out to `signal-cli listAccounts` here. signal-cli takes an
+# exclusive lock per account, and the daemon this script installs holds it for
+# as long as it runs — so on every re-run after the first install, listAccounts
+# blocks forever and takes this script with it.
+ACCOUNTS_JSON="$HOME/.local/share/signal-cli/data/accounts.json"
+
+registered_numbers() {
+  [ -f "$ACCOUNTS_JSON" ] || return 0
+  sed -n 's/.*"number"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$ACCOUNTS_JSON" | tr '\n' ' '
+}
+
 # Read a KEY=value out of the signal-bridge .env, ignoring comments.
 env_get() {
   [ -f "$BRIDGE_DIR/.env" ] || return 0
@@ -80,13 +96,34 @@ render() {  # render <template> <installed-plist-name>
 }
 
 reload() {  # reload <label>
-  local label="$1"
+  local label="$1" domain="gui/$(id -u)" i
+
   # bootout is the modern replacement for `unload`; it fails when the agent
   # isn't loaded, which is fine on a first install.
-  launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
-  launchctl bootstrap "gui/$(id -u)" "$AGENTS_DIR/$label.plist"
-  launchctl enable "gui/$(id -u)/$label"
-  echo -e "${GREEN}  loaded $label${NC}"
+  launchctl bootout "$domain/$label" 2>/dev/null || true
+
+  # bootout returns before the job is actually gone. Bootstrapping into a
+  # domain that still holds the old job fails with
+  #   Bootstrap failed: 5: Input/output error
+  # and under `set -e` that aborts the whole install. signal-cli is the one
+  # that exposes it — a JVM takes seconds to die. Wait for the service to
+  # disappear, then retry the bootstrap a few times before giving up.
+  for i in $(seq 1 30); do
+    launchctl print "$domain/$label" >/dev/null 2>&1 || break
+    sleep 1
+  done
+
+  for i in 1 2 3 4 5; do
+    if launchctl bootstrap "$domain" "$AGENTS_DIR/$label.plist" 2>/dev/null; then
+      launchctl enable "$domain/$label"
+      echo -e "${GREEN}  loaded $label${NC}"
+      return 0
+    fi
+    sleep 2
+  done
+
+  echo -e "${RED}  failed to load $label — try: launchctl bootstrap $domain $AGENTS_DIR/$label.plist${NC}"
+  return 1
 }
 
 echo "Project:  $PROJECT_PATH"
@@ -108,10 +145,10 @@ if [ "$DEV_ONLY" = false ]; then
   if [ -z "$SIGNAL_PHONE_NUMBER" ] || [ -z "$SIGNAL_CLI" ]; then
     echo -e "${YELLOW}Skipping Signal services: set SIGNAL_PHONE_NUMBER and install signal-cli first.${NC}"
     echo -e "${YELLOW}  brew install signal-cli   # then edit $BRIDGE_DIR/.env${NC}"
-  elif ! signal-cli listAccounts 2>/dev/null | grep -q "$SIGNAL_PHONE_NUMBER"; then
+  elif ! grep -q "\"$SIGNAL_PHONE_NUMBER\"" "$ACCOUNTS_JSON" 2>/dev/null; then
     echo -e "${YELLOW}Skipping Signal services: $SIGNAL_PHONE_NUMBER is not registered with signal-cli here.${NC}"
     echo -e "${YELLOW}  Migrate ~/.local/share/signal-cli from the old host, or link/register the number.${NC}"
-    echo -e "${YELLOW}  Registered now: $(signal-cli listAccounts 2>/dev/null | tr '\n' ' ')${NC}"
+    echo -e "${YELLOW}  Registered now: $(registered_numbers)${NC}"
   else
     echo -e "\n${GREEN}Installing com.choom.signal-cli-daemon...${NC}"
     render com.choom.signal-cli-daemon.plist.template com.choom.signal-cli-daemon.plist
@@ -120,6 +157,17 @@ if [ "$DEV_ONLY" = false ]; then
     echo -e "\n${GREEN}Installing com.choom.signal-bridge...${NC}"
     render com.choom.signal-bridge.plist.template com.choom.signal-bridge.plist
     reload com.choom.signal-bridge
+  fi
+fi
+
+if [ "$WITH_SEARXNG" = true ]; then
+  if [ -x "$PROJECT_PATH/nextjs-app/services/searxng/venv/bin/python" ]; then
+    echo -e "\n${GREEN}Installing com.choom.searxng...${NC}"
+    render com.choom.searxng.plist.template com.choom.searxng.plist
+    reload com.choom.searxng
+  else
+    echo -e "\n${YELLOW}Skipping SearXNG: no venv yet. Build it first:${NC}"
+    echo -e "${YELLOW}  cd $PROJECT_PATH/nextjs-app/services/searxng && ./setup.sh${NC}"
   fi
 fi
 

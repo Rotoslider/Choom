@@ -236,9 +236,10 @@ Install the launchd agents (the counterpart of `install-services.sh`):
 
 ```bash
 cd ~/Projects/Choom/launchd
-./install-launchd.sh                # dev server + Signal services
+./install-launchd.sh                # dev server, Signal services, SearXNG
 ./install-launchd.sh --dev-only     # just Next.js + memory server
 ./install-launchd.sh --with-ngrok   # also the ngrok tunnel
+./install-launchd.sh --no-searxng   # skip the local SearXNG instance
 ```
 
 This writes `~/Library/LaunchAgents/com.choom.*.plist` and loads them. They are
@@ -275,6 +276,7 @@ point it somewhere else.
 | Stop it | `systemctl --user stop choom-dev` | `launchctl bootout gui/$(id -u)/com.choom.dev` |
 | Restart the bridge | `sudo systemctl restart signal-bridge` | `launchctl kickstart -k gui/$(id -u)/com.choom.signal-bridge` |
 | Bridge logs | `journalctl -u signal-bridge -f` | `tail -f nextjs-app/data/logs/signal-bridge.log` |
+| Restart SearXNG | `sudo systemctl restart searxng` | `launchctl kickstart -k gui/$(id -u)/com.choom.searxng` |
 | Survive logout | `loginctl enable-linger $USER` | user agents already do; see [sleep](#the-mac-goes-to-sleep) |
 
 `services/signal-bridge/servicectl.sh` wraps both, so `pnpm signal:logs`,
@@ -360,6 +362,33 @@ launchd agents stop when the machine sleeps, so Signal messages and scheduled
 heartbeats stop with them. For an always-on Choom, either disable sleep in
 System Settings → Lock Screen / Energy, or run `sudo caffeinate -dims` — the
 macOS equivalent of the always-on server the Linux box was.
+
+### SearXNG
+
+Run `services/searxng/setup.sh` before `install-launchd.sh`, or the installer
+skips SearXNG and tells you so. The setup script picks Python 3.12/3.11 rather
+than whatever `python3` is — SearXNG's native wheels (lxml, curl_cffi, msgspec)
+lag new CPython releases. Override with `$PYTHON_BIN`.
+
+It binds **127.0.0.1:8888**, so it is reachable only from this Mac — browse it
+at <http://localhost:8888>. A remote host cannot reach it, and that is
+intentional: it is an unauthenticated search proxy. Checking port 8888 from
+*another* machine will always look closed even when it is running perfectly.
+
+Choom uses it as the unlimited fallback behind Brave (`provider` defaults to
+`brave`), so set `SEARXNG_ENDPOINT=http://localhost:8888` in `nextjs-app/.env`.
+
+Two failure modes worth knowing:
+
+- **`KeyError: 'engines'` at startup.** Something replaced
+  `searxng-src/searx/settings.yml` — SearXNG's packaged defaults — with our
+  overlay, leaving `use_default_settings: keep_only:` nothing to merge against.
+  Restore the packaged file; the overlay is passed via `$SEARXNG_SETTINGS_PATH`,
+  never symlinked over the defaults.
+- **`ModuleNotFoundError: No module named 'msgspec'` during install.** SearXNG's
+  `setup.py` imports its own package at build time, so `pip install -e` on a
+  clean venv cannot even compute requirements. Install `requirements.txt` first,
+  then `pip install --no-build-isolation -e`. setup.sh does this.
 
 ### Anything referencing `/home/nuc1`
 

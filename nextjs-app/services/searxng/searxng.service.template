@@ -1,0 +1,30 @@
+# Render __USER__ and __PROJECT_PATH__ before installing, e.g.
+#   sed -e "s|__USER__|$USER|g" -e "s|__PROJECT_PATH__|$(git rev-parse --show-toplevel)|g" \
+#       searxng.service.template | sudo tee /etc/systemd/system/searxng.service
+# On macOS use launchd/install-launchd.sh instead — com.choom.searxng.
+
+[Unit]
+Description=SearXNG Local Search Engine for Choom
+After=network.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__PROJECT_PATH__/nextjs-app/services/searxng/searxng-src
+Environment=SEARXNG_SETTINGS_PATH=__PROJECT_PATH__/nextjs-app/services/searxng/settings.yml
+
+# Kill any orphan process holding port 8888 before starting
+ExecStartPre=/bin/bash -c 'fuser -k 8888/tcp 2>/dev/null || true'
+ExecStartPre=/bin/sleep 1
+
+ExecStart=__PROJECT_PATH__/nextjs-app/services/searxng/venv/bin/python -m searx.webapp
+
+Restart=on-failure
+# Wait 30s between restarts (not 5s) to avoid CPU hammering
+RestartSec=30
+# Max 5 restarts in 10 minutes, then give up
+StartLimitBurst=5
+StartLimitIntervalSec=600
+
+[Install]
+WantedBy=multi-user.target
