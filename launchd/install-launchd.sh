@@ -10,6 +10,7 @@
 #   ./install-launchd.sh --dev-only   # just the Next.js/memory dev server
 #   ./install-launchd.sh --with-ngrok # also install the ngrok tunnel
 #   ./install-launchd.sh --no-searxng # skip the local SearXNG instance
+#   ./install-launchd.sh --with-tts   # local Chatterbox TTS (Rapid-MLX + bridge)
 
 set -euo pipefail
 
@@ -24,11 +25,13 @@ GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
 DEV_ONLY=false
 WITH_NGROK=false
 WITH_SEARXNG=true
+WITH_TTS=false
 for arg in "$@"; do
   case "$arg" in
     --dev-only)   DEV_ONLY=true ;;
     --with-ngrok) WITH_NGROK=true ;;
     --no-searxng) WITH_SEARXNG=false ;;
+    --with-tts)   WITH_TTS=true ;;
     *) echo -e "${RED}Unknown option: $arg${NC}"; exit 1 ;;
   esac
 done
@@ -60,6 +63,10 @@ SIGNAL_SOCKET_PATH=""
 NGROK=""
 NGROK_DOMAIN=""
 TRAFFIC_POLICY=""
+RAPID_MLX=""
+TTS_MODEL="chatterbox"
+VOICES_DIR=""
+KEEP_WARM_VOICE=""
 
 # Which numbers signal-cli has registered, read straight from its account file.
 #
@@ -92,6 +99,10 @@ render() {  # render <template> <installed-plist-name>
       -e "s|__NGROK__|$NGROK|g" \
       -e "s|__NGROK_DOMAIN__|$NGROK_DOMAIN|g" \
       -e "s|__TRAFFIC_POLICY__|$TRAFFIC_POLICY|g" \
+      -e "s|__RAPID_MLX__|$RAPID_MLX|g" \
+      -e "s|__TTS_MODEL__|$TTS_MODEL|g" \
+      -e "s|__VOICES_DIR__|$VOICES_DIR|g" \
+      -e "s|__KEEP_WARM_VOICE__|$KEEP_WARM_VOICE|g" \
       "$src" > "$dest"
   plutil -lint "$dest" > /dev/null
   echo -e "${GREEN}  wrote $dest${NC}"
@@ -170,6 +181,36 @@ if [ "$WITH_SEARXNG" = true ]; then
   else
     echo -e "\n${YELLOW}Skipping SearXNG: no venv yet. Build it first:${NC}"
     echo -e "${YELLOW}  cd $PROJECT_PATH/nextjs-app/services/searxng && ./setup.sh${NC}"
+  fi
+fi
+
+if [ "$WITH_TTS" = true ]; then
+  # rapid-mlx must come from a pip install with the [audio] extra; the Homebrew
+  # bottle refuses audio aliases ("requires the optional mlx-audio dependency").
+  RAPID_MLX="${CHOOM_RAPID_MLX:-$HOME/.local/share/rapid-mlx-audio/venv/bin/rapid-mlx}"
+  VOICES_DIR="${CHOOM_VOICES_DIR:-$HOME/Library/Application Support/Choom/voices-prepared}"
+  KEEP_WARM_VOICE="${CHOOM_KEEP_WARM_VOICE:-sophie}"
+
+  if [ ! -x "$RAPID_MLX" ]; then
+    echo -e "\n${YELLOW}Skipping local TTS: no audio-capable rapid-mlx at $RAPID_MLX${NC}"
+    echo -e "${YELLOW}  python3.12 -m venv ~/.local/share/rapid-mlx-audio/venv${NC}"
+    echo -e "${YELLOW}  ~/.local/share/rapid-mlx-audio/venv/bin/pip install 'rapid-mlx[audio]'${NC}"
+  elif [ ! -d "$VOICES_DIR" ]; then
+    echo -e "\n${YELLOW}Skipping local TTS: no prepared voices at $VOICES_DIR${NC}"
+    echo -e "${YELLOW}  Each voice needs <name>.wav (~12s, 24kHz mono) and <name>.txt (its transcript).${NC}"
+  elif [ ! -x "$PROJECT_PATH/nextjs-app/services/tts-bridge/venv/bin/python" ]; then
+    echo -e "\n${YELLOW}Skipping local TTS: build the bridge venv first:${NC}"
+    echo -e "${YELLOW}  cd $PROJECT_PATH/nextjs-app/services/tts-bridge${NC}"
+    echo -e "${YELLOW}  python3.12 -m venv --copies venv && ./venv/bin/pip install -r requirements.txt${NC}"
+  else
+    echo -e "\n${GREEN}Installing com.choom.rapid-mlx...${NC}"
+    render com.choom.rapid-mlx.plist.template com.choom.rapid-mlx.plist
+    reload com.choom.rapid-mlx
+
+    echo -e "\n${GREEN}Installing com.choom.tts-bridge (keep-warm: $KEEP_WARM_VOICE)...${NC}"
+    render com.choom.tts-bridge.plist.template com.choom.tts-bridge.plist
+    reload com.choom.tts-bridge
+    echo -e "${YELLOW}  Point TTS_ENDPOINT at http://localhost:8004 to cut over from the old host.${NC}"
   fi
 fi
 

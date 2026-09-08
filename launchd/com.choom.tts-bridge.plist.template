@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Choom TTS bridge — speaks the QUITE_CHATTER API Choom and Home Assistant
+  already use, and resolves named voices to reference clips for Rapid-MLX,
+  which has no registry of cloned voices of its own.
+
+  Listens on 8004, the same port the old Chatterbox server used, so switching
+  hosts is a one-line TTS_ENDPOINT change and nothing else moves.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.choom.tts-bridge</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__PROJECT_PATH__/nextjs-app/services/tts-bridge/venv/bin/python</string>
+    <string>server.py</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__PROJECT_PATH__/nextjs-app/services/tts-bridge</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>__PROJECT_PATH__/nextjs-app/services/tts-bridge/venv/bin:__HOMEBREW_BIN__:/usr/bin:/bin</string>
+    <key>HOME</key>
+    <string>__HOME__</string>
+    <key>RAPID_MLX_URL</key>
+    <string>http://127.0.0.1:8890</string>
+    <key>TTS_MODEL</key>
+    <string>__TTS_MODEL__</string>
+    <key>VOICES_DIR</key>
+    <string>__VOICES_DIR__</string>
+    <!-- Genesis is the most-used Choom; hold her voice resident so she never
+         pays the ~45s cold model load. Blank disables. -->
+    <key>KEEP_WARM_VOICE</key>
+    <string>__KEEP_WARM_VOICE__</string>
+    <key>KEEP_WARM_INTERVAL</key>
+    <string>240</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>StandardOutPath</key>
+  <string>__PROJECT_PATH__/nextjs-app/data/logs/tts-bridge.log</string>
+  <key>StandardErrorPath</key>
+  <string>__PROJECT_PATH__/nextjs-app/data/logs/tts-bridge.log</string>
+</dict>
+</plist>

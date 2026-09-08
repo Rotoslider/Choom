@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Rapid-MLX audio server — the TTS/STT engine behind com.choom.tts-bridge.
+
+  Installed via pip (rapid-mlx[audio]) rather than Homebrew: the brew bottle
+  omits the [audio] extra and refuses to serve audio aliases with
+  "requires the optional mlx-audio dependency".
+
+  Binds 127.0.0.1 — the bridge in front of it is the only client, and this API
+  is unauthenticated.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.choom.rapid-mlx</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__RAPID_MLX__</string>
+    <string>serve</string>
+    <string>__TTS_MODEL__</string>
+    <string>--host</string>
+    <string>127.0.0.1</string>
+    <string>--port</string>
+    <string>8890</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>__HOMEBREW_BIN__:/usr/local/bin:/usr/bin:/bin</string>
+    <key>HOME</key>
+    <string>__HOME__</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+
+  <key>StandardOutPath</key>
+  <string>__PROJECT_PATH__/nextjs-app/data/logs/rapid-mlx.log</string>
+  <key>StandardErrorPath</key>
+  <string>__PROJECT_PATH__/nextjs-app/data/logs/rapid-mlx.log</string>
+</dict>
+</plist>
