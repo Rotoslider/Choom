@@ -378,24 +378,56 @@ Images use a size + aspect combination. All dimensions are computed to be divisi
 
 ### Reference Images (character consistency without LoRAs)
 
-Each mode can carry one or more **reference images** — a character sheet, a face crop,
-a style reference. They are uploaded per Choom in the edit panel (Image tab), stored under
-`nextjs-app/data/reference-images/<choomId>/`, and sent to Forge on every generation via its
-built-in `ImageStitch Integrated` always-on script, which VAE-encodes them into reference
-latents.
+Reference images keep people, places and objects looking the same across generations. They are
+sent to Forge via its built-in `ImageStitch Integrated` always-on script, which VAE-encodes them
+into reference latents.
 
-This is the LoRA-free path to a consistent character: edit-capable models keep the same face
-across images from the reference alone, so a Choom needs no character LoRA and the GPU holds
-one checkpoint for every Choom instead of swapping per-character weights.
+This is the LoRA-free path to a consistent character: an edit-capable model holds the likeness
+from the reference alone, so a Choom needs no character LoRA and the GPU keeps one checkpoint
+loaded for every Choom instead of swapping per-character weights.
 
 Supported by edit-capable models — **Flux.2 Klein**, Flux.1 Kontext, Qwen-Image-Edit, Anima Edit,
-Krea2 Edit. Other checkpoints ignore the references, so leaving them configured is harmless.
+Krea2 Edit. Other checkpoints ignore references, so leaving them configured is harmless.
 Forge needs Settings → **[Klein] Enable Reference** on (the default) for Klein.
 
-Per reference: a label, an on/off toggle, and a shared **Reference detail** setting (the longest
-side each reference is scaled to before encoding, default 1024px). On a multi-panel character
-sheet the face is only a fraction of those pixels — adding a tight face crop as a second
-reference usually improves likeness more than raising the detail setting.
+There are two layers.
+
+#### The reference library (Settings → Image)
+
+A shared set of named **subjects** any Choom can call: a character, a person, a place, a vehicle.
+Each subject has a slug (`genesis`, `owner`, `cabin-exterior`, `blue-pickup`), a description
+the model reads to decide relevance, a category, and one or more images tagged `sheet`, `face`
+or `extra`. Naming a subject sends **all** of its images, sheet first — on a multi-panel character
+sheet the face is only a small fraction of the pixels, so the closeup is what sharpens likeness.
+
+A subject can be linked to a Choom, in which case it attaches automatically to that Choom's
+self-portraits — selfies keep working from a bare prompt with no reference argument.
+
+The library is global on purpose: "Genesis with her sister Eve camping" needs Genesis to reach
+Eve's sheet. The catalogue is injected into `generate_image`'s `references` argument on every
+request, so a Choom always sees the current list and calls subjects by name:
+
+```
+generate_image(prompt: "...", references: ["genesis", "owner", "cabin-exterior"])
+```
+
+Up to `MAX_REFERENCES_PER_IMAGE` (8) images per generation. The cap drops whole subjects rather
+than splitting one, so a person's sheet is never sent without their face.
+
+**Prompting two or more people:** describe each one distinctly, in the same order as the
+references — *"the first woman, with round glasses, in a green flannel; the second woman, no
+glasses, in a navy jacket"*. Without that, clothing and features bleed from the first person onto
+everyone else. The tool description tells the Choom this, but it is worth knowing when tuning.
+
+#### Per-Choom pinned references (Choom edit panel → Image)
+
+Always-on extras for one Choom and mode, uploaded in the edit panel and stored under
+`nextjs-app/data/reference-images/<choomId>/`. They are appended after whatever the library
+resolved. Use these for something that should be in *every* image from that Choom; use the
+library for anything the Choom should choose per image.
+
+Both layers share the **Reference detail** setting (the longest side each reference is scaled to
+before encoding, default 1024px).
 
 ### Additional Modules (VAE / text encoder)
 

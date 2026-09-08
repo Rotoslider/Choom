@@ -19,11 +19,14 @@ import {
 } from '@/components/ui/tooltip';
 import { useAppStore } from '@/lib/store';
 import { cn } from '@/lib/utils';
+import { Separator } from '@/components/ui/separator';
+import { ReferenceLibrarySettings } from './reference-library-settings';
+import type { CheckpointType } from '@/lib/types';
 
 interface CheckpointOption {
   id: string;
   name: string;
-  type: 'pony' | 'flux' | 'other';
+  type: CheckpointType;
 }
 
 interface SamplerOption {
@@ -405,8 +408,13 @@ export function ImageSettings() {
 
       {/* Note about LoRAs */}
       <p className="text-xs text-muted-foreground p-3 rounded-lg bg-muted/30">
-        LoRAs are configured per-Choom in the Choom settings panel (click edit on a Choom).
+        LoRAs and per-Choom reference images are configured per-Choom in the Choom settings panel
+        (click edit on a Choom).
       </p>
+
+      <Separator />
+
+      <ReferenceLibrarySettings />
     </div>
   );
 }

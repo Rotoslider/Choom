@@ -8,50 +8,51 @@ datasource db {
 }
 
 model Choom {
-  id            String    @id @default(cuid())
-  companionId   String?   // Custom memory ID - if null, uses id. Allows memory isolation per Choom
-  name          String
-  description   String?
-  avatarUrl     String?
-  systemPrompt  String    @default("")
-  imageSettings String?   // JSON string - Choom-specific image gen settings
-  permissions   String?   // JSON per-Choom capability grants; defaults deny when absent
-  voiceId       String?   // TTS voice ID (per-Choom)
-  ttsProviderId String?   // TTS server ID (references settings.ttsProviders[]); null = global default
-  llmModel      String?   // LLM model override (per-Choom)
-  llmEndpoint   String?   // Optional LLM endpoint override
-  llmProviderId String?   // External provider ID (references settings.providers[])
-  llmTimeoutSec Int?      // LLM response timeout in seconds (default 120)
-  llmFallbackModel1    String?  // First fallback model (on timeout/error)
-  llmFallbackProvider1 String?  // First fallback provider ID
-  llmFallbackModel2    String?  // Second fallback model (on timeout/error)
-  llmFallbackProvider2 String?  // Second fallback provider ID
-  groupChatModel    String?   // Model used when INVITED into a group room (not the room creator). Falls back to primary then fallbacks.
-  groupChatProvider String?   // Provider ID for the group-chat model (null = local)
-  avatarMode        String?   // 'off' | 'live' | 'desktop' (default null = off)
-  avatar3dModelPath String?   // Relative path to GLB file (legacy)
-  avatar3dStatus    String?   // 'generating' | 'ready' | 'failed' (legacy)
-  avatar3dError     String?   // Error message if generation failed (legacy)
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
-  chats         Chat[]
-  images        GeneratedImage[]
-  groupParticipants GroupParticipant[]
-  groupMessages     GroupMessage[]
+  id                   String             @id @default(cuid())
+  companionId          String? // Custom memory ID - if null, uses id. Allows memory isolation per Choom
+  name                 String
+  description          String?
+  avatarUrl            String?
+  systemPrompt         String             @default("")
+  imageSettings        String? // JSON string - Choom-specific image gen settings
+  permissions          String? // JSON per-Choom capability grants; defaults deny when absent
+  voiceId              String? // TTS voice ID (per-Choom)
+  ttsProviderId        String? // TTS server ID (references settings.ttsProviders[]); null = global default
+  llmModel             String? // LLM model override (per-Choom)
+  llmEndpoint          String? // Optional LLM endpoint override
+  llmProviderId        String? // External provider ID (references settings.providers[])
+  llmTimeoutSec        Int? // LLM response timeout in seconds (default 120)
+  llmFallbackModel1    String? // First fallback model (on timeout/error)
+  llmFallbackProvider1 String? // First fallback provider ID
+  llmFallbackModel2    String? // Second fallback model (on timeout/error)
+  llmFallbackProvider2 String? // Second fallback provider ID
+  groupChatModel       String? // Model used when INVITED into a group room (not the room creator). Falls back to primary then fallbacks.
+  groupChatProvider    String? // Provider ID for the group-chat model (null = local)
+  avatarMode           String? // 'off' | 'live' | 'desktop' (default null = off)
+  avatar3dModelPath    String? // Relative path to GLB file (legacy)
+  avatar3dStatus       String? // 'generating' | 'ready' | 'failed' (legacy)
+  avatar3dError        String? // Error message if generation failed (legacy)
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+  chats                Chat[]
+  images               GeneratedImage[]
+  referenceSubjects    ReferenceSubject[]
+  groupParticipants    GroupParticipant[]
+  groupMessages        GroupMessage[]
 }
 
 model Chat {
-  id                String    @id @default(cuid())
-  title             String?
-  choomId           String
-  choom             Choom     @relation(fields: [choomId], references: [id], onDelete: Cascade)
-  messages          Message[]
-  archived          Boolean   @default(false)
-  compactionSummary String?
+  id                  String    @id @default(cuid())
+  title               String?
+  choomId             String
+  choom               Choom     @relation(fields: [choomId], references: [id], onDelete: Cascade)
+  messages            Message[]
+  archived            Boolean   @default(false)
+  compactionSummary   String?
   activeProjectFolder String? // Project this chat is pinned to (set by dropdown or "we're working in X"); null = selfies default
-  lastUserMessageAt DateTime? // Last time the OWNER actually typed here (web/Signal). NOT bumped by heartbeats/self-followups/cron/group/delegation. Powers cross-surface "talk to the Choom I last talked to" routing.
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
+  lastUserMessageAt   DateTime? // Last time the OWNER actually typed here (web/Signal). NOT bumped by heartbeats/self-followups/cron/group/delegation. Powers cross-surface "talk to the Choom I last talked to" routing.
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 
   @@index([lastUserMessageAt])
 }
@@ -60,10 +61,10 @@ model Message {
   id          String   @id @default(cuid())
   chatId      String
   chat        Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
-  role        String   // 'user' | 'assistant' | 'system' | 'tool'
+  role        String // 'user' | 'assistant' | 'system' | 'tool'
   content     String
-  toolCalls   String?  // JSON string - Tool calls made by assistant
-  toolResults String?  // JSON string - Results from tool execution
+  toolCalls   String? // JSON string - Tool calls made by assistant
+  toolResults String? // JSON string - Results from tool execution
   createdAt   DateTime @default(now())
 }
 
@@ -72,26 +73,26 @@ model Message {
 // ============================================================================
 
 model GroupRoom {
-  id            String   @id @default(cuid())
+  id            String             @id @default(cuid())
   title         String?
-  topic         String?  // Pinned one-line purpose, injected into every turn's prompt
-  projectFolder String?  // Shared workspace folder, e.g. "choom_commons/rooms/<slug>"
-  autoRounds    Int      @default(0) // Max extra Choom↔Choom rounds after the first (0 = off)
-  archived      Boolean  @default(false)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  topic         String? // Pinned one-line purpose, injected into every turn's prompt
+  projectFolder String? // Shared workspace folder, e.g. "choom_commons/rooms/<slug>"
+  autoRounds    Int                @default(0) // Max extra Choom↔Choom rounds after the first (0 = off)
+  archived      Boolean            @default(false)
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
   participants  GroupParticipant[]
   messages      GroupMessage[]
 }
 
 model GroupParticipant {
-  id      String    @id @default(cuid())
-  roomId  String
-  room    GroupRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
-  choomId String
-  choom   Choom     @relation(fields: [choomId], references: [id], onDelete: Cascade)
-  order   Int       @default(0) // Speaking order in round-robin
-  active  Boolean   @default(true)
+  id            String    @id @default(cuid())
+  roomId        String
+  room          GroupRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  choomId       String
+  choom         Choom     @relation(fields: [choomId], references: [id], onDelete: Cascade)
+  order         Int       @default(0) // Speaking order in round-robin
+  active        Boolean   @default(true)
   scratchChatId String? // FK anchor for /api/chat group turns (history ignored)
 
   @@unique([roomId, choomId])
@@ -102,13 +103,13 @@ model GroupMessage {
   id            String    @id @default(cuid())
   roomId        String
   room          GroupRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
-  role          String    // 'user' | 'assistant'
-  authorChoomId String?   // null = owner (the user); else the speaking Choom
+  role          String // 'user' | 'assistant'
+  authorChoomId String? // null = owner (the user); else the speaking Choom
   author        Choom?    @relation(fields: [authorChoomId], references: [id], onDelete: SetNull)
-  authorName    String    // Display name for attribution ('Donny' / 'Eve')
+  authorName    String // Display name for attribution ('Donny' / 'Eve')
   content       String
-  toolCalls     String?   // JSON string - tool calls made during this turn
-  imageUrl      String?   // Optional attached generated image (data: URL or /api/images id)
+  toolCalls     String? // JSON string - tool calls made during this turn
+  imageUrl      String? // Optional attached generated image (data: URL or /api/images id)
   createdAt     DateTime  @default(now())
 
   @@index([roomId])
@@ -120,7 +121,7 @@ model GeneratedImage {
   choom     Choom    @relation(fields: [choomId], references: [id], onDelete: Cascade)
   prompt    String
   imageUrl  String
-  settings  String?  // JSON string - Generation settings used
+  settings  String? // JSON string - Generation settings used
   createdAt DateTime @default(now())
 }
 
@@ -128,11 +129,11 @@ model ActivityLog {
   id        String   @id @default(cuid())
   choomId   String?
   chatId    String?
-  level     String   // info, success, warning, error
-  category  String   // llm, tts, stt, image, memory, agent, system
+  level     String // info, success, warning, error
+  category  String // llm, tts, stt, image, memory, agent, system
   title     String
   message   String
-  details   String?  // JSON
+  details   String? // JSON
   duration  Int?
   createdAt DateTime @default(now())
 }
@@ -141,8 +142,8 @@ model Notification {
   id           String   @id @default(cuid())
   choomId      String
   message      String
-  imageIds     String?  // JSON array of GeneratedImage IDs to attach
-  filePaths    String?  // JSON array of absolute workspace file paths to attach
+  imageIds     String? // JSON array of GeneratedImage IDs to attach
+  filePaths    String? // JSON array of absolute workspace file paths to attach
   includeAudio Boolean  @default(true)
   delivered    Boolean  @default(false)
   createdAt    DateTime @default(now())
@@ -150,14 +151,14 @@ model Notification {
 
 model Settings {
   id         String   @id @default("global")
-  llm        String   // JSON string - LLM endpoint, model, params
-  tts        String   // JSON string - TTS endpoint, voice
-  stt        String   // JSON string - STT endpoint
-  imageGen   String   // JSON string - Forge endpoint, defaults
-  weather    String   // JSON string - Weather API config
-  search     String   // JSON string - Search API config
-  memory     String   // JSON string - Memory server config
-  appearance String   // JSON string - Theme, dark mode
+  llm        String // JSON string - LLM endpoint, model, params
+  tts        String // JSON string - TTS endpoint, voice
+  stt        String // JSON string - STT endpoint
+  imageGen   String // JSON string - Forge endpoint, defaults
+  weather    String // JSON string - Weather API config
+  search     String // JSON string - Search API config
+  memory     String // JSON string - Memory server config
+  appearance String // JSON string - Theme, dark mode
   updatedAt  DateTime @updatedAt
 }
 
@@ -167,13 +168,13 @@ model Settings {
 
 model HabitEntry {
   id        String   @id @default(cuid())
-  choomId   String   // Which Choom recorded this entry
-  category  String   // e.g. "vehicle", "hygiene", "shopping", "outdoor", "maintenance", "health"
-  activity  String   // e.g. "filled gas", "shower", "went to Walmart"
-  location  String?  // Optional: "Lake Tahoe", "Shell on 5th"
-  notes     String?  // Optional freeform notes
-  quantity  Float?   // Optional: 15.5 gallons, $47.50
-  unit      String?  // Optional: "gallons", "$", "miles"
+  choomId   String // Which Choom recorded this entry
+  category  String // e.g. "vehicle", "hygiene", "shopping", "outdoor", "maintenance", "health"
+  activity  String // e.g. "filled gas", "shower", "went to Walmart"
+  location  String? // Optional: "Lake Tahoe", "Shell on 5th"
+  notes     String? // Optional freeform notes
+  quantity  Float? // Optional: 15.5 gallons, $47.50
+  unit      String? // Optional: "gallons", "$", "miles"
   timestamp DateTime @default(now()) // When the activity happened
   createdAt DateTime @default(now())
 
@@ -197,20 +198,20 @@ model HabitCategory {
 
 model TokenUsage {
   id               String   @id @default(cuid())
-  choomId          String   // Which Choom made the request
-  choomName        String   // Choom display name (denormalized for easy querying)
-  chatId           String?  // Chat session (null for delegation/heartbeat)
-  model            String   // LLM model name used
-  provider         String   // Provider: "local", "anthropic", "openai", etc.
-  endpoint         String?  // API endpoint URL
+  choomId          String // Which Choom made the request
+  choomName        String // Choom display name (denormalized for easy querying)
+  chatId           String? // Chat session (null for delegation/heartbeat)
+  model            String // LLM model name used
+  provider         String // Provider: "local", "anthropic", "openai", etc.
+  endpoint         String? // API endpoint URL
   promptTokens     Int      @default(0) // Input tokens
   completionTokens Int      @default(0) // Output tokens
   totalTokens      Int      @default(0) // Total tokens (prompt + completion)
   savedTokens      Int      @default(0) // Est. tokens trimmed by tool-output compression (counterfactual)
   iterations       Int      @default(1) // Agentic loop iterations
   toolCalls        Int      @default(0) // Number of tool calls in request
-  toolNames        String?  // JSON array of tool names used
-  durationMs       Int?     // Wall-clock duration in milliseconds
+  toolNames        String? // JSON array of tool names used
+  durationMs       Int? // Wall-clock duration in milliseconds
   source           String   @default("chat") // "chat", "delegation", "heartbeat", "compaction"
   timestamp        DateTime @default(now())
 
@@ -219,4 +220,47 @@ model TokenUsage {
   @@index([provider])
   @@index([timestamp])
   @@index([source])
+}
+
+/// A thing a Choom can name as an image reference: a character, a person, a
+/// place, a vehicle. `slug` is the handle the LLM passes to generate_image;
+/// `description` is what it reads to decide whether the subject is relevant.
+model ReferenceSubject {
+  id          String                  @id @default(cuid())
+  slug        String                  @unique
+  name        String
+  description String?
+  /// character | person | place | object | style
+  category    String                  @default("object")
+  /// Set when this subject IS a Choom, so its sheet auto-attaches to that
+  /// Choom's self-portraits without the LLM having to ask for it.
+  choomId     String?
+  enabled     Boolean                 @default(true)
+  createdAt   DateTime                @default(now())
+  updatedAt   DateTime                @updatedAt
+  choom       Choom?                  @relation(fields: [choomId], references: [id], onDelete: SetNull)
+  images      ReferenceSubjectImage[]
+
+  @@index([choomId])
+}
+
+/// One view of a subject. All enabled images of a named subject are sent
+/// together, in `order` — for a person that is the character sheet first and
+/// the face closeup second, which measurably sharpens likeness because on a
+/// multi-panel sheet the face is only a small fraction of the pixels.
+model ReferenceSubjectImage {
+  id        String           @id @default(cuid())
+  subjectId String
+  /// sheet | face | extra
+  kind      String           @default("sheet")
+  order     Int              @default(0)
+  file      String
+  label     String?
+  enabled   Boolean          @default(true)
+  width     Int?
+  height    Int?
+  createdAt DateTime         @default(now())
+  subject   ReferenceSubject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+
+  @@index([subjectId])
 }

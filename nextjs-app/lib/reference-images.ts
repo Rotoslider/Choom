@@ -23,13 +23,37 @@ import type { ReferenceImage } from '@/lib/types';
 /** Filenames we generate — also the whitelist for anything read back off disk. */
 const FILE_PATTERN = /^[A-Za-z0-9_-]+\.(png|jpg|jpeg|webp)$/;
 
-export function choomReferenceDir(choomId: string): string {
-  // choomId is a cuid from our own DB, but treat it as untrusted anyway: it
-  // arrives via URL params.
-  if (!/^[A-Za-z0-9_-]+$/.test(choomId)) {
-    throw new Error(`Invalid choom id: ${choomId}`);
+/** One path segment, validated. Ids are our own cuids but arrive via URL params. */
+function safeSegment(segment: string, what: string): string {
+  if (!/^[A-Za-z0-9_-]+$/.test(segment)) {
+    throw new Error(`Invalid ${what}: ${segment}`);
   }
-  return path.join(REFERENCE_IMAGES_ROOT, choomId);
+  return segment;
+}
+
+export function choomReferenceDir(choomId: string): string {
+  return path.join(REFERENCE_IMAGES_ROOT, safeSegment(choomId, 'choom id'));
+}
+
+/**
+ * Shared library images live under a `library/` prefix, one directory per
+ * subject. Kept apart from the per-Choom always-on references so deleting a
+ * Choom can never take a shared subject's images with it.
+ */
+export function librarySubjectDir(subjectId: string): string {
+  return path.join(REFERENCE_IMAGES_ROOT, 'library', safeSegment(subjectId, 'subject id'));
+}
+
+/** Join a validated filename to a directory, refusing anything that escapes it. */
+function resolveInDir(dir: string, file: string): string {
+  if (!FILE_PATTERN.test(file)) {
+    throw new Error(`Invalid reference image filename: ${file}`);
+  }
+  const full = path.join(dir, file);
+  if (path.dirname(full) !== dir) {
+    throw new Error(`Reference image escapes its directory: ${file}`);
+  }
+  return full;
 }
 
 /**
@@ -37,15 +61,11 @@ export function choomReferenceDir(choomId: string): string {
  * that isn't a plain filename inside the Choom's own directory.
  */
 export function resolveReferencePath(choomId: string, file: string): string {
-  if (!FILE_PATTERN.test(file)) {
-    throw new Error(`Invalid reference image filename: ${file}`);
-  }
-  const dir = choomReferenceDir(choomId);
-  const full = path.join(dir, file);
-  if (path.dirname(full) !== dir) {
-    throw new Error(`Reference image escapes its directory: ${file}`);
-  }
-  return full;
+  return resolveInDir(choomReferenceDir(choomId), file);
+}
+
+export function resolveLibraryPath(subjectId: string, file: string): string {
+  return resolveInDir(librarySubjectDir(subjectId), file);
 }
 
 /**
@@ -58,7 +78,33 @@ export async function saveReferenceImage(
   buffer: Buffer,
   label?: string
 ): Promise<ReferenceImage> {
-  const dir = choomReferenceDir(choomId);
+  return storeImage(choomReferenceDir(choomId), buffer, label);
+}
+
+/** Store an image for a shared library subject. */
+export async function saveLibraryImage(
+  subjectId: string,
+  buffer: Buffer,
+  label?: string
+): Promise<ReferenceImage> {
+  return storeImage(librarySubjectDir(subjectId), buffer, label);
+}
+
+export async function readLibraryImage(subjectId: string, file: string): Promise<Buffer> {
+  return readFile(resolveLibraryPath(subjectId, file));
+}
+
+export async function deleteLibraryImage(subjectId: string, file: string): Promise<void> {
+  await unlink(resolveLibraryPath(subjectId, file)).catch((err: NodeJS.ErrnoException) => {
+    if (err.code !== 'ENOENT') throw err;
+  });
+}
+
+async function storeImage(
+  dir: string,
+  buffer: Buffer,
+  label?: string
+): Promise<ReferenceImage> {
   await mkdir(dir, { recursive: true });
 
   const id = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
@@ -76,6 +122,7 @@ export async function saveReferenceImage(
     .toBuffer({ resolveWithObject: true });
 
   await writeFile(path.join(dir, file), resized.data);
+
 
   return {
     id,

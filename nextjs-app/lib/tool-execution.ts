@@ -25,6 +25,7 @@ import type {
 import { computeImageDimensions } from '@/lib/types';
 import { detectCheckpointType } from '@/lib/checkpoint-modules';
 import { loadReferenceImagesBase64 } from '@/lib/reference-images';
+import { resolveReferences } from '@/lib/reference-library';
 import { REFERENCE_IMAGE_DEFAULT_MAX_DIM } from '@/lib/config';
 import { findVisionProfile } from '@/lib/model-profiles';
 import { memoryTools } from '@/lib/tool-definitions';
@@ -322,13 +323,28 @@ export async function executeToolCall(
 
       // Reference images (character sheets etc.) — plain file IO, so read them
       // before taking the GPU lock.
-      const referenceImages = await loadReferenceImagesBase64(
+      // Library subjects the model named (own subject first on a self-portrait),
+      // then the always-on extras pinned in this mode's settings.
+      const requestedReferences = Array.isArray(toolCall.arguments.references)
+        ? (toolCall.arguments.references as unknown[]).filter((r): r is string => typeof r === 'string')
+        : [];
+      const library = await resolveReferences({
+        choomId,
+        requested: requestedReferences,
+        isSelfPortrait,
+      });
+      const pinned = await loadReferenceImagesBase64(
         choomId,
         modeSettings.referenceImages as ReferenceImage[] | undefined
       );
+      const referenceImages = [...library.images, ...pinned];
       const referenceMaxDim = (modeSettings.referenceMaxDim as number) || REFERENCE_IMAGE_DEFAULT_MAX_DIM;
       if (referenceImages.length > 0) {
-        console.log(`   🖼️  Using ${referenceImages.length} reference image(s) @ max ${referenceMaxDim}px`);
+        const named = library.used.map(u => u.slug).join(', ') || 'none';
+        console.log(`   🖼️  ${referenceImages.length} reference image(s) @ max ${referenceMaxDim}px — subjects: ${named}${pinned.length ? `, +${pinned.length} pinned` : ''}`);
+      }
+      if (library.unknown.length > 0) {
+        console.warn(`   ⚠️ Unknown reference(s) ignored: ${library.unknown.join(', ')}`);
       }
 
       // Use image generation lock to serialize checkpoint switch + generation
@@ -432,7 +448,7 @@ export async function executeToolCall(
         name: toolCall.name,
         result: {
           success: true,
-          message: `Image generated successfully with seed ${genResult.seed}${modeSettings.upscale ? ' (upscaled 2x)' : ''}. The image has been displayed to the user. To analyze this image, call analyze_image with image_id="${savedImage.id}".`,
+          message: `Image generated successfully with seed ${genResult.seed}${modeSettings.upscale ? ' (upscaled 2x)' : ''}.${library.used.length > 0 ? ` References used: ${library.used.map(u => u.slug).join(', ')}.` : ''}${library.unknown.length > 0 ? ` No reference exists named: ${library.unknown.join(', ')} — ask the user to add it to the reference library if it should.` : ''} The image has been displayed to the user. To analyze this image, call analyze_image with image_id="${savedImage.id}".`,
           imageId: savedImage.id,
         },
       };

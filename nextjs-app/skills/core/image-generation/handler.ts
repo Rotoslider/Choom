@@ -8,6 +8,7 @@ import { REFERENCE_IMAGE_DEFAULT_MAX_DIM, WORKSPACE_ROOT, WORKSPACE_ALLOWED_EXTE
 import { waitForGpu } from '@/lib/gpu-lock';
 import { detectCheckpointType } from '@/lib/checkpoint-modules';
 import { loadReferenceImagesBase64 } from '@/lib/reference-images';
+import { resolveReferences } from '@/lib/reference-library';
 import type { CheckpointType, ReferenceImage } from '@/lib/types';
 
 // ============================================================================
@@ -313,13 +314,32 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
       // Reference images (character sheets etc.) — read from disk before taking
       // the GPU lock, since this is pure file IO.
       // -------------------------------------------------------------------
-      const referenceImages = await loadReferenceImagesBase64(
+      // Two layers, library first so the subject of the image leads: subjects the
+      // model named (plus this Choom's own on a self-portrait), then the
+      // always-on extras pinned in this mode's settings.
+      const requestedReferences = Array.isArray(toolCall.arguments.references)
+        ? (toolCall.arguments.references as unknown[]).filter((r): r is string => typeof r === 'string')
+        : [];
+      const library = await resolveReferences({
+        choomId,
+        requested: requestedReferences,
+        isSelfPortrait,
+      });
+      const pinned = await loadReferenceImagesBase64(
         choomId,
         modeSettings.referenceImages as ReferenceImage[] | undefined
       );
+      const referenceImages = [...library.images, ...pinned];
       const referenceMaxDim = (modeSettings.referenceMaxDim as number) || REFERENCE_IMAGE_DEFAULT_MAX_DIM;
       if (referenceImages.length > 0) {
-        console.log(`   🖼️  Using ${referenceImages.length} reference image(s) @ max ${referenceMaxDim}px`);
+        const named = library.used.map(u => u.slug).join(', ') || 'none';
+        console.log(`   🖼️  ${referenceImages.length} reference image(s) @ max ${referenceMaxDim}px — subjects: ${named}${pinned.length ? `, +${pinned.length} pinned` : ''}`);
+      }
+      if (library.unknown.length > 0) {
+        console.warn(`   ⚠️ Unknown reference(s) ignored: ${library.unknown.join(', ')}`);
+      }
+      if (library.truncated) {
+        console.warn(`   ⚠️ Reference list trimmed to stay within the per-image cap`);
       }
 
       // -------------------------------------------------------------------
@@ -431,7 +451,7 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
 
       return this.success(toolCall, {
         success: true,
-        message: `Image generated successfully with seed ${genResult.seed}${modeSettings.upscale ? ' (upscaled 2x)' : ''}. The image has been displayed to the user. To analyze this image, call analyze_image with image_id="${savedImage.id}". To save this image to a project folder, call save_generated_image with image_id="${savedImage.id}" and a save_path like "project_name/images/filename.png".`,
+        message: `Image generated successfully with seed ${genResult.seed}${modeSettings.upscale ? ' (upscaled 2x)' : ''}.${library.used.length > 0 ? ` References used: ${library.used.map(u => u.slug).join(', ')}.` : ''}${library.unknown.length > 0 ? ` No reference exists named: ${library.unknown.join(', ')} — ask the user to add it to the reference library if it should.` : ''} The image has been displayed to the user. To analyze this image, call analyze_image with image_id="${savedImage.id}". To save this image to a project folder, call save_generated_image with image_id="${savedImage.id}" and a save_path like "project_name/images/filename.png".`,
         imageId: savedImage.id,
       });
     } catch (imageError) {
