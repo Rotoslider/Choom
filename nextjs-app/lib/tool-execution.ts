@@ -20,8 +20,12 @@ import { ProjectService } from '@/lib/project-service';
 import type {
   VisionSettings, LLMProviderConfig, VisionModelProfile,
   ToolCall, ToolResult, ImageGenSettings, WeatherSettings, SearchSettings, ImageSize, ImageAspect,
+  CheckpointType, ReferenceImage,
 } from '@/lib/types';
 import { computeImageDimensions } from '@/lib/types';
+import { detectCheckpointType } from '@/lib/checkpoint-modules';
+import { loadReferenceImagesBase64 } from '@/lib/reference-images';
+import { REFERENCE_IMAGE_DEFAULT_MAX_DIM } from '@/lib/config';
 import { findVisionProfile } from '@/lib/model-profiles';
 import { memoryTools } from '@/lib/tool-definitions';
 import { getSkillRegistry } from '@/lib/skill-registry';
@@ -49,14 +53,6 @@ function withImageGenLock<T>(fn: () => Promise<T>): Promise<T> {
   let resolve: () => void;
   imageGenLock = new Promise<void>(r => { resolve = r; });
   return prev.then(fn).finally(() => resolve!());
-}
-
-// Auto-detect checkpoint type from name when not explicitly set
-function detectCheckpointType(checkpointName: string): 'pony' | 'flux' | 'other' {
-  const lower = checkpointName.toLowerCase();
-  if (lower.includes('pony') || lower.includes('cyberrealistic')) return 'pony';
-  if (lower.includes('flux')) return 'flux';
-  return 'other';
 }
 
 // ============================================================================
@@ -263,7 +259,7 @@ export async function executeToolCall(
       console.log(`      Settings panel default: checkpoint=${(settings?.imageGen as Record<string, unknown>)?.defaultCheckpoint || '(not set)'}`);
       console.log(`      ✅ RESOLVED checkpoint: ${checkpoint || '(none - using current)'}`);
       // Auto-detect checkpoint type from name if not explicitly set
-      const checkpointType = modeSettings.checkpointType || (checkpoint ? detectCheckpointType(checkpoint) : 'other');
+      const checkpointType: CheckpointType = modeSettings.checkpointType || (checkpoint ? detectCheckpointType(checkpoint) : 'other');
 
       // Build the prompt (before lock, since this is CPU-only)
       let prompt = toolCall.arguments.prompt as string;
@@ -307,7 +303,11 @@ export async function executeToolCall(
       let genCfgScale: number;
       let genDistilledCfg: number;
 
-      if (checkpointType === 'flux') {
+      if (checkpointType === 'klein') {
+        // Flux.2 Klein is guidance-distilled: CFG 1 and no distilled-CFG knob.
+        genCfgScale = 1;
+        genDistilledCfg = 0;
+      } else if (checkpointType === 'flux') {
         genCfgScale = 1;
         genDistilledCfg = modeSettings.distilledCfg || imageGenSettings.defaultDistilledCfg;
       } else if (checkpointType === 'pony') {
@@ -320,12 +320,23 @@ export async function executeToolCall(
 
       console.log(`   🔧 Generation params: type=${checkpointType}, cfgScale=${genCfgScale}, distilledCfg=${genDistilledCfg}`);
 
+      // Reference images (character sheets etc.) — plain file IO, so read them
+      // before taking the GPU lock.
+      const referenceImages = await loadReferenceImagesBase64(
+        choomId,
+        modeSettings.referenceImages as ReferenceImage[] | undefined
+      );
+      const referenceMaxDim = (modeSettings.referenceMaxDim as number) || REFERENCE_IMAGE_DEFAULT_MAX_DIM;
+      if (referenceImages.length > 0) {
+        console.log(`   🖼️  Using ${referenceImages.length} reference image(s) @ max ${referenceMaxDim}px`);
+      }
+
       // Use image generation lock to serialize checkpoint switch + generation
       // This prevents race conditions when multiple requests try to switch checkpoints
       const { genResult, finalImageUrl } = await withImageGenLock(async () => {
         if (checkpoint) {
           console.log(`   ⏳ Switching checkpoint to: ${checkpoint} (type: ${checkpointType})`);
-          await imageGenClient.setCheckpointWithModules(checkpoint, checkpointType);
+          await imageGenClient.setCheckpointWithModules(checkpoint, checkpointType, modeSettings.modules);
           const stripHash = (s: string) => s.replace(/\s*\[[\da-f]+\]$/i, '').trim();
           const maxWait = 120000;
           const pollInterval = 2000;
@@ -359,6 +370,8 @@ export async function executeToolCall(
           distilledCfg: genDistilledCfg,
           sampler: modeSettings.sampler || imageGenSettings.defaultSampler,
           scheduler: modeSettings.scheduler || imageGenSettings.defaultScheduler,
+          referenceImages,
+          referenceMaxDim,
           isSelfPortrait,
         });
 

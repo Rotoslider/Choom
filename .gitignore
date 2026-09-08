@@ -50,6 +50,9 @@ Thumbs.db
 # Presence engine runtime data (UCB1 action stats + reflection log, written by scheduler)
 **/data/presence/
 
+# Per-Choom image-generation reference images (user-uploaded character sheets)
+**/data/reference-images/
+
 # Avatar service model weights (large binaries, fetched locally)
 **/avatar-service/models/
 

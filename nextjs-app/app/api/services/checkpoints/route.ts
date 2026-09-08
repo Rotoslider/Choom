@@ -1,18 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { detectCheckpointType } from '@/lib/checkpoint-modules';
+import type { CheckpointType } from '@/lib/types';
 
 const DEFAULT_IMAGE_GEN_ENDPOINT = process.env.IMAGE_GEN_ENDPOINT || 'http://localhost:7860';
-
-// Checkpoint type detection based on name patterns
-function detectCheckpointType(name: string): 'pony' | 'flux' | 'other' {
-  const nameLower = name.toLowerCase();
-  if (nameLower.includes('pony') || nameLower.includes('pdxl')) {
-    return 'pony';
-  }
-  if (nameLower.includes('flux')) {
-    return 'flux';
-  }
-  return 'other';
-}
 
 // LoRA category detection based on path/folder
 function detectLoraCategory(path: string, name: string): 'pony' | 'flux' | 'other' {
@@ -37,7 +27,14 @@ function detectLoraCategory(path: string, name: string): 'pony' | 'flux' | 'othe
 interface Checkpoint {
   id: string;
   name: string;
-  type: 'pony' | 'flux' | 'other';
+  type: CheckpointType;
+}
+
+// VAE / text-encoder files Forge can load alongside a checkpoint.
+interface ModuleOption {
+  id: string;
+  name: string;
+  kind: 'vae' | 'text_encoder' | 'other';
 }
 
 interface LoRA {
@@ -86,11 +83,18 @@ export async function GET(request: NextRequest) {
       signal: controller.signal,
     });
 
-    const [checkpointsRes, lorasRes, samplersRes, schedulersRes] = await Promise.allSettled([
+    // Fetch additional modules (VAEs + text encoders)
+    const modulesPromise = fetch(`${endpoint}/sdapi/v1/sd-modules`, {
+      method: 'GET',
+      signal: controller.signal,
+    });
+
+    const [checkpointsRes, lorasRes, samplersRes, schedulersRes, modulesRes] = await Promise.allSettled([
       checkpointsPromise,
       lorasPromise,
       samplersPromise,
       schedulersPromise,
+      modulesPromise,
     ]);
 
     clearTimeout(timeout);
@@ -99,6 +103,7 @@ export async function GET(request: NextRequest) {
     const loras: LoRA[] = [];
     const samplers: { id: string; name: string }[] = [];
     const schedulers: Scheduler[] = [];
+    const modules: ModuleOption[] = [];
 
     // Parse checkpoints with type detection
     if (checkpointsRes.status === 'fulfilled' && checkpointsRes.value.ok) {
@@ -164,11 +169,31 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    // Parse additional modules. Forge reports the on-disk path, which is what
+    // tells a VAE apart from a text encoder.
+    if (modulesRes.status === 'fulfilled' && modulesRes.value.ok) {
+      const data = await modulesRes.value.json();
+      if (Array.isArray(data)) {
+        data.forEach((m: { model_name?: string; filename?: string }) => {
+          const name = m.model_name || '';
+          if (!name) return;
+          const pathLower = (m.filename || '').toLowerCase().replace(/\\/g, '/');
+          const kind: ModuleOption['kind'] = pathLower.includes('/vae/')
+            ? 'vae'
+            : pathLower.includes('/text_encoder/') || pathLower.includes('/clip/')
+              ? 'text_encoder'
+              : 'other';
+          modules.push({ id: name, name, kind });
+        });
+      }
+    }
+
     return NextResponse.json({
       checkpoints,
       loras,
       samplers,
       schedulers,
+      modules,
       // Summary counts for debugging
       counts: {
         checkpoints: checkpoints.length,
@@ -178,12 +203,13 @@ export async function GET(request: NextRequest) {
         otherLoras: loras.filter(l => l.category === 'other').length,
         samplers: samplers.length,
         schedulers: schedulers.length,
+        modules: modules.length,
       },
     });
   } catch (error) {
     console.error('Failed to fetch image gen options:', error);
     return NextResponse.json(
-      { error: 'Service unavailable', checkpoints: [], loras: [], samplers: [], schedulers: [], counts: {} },
+      { error: 'Service unavailable', checkpoints: [], loras: [], samplers: [], schedulers: [], modules: [], counts: {} },
       { status: 503 }
     );
   }

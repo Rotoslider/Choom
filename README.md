@@ -266,7 +266,7 @@ Each Choom can override specific settings stored in the database:
 | `llmEndpoint` | LLM API endpoint |
 | `llmProviderId` | External provider from Settings > Providers (triggers Layer 3b — provider endpoint + API key + model profile auto-applied) |
 | `voiceId` | TTS voice |
-| `imageSettings` | Image generation config (JSON): checkpoint, LoRA, size, aspect, upscale, choomDecides |
+| `imageSettings` | Image generation config (JSON): checkpoint, modules, LoRA, reference images, size, aspect, upscale, choomDecides |
 | `companionId` | Memory isolation ID |
 | `systemPrompt` | Character instructions |
 
@@ -372,9 +372,41 @@ Images use a size + aspect combination. All dimensions are computed to be divisi
 
 ### Modes
 
-- **General**: Standard txt2img with configurable checkpoint, sampler, LoRA
-- **Self-Portrait**: Character-specific settings (dedicated checkpoint, LoRA, prompt prefix/suffix)
+- **General**: Standard txt2img with configurable checkpoint, sampler, LoRA, reference images
+- **Self-Portrait**: Character-specific settings (dedicated checkpoint, LoRA, reference images, prompt prefix/suffix)
 - **LLM-Guided** (`choomDecides`): The LLM picks size and aspect ratio based on what it's generating
+
+### Reference Images (character consistency without LoRAs)
+
+Each mode can carry one or more **reference images** — a character sheet, a face crop,
+a style reference. They are uploaded per Choom in the edit panel (Image tab), stored under
+`nextjs-app/data/reference-images/<choomId>/`, and sent to Forge on every generation via its
+built-in `ImageStitch Integrated` always-on script, which VAE-encodes them into reference
+latents.
+
+This is the LoRA-free path to a consistent character: edit-capable models keep the same face
+across images from the reference alone, so a Choom needs no character LoRA and the GPU holds
+one checkpoint for every Choom instead of swapping per-character weights.
+
+Supported by edit-capable models — **Flux.2 Klein**, Flux.1 Kontext, Qwen-Image-Edit, Anima Edit,
+Krea2 Edit. Other checkpoints ignore the references, so leaving them configured is harmless.
+Forge needs Settings → **[Klein] Enable Reference** on (the default) for Klein.
+
+Per reference: a label, an on/off toggle, and a shared **Reference detail** setting (the longest
+side each reference is scaled to before encoding, default 1024px). On a multi-panel character
+sheet the face is only a fraction of those pixels — adding a tight face crop as a second
+reference usually improves likeness more than raising the detail setting.
+
+### Additional Modules (VAE / text encoder)
+
+Each mode can pin the VAE and text-encoder files loaded with its checkpoint
+(Forge's `forge_additional_modules`). Leave them unchecked to auto-resolve defaults for the
+checkpoint's architecture against what the Forge host actually has on disk.
+
+Architecture is detected from the checkpoint name, with **Flux.2 / Klein matched before Flux.1** —
+Klein filenames contain "flux" but need a Flux.2 VAE and a Qwen3 text encoder, not Flux.1's
+`ae` + `clip_l` + `t5xxl`. Klein also generates at CFG 1 with no distilled-CFG and ignores
+negative prompts, which Choom applies automatically.
 
 ### Upscaling
 

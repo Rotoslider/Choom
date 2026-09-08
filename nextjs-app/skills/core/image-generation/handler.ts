@@ -4,8 +4,11 @@ import { WorkspaceService } from '@/lib/workspace-service';
 import prisma from '@/lib/db';
 import { computeImageDimensions } from '@/lib/types';
 import type { ImageSize, ImageAspect, ImageGenSettings, ToolCall, ToolResult } from '@/lib/types';
-import { WORKSPACE_ROOT, WORKSPACE_ALLOWED_EXTENSIONS, WORKSPACE_IMAGE_EXTENSIONS } from '@/lib/config';
+import { REFERENCE_IMAGE_DEFAULT_MAX_DIM, WORKSPACE_ROOT, WORKSPACE_ALLOWED_EXTENSIONS, WORKSPACE_IMAGE_EXTENSIONS } from '@/lib/config';
 import { waitForGpu } from '@/lib/gpu-lock';
+import { detectCheckpointType } from '@/lib/checkpoint-modules';
+import { loadReferenceImagesBase64 } from '@/lib/reference-images';
+import type { CheckpointType, ReferenceImage } from '@/lib/types';
 
 // ============================================================================
 // Module-level image generation lock (serializes checkpoint switching)
@@ -18,13 +21,6 @@ function withImageGenLock<T>(fn: () => Promise<T>): Promise<T> {
   let resolve: () => void;
   imageGenLock = new Promise<void>(r => { resolve = r; });
   return prev.then(fn).finally(() => resolve!());
-}
-
-function detectCheckpointType(checkpointName: string): 'pony' | 'flux' | 'other' {
-  const lower = checkpointName.toLowerCase();
-  if (lower.includes('pony') || lower.includes('cyberrealistic')) return 'pony';
-  if (lower.includes('flux')) return 'flux';
-  return 'other';
 }
 
 // ============================================================================
@@ -219,7 +215,7 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
       console.log(`      ✅ RESOLVED checkpoint: ${checkpoint || '(none - using current)'}`);
 
       // Auto-detect checkpoint type from name if not explicitly set
-      const checkpointType = (modeSettings.checkpointType as string) || (checkpoint ? detectCheckpointType(checkpoint) : 'other');
+      const checkpointType = ((modeSettings.checkpointType as CheckpointType) || (checkpoint ? detectCheckpointType(checkpoint) : 'other')) as CheckpointType;
 
       // -------------------------------------------------------------------
       // Build the prompt (before lock, since this is CPU-only)
@@ -296,7 +292,11 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
       let genCfgScale: number;
       let genDistilledCfg: number;
 
-      if (checkpointType === 'flux') {
+      if (checkpointType === 'klein') {
+        // Flux.2 Klein is guidance-distilled: CFG 1 and no distilled-CFG knob.
+        genCfgScale = 1;
+        genDistilledCfg = 0;
+      } else if (checkpointType === 'flux') {
         genCfgScale = 1;
         genDistilledCfg = (modeSettings.distilledCfg as number) || imageGenSettings.defaultDistilledCfg;
       } else if (checkpointType === 'pony') {
@@ -310,12 +310,29 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
       console.log(`   🔧 Generation params: type=${checkpointType}, cfgScale=${genCfgScale}, distilledCfg=${genDistilledCfg}`);
 
       // -------------------------------------------------------------------
+      // Reference images (character sheets etc.) — read from disk before taking
+      // the GPU lock, since this is pure file IO.
+      // -------------------------------------------------------------------
+      const referenceImages = await loadReferenceImagesBase64(
+        choomId,
+        modeSettings.referenceImages as ReferenceImage[] | undefined
+      );
+      const referenceMaxDim = (modeSettings.referenceMaxDim as number) || REFERENCE_IMAGE_DEFAULT_MAX_DIM;
+      if (referenceImages.length > 0) {
+        console.log(`   🖼️  Using ${referenceImages.length} reference image(s) @ max ${referenceMaxDim}px`);
+      }
+
+      // -------------------------------------------------------------------
       // Use image generation lock to serialize checkpoint switch + generation
       // -------------------------------------------------------------------
       const { genResult, finalImageUrl } = await withImageGenLock(async () => {
         if (checkpoint) {
           console.log(`   ⏳ Switching checkpoint to: ${checkpoint} (type: ${checkpointType})`);
-          await imageGenClient.setCheckpointWithModules(checkpoint, checkpointType as 'pony' | 'flux' | 'other');
+          await imageGenClient.setCheckpointWithModules(
+            checkpoint,
+            checkpointType,
+            modeSettings.modules as string[] | undefined
+          );
           const stripHash = (s: string) => s.replace(/\s*\[[\da-f]+\]$/i, '').trim();
           const maxWait = 120000;
           const pollInterval = 2000;
@@ -342,7 +359,8 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
         const result = await imageGenClient.generate({
           prompt,
           negativePrompt: (toolCall.arguments.negative_prompt as string || (modeSettings.negativePrompt as string) || imageGenSettings.defaultNegativePrompt)
-            + (selfieNegativeKeywords && checkpointType !== 'flux' ? `, ${selfieNegativeKeywords}` : ''),
+            // CFG-1 distilled models (Flux.1 dev, Flux.2 Klein) ignore the negative prompt.
+            + (selfieNegativeKeywords && checkpointType !== 'flux' && checkpointType !== 'klein' ? `, ${selfieNegativeKeywords}` : ''),
           width: genWidth,
           height: genHeight,
           steps: (typeof toolCall.arguments.steps === 'number' ? toolCall.arguments.steps : parseInt(toolCall.arguments.steps as string)) || (modeSettings.steps as number) || imageGenSettings.defaultSteps,
@@ -350,6 +368,8 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
           distilledCfg: genDistilledCfg,
           sampler: (modeSettings.sampler as string) || imageGenSettings.defaultSampler,
           scheduler: (modeSettings.scheduler as string) || imageGenSettings.defaultScheduler,
+          referenceImages,
+          referenceMaxDim,
           isSelfPortrait,
         });
 

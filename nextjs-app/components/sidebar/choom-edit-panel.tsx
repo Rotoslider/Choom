@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import NextImage from 'next/image';
-import { RefreshCw, Info, Save, X, Plus, Trash2, Wand2, Check, AlertCircle, Loader2 } from 'lucide-react';
+import { RefreshCw, Info, Save, X, Plus, Trash2, Wand2, Check, AlertCircle, Loader2, ImagePlus } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -29,7 +29,7 @@ import {
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Separator } from '@/components/ui/separator';
-import type { Choom, ChoomPermissions, LoraConfig, ImageModeSettings, ImageSize, ImageAspect, LLMProviderConfig } from '@/lib/types';
+import type { Choom, ChoomPermissions, LoraConfig, ImageModeSettings, ImageSize, ImageAspect, LLMProviderConfig, CheckpointType, ReferenceImage } from '@/lib/types';
 import { IMAGE_SIZES, IMAGE_ASPECTS, computeImageDimensions } from '@/lib/types';
 import { useLiveModels } from '@/lib/hooks/use-live-models';
 import { Switch } from '@/components/ui/switch';
@@ -59,7 +59,13 @@ interface VoiceOption {
 interface CheckpointOption {
   id: string;
   name: string;
-  type: 'pony' | 'flux' | 'other';
+  type: CheckpointType;
+}
+
+interface ModuleOption {
+  id: string;
+  name: string;
+  kind: 'vae' | 'text_encoder' | 'other';
 }
 
 interface LoraOption {
@@ -100,22 +106,26 @@ const emptyModeSettings: ImageModeSettings = {
 // re-mounting on every parent state change (which causes input focus loss)
 interface ImageModeSettingsEditorProps {
   mode: 'general' | 'selfPortrait';
+  choomId: string;
   settings: ImageModeSettings & { characterPrompt?: string };
   onSettingsChange: (updates: Partial<ImageModeSettings & { characterPrompt?: string }>) => void;
   checkpoints: CheckpointOption[];
   availableLoras: LoraOption[];
   samplers: SamplerOption[];
   schedulers: SchedulerOption[];
+  modules: ModuleOption[];
 }
 
 function ImageModeSettingsEditor({
   mode,
+  choomId,
   settings: modeSettings,
   onSettingsChange,
   checkpoints,
   availableLoras,
   samplers,
   schedulers,
+  modules,
 }: ImageModeSettingsEditorProps) {
   const currentCheckpointType = useMemo(() => {
     const cp = checkpoints.find(c => c.id === modeSettings.checkpoint);
@@ -144,6 +154,65 @@ function ImageModeSettingsEditor({
       loras: (modeSettings.loras || []).filter((_, i) => i !== index)
     });
   }, [modeSettings.loras, onSettingsChange]);
+
+  // --- Reference images -------------------------------------------------
+  // Uploads land on disk immediately (so we can show a thumbnail); the
+  // descriptor is only persisted when the panel is saved.
+  const [refUploading, setRefUploading] = useState(false);
+  const [refError, setRefError] = useState<string | null>(null);
+  const refInputId = `reference-file-input-${mode}`;
+  const references = useMemo(() => modeSettings.referenceImages || [], [modeSettings.referenceImages]);
+
+  const uploadReferences = useCallback(async (files: FileList | File[]) => {
+    const list = Array.from(files).filter(f => f.type.startsWith('image/'));
+    if (list.length === 0) return;
+
+    setRefUploading(true);
+    setRefError(null);
+    const added: ReferenceImage[] = [];
+    try {
+      for (const file of list) {
+        const body = new FormData();
+        body.append('file', file);
+        body.append('label', file.name.replace(/\.[^.]+$/, '').slice(0, 80));
+        const res = await fetch(`/api/chooms/${choomId}/reference-images`, { method: 'POST', body });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `Upload failed (${res.status})`);
+        added.push(data.reference as ReferenceImage);
+      }
+      if (added.length > 0) {
+        onSettingsChange({ referenceImages: [...references, ...added] });
+      }
+    } catch (err) {
+      setRefError(err instanceof Error ? err.message : 'Upload failed');
+    } finally {
+      setRefUploading(false);
+    }
+  }, [choomId, references, onSettingsChange]);
+
+  const updateReference = useCallback((id: string, updates: Partial<ReferenceImage>) => {
+    onSettingsChange({
+      referenceImages: references.map(r => r.id === id ? { ...r, ...updates } : r),
+    });
+  }, [references, onSettingsChange]);
+
+  const removeReference = useCallback(async (ref: ReferenceImage) => {
+    onSettingsChange({ referenceImages: references.filter(r => r.id !== ref.id) });
+    // Best-effort file cleanup; the settings entry is the source of truth.
+    fetch(`/api/chooms/${choomId}/reference-images?file=${encodeURIComponent(ref.file)}`, {
+      method: 'DELETE',
+    }).catch(() => {});
+  }, [choomId, references, onSettingsChange]);
+
+  // --- Additional modules (VAE / text encoder) --------------------------
+  const selectedModules = useMemo(() => modeSettings.modules || [], [modeSettings.modules]);
+
+  const toggleModule = useCallback((name: string) => {
+    const next = selectedModules.includes(name)
+      ? selectedModules.filter(m => m !== name)
+      : [...selectedModules, name];
+    onSettingsChange({ modules: next.length > 0 ? next : undefined });
+  }, [selectedModules, onSettingsChange]);
 
   return (
     <div className="space-y-4">
@@ -196,7 +265,7 @@ function ImageModeSettingsEditor({
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="__default__">Use default checkpoint</SelectItem>
-              {['pony', 'flux', 'other'].map((type) => {
+              {['klein', 'flux', 'pony', 'other'].map((type) => {
                 const typeCheckpoints = checkpoints.filter(cp => cp.type === type);
                 if (typeCheckpoints.length === 0) return null;
                 return (
@@ -212,6 +281,7 @@ function ImageModeSettingsEditor({
                             'px-1 py-0.5 text-[10px] rounded',
                             cp.type === 'pony' ? 'bg-pink-500/10 text-pink-500' :
                             cp.type === 'flux' ? 'bg-blue-500/10 text-blue-500' :
+                            cp.type === 'klein' ? 'bg-emerald-500/10 text-emerald-500' :
                             'bg-muted text-muted-foreground'
                           )}>
                             {cp.type}
@@ -231,6 +301,63 @@ function ImageModeSettingsEditor({
             placeholder="Leave empty to use default"
             className="hover:border-primary/50 transition-colors"
           />
+        )}
+      </div>
+
+      {/* Additional Modules (VAE / text encoder) */}
+      <div className="space-y-2">
+        <div className="flex items-center gap-2">
+          <label className="text-sm font-medium">Additional Modules</label>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" />
+            </TooltipTrigger>
+            <TooltipContent>
+              <p className="max-w-xs">
+                VAE and text-encoder files loaded with the checkpoint. Leave all unchecked to
+                auto-pick defaults for the checkpoint type — Flux.2 Klein needs a Flux.2 VAE and a
+                Qwen3 encoder, which are different from Flux.1&apos;s ae + clip_l + t5xxl.
+              </p>
+            </TooltipContent>
+          </Tooltip>
+          {selectedModules.length > 0 && (
+            <span className="px-2 py-0.5 text-xs rounded-full bg-emerald-500/10 text-emerald-500">
+              {selectedModules.length} selected
+            </span>
+          )}
+        </div>
+        {modules.length > 0 ? (
+          <div className="rounded-md border border-border divide-y divide-border max-h-44 overflow-y-auto">
+            {(['vae', 'text_encoder', 'other'] as const).map((kind) => {
+              const group = modules.filter(m => m.kind === kind);
+              if (group.length === 0) return null;
+              return (
+                <div key={kind} className="p-2 space-y-1">
+                  <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                    {kind === 'text_encoder' ? 'text encoder' : kind}
+                  </p>
+                  {group.map((m) => (
+                    <label
+                      key={m.id}
+                      className="flex items-center gap-2 text-xs cursor-pointer hover:text-primary transition-colors"
+                    >
+                      <input
+                        type="checkbox"
+                        className="accent-primary"
+                        checked={selectedModules.includes(m.id)}
+                        onChange={() => toggleModule(m.id)}
+                      />
+                      <span className="truncate">{m.name}</span>
+                    </label>
+                  ))}
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            No modules reported by Forge — defaults for the checkpoint type will be used.
+          </p>
         )}
       </div>
 
@@ -293,6 +420,165 @@ function ImageModeSettingsEditor({
             </Button>
           </div>
         ))}
+      </div>
+
+      {/* Reference Images */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <label className="text-sm font-medium">Reference Images</label>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" />
+              </TooltipTrigger>
+              <TooltipContent>
+                <p className="max-w-xs">
+                  Character sheets or face crops that edit-capable models (Flux.2 Klein,
+                  Flux.1 Kontext, Qwen-Image-Edit) use to keep the same character across images —
+                  the job a character LoRA used to do, with no LoRA to load.
+                  Ignored by models that don&apos;t support references.
+                </p>
+              </TooltipContent>
+            </Tooltip>
+            {references.length > 0 && (
+              <span className="px-2 py-0.5 text-xs rounded-full bg-emerald-500/10 text-emerald-500">
+                {references.filter(r => r.enabled !== false).length}/{references.length} active
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <input
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              id={refInputId}
+              onChange={(e) => {
+                if (e.target.files) uploadReferences(e.target.files);
+                e.target.value = '';
+              }}
+            />
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={refUploading}
+              onClick={() => document.getElementById(refInputId)?.click()}
+            >
+              {refUploading
+                ? <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                : <ImagePlus className="h-4 w-4 mr-1" />}
+              Add
+            </Button>
+          </div>
+        </div>
+
+        {refError && (
+          <p className="text-xs text-destructive flex items-center gap-1">
+            <AlertCircle className="h-3 w-3" /> {refError}
+          </p>
+        )}
+
+        <div
+          className={cn(
+            'border-2 border-dashed rounded-lg p-3 transition-colors',
+            references.length === 0 && 'text-center cursor-pointer hover:border-primary/50'
+          )}
+          onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add('border-primary'); }}
+          onDragLeave={(e) => { e.currentTarget.classList.remove('border-primary'); }}
+          onDrop={(e) => {
+            e.preventDefault();
+            e.currentTarget.classList.remove('border-primary');
+            if (e.dataTransfer.files) uploadReferences(e.dataTransfer.files);
+          }}
+          onClick={() => { if (references.length === 0) document.getElementById(refInputId)?.click(); }}
+        >
+          {references.length === 0 ? (
+            <p className="text-xs text-muted-foreground">
+              Drop character sheets here or click to browse
+            </p>
+          ) : (
+            <div className="grid grid-cols-3 gap-2">
+              {references.map((ref) => (
+                <div
+                  key={ref.id}
+                  className={cn(
+                    'relative rounded-md overflow-hidden border bg-muted transition-opacity',
+                    ref.enabled === false ? 'opacity-40 border-border' : 'border-primary/40'
+                  )}
+                >
+                  <div className="relative w-full aspect-square">
+                    <NextImage
+                      src={`/api/chooms/${choomId}/reference-images/${ref.file}`}
+                      alt={ref.label || 'Reference image'}
+                      fill
+                      unoptimized
+                      className="object-cover"
+                    />
+                  </div>
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    size="sm"
+                    className="absolute top-1 right-1 h-5 w-5 p-0 rounded-full"
+                    onClick={(e) => { e.stopPropagation(); removeReference(ref); }}
+                  >
+                    <X className="h-3 w-3" />
+                  </Button>
+                  <div className="p-1 space-y-1">
+                    <Input
+                      value={ref.label || ''}
+                      onChange={(e) => updateReference(ref.id, { label: e.target.value })}
+                      placeholder="Label"
+                      className="h-6 text-[11px] px-1"
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                    <label className="flex items-center gap-1 text-[10px] text-muted-foreground cursor-pointer">
+                      <input
+                        type="checkbox"
+                        className="accent-primary"
+                        checked={ref.enabled !== false}
+                        onChange={(e) => { e.stopPropagation(); updateReference(ref.id, { enabled: e.target.checked }); }}
+                      />
+                      Use
+                    </label>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {references.length > 0 && (
+          <div className="flex items-center gap-2">
+            <label className="text-xs text-muted-foreground whitespace-nowrap">Reference detail</label>
+            <Select
+              value={String(modeSettings.referenceMaxDim ?? 1024)}
+              onValueChange={(v) => onSettingsChange({ referenceMaxDim: parseInt(v) })}
+            >
+              <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {[512, 768, 1024, 1280, 1536].map(px => (
+                  <SelectItem key={px} value={String(px)}>
+                    {px}px{px === 1024 ? ' (default)' : ''}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help shrink-0" />
+              </TooltipTrigger>
+              <TooltipContent>
+                <p className="max-w-xs">
+                  Longest side each reference is scaled to before encoding. Higher keeps more facial
+                  detail but costs VRAM and time — on a multi-panel character sheet the face is only
+                  a fraction of those pixels, so a tight face crop often works better than raising this.
+                </p>
+              </TooltipContent>
+            </Tooltip>
+          </div>
+        )}
       </div>
 
       {/* Prompt Prefix/Suffix */}
@@ -573,6 +859,7 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave, onDelete }: 
   const [availableLoras, setAvailableLoras] = useState<LoraOption[]>([]);
   const [samplers, setSamplers] = useState<SamplerOption[]>([]);
   const [schedulers, setSchedulers] = useState<SchedulerOption[]>([]);
+  const [modules, setModules] = useState<ModuleOption[]>([]);
   const [isLoadingOptions, setIsLoadingOptions] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
@@ -717,6 +1004,7 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave, onDelete }: 
         setAvailableLoras(data.loras || []);
         setSamplers(data.samplers || []);
         setSchedulers(data.schedulers || []);
+        setModules(data.modules || []);
       }
     } catch (error) {
       console.error('Failed to fetch options:', error);
@@ -759,6 +1047,9 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave, onDelete }: 
         if (s.aspect) result.aspect = s.aspect;
         if (s.upscale) result.upscale = s.upscale;
         if (s.choomDecides) result.choomDecides = s.choomDecides;
+        if (s.modules && s.modules.length > 0) result.modules = s.modules;
+        if (s.referenceImages && s.referenceImages.length > 0) result.referenceImages = s.referenceImages;
+        if (s.referenceMaxDim !== undefined && s.referenceMaxDim !== null) result.referenceMaxDim = s.referenceMaxDim;
         return Object.keys(result).length > 0 ? result : undefined;
       };
 
@@ -1424,12 +1715,14 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave, onDelete }: 
                     </p>
                     <ImageModeSettingsEditor
                       mode="general"
+                      choomId={choom.id}
                       settings={generalSettings}
                       onSettingsChange={handleGeneralSettingsChange}
                       checkpoints={checkpoints}
                       availableLoras={availableLoras}
                       samplers={samplers}
                       schedulers={schedulers}
+                      modules={modules}
                     />
                   </TabsContent>
 
@@ -1439,12 +1732,14 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave, onDelete }: 
                     </p>
                     <ImageModeSettingsEditor
                       mode="selfPortrait"
+                      choomId={choom.id}
                       settings={selfPortraitSettings}
                       onSettingsChange={handleSelfPortraitSettingsChange}
                       checkpoints={checkpoints}
                       availableLoras={availableLoras}
                       samplers={samplers}
                       schedulers={schedulers}
+                      modules={modules}
                     />
                   </TabsContent>
                 </Tabs>
