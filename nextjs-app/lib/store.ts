@@ -4,6 +4,7 @@ import type {
   AppSettings,
   HomeAssistantSettings,
   LLMProviderConfig,
+  TTSProviderConfig,
   LLMModelProfile,
   VisionModelProfile,
   ServiceHealth,
@@ -221,6 +222,7 @@ interface AppState {
   updateHomeAssistantSettings: (ha: Partial<HomeAssistantSettings>) => void;
   updateOwnerSettings: (owner: Partial<Pick<AppSettings, 'ownerName' | 'ownerLocation'>>) => void;
   updateProvidersSettings: (providers: LLMProviderConfig[]) => void;
+  updateTTSProvidersSettings: (ttsProviders: TTSProviderConfig[]) => void;
   updateModelProfiles: (profiles: LLMModelProfile[]) => void;
   updateVisionProfiles: (profiles: VisionModelProfile[]) => void;
   resetSettings: () => void;
@@ -311,6 +313,10 @@ function buildBridgePayload(settings: AppSettings): Record<string, unknown> {
     providers: settings.providers?.map(p => ({
       id: p.id, name: p.name, type: p.type, endpoint: p.endpoint,
       apiKey: p.apiKey, models: p.models,
+    })),
+    // TTS servers a Choom can be pinned to (Choom.ttsProviderId).
+    ttsProviders: settings.ttsProviders?.map(p => ({
+      id: p.id, name: p.name, endpoint: p.endpoint, notes: p.notes || null,
     })),
     ownerName: settings.ownerName || null,
     ownerLocation: settings.ownerLocation || null,
@@ -576,6 +582,12 @@ export const useAppStore = create<AppState>()(
         }));
         syncSettingsToBridgeConfig(get().settings);
       },
+      updateTTSProvidersSettings: (ttsProviders) => {
+        set((state) => ({
+          settings: { ...state.settings, ttsProviders },
+        }));
+        syncSettingsToBridgeConfig(get().settings);
+      },
       updateModelProfiles: (modelProfiles) => {
         set((state) => ({
           settings: { ...state.settings, modelProfiles },
@@ -617,6 +629,7 @@ export const useAppStore = create<AppState>()(
             search: merge(s.search, server.search) as typeof s.search,
             homeAssistant: merge(s.homeAssistant, server.homeAssistant) as typeof s.homeAssistant,
             providers: merge(s.providers, server.providers) as typeof s.providers,
+            ttsProviders: merge(s.ttsProviders, server.ttsProviders) as typeof s.ttsProviders,
             visionProfiles: merge(s.visionProfiles, server.visionProfiles) as typeof s.visionProfiles,
             modelProfiles: merge(s.modelProfiles, server.modelProfiles) as typeof s.modelProfiles,
             ownerName: (merge(s.ownerName || '', server.ownerName) as string) || s.ownerName,
@@ -697,6 +710,7 @@ export const useAppStore = create<AppState>()(
           }
           // Preserve optional top-level arrays not in defaults (providers, modelProfiles, visionProfiles)
           if (persistedSettings.providers) mergedSettings.providers = persistedSettings.providers;
+          if (persistedSettings.ttsProviders) mergedSettings.ttsProviders = persistedSettings.ttsProviders;
           if (persistedSettings.modelProfiles) mergedSettings.modelProfiles = persistedSettings.modelProfiles;
           if (persistedSettings.visionProfiles) mergedSettings.visionProfiles = persistedSettings.visionProfiles;
         }

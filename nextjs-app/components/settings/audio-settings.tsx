@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { RefreshCw, Info } from 'lucide-react';
+import { RefreshCw, Info, Plus, Trash2 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
@@ -19,6 +19,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { useAppStore } from '@/lib/store';
+import type { TTSProviderConfig } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
 interface VoiceOption {
@@ -27,8 +28,25 @@ interface VoiceOption {
 }
 
 export function AudioSettings() {
-  const { settings, updateTTSSettings, updateSTTSettings } = useAppStore();
+  const { settings, updateTTSSettings, updateSTTSettings, updateTTSProvidersSettings } = useAppStore();
   const tts = settings.tts;
+  const ttsProviders = settings.ttsProviders || [];
+
+  // Named TTS servers a Choom can be pinned to in its Voice/Model tab
+  // (Choom.ttsProviderId). The endpoint above stays the default for any Choom
+  // that isn't pinned.
+  const addTTSProvider = () => {
+    updateTTSProvidersSettings([
+      ...ttsProviders,
+      { id: `tts_${Date.now()}`, name: 'New TTS Server', endpoint: 'http://localhost:8004' },
+    ]);
+  };
+  const updateTTSProvider = (id: string, patch: Partial<TTSProviderConfig>) => {
+    updateTTSProvidersSettings(ttsProviders.map((p) => (p.id === id ? { ...p, ...patch } : p)));
+  };
+  const removeTTSProvider = (id: string) => {
+    updateTTSProvidersSettings(ttsProviders.filter((p) => p.id !== id));
+  };
   const stt = settings.stt;
 
   const [voices, setVoices] = useState<VoiceOption[]>([]);
@@ -84,6 +102,63 @@ export function AudioSettings() {
               placeholder="http://localhost:8004"
               className="hover:border-primary/50 focus:border-primary transition-colors"
             />
+          </div>
+
+          {/* Named TTS servers — pinnable per Choom */}
+          <div className="space-y-2 rounded-md border border-border/60 p-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <label className="text-sm font-medium">TTS Servers</label>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" />
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p className="max-w-xs">
+                      Named servers a Choom can be pinned to in its Voice/Model tab. Useful for
+                      running a different engine on one Choom. Switching voices on a single server
+                      is free, so this is about which engine speaks, not turn-taking speed.
+                    </p>
+                  </TooltipContent>
+                </Tooltip>
+              </div>
+              <Button size="sm" variant="outline" onClick={addTTSProvider}>
+                <Plus className="h-3.5 w-3.5 mr-1" /> Add
+              </Button>
+            </div>
+
+            {ttsProviders.length === 0 ? (
+              <p className="text-xs text-muted-foreground">
+                None yet — every Choom uses the endpoint above.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {ttsProviders.map((p) => (
+                  <div key={p.id} className="flex items-center gap-2">
+                    <Input
+                      value={p.name}
+                      onChange={(e) => updateTTSProvider(p.id, { name: e.target.value })}
+                      placeholder="Name"
+                      className="w-40"
+                    />
+                    <Input
+                      value={p.endpoint}
+                      onChange={(e) => updateTTSProvider(p.id, { endpoint: e.target.value })}
+                      placeholder="http://host:8004"
+                      className="flex-1 font-mono text-xs"
+                    />
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => removeTTSProvider(p.id)}
+                      title="Remove — Chooms pinned to it fall back to the default endpoint"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Default Voice - Dynamic Dropdown */}
