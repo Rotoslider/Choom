@@ -546,6 +546,7 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave, onDelete }: 
   const [avatarUrl, setAvatarUrl] = useState('');
   const [companionId, setCompanionId] = useState('');
   const [voiceId, setVoiceId] = useState('');
+  const [ttsProviderId, setTtsProviderId] = useState('');
   const [llmModel, setLlmModel] = useState('');
   const [llmEndpoint, setLlmEndpoint] = useState('');
   const [llmProviderId, setLlmProviderId] = useState('');
@@ -595,6 +596,7 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave, onDelete }: 
       setAvatarUrl(choom.avatarUrl || '');
       setCompanionId(choom.companionId || '');
       setVoiceId(choom.voiceId || '');
+      setTtsProviderId(choom.ttsProviderId || '');
       setLlmModel(choom.llmModel || '');
       setLlmEndpoint(choom.llmEndpoint || '');
       setLlmProviderId(choom.llmProviderId || '');
@@ -689,7 +691,12 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave, onDelete }: 
   const fetchOptions = async () => {
     setIsLoadingOptions(true);
     try {
-      const ttsEndpointParam = encodeURIComponent(settings.tts.endpoint);
+      // List voices from the server this Choom actually speaks through — a
+      // pinned server may host a different set than the global default.
+      const choomTtsEndpoint =
+        (ttsProviderId && (settings.ttsProviders || []).find((p) => p.id === ttsProviderId)?.endpoint)
+        || settings.tts.endpoint;
+      const ttsEndpointParam = encodeURIComponent(choomTtsEndpoint);
       const imageGenEndpointParam = encodeURIComponent(settings.imageGen.endpoint);
 
       // Note: model fetching is owned by the [llmProviderId, llmEndpoint, open] effect — it
@@ -722,7 +729,10 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave, onDelete }: 
     if (open) {
       fetchOptions();
     }
-  }, [open]);
+    // ttsProviderId is a dependency: voices are per-server, so switching the
+    // TTS server has to re-list them.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, ttsProviderId]);
 
   const handleSave = async () => {
     if (!choom) return;
@@ -777,6 +787,7 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave, onDelete }: 
         avatarUrl: avatarUrl || null,
         companionId: companionId || null,
         voiceId: voiceId || null,
+        ttsProviderId: ttsProviderId || null,
         llmModel: llmModel || null,
         llmEndpoint: llmEndpoint || null,
         llmProviderId: llmProviderId || null,
@@ -1005,6 +1016,35 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave, onDelete }: 
 
               {/* Voice & Model Tab */}
               <TabsContent value="voice-model" className="mt-0 space-y-6">
+                <div className="space-y-4">
+                  <h4 className="text-sm font-medium">TTS Server</h4>
+                  <Select
+                    value={ttsProviderId || '_default'}
+                    onValueChange={(v) => {
+                      // Voices are per-server; clear so the list cannot show the
+                      // previous server's options while the refetch is in flight.
+                      setVoices([]);
+                      setTtsProviderId(v === '_default' ? '' : v);
+                    }}
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="_default">Default ({settings.tts.endpoint})</SelectItem>
+                      {(settings.ttsProviders || []).map((p) => (
+                        <SelectItem key={p.id} value={p.id}>
+                          {p.name}
+                          <span className="ml-2 text-xs text-muted-foreground">{p.endpoint}</span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Pin this Choom to its own TTS server — useful for trying a new engine on
+                    one Choom, or spreading load. Switching voices on one server is free, so
+                    this is about which engine speaks, not turn-taking speed.
+                  </p>
+                </div>
+                <Separator />
                 <div>
                   <h4 className="text-sm font-medium mb-4">Voice</h4>
                   {voices.length > 0 ? (

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
+import { resolveTTSEndpoint } from '@/lib/tts-provider';
 import { stripForTTS } from '@/lib/utils';
 import { createHash } from 'crypto';
 import fs from 'fs';
@@ -81,26 +82,29 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     // Resolve message text + speaking Choom's voice
     let text: string | null = null;
     let voiceId: string | null = null;
+    let ttsProviderId: string | null = null;
     if (kind === 'group') {
       const msg = await prisma.groupMessage.findUnique({
         where: { id },
-        include: { author: { select: { voiceId: true } } },
+        include: { author: { select: { voiceId: true, ttsProviderId: true } } },
       });
       if (!msg || !msg.authorChoomId) {
         return NextResponse.json({ error: 'Group message not found or not Choom-authored' }, { status: 404 });
       }
       text = msg.content;
       voiceId = msg.author?.voiceId || null;
+      ttsProviderId = msg.author?.ttsProviderId || null;
     } else {
       const msg = await prisma.message.findUnique({
         where: { id },
-        include: { chat: { include: { choom: { select: { voiceId: true } } } } },
+        include: { chat: { include: { choom: { select: { voiceId: true, ttsProviderId: true } } } } },
       });
       if (!msg || msg.role !== 'assistant') {
         return NextResponse.json({ error: 'Message not found or not an assistant message' }, { status: 404 });
       }
       text = msg.content;
       voiceId = msg.chat?.choom?.voiceId || null;
+      ttsProviderId = msg.chat?.choom?.ttsProviderId || null;
     }
 
     // Global TTS settings (endpoint/speed/default voice)
@@ -117,6 +121,8 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       }
     } catch { /* fall back to defaults */ }
     const voice = voiceId || defaultVoice;
+    // A Choom pinned to its own TTS server overrides the global endpoint.
+    ttsEndpoint = await resolveTTSEndpoint(ttsProviderId, ttsEndpoint);
 
     const spoken = stripForTTS(text || '');
     if (!spoken.trim()) {

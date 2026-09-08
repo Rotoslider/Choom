@@ -943,7 +943,10 @@ class STTClient:
 
 # Singleton instances
 _choom_client: Optional[ChoomClient] = None
-_tts_client: Optional[TTSClient] = None
+# Keyed by endpoint, not a single instance: a Choom pinned to its own TTS
+# server (Choom.ttsProviderId) speaks through that one, so the bridge may talk
+# to several hosts in a single group room.
+_tts_clients: Dict[str, TTSClient] = {}
 _stt_client: Optional[STTClient] = None
 
 
@@ -954,11 +957,37 @@ def get_choom_client() -> ChoomClient:
     return _choom_client
 
 
-def get_tts_client() -> TTSClient:
-    global _tts_client
-    if _tts_client is None:
-        _tts_client = TTSClient()
-    return _tts_client
+def get_tts_client(endpoint: Optional[str] = None) -> TTSClient:
+    """TTS client for `endpoint`, or the global default when None.
+
+    Cached per endpoint so repeat calls to the same server reuse one client.
+    """
+    key = endpoint or config.TTS_ENDPOINT
+    client = _tts_clients.get(key)
+    if client is None:
+        client = TTSClient(key)
+        _tts_clients[key] = client
+    return client
+
+
+def resolve_tts_endpoint(tts_provider_id: Optional[str], bridge_cfg: Optional[Dict[str, Any]] = None) -> str:
+    """Map a Choom's ttsProviderId to an endpoint via bridge-config ttsProviders.
+
+    Falls back to the global endpoint when unset or unresolvable — a deleted
+    provider must not leave a Choom silent.
+    """
+    if not tts_provider_id:
+        return config.TTS_ENDPOINT
+    try:
+        from task_config import load_config as load_bridge_config
+        cfg = bridge_cfg if bridge_cfg is not None else load_bridge_config()
+        for p in (cfg.get("ttsProviders") or []):
+            if p.get("id") == tts_provider_id and p.get("endpoint"):
+                return p["endpoint"]
+    except Exception as e:  # noqa: BLE001
+        logger.warning("ttsProviders lookup failed for %s: %s", tts_provider_id, e)
+    logger.warning("ttsProviderId %r not found — using %s", tts_provider_id, config.TTS_ENDPOINT)
+    return config.TTS_ENDPOINT
 
 
 def get_stt_client() -> STTClient:

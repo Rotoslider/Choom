@@ -36,7 +36,10 @@ export class RoomTTSQueue {
   private endpoint: string;
   private speed: number;
   private muted = false;
-  private pending: Array<{ text: string; voiceId: string }> = []; // awaiting synth
+  // endpoint travels with each entry: in a room, speakers may be pinned to
+  // different TTS servers (Choom.ttsProviderId), so one queue-wide endpoint
+  // would send every voice to whichever server the room happened to start on.
+  private pending: Array<{ text: string; voiceId: string; endpoint: string }> = []; // awaiting synth
   private ready: Array<{ audio: HTMLAudioElement; voiceId: string }> = []; // synthesized
   private synthing = false;
   private playing = false;
@@ -69,13 +72,14 @@ export class RoomTTSQueue {
 
   // Queue a speaker's message. Split into sentences so the first one starts
   // synthesizing immediately; the synth loop then races ahead of playback.
-  enqueue(text: string, voiceId: string | null) {
+  enqueue(text: string, voiceId: string | null, endpoint?: string | null) {
     if (this.disposed || this.muted) return;
     const clean = stripForTTS(text || '');
     if (!clean.trim()) return;
     const voice = voiceId || 'sophie';
+    const ep = endpoint || this.endpoint;
     for (const sentence of splitSentences(clean)) {
-      this.pending.push({ text: sentence, voiceId: voice });
+      this.pending.push({ text: sentence, voiceId: voice, endpoint: ep });
     }
     void this.pumpSynth();
     void this.pumpPlay();
@@ -95,12 +99,12 @@ export class RoomTTSQueue {
     this.onSpeakingChange?.(false, null);
   }
 
-  private async synthOne(text: string, voiceId: string): Promise<HTMLAudioElement | null> {
+  private async synthOne(text: string, voiceId: string, endpoint: string): Promise<HTMLAudioElement | null> {
     try {
       const res = await fetch('/api/tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, voice: voiceId, endpoint: this.endpoint, speed: this.speed }),
+        body: JSON.stringify({ text, voice: voiceId, endpoint, speed: this.speed }),
       });
       if (!res.ok) return null;
       const data = await res.json();
@@ -121,7 +125,7 @@ export class RoomTTSQueue {
     try {
       while (myEpoch === this.epoch && !this.muted && this.pending.length > 0 && this.ready.length < RoomTTSQueue.MAX_AHEAD) {
         const next = this.pending.shift()!;
-        const audio = await this.synthOne(next.text, next.voiceId);
+        const audio = await this.synthOne(next.text, next.voiceId, next.endpoint);
         if (myEpoch !== this.epoch || this.muted) break; // stopped while synthesizing
         if (audio) {
           this.ready.push({ audio, voiceId: next.voiceId });

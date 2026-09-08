@@ -84,6 +84,10 @@ export async function GET(request: Request) {
       accessToken: process.env.HOME_ASSISTANT_TOKEN || (bHa.accessToken as string) || '',
     },
     providers: Array.isArray(bridge.providers) ? bridge.providers : [],
+    // TTS servers a Choom can be pinned to (Choom.ttsProviderId). Mirrors
+    // `providers` above. When empty the global tts.endpoint is used, which is
+    // the behaviour before per-Choom TTS existed.
+    ttsProviders: Array.isArray(bridge.ttsProviders) ? bridge.ttsProviders : [],
     visionProfiles: Array.isArray(bridge.visionProfiles) ? bridge.visionProfiles : [],
     modelProfiles: Array.isArray(bridge.modelProfiles) ? bridge.modelProfiles : [],
     ownerName: process.env.OWNER_NAME || (bridge.ownerName as string) || '',

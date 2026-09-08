@@ -18,6 +18,7 @@ export interface Choom {
   imageSettings: ImageSettings | null;
   permissions?: ChoomPermissions;
   voiceId: string | null;
+  ttsProviderId: string | null;  // TTS server (references settings.ttsProviders[]); null = global
   llmModel: string | null;
   llmEndpoint: string | null;
   llmProviderId: string | null;
@@ -132,6 +133,13 @@ export interface VisionModelProfile {
   outputFormat?: string;           // convert to before sending
 }
 
+export interface TTSProviderConfig {
+  id: string;
+  name: string;
+  endpoint: string;
+  notes?: string;
+}
+
 export interface AppSettings {
   llm: LLMSettings;
   tts: TTSSettings;
@@ -144,6 +152,8 @@ export interface AppSettings {
   vision: VisionSettings;
   homeAssistant: HomeAssistantSettings;
   providers?: LLMProviderConfig[];
+  // TTS servers a Choom can be pinned to (Choom.ttsProviderId).
+  ttsProviders?: TTSProviderConfig[];
   modelProfiles?: LLMModelProfile[];
   visionProfiles?: VisionModelProfile[];
   // Human owner identity — the user's name and location, used everywhere a Choom

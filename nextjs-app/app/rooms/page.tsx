@@ -74,6 +74,16 @@ function isEchoedTranscriptLine(s: string): boolean {
 export default function RoomsPage() {
   const router = useRouter();
   const { settings, ui } = useAppStore();
+
+  // A Choom pinned to its own TTS server (ttsProviderId) speaks through that
+  // one; everyone else uses the global endpoint. Resolved per speaker because a
+  // room can mix servers.
+  const ttsEndpointFor = useCallback(
+    (ttsProviderId?: string | null) =>
+      (ttsProviderId && (settings.ttsProviders || []).find((p) => p.id === ttsProviderId)?.endpoint)
+      || settings.tts.endpoint,
+    [settings.ttsProviders, settings.tts.endpoint],
+  );
   const [running, setRunning] = useState(false);
   const [speaking, setSpeaking] = useState(false);
   const runningRef = useRef(false);
@@ -105,6 +115,9 @@ export default function RoomsPage() {
   // message — while RoomTTSQueue still serializes so voices never overlap.
   const ttsBufRef = useRef('');
   const ttsVoiceRef = useRef<string | null>(null);
+  // Speakers in a room can be pinned to different TTS servers, so the
+  // endpoint has to follow the speaker rather than the room.
+  const ttsEndpointRef = useRef<string | null>(null);
   // Every sentence already sent to TTS this speaker turn (normalized). The live
   // stream is raw, un-deduped tokens — a looping model repeats a line several
   // times (often non-adjacently), and adjacent-only dedup let it be SPOKEN 3×
@@ -228,8 +241,10 @@ export default function RoomsPage() {
                 names,
               );
               if (clean) {
-                const voice = choomsRef.current.find(c => c.id === m.authorChoomId)?.voiceId || null;
-                ttsRef.current?.enqueue(clean, voice);
+                const speaker = choomsRef.current.find(c => c.id === m.authorChoomId);
+                const voice = speaker?.voiceId || null;
+                const ttsEndpoint = ttsEndpointFor(speaker?.ttsProviderId);
+                ttsRef.current?.enqueue(clean, voice, ttsEndpoint);
               }
             }
             lastTimestampRef.current = newMsgs[newMsgs.length - 1].createdAt;
@@ -260,6 +275,7 @@ export default function RoomsPage() {
     ttsRef.current?.stop();
     ttsBufRef.current = '';
     ttsVoiceRef.current = null;
+    ttsEndpointRef.current = null;
 
     abortRef.current = new AbortController();
     try {
@@ -295,7 +311,11 @@ export default function RoomsPage() {
               ttsSpokenRef.current.clear();
               streamRawRef.current = '';
               firstChunkRef.current = true;
-              ttsVoiceRef.current = choomsRef.current.find(c => c.id === data.speakerChoomId)?.voiceId || null;
+              {
+                const sp = choomsRef.current.find(c => c.id === data.speakerChoomId);
+                ttsVoiceRef.current = sp?.voiceId || null;
+                ttsEndpointRef.current = ttsEndpointFor(sp?.ttsProviderId);
+              }
               break;
             case 'speaker_content': {
               const tok = (data.content as string) || '';
@@ -316,7 +336,7 @@ export default function RoomsPage() {
                 const key = sentence.toLowerCase().replace(/\s+/g, ' ').trim();
                 if (sentence && !isEchoedTranscriptLine(sentence) && !ttsSpokenRef.current.has(key)) {
                   ttsSpokenRef.current.add(key);
-                  ttsRef.current?.enqueue(sentence, ttsVoiceRef.current);
+                  ttsRef.current?.enqueue(sentence, ttsVoiceRef.current, ttsEndpointRef.current);
                 }
                 ttsBufRef.current = '';
               }
@@ -333,7 +353,7 @@ export default function RoomsPage() {
               const tailKey = tail.toLowerCase().replace(/\s+/g, ' ').trim();
               if (tail && !isEchoedTranscriptLine(tail) && !ttsSpokenRef.current.has(tailKey)) {
                 ttsSpokenRef.current.add(tailKey);
-                ttsRef.current?.enqueue(tail, ttsVoiceRef.current);
+                ttsRef.current?.enqueue(tail, ttsVoiceRef.current, ttsEndpointRef.current);
               }
               ttsBufRef.current = '';
               const doneMsg: RoomMessage = {
