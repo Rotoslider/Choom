@@ -390,6 +390,29 @@ Two failure modes worth knowing:
   clean venv cannot even compute requirements. Install `requirements.txt` first,
   then `pip install --no-build-isolation -e`. setup.sh does this.
 
+### Settings look blank after moving a service to another host
+
+Not lost — unresolvable. Dropdowns are populated from whatever the service
+currently reports, so a stored value that no longer appears in that list renders
+as empty. This has bitten three times during the migration:
+
+- **LLM model** — the Nuc's config named a model this LM Studio does not serve.
+- **Image checkpoints** — Forge builds a checkpoint's `title` from its path
+  relative to the models directory, so `Flux/flux_dev.safetensors [2eda627c8a]`
+  and `flux_dev.safetensors [2eda627c8a]` are the same file in two layouts.
+- **Voices** — each TTS server hosts its own set.
+
+Check whether the saved value still exists in the list it is chosen from before
+concluding a restore failed. For checkpoints the trailing `[hash]` survives any
+folder reshuffle, so remapping is mechanical:
+
+```bash
+launchctl bootout gui/$(id -u)/com.choom.dev      # dev.db must not be open
+node scripts/remap-checkpoints.mjs --endpoint http://<new-forge-host>:7860
+node scripts/remap-checkpoints.mjs --endpoint http://<new-forge-host>:7860 --write
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.choom.dev.plist
+```
+
 ### Anything referencing `/home/nuc1`
 
 Fixed — `paths.py` now exports `APP_ROOT`, derived from its own location, and
