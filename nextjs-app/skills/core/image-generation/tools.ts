@@ -10,7 +10,7 @@ export const tools: ToolDefinition[] = [
       properties: {
         prompt: {
           type: 'string',
-          description: 'Detailed description of the image to generate. For self-portraits, describe the scene, pose, expression, and setting.',
+          description: 'Detailed description of the image to generate. Describe the scene, pose, expression, setting, clothing and mood. Do NOT describe the face, hair, eye colour or build of anyone listed in `references`, or of yourself in a self-portrait — the reference image supplies their likeness, and a conflicting description overrides it and produces the wrong person.',
         },
         self_portrait: {
           type: 'boolean',

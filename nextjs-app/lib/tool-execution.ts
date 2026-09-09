@@ -340,12 +340,20 @@ export async function executeToolCall(
       const referenceImages = [...library.images, ...pinned];
       const referenceMaxDim = (modeSettings.referenceMaxDim as number) || REFERENCE_IMAGE_DEFAULT_MAX_DIM;
       if (referenceImages.length > 0) {
-        const named = library.used.map(u => u.slug).join(', ') || 'none';
+        const named = library.used
+          .map(u => (requestedReferences.some(r => r.toLowerCase() === u.slug.toLowerCase())
+            ? u.slug : `${u.slug}(auto)`))
+          .join(', ') || 'none';
         console.log(`   🖼️  ${referenceImages.length} reference image(s) @ max ${referenceMaxDim}px — subjects: ${named}${pinned.length ? `, +${pinned.length} pinned` : ''}`);
       }
       if (library.unknown.length > 0) {
         console.warn(`   ⚠️ Unknown reference(s) ignored: ${library.unknown.join(', ')}`);
       }
+      // A Choom's own subject attaches to self-portraits whether or not it was
+      // asked for, so "References used: genesis" alone cannot tell a Choom that
+      // the subject it actually asked for was dropped — which is exactly how two
+      // failed generations read as successes. Label the difference.
+      const requestedSlugs = new Set(requestedReferences.map((r) => r.toLowerCase()));
 
       // Use image generation lock to serialize checkpoint switch + generation
       // This prevents race conditions when multiple requests try to switch checkpoints
@@ -448,7 +456,7 @@ export async function executeToolCall(
         name: toolCall.name,
         result: {
           success: true,
-          message: `Image generated successfully with seed ${genResult.seed}${modeSettings.upscale ? ' (upscaled 2x)' : ''}.${library.used.length > 0 ? ` References used: ${library.used.map(u => u.slug).join(', ')}.` : ''}${library.unknown.length > 0 ? ` No reference exists named: ${library.unknown.join(', ')} — ask the user to add it to the reference library if it should.` : ''} The image has been displayed to the user. To analyze this image, call analyze_image with image_id="${savedImage.id}".`,
+          message: `Image generated successfully with seed ${genResult.seed}${modeSettings.upscale ? ' (upscaled 2x)' : ''}.${library.used.length > 0 ? ` References used: ${library.used.map(u => requestedSlugs.has(u.slug.toLowerCase()) ? u.slug : `${u.slug} (auto-attached)`).join(', ')}.` : ''}${library.unknown.length > 0 ? ` No reference exists named: ${library.unknown.join(', ')} — ask the user to add it to the reference library if it should.` : ''} The image has been displayed to the user. To analyze this image, call analyze_image with image_id="${savedImage.id}".`,
           imageId: savedImage.id,
         },
       };

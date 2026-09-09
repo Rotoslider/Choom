@@ -146,6 +146,7 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
       let selfieNegativeKeywords = '';
       if (isSelfPortrait) {
         try {
+          const self = await prisma.choom.findUnique({ where: { id: choomId }, select: { name: true } });
           const recentImages = await prisma.generatedImage.findMany({
             where: { choomId },
             orderBy: { createdAt: 'desc' },
@@ -182,14 +183,40 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
             }
 
             // Keywords appearing in 2+ recent prompts are "overused"
-            const repeatedKeywords = [...wordCounts.entries()]
+            let repeatedKeywords = [...wordCounts.entries()]
               .filter(([, count]) => count >= 2)
               .sort((a, b) => b[1] - a[1])
               .slice(0, 20)
               .map(([word]) => word);
 
+            // A Choom looks the same in every picture, so her identity words are
+            // repeated on purpose. Banning them as "overused" told the model to
+            // avoid its own name and hair colour — which is how a blonde Choom in
+            // glasses came back brunette once references were in play. Vary the
+            // scene, never the person.
+            // Read straight from the parsed settings: modeSettings is not bound
+            // until later, and this block only runs for self-portraits.
+            const selfCharacterPrompt =
+              ((choomImageSettings?.selfPortrait as Record<string, unknown> | undefined)
+                ?.characterPrompt as string) || '';
+            const identityTerms = new Set<string>(
+              selfCharacterPrompt
+                .toLowerCase()
+                .split(/[^a-z0-9]+/)
+                .filter(Boolean)
+            );
+            if (self?.name) identityTerms.add(self.name.toLowerCase());
+            for (const w of ['hair', 'eyes', 'glasses', 'skin', 'freckles', 'beard', 'tattoo', 'blonde', 'brunette', 'redhead']) {
+              identityTerms.add(w);
+            }
+            const dropped = repeatedKeywords.filter((w) => identityTerms.has(w));
+            repeatedKeywords = repeatedKeywords.filter((w) => !identityTerms.has(w));
+            if (dropped.length > 0) {
+              console.log(`   🎲 Kept identity terms out of the diversity ban: ${dropped.join(', ')}`);
+            }
+
             if (repeatedKeywords.length > 0) {
-              selfieDiversityNote = `. DIVERSITY: Make this selfie visually DISTINCT from recent ones. Overused concepts to AVOID: ${repeatedKeywords.join(', ')}. Try a completely different setting, outfit, lighting, mood, or activity`;
+              selfieDiversityNote = `. DIVERSITY: Make this selfie visually DISTINCT from recent ones. Vary the setting, outfit, lighting, mood or activity — keep the person's appearance exactly as described. Overused concepts to AVOID: ${repeatedKeywords.join(', ')}`;
               selfieNegativeKeywords = repeatedKeywords.slice(0, 10).join(', ');
               console.log(`   🎲 Selfie diversity: excluding ${repeatedKeywords.length} overused keywords: ${repeatedKeywords.slice(0, 8).join(', ')}...`);
             }
@@ -243,8 +270,35 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
         prompt = prompt + selfieDiversityNote;
       }
 
-      if (isSelfPortrait && modeSettings.characterPrompt) {
-        prompt = `${modeSettings.characterPrompt}, ${prompt}`;
+      // Applied on self-portraits, and on any image where the Choom named her own
+      // subject — "Genesis and Donny on the porch" is a general-mode image that
+      // still needs Genesis to look like Genesis. Without this the Choom's own
+      // wording is the only description of her in the prompt, and an invented
+      // "long dark wavy hair" overrides a blonde reference.
+      // library is resolved later, so ask the DB directly: did the model name this
+      // Choom's own subject? Matching is loose because the model's spelling is.
+      const requestedNames = Array.isArray(toolCall.arguments.references)
+        ? (toolCall.arguments.references as unknown[]).filter((r): r is string => typeof r === 'string')
+        : [];
+      let ownSubjectReferenced = false;
+      if (requestedNames.length > 0) {
+        const own = await prisma.referenceSubject.findFirst({
+          where: { choomId, enabled: true },
+          select: { slug: true, name: true },
+        });
+        if (own) {
+          const norm = (v: string) => v.toLowerCase().replace(/[^a-z0-9]+/g, '');
+          const wanted = new Set(requestedNames.map(norm));
+          ownSubjectReferenced = wanted.has(norm(own.slug)) || wanted.has(norm(own.name));
+        }
+      }
+      const characterPrompt =
+        (modeSettings.characterPrompt as string) ||
+        ((choomImageSettings?.selfPortrait as Record<string, unknown> | undefined)
+          ?.characterPrompt as string) ||
+        '';
+      if ((isSelfPortrait || ownSubjectReferenced) && characterPrompt) {
+        prompt = `${characterPrompt}, ${prompt}`;
       }
       if (modeSettings.promptPrefix) {
         prompt = `${modeSettings.promptPrefix}, ${prompt}`;
