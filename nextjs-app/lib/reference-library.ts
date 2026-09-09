@@ -200,6 +200,34 @@ export async function resolveReferences(options: {
 }
 
 /**
+ * The canonical look of a Choom, from the characterPrompt on her self-portrait
+ * settings. This is the description the reference images actually depict, so it
+ * belongs in the catalogue — otherwise a Choom describing a *different* Choom
+ * has nothing to go on and makes one up.
+ */
+function choomAppearance(imageSettings: string | null): string {
+  if (!imageSettings) return '';
+  try {
+    const parsed = JSON.parse(imageSettings) as Record<string, { characterPrompt?: string }>;
+    const raw = parsed?.selfPortrait?.characterPrompt?.trim();
+    if (!raw) return '';
+    // characterPrompts are written as raw SD prompts, so they carry parenthetical
+    // weighting like "(cinematic)". Strip those and tidy the punctuation, but
+    // leave the words alone — aggressive keyword filtering turned
+    // "(cinematic) photo of girl, Long blonde wavy hair" into "of girl" and threw
+    // away the very detail the line exists to convey.
+    return raw
+      .replace(/\([^)]*\)/g, ' ')
+      .replace(/\s*,\s*(?=,|$)/g, '')
+      .replace(/\s+/g, ' ')
+      .replace(/^[\s,.-]+|[\s,.-]+$/g, '')
+      .slice(0, 200);
+  } catch {
+    return '';
+  }
+}
+
+/**
  * The catalogue the model sees, as one line per subject. This is injected into
  * the `generate_image` schema per request, so a Choom always sees the current
  * library without a round trip to look it up.
@@ -212,6 +240,12 @@ export async function buildReferenceCatalog(): Promise<string[]> {
       name: true,
       description: true,
       category: true,
+      // A subject that IS a Choom already has a canonical appearance in her
+      // image settings. Fold it into the catalogue line so the model does not
+      // have to guess: told only "Eve character sheet and close up portrait" it
+      // invented "long dark brown hair" for a blonde Choom, and the invented
+      // description then beat the reference image.
+      choom: { select: { imageSettings: true } },
       _count: { select: { images: true } },
     },
     orderBy: [{ category: 'asc' }, { slug: 'asc' }],
@@ -221,6 +255,8 @@ export async function buildReferenceCatalog(): Promise<string[]> {
     .filter((s) => s._count.images > 0)
     .map((s) => {
       const description = s.description?.trim();
-      return `"${s.slug}" (${s.category}) — ${description || s.name}`;
+      const appearance = choomAppearance(s.choom?.imageSettings ?? null);
+      const detail = [description || s.name, appearance].filter(Boolean).join('. ');
+      return `"${s.slug}" (${s.category}) — ${detail}`;
     });
 }
