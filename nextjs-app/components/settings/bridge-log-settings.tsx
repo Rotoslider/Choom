@@ -183,7 +183,7 @@ function AgentConsole() {
   };
 
   const allText = useMemo(
-    () => (resp?.lines || []).map((l) => `${l.ts.slice(11, 19)} ${l.text}`).join('\n'),
+    () => (resp?.lines || []).map((l) => `${localClock(l.ts)} ${l.text}`).join('\n'),
     [resp],
   );
 
@@ -273,7 +273,7 @@ function AgentConsole() {
               // instead of folding into the unreadable mush the user reported.
               resp.lines.map((l, i) => (
                 <div key={i} className={`whitespace-pre ${CAT_CLASS[l.cat] || 'text-foreground'}`}>
-                  <span className="text-muted-foreground/60 select-none">{l.ts.slice(11, 19)} </span>
+                  <span className="text-muted-foreground/60 select-none">{localClock(l.ts)} </span>
                   {l.text}
                 </div>
               ))
@@ -668,6 +668,16 @@ function YouTubeReports() {
 // ====================================================================
 // MAIN: Logs hub with sub-tabs
 // ====================================================================
+// Clock portion in the VIEWER's timezone. Slicing the string would print
+// whatever zone the writer used — the log has carried both UTC (older lines)
+// and local-with-offset, and a mismatched clock reads as a stalled log.
+function localClock(ts: string): string {
+  const d = new Date(ts);
+  return Number.isNaN(d.getTime())
+    ? ts.slice(11, 19)
+    : d.toLocaleTimeString(undefined, { hour12: false });
+}
+
 export function BridgeLogSettings() {
   const [source, setSource] = useState<LogSource>('agent');
 
