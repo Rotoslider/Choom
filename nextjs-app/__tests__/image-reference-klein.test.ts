@@ -18,8 +18,12 @@ import { ImageGenClient } from '../lib/image-gen-client';
 import type { ImageGenSettings } from '../lib/types';
 
 // A real 4x4 PNG, so sharp has something valid to decode.
+// 16x16, not 4x4: libvips 8.18.x fails a 4x4 PNG through
+// rotate().resize().png() with "vipspng: libpng read error", while the same
+// chain succeeds from 16x16 up. That is a fixture artefact, not a bug in
+// storeImage — real uploads are never that small.
 const TINY_PNG = Buffer.from(
-  'iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAFUlEQVR4nGP8//8/AzGAiYFIMKoQPwAAtDkDA1x9AoIAAAAASUVORK5CYII=',
+  'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAGElEQVQokWOoiLIhCTGMaogaDaWK4Zo0AMdDDhBBWdBNAAAAAElFTkSuQmCC',
   'base64'
 );
 
