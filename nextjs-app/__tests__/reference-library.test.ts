@@ -122,6 +122,30 @@ describe('reference resolution', () => {
     expect(result.unknown).toEqual([]);
   });
 
+  it('resolves the decorated slugs models actually send', async () => {
+    // Observed live: asked for "genesis" and "donny", the model sent
+    // "genesis_reference" and "donny_reference", and both were dropped.
+    // (fixtures call the owner subject "owner".)
+    const res = await resolveReferences({
+      choomId: 'choom-genesis',
+      requested: ['genesis_reference', 'owner_reference', 'eve sheet'],
+    });
+    expect(res.used.map((u) => u.slug).sort()).toEqual(['eve', 'genesis', 'owner']);
+    expect(res.unknown).toEqual([]);
+  });
+
+  it('does NOT collapse an era slug onto the base subject', async () => {
+    // "genesis-2026" must stay unknown when no such subject exists. Silently
+    // resolving it to "genesis" would hand back the wrong decade's face, which
+    // is worse than reporting the miss.
+    const res = await resolveReferences({
+      choomId: 'choom-genesis',
+      requested: ['genesis-2031'],
+    });
+    expect(res.used.map((u) => u.slug)).not.toContain('genesis');
+    expect(res.unknown).toEqual(['genesis-2031']);
+  });
+
   it('reports names that match nothing instead of failing', async () => {
     const result = await resolveReferences({
       choomId: 'choom-genesis',

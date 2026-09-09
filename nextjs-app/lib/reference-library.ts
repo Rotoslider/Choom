@@ -65,6 +65,22 @@ function matchSubject(request: string, subjects: SubjectRow[]): SubjectRow | und
   return (
     subjects.find((s) => normalize(s.slug) === wanted) ||
     subjects.find((s) => normalize(s.name) === wanted) ||
+    // Models decorate slugs: asked for "genesis", they send "genesis_reference"
+    // or "eve_sheet". Strip a trailing word from a KNOWN vocabulary only, then
+    // retry the exact match. Deliberately not a general suffix rule — an era
+    // slug like "genesis-2026" must stay unknown when it does not exist rather
+    // than quietly resolving to "genesis" and returning the wrong decade.
+    (() => {
+      const stripped = wanted.replace(
+        /-(reference|references|ref|refs|sheet|sheets|image|images|img|photo|photos|portrait|pic|pics)$/,
+        '',
+      );
+      if (stripped === wanted || !stripped) return undefined;
+      return (
+        subjects.find((s) => normalize(s.slug) === stripped) ||
+        subjects.find((s) => normalize(s.name) === stripped)
+      );
+    })() ||
     // Last resort: a unique prefix match, so "genesis" finds "genesis-choom".
     (() => {
       const hits = subjects.filter(

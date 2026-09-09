@@ -46,7 +46,9 @@ export const tools: ToolDefinition[] = [
           type: 'array',
           items: { type: 'string' },
           description:
-            'Names of reference images to condition the image on, for keeping people, places and '
+            'Names of reference subjects to condition the image on, for keeping people, places and '
+            + 'objects looking the same across images. Use each name EXACTLY as quoted under '
+            + 'Available references below — do not append _reference, _sheet or similar. '
             + 'objects looking the same across images. Name every subject that should appear: '
             + 'e.g. ["genesis", "owner", "cabin-exterior"] for two people outside a specific building. '
             + 'Your own reference is added automatically for self-portraits, so only name the OTHER '
