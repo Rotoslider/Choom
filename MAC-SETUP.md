@@ -390,6 +390,52 @@ Two failure modes worth knowing:
   clean venv cannot even compute requirements. Install `requirements.txt` first,
   then `pip install --no-build-isolation -e`. setup.sh does this.
 
+### Signal messages arrive as text with the image missing
+
+`brew install signal-cli` gives you a **GraalVM native image built without AWT**.
+signal-cli uses `javax.imageio.ImageIO` to build attachment thumbnails, so every
+attachment fails:
+
+```
+signal-cli RPC error: Could not initialize class javax.imageio.ImageIO (NoClassDefFoundError)
+```
+
+The bridge logs that and still delivers the text, so a Choom's message turns up
+looking merely image-less rather than broken — and the Choom believes it sent
+the picture.
+
+Use the official JVM distribution instead. Both builds read the same account
+data in `~/.local/share/signal-cli`, so this is only a path change — no
+re-registering, no re-linking:
+
+```bash
+mkdir -p ~/.local/opt && cd ~/.local/opt
+curl -sLO https://github.com/AsamK/signal-cli/releases/download/v0.14.7/signal-cli-0.14.7.tar.gz
+tar xzf signal-cli-0.14.7.tar.gz && rm signal-cli-0.14.7.tar.gz
+```
+
+Then set `SIGNAL_CLI_PATH` in `services/signal-bridge/.env` and re-run
+`launchd/install-launchd.sh` so the daemon plist picks it up. `config.py` also
+prefers an unpacked `~/.local/opt/signal-cli-*` build automatically. It needs a
+JRE — `brew install openjdk`.
+
+Verify through the daemon socket, which is the path the bridge actually uses,
+rather than the CLI:
+
+```bash
+python3 - <<'EOF'
+import socket, json
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.connect("/tmp/signal-cli-socket")
+s.sendall((json.dumps({"jsonrpc":"2.0","id":"t","method":"send","params":{
+    "recipient":["+1YOURNUMBER"],"message":"attachment test",
+    "attachments":["/path/to/some.png"]}})+"\n").encode())
+print(s.recv(65536).decode())
+EOF
+```
+
+A timestamp back means it worked; an `error` naming ImageIO means the native
+build is still in use.
+
 ### Settings look blank after moving a service to another host
 
 Not lost — unresolvable. Dropdowns are populated from whatever the service

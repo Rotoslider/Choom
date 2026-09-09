@@ -1,6 +1,7 @@
 """
 Signal Bridge Configuration
 """
+import glob
 import os
 import shutil
 import sys
@@ -13,11 +14,29 @@ _IS_MACOS = sys.platform == "darwin"
 
 
 def _default_signal_cli_path() -> str:
-    """Locate signal-cli without assuming the Linux tarball layout.
+    """Locate signal-cli, preferring a JVM build over a native-image one.
 
-    On Linux setup.sh symlinks /usr/local/bin/signal-cli; Homebrew on Apple
-    Silicon puts it in /opt/homebrew/bin. Fall back to whatever is on $PATH.
+    Homebrew ships signal-cli as a GraalVM native image built without AWT, so
+    every attachment fails with
+
+        Could not initialize class javax.imageio.ImageIO (NoClassDefFoundError)
+
+    and the Choom's message arrives as text with the picture silently missing.
+    signal-cli needs ImageIO to build attachment thumbnails. The official JVM
+    distribution has it, and both builds read the same account data in
+    ~/.local/share/signal-cli, so switching is just a path change.
+
+    Prefer an unpacked JVM distribution, then $PATH, then the usual prefixes.
+    Override with $SIGNAL_CLI_PATH.
     """
+    jvm_builds = sorted(
+        glob.glob(os.path.expanduser("~/.local/opt/signal-cli-*/bin/signal-cli"))
+        + glob.glob("/opt/signal-cli-*/bin/signal-cli"),
+        reverse=True,
+    )
+    for candidate in jvm_builds:
+        if os.access(candidate, os.X_OK):
+            return candidate
     found = shutil.which("signal-cli")
     if found:
         return found
