@@ -1,0 +1,210 @@
+/**
+ * The shared reference-image library.
+ *
+ * A *subject* is a thing a Choom can name in a `generate_image` call — a
+ * character, a person, a place, a vehicle. Each subject holds one or more
+ * images (a character sheet, a face closeup, another angle). Naming a subject
+ * sends all of its enabled images, in order, so "genesis" contributes the sheet
+ * and then the face closeup: on a multi-panel sheet the face is only a small
+ * fraction of the pixels, and the closeup is what sharpens the likeness.
+ *
+ * The library is global — every Choom can name every subject — because the
+ * whole point is scenes like "Genesis with her sister Eve camping", where one
+ * Choom needs another Choom's sheet.
+ */
+import prisma from '@/lib/db';
+import { readLibraryImage } from '@/lib/reference-images';
+
+/** Hard ceiling on references per image: each one costs a VAE encode and VRAM. */
+export const MAX_REFERENCES_PER_IMAGE = 8;
+
+export interface ResolvedSubject {
+  slug: string;
+  name: string;
+  category: string;
+  images: { id: string; file: string; kind: string }[];
+}
+
+export interface ResolvedReferences {
+  /** Base64 payloads in the order Forge should receive them. */
+  images: string[];
+  /** Subjects that made it in, in order — for logging and the tool result. */
+  used: ResolvedSubject[];
+  /** Names the model asked for that matched nothing. */
+  unknown: string[];
+  /** True when the cap trimmed the request. */
+  truncated: boolean;
+}
+
+type SubjectRow = {
+  id: string;
+  slug: string;
+  name: string;
+  category: string;
+  choomId: string | null;
+  images: { id: string; file: string; kind: string; enabled: boolean; order: number }[];
+};
+
+function normalize(value: string): string {
+  return value
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+/**
+ * Match what the model asked for against a subject. Models are inconsistent
+ * about slugs — "Cabin (exterior)", "cabin_exterior" and
+ * "the cabin exterior" should all land on `cabin-exterior` — so
+ * match the normalised slug first, then the normalised display name.
+ */
+function matchSubject(request: string, subjects: SubjectRow[]): SubjectRow | undefined {
+  const wanted = normalize(request);
+  if (!wanted) return undefined;
+  return (
+    subjects.find((s) => normalize(s.slug) === wanted) ||
+    subjects.find((s) => normalize(s.name) === wanted) ||
+    // Last resort: a unique prefix match, so "genesis" finds "genesis-choom".
+    (() => {
+      const hits = subjects.filter(
+        (s) => normalize(s.slug).startsWith(wanted) || normalize(s.name).startsWith(wanted)
+      );
+      return hits.length === 1 ? hits[0] : undefined;
+    })()
+  );
+}
+
+async function loadSubjects(): Promise<SubjectRow[]> {
+  return prisma.referenceSubject.findMany({
+    where: { enabled: true },
+    select: {
+      id: true,
+      slug: true,
+      name: true,
+      category: true,
+      choomId: true,
+      images: {
+        where: { enabled: true },
+        orderBy: [{ order: 'asc' }, { createdAt: 'asc' }],
+        select: { id: true, file: true, kind: true, enabled: true, order: true },
+      },
+    },
+    orderBy: { slug: 'asc' },
+  });
+}
+
+/**
+ * Resolve the references for one generation.
+ *
+ * A Choom's own subject is prepended automatically on self-portraits, so
+ * selfies keep working from a bare prompt with no reference argument, and the
+ * subject of the image stays first — reference order is meaningful to Flux.2.
+ */
+export async function resolveReferences(options: {
+  choomId: string;
+  requested?: string[];
+  isSelfPortrait?: boolean;
+  maxReferences?: number;
+}): Promise<ResolvedReferences> {
+  const { choomId, requested = [], isSelfPortrait = false } = options;
+  const cap = options.maxReferences ?? MAX_REFERENCES_PER_IMAGE;
+
+  const subjects = await loadSubjects();
+  if (subjects.length === 0) {
+    return { images: [], used: [], unknown: [], truncated: false };
+  }
+
+  const ordered: SubjectRow[] = [];
+  const seen = new Set<string>();
+  const unknown: string[] = [];
+
+  const push = (subject: SubjectRow | undefined) => {
+    if (!subject || seen.has(subject.id) || subject.images.length === 0) return;
+    seen.add(subject.id);
+    ordered.push(subject);
+  };
+
+  // The Choom itself goes first on a self-portrait.
+  if (isSelfPortrait) {
+    push(subjects.find((s) => s.choomId === choomId));
+  }
+
+  for (const request of requested) {
+    if (typeof request !== 'string' || !request.trim()) continue;
+    const subject = matchSubject(request, subjects);
+    if (subject) {
+      push(subject);
+    } else {
+      unknown.push(request);
+    }
+  }
+
+  // Flatten to individual images, stopping at the cap. Trimming whole subjects
+  // rather than half of one keeps a person's sheet and face together.
+  const used: ResolvedSubject[] = [];
+  const files: { subjectId: string; file: string }[] = [];
+  let truncated = false;
+
+  for (const subject of ordered) {
+    if (files.length + subject.images.length > cap) {
+      truncated = true;
+      break;
+    }
+    used.push({
+      slug: subject.slug,
+      name: subject.name,
+      category: subject.category,
+      images: subject.images.map((i) => ({ id: i.id, file: i.file, kind: i.kind })),
+    });
+    for (const image of subject.images) {
+      files.push({ subjectId: subject.id, file: image.file });
+    }
+  }
+
+  const loaded = await Promise.all(
+    files.map(async ({ subjectId, file }) => {
+      try {
+        return (await readLibraryImage(subjectId, file)).toString('base64');
+      } catch (err) {
+        console.warn(
+          `   ⚠️ Library reference unavailable (${file}): ${err instanceof Error ? err.message : err}`
+        );
+        return null;
+      }
+    })
+  );
+
+  return {
+    images: loaded.filter((b): b is string => b !== null),
+    used,
+    unknown,
+    truncated,
+  };
+}
+
+/**
+ * The catalogue the model sees, as one line per subject. This is injected into
+ * the `generate_image` schema per request, so a Choom always sees the current
+ * library without a round trip to look it up.
+ */
+export async function buildReferenceCatalog(): Promise<string[]> {
+  const subjects = await prisma.referenceSubject.findMany({
+    where: { enabled: true },
+    select: {
+      slug: true,
+      name: true,
+      description: true,
+      category: true,
+      _count: { select: { images: true } },
+    },
+    orderBy: [{ category: 'asc' }, { slug: 'asc' }],
+  });
+
+  return subjects
+    .filter((s) => s._count.images > 0)
+    .map((s) => {
+      const description = s.description?.trim();
+      return `"${s.slug}" (${s.category}) — ${description || s.name}`;
+    });
+}

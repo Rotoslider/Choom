@@ -20,8 +20,13 @@ import { ProjectService } from '@/lib/project-service';
 import type {
   VisionSettings, LLMProviderConfig, VisionModelProfile,
   ToolCall, ToolResult, ImageGenSettings, WeatherSettings, SearchSettings, ImageSize, ImageAspect,
+  CheckpointType, ReferenceImage,
 } from '@/lib/types';
 import { computeImageDimensions } from '@/lib/types';
+import { detectCheckpointType } from '@/lib/checkpoint-modules';
+import { loadReferenceImagesBase64 } from '@/lib/reference-images';
+import { resolveReferences } from '@/lib/reference-library';
+import { REFERENCE_IMAGE_DEFAULT_MAX_DIM } from '@/lib/config';
 import { findVisionProfile } from '@/lib/model-profiles';
 import { memoryTools } from '@/lib/tool-definitions';
 import { getSkillRegistry } from '@/lib/skill-registry';
@@ -49,14 +54,6 @@ function withImageGenLock<T>(fn: () => Promise<T>): Promise<T> {
   let resolve: () => void;
   imageGenLock = new Promise<void>(r => { resolve = r; });
   return prev.then(fn).finally(() => resolve!());
-}
-
-// Auto-detect checkpoint type from name when not explicitly set
-function detectCheckpointType(checkpointName: string): 'pony' | 'flux' | 'other' {
-  const lower = checkpointName.toLowerCase();
-  if (lower.includes('pony') || lower.includes('cyberrealistic')) return 'pony';
-  if (lower.includes('flux')) return 'flux';
-  return 'other';
 }
 
 // ============================================================================
@@ -263,7 +260,7 @@ export async function executeToolCall(
       console.log(`      Settings panel default: checkpoint=${(settings?.imageGen as Record<string, unknown>)?.defaultCheckpoint || '(not set)'}`);
       console.log(`      ✅ RESOLVED checkpoint: ${checkpoint || '(none - using current)'}`);
       // Auto-detect checkpoint type from name if not explicitly set
-      const checkpointType = modeSettings.checkpointType || (checkpoint ? detectCheckpointType(checkpoint) : 'other');
+      const checkpointType: CheckpointType = modeSettings.checkpointType || (checkpoint ? detectCheckpointType(checkpoint) : 'other');
 
       // Build the prompt (before lock, since this is CPU-only)
       let prompt = toolCall.arguments.prompt as string;
@@ -307,7 +304,11 @@ export async function executeToolCall(
       let genCfgScale: number;
       let genDistilledCfg: number;
 
-      if (checkpointType === 'flux') {
+      if (checkpointType === 'klein') {
+        // Flux.2 Klein is guidance-distilled: CFG 1 and no distilled-CFG knob.
+        genCfgScale = 1;
+        genDistilledCfg = 0;
+      } else if (checkpointType === 'flux') {
         genCfgScale = 1;
         genDistilledCfg = modeSettings.distilledCfg || imageGenSettings.defaultDistilledCfg;
       } else if (checkpointType === 'pony') {
@@ -320,12 +321,38 @@ export async function executeToolCall(
 
       console.log(`   🔧 Generation params: type=${checkpointType}, cfgScale=${genCfgScale}, distilledCfg=${genDistilledCfg}`);
 
+      // Reference images (character sheets etc.) — plain file IO, so read them
+      // before taking the GPU lock.
+      // Library subjects the model named (own subject first on a self-portrait),
+      // then the always-on extras pinned in this mode's settings.
+      const requestedReferences = Array.isArray(toolCall.arguments.references)
+        ? (toolCall.arguments.references as unknown[]).filter((r): r is string => typeof r === 'string')
+        : [];
+      const library = await resolveReferences({
+        choomId,
+        requested: requestedReferences,
+        isSelfPortrait,
+      });
+      const pinned = await loadReferenceImagesBase64(
+        choomId,
+        modeSettings.referenceImages as ReferenceImage[] | undefined
+      );
+      const referenceImages = [...library.images, ...pinned];
+      const referenceMaxDim = (modeSettings.referenceMaxDim as number) || REFERENCE_IMAGE_DEFAULT_MAX_DIM;
+      if (referenceImages.length > 0) {
+        const named = library.used.map(u => u.slug).join(', ') || 'none';
+        console.log(`   🖼️  ${referenceImages.length} reference image(s) @ max ${referenceMaxDim}px — subjects: ${named}${pinned.length ? `, +${pinned.length} pinned` : ''}`);
+      }
+      if (library.unknown.length > 0) {
+        console.warn(`   ⚠️ Unknown reference(s) ignored: ${library.unknown.join(', ')}`);
+      }
+
       // Use image generation lock to serialize checkpoint switch + generation
       // This prevents race conditions when multiple requests try to switch checkpoints
       const { genResult, finalImageUrl } = await withImageGenLock(async () => {
         if (checkpoint) {
           console.log(`   ⏳ Switching checkpoint to: ${checkpoint} (type: ${checkpointType})`);
-          await imageGenClient.setCheckpointWithModules(checkpoint, checkpointType);
+          await imageGenClient.setCheckpointWithModules(checkpoint, checkpointType, modeSettings.modules);
           const stripHash = (s: string) => s.replace(/\s*\[[\da-f]+\]$/i, '').trim();
           const maxWait = 120000;
           const pollInterval = 2000;
@@ -359,6 +386,8 @@ export async function executeToolCall(
           distilledCfg: genDistilledCfg,
           sampler: modeSettings.sampler || imageGenSettings.defaultSampler,
           scheduler: modeSettings.scheduler || imageGenSettings.defaultScheduler,
+          referenceImages,
+          referenceMaxDim,
           isSelfPortrait,
         });
 
@@ -419,7 +448,7 @@ export async function executeToolCall(
         name: toolCall.name,
         result: {
           success: true,
-          message: `Image generated successfully with seed ${genResult.seed}${modeSettings.upscale ? ' (upscaled 2x)' : ''}. The image has been displayed to the user. To analyze this image, call analyze_image with image_id="${savedImage.id}".`,
+          message: `Image generated successfully with seed ${genResult.seed}${modeSettings.upscale ? ' (upscaled 2x)' : ''}.${library.used.length > 0 ? ` References used: ${library.used.map(u => u.slug).join(', ')}.` : ''}${library.unknown.length > 0 ? ` No reference exists named: ${library.unknown.join(', ')} — ask the user to add it to the reference library if it should.` : ''} The image has been displayed to the user. To analyze this image, call analyze_image with image_id="${savedImage.id}".`,
           imageId: savedImage.id,
         },
       };

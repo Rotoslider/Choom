@@ -10,7 +10,25 @@ const SUPPRESS = /^\s*(GET|POST|DELETE) \/api\/(notifications|health|chats|image
 // there is nothing to supply one — set CHOOM_LOG_TIMESTAMPS=1 there and we
 // prefix an ISO timestamp ourselves. /api/server-log parses both shapes.
 const STAMP = process.env.CHOOM_LOG_TIMESTAMPS === '1';
-const stamp = () => (STAMP ? new Date().toISOString() + ' ' : '');
+
+// LOCAL time with a UTC offset, matching `journalctl -o short-iso` on the Linux
+// side. toISOString() would be simpler but stamps UTC, and the Agent Console
+// renders the clock portion — six hours off for a US mountain-time host reads
+// as "the log stopped this morning" rather than "these are UTC".
+const stamp = () => {
+  if (!STAMP) return '';
+  const d = new Date();
+  const p2 = (n) => String(n).padStart(2, '0');
+  const off = -d.getTimezoneOffset(); // minutes east of UTC
+  const sign = off >= 0 ? '+' : '-';
+  const abs = Math.abs(off);
+  return (
+    `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}` +
+    `T${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}` +
+    `.${String(d.getMilliseconds()).padStart(3, '0')}` +
+    `${sign}${p2(Math.floor(abs / 60))}${p2(abs % 60)} `
+  );
+};
 
 let buffer = '';
 process.stdin.setEncoding('utf8');

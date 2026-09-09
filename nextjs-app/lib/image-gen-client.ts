@@ -1,5 +1,13 @@
-import type { ImageGenSettings, ImageGenerationSettings, LoraConfig } from './types';
+import type { CheckpointType, ImageGenSettings, ImageGenerationSettings, LoraConfig } from './types';
 import { ensureEndpoint } from './utils';
+import { resolveCheckpointModules } from './checkpoint-modules';
+
+// Forge's built-in always-on script that turns images into reference latents for
+// edit-capable models (Flux.2 Klein, Flux.1 Kontext, Qwen-Image-Edit, ...).
+// Despite the name it does not stitch anything. Matched case-insensitively by
+// Forge, and its args are positional: [enabled, references, maxSideLength].
+const IMAGE_STITCH_SCRIPT = 'ImageStitch Integrated';
+const DEFAULT_REFERENCE_MAX_DIM = 1024;
 
 export interface ForgeGenerationRequest {
   prompt: string;
@@ -14,6 +22,7 @@ export interface ForgeGenerationRequest {
   seed?: number;
   batch_size?: number;
   n_iter?: number;
+  alwayson_scripts?: Record<string, { args: unknown[] }>;
 }
 
 export interface ForgeGenerationResponse {
@@ -52,6 +61,20 @@ export class ImageGenClient {
       batch_size: 1,
       n_iter: 1,
     };
+
+    // Reference images ride along as an always-on script rather than as top-level
+    // fields. Forge decodes each entry with its normal base64 image decoder.
+    if (settings.referenceImages && settings.referenceImages.length > 0) {
+      request.alwayson_scripts = {
+        [IMAGE_STITCH_SCRIPT]: {
+          args: [
+            true,
+            settings.referenceImages,
+            settings.referenceMaxDim ?? DEFAULT_REFERENCE_MAX_DIM,
+          ],
+        },
+      };
+    }
 
     const response = await fetch(url, {
       method: 'POST',
@@ -148,29 +171,49 @@ export class ImageGenClient {
     }
   }
 
+  /** List the VAE / text-encoder files Forge can load as additional modules. */
+  async getModules(): Promise<string[]> {
+    const url = ensureEndpoint(this.endpoint, '/sdapi/v1/sd-modules');
+
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`Failed to get modules: ${response.status}`);
+    }
+
+    const data = await response.json();
+    if (!Array.isArray(data)) return [];
+    return data
+      .map((m: { model_name?: string; filename?: string }) => m.model_name || '')
+      .filter((n: string) => n.length > 0);
+  }
+
   /**
    * Set checkpoint with type-aware module loading.
-   * For Flux: loads required VAE and text encoders
-   * For Pony: clears Flux modules (Pony has built-in VAE/encoders)
+   * - Flux.1: ae + clip_l + t5xxl
+   * - Flux.2 / Klein: Flux.2 VAE + Qwen3 text encoder (NOT the Flux.1 set)
+   * - Pony/other: empty, which also clears modules left by a previous checkpoint
+   *
+   * An explicit `modules` list always wins — that's what the per-Choom module
+   * picker passes. Otherwise defaults are resolved against what this Forge
+   * instance actually has on disk, so the same settings work after Forge moves
+   * to another machine.
    */
   async setCheckpointWithModules(
     checkpoint: string,
-    checkpointType: 'pony' | 'flux' | 'other',
+    checkpointType: CheckpointType,
     modules?: string[]
   ): Promise<void> {
     const url = ensureEndpoint(this.endpoint, '/sdapi/v1/options');
 
-    let additionalModules: string[] = [];
-    if (checkpointType === 'flux') {
-      additionalModules = modules || [
-        'ae.safetensors',
-        'clip_l.safetensors',
-        't5xxl_fp16.safetensors',
-      ];
+    let additionalModules: string[];
+    if (modules && modules.length > 0) {
+      additionalModules = modules;
+    } else {
+      const available = await this.getModules().catch(() => [] as string[]);
+      additionalModules = resolveCheckpointModules(checkpointType, checkpoint, available);
     }
-    // For pony/other: empty array clears any stale Flux modules
 
-    console.log(`Setting checkpoint: ${checkpoint} (type: ${checkpointType}, modules: ${additionalModules.length})`);
+    console.log(`Setting checkpoint: ${checkpoint} (type: ${checkpointType}, modules: ${additionalModules.join(', ') || 'none'})`);
 
     const response = await fetch(url, {
       method: 'POST',

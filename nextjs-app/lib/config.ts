@@ -7,6 +7,18 @@ import os from 'os';
 
 export const WORKSPACE_ROOT = process.env.WORKSPACE_ROOT || path.join(os.homedir(), 'choom-projects');
 export const CUSTOM_SKILLS_ROOT = path.join(WORKSPACE_ROOT, '.choom-skills');
+
+// Per-Choom image-generation reference images (character sheets etc.). Kept in
+// the app's data dir rather than the workspace: they belong to the Choom's
+// config, not to a user project, and they must travel with Choom rather than
+// with whichever machine currently runs Forge.
+export const REFERENCE_IMAGES_ROOT =
+  process.env.REFERENCE_IMAGES_ROOT || path.join(process.cwd(), 'data', 'reference-images');
+export const REFERENCE_IMAGE_MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+// Longest side stored on disk. Forge downscales again per-request to
+// referenceMaxDim; this just keeps 4K sheets from bloating the data dir.
+export const REFERENCE_IMAGE_STORED_MAX_DIM = 1536;
+export const REFERENCE_IMAGE_DEFAULT_MAX_DIM = 1024;
 export const EXTERNAL_SKILLS_ROOT = path.join(WORKSPACE_ROOT, '.choom-external-skills');
 
 // Workspace write policy (moved verbatim out of app/api/chat/route.ts, C-22).

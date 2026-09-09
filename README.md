@@ -266,7 +266,7 @@ Each Choom can override specific settings stored in the database:
 | `llmEndpoint` | LLM API endpoint |
 | `llmProviderId` | External provider from Settings > Providers (triggers Layer 3b — provider endpoint + API key + model profile auto-applied) |
 | `voiceId` | TTS voice |
-| `imageSettings` | Image generation config (JSON): checkpoint, LoRA, size, aspect, upscale, choomDecides |
+| `imageSettings` | Image generation config (JSON): checkpoint, modules, LoRA, reference images, size, aspect, upscale, choomDecides |
 | `companionId` | Memory isolation ID |
 | `systemPrompt` | Character instructions |
 
@@ -372,9 +372,117 @@ Images use a size + aspect combination. All dimensions are computed to be divisi
 
 ### Modes
 
-- **General**: Standard txt2img with configurable checkpoint, sampler, LoRA
-- **Self-Portrait**: Character-specific settings (dedicated checkpoint, LoRA, prompt prefix/suffix)
+- **General**: Standard txt2img with configurable checkpoint, sampler, LoRA, reference images
+- **Self-Portrait**: Character-specific settings (dedicated checkpoint, LoRA, reference images, prompt prefix/suffix)
 - **LLM-Guided** (`choomDecides`): The LLM picks size and aspect ratio based on what it's generating
+
+### Reference Images (character consistency without LoRAs)
+
+Reference images keep people, places and objects looking the same across generations. They are
+sent to Forge via its built-in `ImageStitch Integrated` always-on script, which VAE-encodes them
+into reference latents.
+
+This is the LoRA-free path to a consistent character: an edit-capable model holds the likeness
+from the reference alone, so a Choom needs no character LoRA and the GPU keeps one checkpoint
+loaded for every Choom instead of swapping per-character weights.
+
+Supported by edit-capable models — **Flux.2 Klein**, Flux.1 Kontext, Qwen-Image-Edit, Anima Edit,
+Krea2 Edit. Other checkpoints ignore references, so leaving them configured is harmless.
+Forge needs Settings → **[Klein] Enable Reference** on (the default) for Klein.
+
+There are two layers.
+
+#### The reference library (Settings → Image)
+
+A shared set of named **subjects** any Choom can call: a character, a person, a place, a vehicle.
+Each subject has a slug (`genesis`, `owner`, `cabin-exterior`, `blue-pickup`), a description
+the model reads to decide relevance, a category, and one or more images tagged `sheet`, `face`
+or `extra`. Naming a subject sends **all** of its images, sheet first — on a multi-panel character
+sheet the face is only a small fraction of the pixels, so the closeup is what sharpens likeness.
+
+A subject can be linked to a Choom, in which case it attaches automatically to that Choom's
+self-portraits — selfies keep working from a bare prompt with no reference argument.
+
+The library is global on purpose: "Genesis with her sister Eve camping" needs Genesis to reach
+Eve's sheet. The catalogue is injected into `generate_image`'s `references` argument on every
+request, so a Choom always sees the current list and calls subjects by name:
+
+```
+generate_image(prompt: "...", references: ["genesis", "owner", "cabin-exterior"])
+```
+
+Up to `MAX_REFERENCES_PER_IMAGE` (8) images per generation. The cap drops whole subjects rather
+than splitting one, so a person's sheet is never sent without their face.
+
+**Prompting two or more people:** describe each one distinctly, in the same order as the
+references — *"the first woman, with round glasses, in a green flannel; the second woman, no
+glasses, in a navy jacket"*. Without that, clothing and features bleed from the first person onto
+everyone else. The tool description tells the Choom this, but it is worth knowing when tuning.
+
+#### Subjects change over time — snapshot before you overwrite
+
+People age. Chooms age with them, and bodies change in ways that are not gradual:
+weight, surgery, an injury, a haircut you regret. A subject is the **thing**, not one
+photo shoot, so images accumulate under it — but a subject cannot hold two versions of
+the same face at once. Naming it sends **all** of its enabled images, so a 2026 face and
+a 2031 face in one subject are averaged into someone who is neither.
+
+The pattern is one subject per era, with only the current one linked to the Choom:
+
+```
+genesis          choomId=Genesis    ← current; auto-attaches to self-portraits
+genesis-2026     unlinked           ← snapshot; callable by name
+genesis-2031     unlinked
+```
+
+Ageing a character is then: copy the current subject to a dated one, leave that
+**unlinked**, and update `genesis` in place with the new sheet and face. Selfies keep
+working from a bare prompt, and "us back in 2026" is a normal reference call:
+
+```
+generate_image(prompt: "...", references: ["genesis-2026", "donny-2026"])
+```
+
+**Link exactly one subject per Choom.** The self-portrait auto-attach takes the *first*
+subject whose `choomId` matches, and the query has no explicit ordering — so two linked
+subjects means the one that attaches depends on row order. Every historical era stays
+unlinked.
+
+Two habits that keep this cheap:
+
+- **Snapshot before you overwrite.** The moment a sheet is replaced is the only moment
+  the old one is trivially available.
+- **Date the description, not just the slug** — *"Genesis as of 2026, long blonde hair,
+  glasses"*. Slugs are a handle for you; the description is what the model reads, and it
+  is what still makes sense in four years.
+
+For a discontinuous change, name the state rather than the year: `genesis-preinjury`,
+`donny-beard`. The slug only has to be memorable to you.
+
+Remember the cap when a scene grows: 8 images per generation, dropped a whole subject at
+a time. Two people at sheet + face is already 4, so three people plus a place and a
+vehicle will not all fit.
+
+#### Per-Choom pinned references (Choom edit panel → Image)
+
+Always-on extras for one Choom and mode, uploaded in the edit panel and stored under
+`nextjs-app/data/reference-images/<choomId>/`. They are appended after whatever the library
+resolved. Use these for something that should be in *every* image from that Choom; use the
+library for anything the Choom should choose per image.
+
+Both layers share the **Reference detail** setting (the longest side each reference is scaled to
+before encoding, default 1024px).
+
+### Additional Modules (VAE / text encoder)
+
+Each mode can pin the VAE and text-encoder files loaded with its checkpoint
+(Forge's `forge_additional_modules`). Leave them unchecked to auto-resolve defaults for the
+checkpoint's architecture against what the Forge host actually has on disk.
+
+Architecture is detected from the checkpoint name, with **Flux.2 / Klein matched before Flux.1** —
+Klein filenames contain "flux" but need a Flux.2 VAE and a Qwen3 text encoder, not Flux.1's
+`ae` + `clip_l` + `t5xxl`. Klein also generates at CFG 1 with no distilled-CFG and ignores
+negative prompts, which Choom applies automatically.
 
 ### Upscaling
 

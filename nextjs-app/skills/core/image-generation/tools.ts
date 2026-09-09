@@ -42,6 +42,20 @@ export const tools: ToolDefinition[] = [
           type: 'number',
           description: 'Number of generation steps (optional, uses mode defaults)',
         },
+        references: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Names of reference images to condition the image on, for keeping people, places and '
+            + 'objects looking the same across images. Name every subject that should appear: '
+            + 'e.g. ["genesis", "owner", "cabin-exterior"] for two people outside a specific building. '
+            + 'Your own reference is added automatically for self-portraits, so only name the OTHER '
+            + 'subjects there. Omit entirely when nothing recurring is in the picture. '
+            + 'IMPORTANT when naming two or more people: describe each one distinctly in the prompt, '
+            + 'in the same order you list them here (e.g. "the first woman, with round glasses, in a '
+            + 'green flannel; the second woman, no glasses, in a navy jacket"). Without that, clothing '
+            + 'and features bleed from the first person onto everyone else.',
+        },
       },
       required: ['prompt'],
     },

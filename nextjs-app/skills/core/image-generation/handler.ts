@@ -4,8 +4,12 @@ import { WorkspaceService } from '@/lib/workspace-service';
 import prisma from '@/lib/db';
 import { computeImageDimensions } from '@/lib/types';
 import type { ImageSize, ImageAspect, ImageGenSettings, ToolCall, ToolResult } from '@/lib/types';
-import { WORKSPACE_ROOT, WORKSPACE_ALLOWED_EXTENSIONS, WORKSPACE_IMAGE_EXTENSIONS } from '@/lib/config';
+import { REFERENCE_IMAGE_DEFAULT_MAX_DIM, WORKSPACE_ROOT, WORKSPACE_ALLOWED_EXTENSIONS, WORKSPACE_IMAGE_EXTENSIONS } from '@/lib/config';
 import { waitForGpu } from '@/lib/gpu-lock';
+import { detectCheckpointType } from '@/lib/checkpoint-modules';
+import { loadReferenceImagesBase64 } from '@/lib/reference-images';
+import { resolveReferences } from '@/lib/reference-library';
+import type { CheckpointType, ReferenceImage } from '@/lib/types';
 
 // ============================================================================
 // Module-level image generation lock (serializes checkpoint switching)
@@ -18,13 +22,6 @@ function withImageGenLock<T>(fn: () => Promise<T>): Promise<T> {
   let resolve: () => void;
   imageGenLock = new Promise<void>(r => { resolve = r; });
   return prev.then(fn).finally(() => resolve!());
-}
-
-function detectCheckpointType(checkpointName: string): 'pony' | 'flux' | 'other' {
-  const lower = checkpointName.toLowerCase();
-  if (lower.includes('pony') || lower.includes('cyberrealistic')) return 'pony';
-  if (lower.includes('flux')) return 'flux';
-  return 'other';
 }
 
 // ============================================================================
@@ -219,7 +216,7 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
       console.log(`      ✅ RESOLVED checkpoint: ${checkpoint || '(none - using current)'}`);
 
       // Auto-detect checkpoint type from name if not explicitly set
-      const checkpointType = (modeSettings.checkpointType as string) || (checkpoint ? detectCheckpointType(checkpoint) : 'other');
+      const checkpointType = ((modeSettings.checkpointType as CheckpointType) || (checkpoint ? detectCheckpointType(checkpoint) : 'other')) as CheckpointType;
 
       // -------------------------------------------------------------------
       // Build the prompt (before lock, since this is CPU-only)
@@ -296,7 +293,11 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
       let genCfgScale: number;
       let genDistilledCfg: number;
 
-      if (checkpointType === 'flux') {
+      if (checkpointType === 'klein') {
+        // Flux.2 Klein is guidance-distilled: CFG 1 and no distilled-CFG knob.
+        genCfgScale = 1;
+        genDistilledCfg = 0;
+      } else if (checkpointType === 'flux') {
         genCfgScale = 1;
         genDistilledCfg = (modeSettings.distilledCfg as number) || imageGenSettings.defaultDistilledCfg;
       } else if (checkpointType === 'pony') {
@@ -310,12 +311,48 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
       console.log(`   🔧 Generation params: type=${checkpointType}, cfgScale=${genCfgScale}, distilledCfg=${genDistilledCfg}`);
 
       // -------------------------------------------------------------------
+      // Reference images (character sheets etc.) — read from disk before taking
+      // the GPU lock, since this is pure file IO.
+      // -------------------------------------------------------------------
+      // Two layers, library first so the subject of the image leads: subjects the
+      // model named (plus this Choom's own on a self-portrait), then the
+      // always-on extras pinned in this mode's settings.
+      const requestedReferences = Array.isArray(toolCall.arguments.references)
+        ? (toolCall.arguments.references as unknown[]).filter((r): r is string => typeof r === 'string')
+        : [];
+      const library = await resolveReferences({
+        choomId,
+        requested: requestedReferences,
+        isSelfPortrait,
+      });
+      const pinned = await loadReferenceImagesBase64(
+        choomId,
+        modeSettings.referenceImages as ReferenceImage[] | undefined
+      );
+      const referenceImages = [...library.images, ...pinned];
+      const referenceMaxDim = (modeSettings.referenceMaxDim as number) || REFERENCE_IMAGE_DEFAULT_MAX_DIM;
+      if (referenceImages.length > 0) {
+        const named = library.used.map(u => u.slug).join(', ') || 'none';
+        console.log(`   🖼️  ${referenceImages.length} reference image(s) @ max ${referenceMaxDim}px — subjects: ${named}${pinned.length ? `, +${pinned.length} pinned` : ''}`);
+      }
+      if (library.unknown.length > 0) {
+        console.warn(`   ⚠️ Unknown reference(s) ignored: ${library.unknown.join(', ')}`);
+      }
+      if (library.truncated) {
+        console.warn(`   ⚠️ Reference list trimmed to stay within the per-image cap`);
+      }
+
+      // -------------------------------------------------------------------
       // Use image generation lock to serialize checkpoint switch + generation
       // -------------------------------------------------------------------
       const { genResult, finalImageUrl } = await withImageGenLock(async () => {
         if (checkpoint) {
           console.log(`   ⏳ Switching checkpoint to: ${checkpoint} (type: ${checkpointType})`);
-          await imageGenClient.setCheckpointWithModules(checkpoint, checkpointType as 'pony' | 'flux' | 'other');
+          await imageGenClient.setCheckpointWithModules(
+            checkpoint,
+            checkpointType,
+            modeSettings.modules as string[] | undefined
+          );
           const stripHash = (s: string) => s.replace(/\s*\[[\da-f]+\]$/i, '').trim();
           const maxWait = 120000;
           const pollInterval = 2000;
@@ -342,7 +379,8 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
         const result = await imageGenClient.generate({
           prompt,
           negativePrompt: (toolCall.arguments.negative_prompt as string || (modeSettings.negativePrompt as string) || imageGenSettings.defaultNegativePrompt)
-            + (selfieNegativeKeywords && checkpointType !== 'flux' ? `, ${selfieNegativeKeywords}` : ''),
+            // CFG-1 distilled models (Flux.1 dev, Flux.2 Klein) ignore the negative prompt.
+            + (selfieNegativeKeywords && checkpointType !== 'flux' && checkpointType !== 'klein' ? `, ${selfieNegativeKeywords}` : ''),
           width: genWidth,
           height: genHeight,
           steps: (typeof toolCall.arguments.steps === 'number' ? toolCall.arguments.steps : parseInt(toolCall.arguments.steps as string)) || (modeSettings.steps as number) || imageGenSettings.defaultSteps,
@@ -350,6 +388,8 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
           distilledCfg: genDistilledCfg,
           sampler: (modeSettings.sampler as string) || imageGenSettings.defaultSampler,
           scheduler: (modeSettings.scheduler as string) || imageGenSettings.defaultScheduler,
+          referenceImages,
+          referenceMaxDim,
           isSelfPortrait,
         });
 
@@ -411,7 +451,7 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
 
       return this.success(toolCall, {
         success: true,
-        message: `Image generated successfully with seed ${genResult.seed}${modeSettings.upscale ? ' (upscaled 2x)' : ''}. The image has been displayed to the user. To analyze this image, call analyze_image with image_id="${savedImage.id}". To save this image to a project folder, call save_generated_image with image_id="${savedImage.id}" and a save_path like "project_name/images/filename.png".`,
+        message: `Image generated successfully with seed ${genResult.seed}${modeSettings.upscale ? ' (upscaled 2x)' : ''}.${library.used.length > 0 ? ` References used: ${library.used.map(u => u.slug).join(', ')}.` : ''}${library.unknown.length > 0 ? ` No reference exists named: ${library.unknown.join(', ')} — ask the user to add it to the reference library if it should.` : ''} The image has been displayed to the user. To analyze this image, call analyze_image with image_id="${savedImage.id}". To save this image to a project folder, call save_generated_image with image_id="${savedImage.id}" and a save_path like "project_name/images/filename.png".`,
         imageId: savedImage.id,
       });
     } catch (imageError) {

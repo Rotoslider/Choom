@@ -248,7 +248,16 @@ export interface SelfPortraitSettings {
 // Complete settings for one image generation mode
 export interface ImageModeSettings {
   checkpoint?: string;
-  checkpointType?: 'pony' | 'flux' | 'other';
+  checkpointType?: CheckpointType;
+  // VAE / text-encoder files loaded alongside the checkpoint (Forge
+  // `forge_additional_modules`). Empty/undefined falls back to the defaults for
+  // the checkpoint type. Names come from Forge's /sdapi/v1/sd-modules.
+  modules?: string[];
+  // Reference images fed to edit-capable models (Flux.2 Klein, Flux.1 Kontext,
+  // Qwen-Image-Edit, ...) via Forge's "ImageStitch Integrated" script.
+  referenceImages?: ReferenceImage[];
+  // Longest side each reference is downscaled to before VAE encoding.
+  referenceMaxDim?: number;
   loras?: LoraConfig[];
   negativePrompt?: string;
   promptPrefix?: string; // Added before the prompt
@@ -282,6 +291,23 @@ export interface LoraConfig {
   triggerWords?: string;
 }
 
+// Checkpoint architectures Choom knows how to configure. 'klein' covers the
+// Flux.2 family (Klein 4B/9B), which needs a different VAE and text encoder
+// than Flux.1 despite sharing "flux" in the filename.
+export type CheckpointType = 'pony' | 'flux' | 'klein' | 'other';
+
+// A user-supplied reference image attached to a Choom's image settings, e.g. a
+// character sheet. Stored on disk under REFERENCE_IMAGES_ROOT/<choomId>/;
+// `file` is the bare filename, never a path.
+export interface ReferenceImage {
+  id: string;
+  file: string;
+  label?: string;
+  enabled?: boolean;
+  width?: number;
+  height?: number;
+}
+
 export interface ImageGenerationSettings {
   prompt: string;
   negativePrompt?: string;
@@ -295,6 +321,9 @@ export interface ImageGenerationSettings {
   height?: number;
   seed?: number;
   loras?: LoraConfig[];
+  // Base64-encoded reference images (no data: prefix), already resolved from disk.
+  referenceImages?: string[];
+  referenceMaxDim?: number;
   // Mode indicators
   isSelfPortrait?: boolean;
 }

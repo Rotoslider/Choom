@@ -9,6 +9,7 @@ import type { LLMProviderConfig, LLMModelProfile } from '@/lib/types';
 import { findLLMProfile } from '@/lib/model-profiles';
 import { getLiveContextWindow } from '@/lib/model-metadata';
 import { allTools, getAllToolsFromSkills, useSkillDispatch } from '@/lib/tool-definitions';
+import { buildReferenceCatalog } from '@/lib/reference-library';
 import { loadCoreSkills, loadCustomSkills } from '@/lib/skill-loader';
 import { CompactionService } from '@/lib/compaction-service';
 import { choomHasSshPermission } from '@/lib/choom-permissions';
@@ -47,6 +48,49 @@ import { runChatTurn } from '@/lib/chat-stream';
 // word-for-word (classic case: re-apologizing and re-running the same tools on
 // the turn AFTER a correction→apology exchange). Lives in
 // lib/repetition-guard.ts together with stripRepeatedParagraphs (C-29).
+
+/**
+ * Rewrite generate_image's `references` argument description with the current
+ * reference library, so the model can name subjects it actually has. Returns
+ * the tool list untouched when the library is empty, and never mutates the
+ * shared static tool definitions.
+ */
+async function withReferenceCatalog(tools: ToolDefinition[]): Promise<ToolDefinition[]> {
+  const index = tools.findIndex((t) => t.name === 'generate_image');
+  if (index === -1) return tools;
+
+  let catalog: string[];
+  try {
+    catalog = await buildReferenceCatalog();
+  } catch (err) {
+    console.warn('   ⚠️ Could not load reference library:', err instanceof Error ? err.message : err);
+    return tools;
+  }
+  if (catalog.length === 0) return tools;
+
+  const tool = tools[index];
+  const properties = tool.parameters?.properties;
+  const references = properties?.references;
+  if (!references) return tools;
+
+  const next = [...tools];
+  next[index] = {
+    ...tool,
+    parameters: {
+      ...tool.parameters,
+      properties: {
+        ...properties,
+        references: {
+          ...references,
+          description: `${references.description}\n\nAvailable references:\n${catalog.join('\n')}`,
+        },
+      },
+    },
+  };
+
+  console.log(`   🖼️  Reference library: ${catalog.length} subject(s) offered to generate_image`);
+  return next;
+}
 
 export async function POST(request: NextRequest) {
 
@@ -381,6 +425,11 @@ export async function POST(request: NextRequest) {
       console.log(`   🔒 Remote SSH disabled for ${choom.name}; removed run_ssh_command + ssh_copy_file`);
     }
     console.log(`   🛠️  ${activeTools.length} tools available`);
+
+    // Tell the model which reference images exist. The catalogue is rebuilt per
+    // request and written into generate_image's `references` argument, so a
+    // Choom always sees the current library without a lookup round trip.
+    activeTools = await withReferenceCatalog(activeTools);
 
     // noTools mode: strip ALL tools so the LLM can only produce text.
     // Used by scheduler briefings where all data is pre-fetched in the prompt.
