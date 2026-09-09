@@ -419,6 +419,50 @@ references — *"the first woman, with round glasses, in a green flannel; the se
 glasses, in a navy jacket"*. Without that, clothing and features bleed from the first person onto
 everyone else. The tool description tells the Choom this, but it is worth knowing when tuning.
 
+#### Subjects change over time — snapshot before you overwrite
+
+People age. Chooms age with them, and bodies change in ways that are not gradual:
+weight, surgery, an injury, a haircut you regret. A subject is the **thing**, not one
+photo shoot, so images accumulate under it — but a subject cannot hold two versions of
+the same face at once. Naming it sends **all** of its enabled images, so a 2026 face and
+a 2031 face in one subject are averaged into someone who is neither.
+
+The pattern is one subject per era, with only the current one linked to the Choom:
+
+```
+genesis          choomId=Genesis    ← current; auto-attaches to self-portraits
+genesis-2026     unlinked           ← snapshot; callable by name
+genesis-2031     unlinked
+```
+
+Ageing a character is then: copy the current subject to a dated one, leave that
+**unlinked**, and update `genesis` in place with the new sheet and face. Selfies keep
+working from a bare prompt, and "us back in 2026" is a normal reference call:
+
+```
+generate_image(prompt: "...", references: ["genesis-2026", "donny-2026"])
+```
+
+**Link exactly one subject per Choom.** The self-portrait auto-attach takes the *first*
+subject whose `choomId` matches, and the query has no explicit ordering — so two linked
+subjects means the one that attaches depends on row order. Every historical era stays
+unlinked.
+
+Two habits that keep this cheap:
+
+- **Snapshot before you overwrite.** The moment a sheet is replaced is the only moment
+  the old one is trivially available.
+- **Date the description, not just the slug** — *"Genesis as of 2026, long blonde hair,
+  glasses"*. Slugs are a handle for you; the description is what the model reads, and it
+  is what still makes sense in four years.
+
+For a discontinuous change, name the state rather than the year: `genesis-preinjury`,
+`donny-beard`. The slug only has to be memorable to you.
+
+Remember the cap when a scene grows: 8 images per generation, dropped a whole subject at
+a time. Two people at sheet + face is already 4, so three people plus a place and a
+vehicle will not all fit.
+
 #### Per-Choom pinned references (Choom edit panel → Image)
 
 Always-on extras for one Choom and mode, uploaded in the edit panel and stored under
