@@ -2,6 +2,7 @@
 Signal Bridge Configuration
 """
 import glob
+import json
 import os
 import shutil
 import sys
@@ -11,6 +12,41 @@ from dotenv import load_dotenv
 load_dotenv()
 
 _IS_MACOS = sys.platform == "darwin"
+
+# ---------------------------------------------------------------------------
+# bridge-config.json takes precedence over the environment.
+#
+# The Settings UI writes bridge-config.json; .env is what a fresh install starts
+# from. Reading the env first meant a change made in the GUI never reached this
+# process: the web app moved image generation to a new host and went green,
+# while the bridge kept probing the old address from .env and sent "image server
+# is disconnected" warnings over Signal. Same shadowing bug the Next.js defaults
+# route had, in the other half of the system.
+#
+# Read once at import. The bridge already restarts on config changes.
+# ---------------------------------------------------------------------------
+_BRIDGE_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "bridge-config.json")
+
+
+def _load_bridge_config() -> dict:
+    try:
+        with open(_BRIDGE_CONFIG_PATH, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:
+        return {}
+
+
+_BRIDGE_CONFIG = _load_bridge_config()
+
+
+def _setting(section: str, key: str, env_var: str, default: str) -> str:
+    """A UI-owned setting: bridge-config, then $ENV, then the built-in default."""
+    value = (_BRIDGE_CONFIG.get(section) or {}).get(key)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return os.getenv(env_var) or default
+
+
 
 
 def _default_signal_cli_path() -> str:
@@ -78,17 +114,17 @@ OWNER_PHONE_NUMBER = os.getenv("OWNER_PHONE_NUMBER", "+10000000000")
 CHOOM_API_URL = os.getenv("CHOOM_API_URL", "http://localhost:3000")
 
 # LLM Configuration (Mac Ultra running LM Studio)
-LLM_ENDPOINT = os.getenv("LLM_ENDPOINT", "http://localhost:1234/v1")
+LLM_ENDPOINT = _setting("llm", "endpoint", "LLM_ENDPOINT", "http://localhost:1234/v1")
 
 # Ngrok Configuration
 NGROK_WEBHOOK_SECRET = os.getenv("NGROK_WEBHOOK_SECRET", "")
 NGROK_URL = os.getenv("NGROK_URL", "https://your-subdomain.ngrok-free.app")
 
 # Service Endpoints (on the Choom server)
-STT_ENDPOINT = os.getenv("STT_ENDPOINT", "http://localhost:5000")
-TTS_ENDPOINT = os.getenv("TTS_ENDPOINT", "http://localhost:8004")
-MEMORY_ENDPOINT = os.getenv("MEMORY_ENDPOINT", "http://localhost:8100")
-IMAGE_GEN_ENDPOINT = os.getenv("IMAGE_GEN_ENDPOINT", "http://localhost:7860")
+STT_ENDPOINT = _setting("stt", "endpoint", "STT_ENDPOINT", "http://localhost:5000")
+TTS_ENDPOINT = _setting("tts", "endpoint", "TTS_ENDPOINT", "http://localhost:8004")
+MEMORY_ENDPOINT = _setting("memory", "endpoint", "MEMORY_ENDPOINT", "http://localhost:8100")
+IMAGE_GEN_ENDPOINT = _setting("imageGen", "endpoint", "IMAGE_GEN_ENDPOINT", "http://localhost:7860")
 
 # Default Choom (used if no name specified)
 DEFAULT_CHOOM_NAME = os.getenv("DEFAULT_CHOOM_NAME", "Choom")
@@ -97,7 +133,7 @@ DEFAULT_CHOOM_NAME = os.getenv("DEFAULT_CHOOM_NAME", "Choom")
 BRAVE_API_KEY = os.getenv("BRAVE_API_KEY", "")
 SERPAPI_KEY = os.getenv("SERPAPI_KEY", "")
 OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY", "")
-SEARXNG_ENDPOINT = os.getenv("SEARXNG_ENDPOINT", "http://localhost:8888")
+SEARXNG_ENDPOINT = _setting("search", "searxngEndpoint", "SEARXNG_ENDPOINT", "http://localhost:8888")
 
 # Available Chooms (name -> choomId mapping, populated from database)
 CHOOMS = {}
