@@ -46,6 +46,7 @@ for (const m of models) {
 console.log(`Forge at ${endpoint}: ${models.length} checkpoints\n`);
 
 let changed = 0;
+let unmatched = 0;
 for (const choom of await prisma.choom.findMany({ where: { imageSettings: { not: null } } })) {
   let settings;
   try { settings = JSON.parse(choom.imageSettings); } catch { continue; }
@@ -56,6 +57,7 @@ for (const choom of await prisma.choom.findMany({ where: { imageSettings: { not:
     const target = byHash.get(hashOf(ck));
     if (!target) {
       console.log(`  ${choom.name}/${mode}: NO MATCH for ${ck} — set it by hand`);
+      unmatched++;
       continue;
     }
     console.log(`  ${choom.name}/${mode}:\n      ${ck}\n   -> ${target}`);
@@ -73,7 +75,17 @@ for (const choom of await prisma.choom.findMany({ where: { imageSettings: { not:
   }
 }
 
-console.log(changed === 0
-  ? '\nAll checkpoints already resolve — nothing to do.'
-  : `\n${write ? 'Updated' : 'Would update'} ${changed} Choom(s).` + (write ? '' : ' Re-run with --write to apply.'));
+if (changed > 0) {
+  console.log(`\n${write ? 'Updated' : 'Would update'} ${changed} Choom(s).` + (write ? '' : ' Re-run with --write to apply.'));
+} else if (unmatched === 0) {
+  console.log('\nAll checkpoints already resolve — nothing to do.');
+}
+if (unmatched > 0) {
+  // Hash-matching cannot help when the file is simply absent from this host —
+  // saying "nothing to do" here would read as success on a Forge that is
+  // missing the models entirely.
+  console.log(`\n${unmatched} reference(s) name a checkpoint this Forge does not have.`);
+  console.log('Copy those model files across, or pick a replacement in each Choom\'s Image tab.');
+  process.exitCode = 1;
+}
 await prisma.$disconnect();
