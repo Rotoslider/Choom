@@ -273,16 +273,13 @@ export interface ImageModeSettings {
   size?: ImageSize;
   aspect?: ImageAspect;
   upscale?: boolean;
-  // Forge hires-fix: a second denoising pass at hiresScale x the base size.
-  // Unlike `upscale` (Lanczos, which only enlarges the pixels it is given) this
-  // regenerates detail, and with Klein it keeps the references — measured on a
-  // solo three-quarter shot, the base pass gave a generic redhead while a 2x
-  // pass brought back the freckles from the reference. The upscale is latent
-  // (see image-gen-client.ts for why pixel-space upscalers are unusable with
-  // Klein); latent needs denoise 0.45-0.50 — it ghosts below 0.40 and faces
-  // drift from the references above 0.55. Second-pass steps (6 vs 12/16/20)
-  // and hr_distilled_cfg made no visible difference at a fixed seed. When
-  // both are on, hires-fix wins and the Lanczos pass is skipped.
+  // Forge hires-fix: a second denoising pass at hiresScale x the base size,
+  // references still attached. NOT for Klein: pixel-space upscalers come out
+  // crunchy at any denoise, and latent upscale (what this sends) smears dark
+  // grime on skin and clothes — see image-gen-client.ts and the README. For
+  // Klein the fix for small faces is the xx-large size. Kept for other
+  // checkpoints; latent needs denoise 0.45-0.50 (ghosts below, drifts above).
+  // When both this and `upscale` are on, hires-fix wins.
   hiresFix?: boolean;
   hiresScale?: number; // default 2
   hiresDenoise?: number; // default 0.5
@@ -376,7 +373,7 @@ export const ASPECT_RATIO_PRESETS: AspectRatioPreset[] = [
 // New Image Size/Aspect System
 // ============================================================================
 
-export type ImageSize = 'small' | 'medium' | 'large' | 'x-large';
+export type ImageSize = 'small' | 'medium' | 'large' | 'x-large' | 'xx-large';
 export type ImageAspect = 'portrait' | 'portrait-tall' | 'square' | 'landscape' | 'wide';
 
 export const IMAGE_SIZES: Record<ImageSize, number> = {
@@ -384,6 +381,11 @@ export const IMAGE_SIZES: Record<ImageSize, number> = {
   medium: 1024,
   large: 1536,
   'x-large': 1856,
+  // 2048 on the long side is 2.4MP landscape / 3.1MP portrait — the biggest
+  // Klein 9B renders cleanly in one pass. Faces in a group shot need the
+  // pixels, and a second pass cannot supply them: pixel-space hires-fix
+  // over-sharpens Klein into crunch, latent hires-fix smears grime.
+  'xx-large': 2048,
 };
 
 export const IMAGE_ASPECTS: Record<ImageAspect, { ratio: string; label: string; w: number; h: number }> = {

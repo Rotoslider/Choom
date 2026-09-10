@@ -220,8 +220,8 @@ export const utilityTools: ToolDefinition[] = [
         },
         size: {
           type: 'string',
-          description: 'Image size preset: "small" (768px), "medium" (1024px), "large" (1536px), "x-large" (1856px). Controls the longest dimension.',
-          enum: ['small', 'medium', 'large', 'x-large'],
+          description: 'Image size preset: "small" (768px), "medium" (1024px), "large" (1536px), "x-large" (1856px), "xx-large" (2048px). Controls the longest dimension.',
+          enum: ['small', 'medium', 'large', 'x-large', 'xx-large'],
         },
         aspect: {
           type: 'string',

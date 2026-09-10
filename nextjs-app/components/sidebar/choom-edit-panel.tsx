@@ -772,10 +772,11 @@ function ImageModeSettingsEditor({
           <div className="space-y-0.5">
             <label className="text-sm font-medium">Hires Fix</label>
             <p className="text-xs text-muted-foreground">
-              Second denoising pass at scale (latent upscale) — regenerates faces with the
-              references still attached. Fixes likeness in group and full-body shots where the
-              face is too small on the first pass. Denoise 0.45–0.50: lower ghosts, higher
-              drifts from the references. Replaces 2x Upscaling when both are on.
+              Second denoising pass at scale (latent upscale) with the references still
+              attached. Not recommended for Flux.2 Klein — it smears dark grime on skin and
+              clothes; use the xx-large size instead, which gives faces the pixels in one
+              clean pass. Denoise 0.45–0.50: lower ghosts, higher drifts from the references.
+              Replaces 2x Upscaling when both are on.
             </p>
           </div>
           <Switch

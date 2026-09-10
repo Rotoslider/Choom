@@ -366,7 +366,7 @@ Integrates with Stable Diffusion Forge (`/sdapi/v1/txt2img`).
 
 Images use a size + aspect combination. All dimensions are computed to be divisible by 32.
 
-**Sizes**: small (768px base), medium (1024px), large (1536px), x-large (1856px)
+**Sizes**: small (768px base), medium (1024px), large (1536px), x-large (1856px), xx-large (2048px)
 
 **Aspects**: portrait, portrait-tall, square, landscape, wide
 
@@ -511,17 +511,18 @@ Two per-mode options in the Choom edit panel → Image:
   gave a generic redhead, the 2× pass brought back the reference's freckles. Roughly doubles the
   generation time. When both options are on, Hires Fix wins and the Lanczos pass is skipped.
 
-  **The upscale is latent, and that is not optional with Klein.** Every pixel-space upscaler
-  (Lanczos, ESRGAN) at every denoise from 0.20 to 0.45, with 6 or 20 second-pass steps and
-  either scheduler, gave the same over-baked look on every surface — crunchy skin, exaggerated
-  stucco, burnt highlights, the opposite of oily-smooth AI skin. Klein re-interprets resampled
-  pixels as texture. Latent upscale at 0.45–0.50 came out photographic, with *more* correct
-  freckle detail on the faces than any of the crunchy ones. Stay in that range: below 0.40
-  latent ghosts (doubled mouths); above 0.55 faces drift away from the references. Second-pass
-  step count and second-pass guidance made no visible difference at a fixed seed.
+  **Do not use Hires Fix with Flux.2 Klein.** Both ways of doing a second pass fail on it,
+  measured at fixed seeds on real three-person requests. Pixel-space upscalers (Lanczos,
+  ESRGAN, at every denoise from 0.20 to 0.45, 6 or 20 steps, either scheduler) come out
+  over-baked on every surface — crunchy skin, exaggerated stucco, burnt highlights. Latent
+  upscale (0.40–0.65) comes out smooth but smears dark grime on faces, jeans and hands, and
+  above 0.50 starts redrawing details (Eve grew glasses). The implementation is latent at 0.50
+  because that is the least bad, and it may suit other checkpoints; it is off by default.
 
-Landscape is the wrong shape for a solo portrait, but for group shots it is the right one —
-Hires Fix is what lets a group stay landscape and still look like the people in it.
+**What actually fixes likeness in group shots is the `xx-large` size (2048px).** Klein 9B
+renders 2048×1152 landscape / 1536×2048 portrait cleanly in a single pass in roughly twice the
+time of a `large` image (40s vs 18s on an RTX 6000), and a face in a three-person landscape goes from ~100px to
+~135px tall — enough for freckles. Group shots stay landscape; just make the canvas bigger.
 
 ### Image Naming Convention
 Images can be saved via the chat window by clicking on them. Auto downloaded to your Downloads folder

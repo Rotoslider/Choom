@@ -2331,7 +2331,7 @@ You have access to the following tools:
 - \`generate_image\` - Generate an image using Stable Diffusion. Parameters:
   - \`prompt\`: Detailed description of the image
   - \`self_portrait\`: Set to TRUE when generating an image of yourself/your appearance (selfie, portrait, picture of you)
-  - \`size\`: Optional size preset - "small" (768px), "medium" (1024px), "large" (1536px), "x-large" (1856px)
+  - \`size\`: Optional size preset - "small" (768px), "medium" (1024px), "large" (1536px), "x-large" (1856px), "xx-large" (2048px)
   - \`aspect\`: Optional aspect ratio - "portrait" (3:4), "portrait-tall" (9:16), "square" (1:1), "landscape" (16:9), "wide" (21:9)
 
 **Weather:**

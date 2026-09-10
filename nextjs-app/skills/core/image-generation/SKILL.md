@@ -20,7 +20,7 @@ dependencies: []
 Auto-detected from phrases: "selfie", "picture of me/you/yourself", "what do you look like"
 
 ## Size/Aspect Parameters
-- size: "small" (768px), "medium" (1024px), "large" (1536px), "x-large" (1856px)
+- size: "small" (768px), "medium" (1024px), "large" (1536px), "x-large" (1856px), "xx-large" (2048px)
 - aspect: "portrait" (3:4), "portrait-tall" (9:16), "square" (1:1), "landscape" (16:9), "wide" (21:9)
 
 ## Important
