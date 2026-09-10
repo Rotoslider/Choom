@@ -164,6 +164,30 @@ export async function resolveReferences(options: {
     }
   }
 
+  // A subject named in the prompt but left out of `references` still needs its
+  // reference images. Observed: "aloy and donny, intimate night portrait ...
+  // donny tall and rugged with salt-and-pepper beard" resolved to aloy alone, so
+  // the man was painted from imagination — no error, nothing unknown, just a
+  // person who did not look like himself. Naming someone in the prompt is a
+  // clear enough signal of intent to attach them.
+  if (prompt.trim()) {
+    for (const subject of subjects) {
+      if (seen.has(subject.id) || subject.images.length === 0) continue;
+      // Word boundaries matter: "eve" must not fire on "evening", and these
+      // prompts are full of them. Two-character names are skipped as too risky.
+      const candidates = [subject.slug, subject.name]
+        .filter((v) => v && v.replace(/[^A-Za-z0-9]/g, '').length >= 3)
+        .map((v) => v.replace(/[-_]+/g, ' ').trim());
+      for (const c of candidates) {
+        const re = new RegExp(`(^|[^a-z0-9])${c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^a-z0-9]|$)`, 'i');
+        if (re.test(prompt)) {
+          push(subject);
+          break;
+        }
+      }
+    }
+  }
+
   // Reference order is meaningful to Flux.2: features bleed from earlier
   // references onto later ones unless the prompt introduces people in the same
   // order. Models do not naturally do that — a four-person portrait resolved

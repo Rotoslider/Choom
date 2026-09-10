@@ -194,6 +194,30 @@ describe('reference resolution', () => {
     expect(res.images).toHaveLength(4);
   });
 
+  it('attaches a subject the prompt names but references omitted', async () => {
+    // Observed: "aloy and donny, intimate night portrait ... donny tall and
+    // rugged" resolved to aloy alone, so the man was painted from imagination.
+    const res = await resolveReferences({
+      choomId: 'choom-genesis',
+      requested: [],
+      isSelfPortrait: true,
+      prompt: 'genesis and owner sitting on the porch steps at night under the stars',
+    });
+    expect(res.used.map((u) => u.slug).sort()).toEqual(['genesis', 'owner']);
+  });
+
+  it('does not fire on a word that merely contains a subject name', async () => {
+    // "eve" inside "evening" must not drag Eve into a solo portrait — these
+    // prompts are full of golden hours and evenings.
+    const res = await resolveReferences({
+      choomId: 'choom-genesis',
+      requested: [],
+      isSelfPortrait: true,
+      prompt: 'a quiet evening on the porch, whatever the weather',
+    });
+    expect(res.used.map((u) => u.slug)).toEqual(['genesis']);
+  });
+
   it('reports names that match nothing instead of failing', async () => {
     const result = await resolveReferences({
       choomId: 'choom-genesis',
