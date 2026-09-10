@@ -41,33 +41,43 @@ export async function GET(request: Request) {
   // Whole slices so the client can overwrite server-owned settings wholesale.
   // .env wins for the few fields it can set; otherwise the bridge value (what
   // the UI last saved) is the truth.
+  // Precedence: bridge-config.json BEFORE the environment.
+  //
+  // The Settings UI writes bridge-config.json, and store.ts treats the server as
+  // the source of truth — but these lines read the env first, so a .env value
+  // silently overrode every change made in the UI. Editing an endpoint appeared
+  // to work, then reverted on the next load, and the app kept talking to the old
+  // host. That cost real debugging time twice.
+  //
+  // $ENV is now the seed for a fresh install: it supplies the value until
+  // something is saved, and stops winning once the user has set one.
   return NextResponse.json({
     local: isLocalRequest(request),
     llm: {
       ...bLlm,
-      endpoint: process.env.LLM_ENDPOINT || (bLlm.endpoint as string) || 'http://localhost:1234/v1',
-      model: process.env.LLM_MODEL || (bLlm.model as string) || 'local-model',
+      endpoint: (bLlm.endpoint as string) || process.env.LLM_ENDPOINT || 'http://localhost:1234/v1',
+      model: (bLlm.model as string) || process.env.LLM_MODEL || 'local-model',
     },
     tts: {
       ...bTts,
-      endpoint: process.env.TTS_ENDPOINT || (bTts.endpoint as string) || 'http://localhost:8004',
+      endpoint: (bTts.endpoint as string) || process.env.TTS_ENDPOINT || 'http://localhost:8004',
     },
     stt: {
       ...bStt,
-      endpoint: process.env.STT_ENDPOINT || (bStt.endpoint as string) || 'http://localhost:5000',
+      endpoint: (bStt.endpoint as string) || process.env.STT_ENDPOINT || 'http://localhost:5000',
     },
     imageGen: {
       ...bImage,
-      endpoint: process.env.IMAGE_GEN_ENDPOINT || (bImage.endpoint as string) || 'http://localhost:7860',
+      endpoint: (bImage.endpoint as string) || process.env.IMAGE_GEN_ENDPOINT || 'http://localhost:7860',
     },
     memory: {
       ...bMemory,
-      endpoint: process.env.MEMORY_ENDPOINT || (bMemory.endpoint as string) || 'http://localhost:8100',
+      endpoint: (bMemory.endpoint as string) || process.env.MEMORY_ENDPOINT || 'http://localhost:8100',
     },
     vision: {
       ...bVision,
-      endpoint: process.env.VISION_ENDPOINT || (bVision.endpoint as string) || 'http://localhost:1234',
-      model: process.env.VISION_MODEL || (bVision.model as string) || '',
+      endpoint: (bVision.endpoint as string) || process.env.VISION_ENDPOINT || 'http://localhost:1234',
+      model: (bVision.model as string) || process.env.VISION_MODEL || '',
     },
     weather: {
       ...bWeather,
