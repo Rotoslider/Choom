@@ -46,17 +46,18 @@ export const tools: ToolDefinition[] = [
           type: 'array',
           items: { type: 'string' },
           description:
-            'Names of reference subjects to condition the image on, for keeping people, places and '
-            + 'objects looking the same across images. Use each name EXACTLY as quoted under '
-            + 'Available references below — do not append _reference, _sheet or similar. '
-            + 'objects looking the same across images. Name every subject that should appear: '
-            + 'e.g. ["genesis", "owner", "cabin-exterior"] for two people outside a specific building. '
-            + 'Your own reference is added automatically for self-portraits, so only name the OTHER '
-            + 'subjects there. Omit entirely when nothing recurring is in the picture. '
-            + 'IMPORTANT when naming two or more people: describe each one distinctly in the prompt, '
-            + 'in the same order you list them here (e.g. "the first woman, with round glasses, in a '
-            + 'green flannel; the second woman, no glasses, in a navy jacket"). Without that, clothing '
-            + 'and features bleed from the first person onto everyone else.',
+            'Subjects from the shared reference library to condition the image on, so people, '
+            + 'places and objects look the same across images. These are ALREADY LOADED and listed '
+            + 'under "Available references" below — there are no files to find, and searching the '
+            + 'workspace for character sheets or portraits will not find them. '
+            + 'Use each name exactly as quoted; do not append _reference, _sheet or similar. '
+            + 'e.g. ["genesis", "owner", "cabin-exterior"]. '
+            + 'Anyone you name in the prompt is attached automatically even if you leave them out '
+            + 'here, and your own reference is attached on self-portraits — so the argument is a '
+            + 'convenience, not a requirement. Omit it when nothing recurring is in the picture. '
+            + 'Do NOT describe the face, hair, eye colour, skin or build of anyone referenced: the '
+            + 'reference image supplies their likeness, and a conflicting description overrides it '
+            + 'and produces the wrong person. Describe the scene, pose, clothing and mood instead.',
         },
       },
       required: ['prompt'],
