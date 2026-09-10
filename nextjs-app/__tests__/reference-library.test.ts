@@ -257,6 +257,32 @@ describe('reference resolution', () => {
     expect(res.used.map((u) => u.slug)).toEqual(['owner', 'eve', 'genesis']);
   });
 
+  it('puts whoever stands behind last, and reports the seating as known', async () => {
+    // Four-person tests placed the back-row person correctly as the last
+    // reference; "behind" counts as a seat so the roster can still say
+    // "left to right".
+    const res = await resolveReferences({
+      choomId: 'choom-genesis',
+      requested: ['owner', 'genesis', 'eve'],
+      prompt: 'Eve on the left, Genesis on the right, Owner standing behind them both.',
+    });
+    expect(res.used.map((u) => u.slug)).toEqual(['eve', 'genesis', 'owner']);
+    expect(res.seated).toBe(true);
+  });
+
+  it('does not treat "on X\'s left" as a seat, and says so', async () => {
+    // Possessive left/right is a relation from an unknown viewpoint. Fall back
+    // to mention order and flag that seating was NOT established, so the
+    // roster does not assert an order the scene may contradict.
+    const res = await resolveReferences({
+      choomId: 'choom-genesis',
+      requested: ['owner', 'eve', 'genesis'],
+      prompt: 'Owner in the center. Eve on Owner\'s left. Genesis on Owner\'s right.',
+    });
+    expect(res.used.map((u) => u.slug)).toEqual(['owner', 'eve', 'genesis']);
+    expect(res.seated).toBe(false);
+  });
+
   it('reports names that match nothing instead of failing', async () => {
     const result = await resolveReferences({
       choomId: 'choom-genesis',
@@ -300,7 +326,7 @@ describe('reference resolution', () => {
   it('returns nothing when the library is empty', async () => {
     findMany.mockResolvedValue([]);
     const result = await resolveReferences({ choomId: 'choom-genesis', isSelfPortrait: true });
-    expect(result).toEqual({ images: [], used: [], unknown: [], truncated: false });
+    expect(result).toEqual({ images: [], used: [], seated: false, unknown: [], truncated: false });
   });
 
   it('skips a subject whose images are all disabled', async () => {

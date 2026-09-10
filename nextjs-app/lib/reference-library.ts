@@ -32,6 +32,8 @@ export interface ResolvedReferences {
   images: string[];
   /** Subjects that made it in, in order — for logging and the tool result. */
   used: ResolvedSubject[];
+  /** True when the prompt gave every subject a seat and references were sorted by it. */
+  seated: boolean;
   /** Names the model asked for that matched nothing. */
   unknown: string[];
   /** True when the cap trimmed the request. */
@@ -136,7 +138,7 @@ export async function resolveReferences(options: {
 
   const subjects = await loadSubjects();
   if (subjects.length === 0) {
-    return { images: [], used: [], unknown: [], truncated: false };
+    return { images: [], used: [], seated: false, unknown: [], truncated: false };
   }
 
   let ordered: SubjectRow[] = [];
@@ -230,6 +232,7 @@ export async function resolveReferences(options: {
   //
   // When the prompt states where everyone sits, sort by that. Only when every
   // subject has a position; a half-sorted list is worse than mention order.
+  let seated = false;
   if (prompt.trim() && ordered.length > 1) {
     const text = prompt;
     const nameForms = (sub: SubjectRow) =>
@@ -239,12 +242,14 @@ export async function resolveReferences(options: {
         .filter((v) => v.replace(/[^A-Za-z0-9]/g, '').length >= 3);
     const esc = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     // A seat word and where it sits in a chunk; the nearest one to the name wins.
-    const SEAT = /(?:on|to|at|from) the (?:far )?(left|right)\b|\b(left|right)(?:most| side)\b|\bin the (middle|center|centre)\b|\b(between)\b|\b(LEFT|MIDDLE|CENTER|CENTRE|RIGHT)\s*:/gi;
+    const SEAT = /(?:on|to|at|from) the (?:far )?(left|right)\b|\b(left|right)(?:most| side)\b|\bin the (middle|center|centre)\b|\b(between)\b|\b(LEFT|MIDDLE|CENTER|CENTRE|RIGHT|BACK)\s*:|\b(behind|back row|in the back|in back)\b/gi;
     const seatIn = (chunk: string, pickLast: boolean): number | undefined => {
       let found: { at: number; seat: number } | undefined;
       for (const m of chunk.matchAll(SEAT)) {
-        const word = (m[1] || m[2] || m[3] || m[4] || m[5] || '').toLowerCase();
-        const seat = word === 'left' ? 0 : word === 'right' ? 2 : 1;
+        const word = (m[1] || m[2] || m[3] || m[4] || m[5] || m[6] || '').toLowerCase();
+        // Back row sorts after the front row: four-person tests placed the
+        // person "standing behind" correctly as the last reference.
+        const seat = word === 'left' ? 0 : word === 'right' ? 2 : /back|behind/.test(word) ? 3 : 1;
         const at = m.index ?? 0;
         if (!found || (pickLast ? at > found.at : at < found.at)) found = { at, seat };
       }
@@ -280,7 +285,8 @@ export async function resolveReferences(options: {
       return best?.seat;
     };
     const seats = ordered.map((sub) => seatOf(sub));
-    if (seats.every((seat) => seat !== undefined)) {
+    seated = seats.every((seat) => seat !== undefined);
+    if (seated) {
       ordered = ordered
         .map((sub, i) => ({ sub, i, seat: seats[i] as number }))
         .sort((a, b) => (a.seat === b.seat ? a.i - b.i : a.seat - b.seat))
@@ -354,6 +360,7 @@ export async function resolveReferences(options: {
   return {
     images: loaded.filter((b): b is string => b !== null),
     used,
+    seated,
     unknown,
     truncated,
   };

@@ -365,8 +365,14 @@ export async function executeToolCall(
           prompt = prompt.replace(`${cp}, `, '');
         }
         // "left to right" is literal: reference order is where people land in the
-        // frame, and the roster is read the same way.
-        prompt = `People in this image, left to right, matching the reference images in order: ${roster}. ${prompt}`;
+        // frame, and the roster is read the same way — so only say it when the
+        // prompt actually seated everyone. A roster that claims an order the scene
+        // contradicts wins over the scene, and that is what shuffled a four-person
+        // portrait whose prompt said "on Aloy's left" instead of "on the left".
+        const lead = library.seated
+          ? 'People in this image, left to right, matching the reference images in order'
+          : 'People in this image, matching the reference images in order';
+        prompt = `${lead}: ${roster}. ${prompt}`;
       }
       const referenceMaxDim = (modeSettings.referenceMaxDim as number) || REFERENCE_IMAGE_DEFAULT_MAX_DIM;
       if (referenceImages.length > 0) {
