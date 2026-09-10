@@ -197,13 +197,34 @@ export async function resolveReferences(options: {
       .map((e) => e.sub);
   }
 
+  // Budget images per subject by how many subjects there are. Sending a sheet
+  // AND a face for everyone does not scale: measured on a 20GB card with Klein
+  // resident (~18GB), three people at sheet+face is six reference latents and
+  // Forge dies with CUDA OOM — "Currently allocated 17.92 GiB, free 19.44 MiB".
+  //
+  // It is also unnecessary. With one face each and no appearance text at all,
+  // three people came back correct — ginger braids, blonde, blonde-with-glasses.
+  // The sheet earns its place for a solo or a pair, where the extra angles and
+  // full-body proportions help; past that the face is what carries likeness.
+  const perSubject = ordered.length >= 3 ? 1 : 2;
+  const budgeted = ordered.map((subject) => {
+    if (subject.images.length <= perSubject) return subject;
+    // Prefer the face: on a multi-panel sheet the face is a small fraction of
+    // the pixels, so it is the weaker likeness signal of the two.
+    const byKind = [...subject.images].sort((a, b) => {
+      const rank = (k: string) => (k === 'face' ? 0 : k === 'sheet' ? 1 : 2);
+      return rank(a.kind) - rank(b.kind);
+    });
+    return { ...subject, images: byKind.slice(0, perSubject) };
+  });
+
   // Flatten to individual images, stopping at the cap. Trimming whole subjects
   // rather than half of one keeps a person's sheet and face together.
   const used: ResolvedSubject[] = [];
   const files: { subjectId: string; file: string }[] = [];
   let truncated = false;
 
-  for (const subject of ordered) {
+  for (const subject of budgeted) {
     if (files.length + subject.images.length > cap) {
       truncated = true;
       break;
