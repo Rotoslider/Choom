@@ -383,22 +383,54 @@ export async function runChatTurn(params: ChatTurnParams): Promise<void> {
           const MAX_DB_FIELD_CHARS = 100_000;
           let toolCallsJson = allToolCalls.length > 0 ? JSON.stringify(allToolCalls) : null;
           let toolResultsJson = allToolResults.length > 0 ? JSON.stringify(allToolResults) : null;
-          // Truncate by dropping trailing array entries to keep valid JSON (not slicing mid-string)
+          // Shrink the biggest results first, and never drop one carrying an
+          // imageId. Popping trailing entries alone threw away generate_image to
+          // keep two 48KB recursive workspace_list_files results — so the picture
+          // vanished from the chat window the moment the turn was persisted,
+          // while still showing in the gallery (a separate table). The listing is
+          // replayable; the link to the image is not.
+          const carriesImage = (entry: unknown): boolean => {
+            const r = (entry as { result?: unknown })?.result;
+            if (!r || typeof r !== 'object') return false;
+            const o = r as { imageId?: unknown; imageUrl?: unknown };
+            return Boolean(o.imageId || o.imageUrl);
+          };
           const truncateJsonArray = (json: string, label: string): string => {
             if (json.length <= MAX_DB_FIELD_CHARS) return json;
             try {
-              const arr = JSON.parse(json) as unknown[];
-              while (arr.length > 1) {
-                arr.pop();
-                const attempt = JSON.stringify(arr);
+              const arr = JSON.parse(json) as Array<Record<string, unknown>>;
+
+              // 1. Replace the fattest non-image results with a marker, largest first.
+              const sized = arr
+                .map((entry, i) => ({ i, size: JSON.stringify(entry).length }))
+                .filter(({ i }) => !carriesImage(arr[i]))
+                .sort((a, b) => b.size - a.size);
+              for (const { i, size } of sized) {
+                if (JSON.stringify(arr).length <= MAX_DB_FIELD_CHARS) break;
+                if (size < 2_000) break; // nothing left worth shrinking
+                arr[i] = {
+                  ...arr[i],
+                  result: `[trimmed for storage — ${size.toLocaleString()} chars]`,
+                };
+              }
+              let attempt = JSON.stringify(arr);
+              if (attempt.length <= MAX_DB_FIELD_CHARS) {
+                console.warn(`   ⚠️ ${label} shrunk for DB save: ${json.length.toLocaleString()} → ${attempt.length.toLocaleString()} chars, all ${arr.length} entries kept`);
+                return attempt;
+              }
+
+              // 2. Still too big: drop trailing entries, skipping any with an image.
+              for (let i = arr.length - 1; i >= 0 && arr.length > 1; i--) {
+                if (carriesImage(arr[i])) continue;
+                arr.splice(i, 1);
+                attempt = JSON.stringify(arr);
                 if (attempt.length <= MAX_DB_FIELD_CHARS) {
                   console.warn(`   ⚠️ ${label} trimmed for DB save: ${arr.length} entries kept (${json.length.toLocaleString()} → ${attempt.length.toLocaleString()} chars)`);
                   return attempt;
                 }
               }
-              // Even single entry too large — store null
-              console.warn(`   ⚠️ ${label} too large even with 1 entry (${json.length.toLocaleString()} chars) — dropping`);
-              return '[]';
+              console.warn(`   ⚠️ ${label} still ${attempt.length.toLocaleString()} chars after trimming — keeping image-bearing entries`);
+              return attempt;
             } catch {
               return json.slice(0, MAX_DB_FIELD_CHARS); // fallback
             }
