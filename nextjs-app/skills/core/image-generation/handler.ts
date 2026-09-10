@@ -385,6 +385,24 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
         modeSettings.referenceImages as ReferenceImage[] | undefined
       );
       const referenceImages = [...library.images, ...pinned];
+
+      // Lead with who the references actually depict. Models describe other
+      // people from imagination — a three-person scene came back with Genesis
+      // dark-haired and un-bespectacled and Eve a different race, because the
+      // prompt said "a woman with dark hair" and "dark curly hair and warm brown
+      // skin" and never named either of them. Klein weights the front of the
+      // prompt most, and prepending the speaker's own characterPrompt already
+      // proved it fixes exactly this, so state every referenced subject up front
+      // in the order their reference images are supplied.
+      if (library.used.length > 1) {
+        const roster = library.used
+          .map((u, i) => {
+            const look = (u.appearance || '').replace(/\s+/g, ' ').trim().slice(0, 160);
+            return `${i + 1}. ${u.name}${look ? ` — ${look}` : ''}`;
+          })
+          .join(' ');
+        prompt = `People in this image, matching the reference images in order: ${roster}. ${prompt}`;
+      }
       const referenceMaxDim = (modeSettings.referenceMaxDim as number) || REFERENCE_IMAGE_DEFAULT_MAX_DIM;
       if (referenceImages.length > 0) {
         const named = library.used.map(u => u.slug).join(', ') || 'none';

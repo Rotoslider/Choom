@@ -58,10 +58,10 @@ afterAll(() => rmSync(TEST_ROOT, { recursive: true, force: true }));
 
 function library() {
   return [
-    { id: 'sub-genesis', slug: 'genesis', name: 'Genesis', category: 'character', choomId: 'choom-genesis', images: GENESIS },
-    { id: 'sub-eve', slug: 'eve', name: 'Eve', category: 'character', choomId: 'choom-eve', images: EVE },
-    { id: 'sub-owner', slug: 'owner', name: 'Owner', category: 'person', choomId: null, images: OWNER },
-    { id: 'sub-house', slug: 'cabin-exterior', name: 'Cabin exterior', category: 'place', choomId: null, images: HOUSE },
+    { id: 'sub-genesis', slug: 'genesis', name: 'Genesis', category: 'character', choomId: 'choom-genesis', description: 'Genesis, blonde, glasses', choom: null, images: GENESIS },
+    { id: 'sub-eve', slug: 'eve', name: 'Eve', category: 'character', choomId: 'choom-eve', description: 'Eve, blonde, blue eyes', choom: null, images: EVE },
+    { id: 'sub-owner', slug: 'owner', name: 'Owner', category: 'person', choomId: null, description: 'Owner, tall', choom: null, images: OWNER },
+    { id: 'sub-house', slug: 'cabin-exterior', name: 'Cabin exterior', category: 'place', choomId: null, description: 'Cabin exterior', choom: null, images: HOUSE },
   ];
 }
 

@@ -22,6 +22,8 @@ export interface ResolvedSubject {
   slug: string;
   name: string;
   category: string;
+  /** What this subject actually looks like, for the prompt roster. */
+  appearance: string;
   images: { id: string; file: string; kind: string }[];
 }
 
@@ -42,6 +44,8 @@ type SubjectRow = {
   name: string;
   category: string;
   choomId: string | null;
+  description: string | null;
+  choom: { imageSettings: string | null } | null;
   images: { id: string; file: string; kind: string; enabled: boolean; order: number }[];
 };
 
@@ -100,6 +104,8 @@ async function loadSubjects(): Promise<SubjectRow[]> {
       name: true,
       category: true,
       choomId: true,
+      description: true,
+      choom: { select: { imageSettings: true } },
       images: {
         where: { enabled: true },
         orderBy: [{ order: 'asc' }, { createdAt: 'asc' }],
@@ -206,6 +212,7 @@ export async function resolveReferences(options: {
       slug: subject.slug,
       name: subject.name,
       category: subject.category,
+      appearance: choomAppearance(subject.choom?.imageSettings ?? null) || (subject.description ?? '').trim(),
       images: subject.images.map((i) => ({ id: i.id, file: i.file, kind: i.kind })),
     });
     for (const image of subject.images) {
