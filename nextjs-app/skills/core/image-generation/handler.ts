@@ -2,7 +2,7 @@ import { BaseSkillHandler, SkillHandlerContext } from '@/lib/skill-handler';
 import { ImageGenClient, buildPromptWithLoras } from '@/lib/image-gen-client';
 import { WorkspaceService } from '@/lib/workspace-service';
 import prisma from '@/lib/db';
-import { computeImageDimensions, HIRES_FIX_DEFAULTS } from '@/lib/types';
+import { computeImageDimensions, HIRES_FIX_DEFAULTS, imageAutonomy } from '@/lib/types';
 import type { ImageSize, ImageAspect, ImageGenSettings, ToolCall, ToolResult } from '@/lib/types';
 import { REFERENCE_IMAGE_DEFAULT_MAX_DIM, WORKSPACE_ROOT, WORKSPACE_ALLOWED_EXTENSIONS, WORKSPACE_IMAGE_EXTENSIONS } from '@/lib/config';
 import { waitForGpu } from '@/lib/gpu-lock';
@@ -227,18 +227,25 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
       let genWidth: number;
       let genHeight: number;
 
+      // What the Choom may choose. Anything it is not allowed to choose is
+      // taken from the mode settings even if the tool call supplied it.
+      const autonomy = imageAutonomy(modeSettings);
       // Filter out "None"/null string values that some models pass for optional int params
       const argWidth = typeof toolCall.arguments.width === 'number' ? toolCall.arguments.width : parseInt(toolCall.arguments.width as string);
       const argHeight = typeof toolCall.arguments.height === 'number' ? toolCall.arguments.height : parseInt(toolCall.arguments.height as string);
-      if (argWidth > 0 && argHeight > 0) {
+      if (argWidth > 0 && argHeight > 0 && autonomy.size && autonomy.aspect) {
         genWidth = argWidth;
         genHeight = argHeight;
       } else {
         // Strip stray quotes/backslashes some models leak in via XML tool-call
         // parsing bleed (e.g. aspect="wide\""). Coerce to a known key or fall through.
         const cleanEnum = (v: unknown): string => typeof v === 'string' ? v.replace(/["\\\s]/g, '').toLowerCase() : '';
-        const rawSize = cleanEnum(toolCall.arguments.size) || cleanEnum(modeSettings.size) || 'medium';
-        const rawAspect = cleanEnum(toolCall.arguments.aspect) || cleanEnum(modeSettings.aspect) || (isSelfPortrait ? 'portrait' : 'square');
+        const argSize = cleanEnum(toolCall.arguments.size);
+        const argAspect = cleanEnum(toolCall.arguments.aspect);
+        if (argSize && !autonomy.size) console.log(`   📐 Ignoring requested size "${argSize}" — Choom may not choose size in this mode`);
+        if (argAspect && !autonomy.aspect) console.log(`   📐 Ignoring requested aspect "${argAspect}" — Choom may not choose aspect in this mode`);
+        const rawSize = (autonomy.size ? argSize : '') || cleanEnum(modeSettings.size) || 'medium';
+        const rawAspect = (autonomy.aspect ? argAspect : '') || cleanEnum(modeSettings.aspect) || (isSelfPortrait ? 'portrait' : 'square');
         const size = rawSize as ImageSize;
         const aspect = rawAspect as ImageAspect;
 

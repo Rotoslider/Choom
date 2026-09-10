@@ -8,6 +8,8 @@
  * app/api/chat/route.ts prep.
  */
 import { getOwnerIdentity } from '@/lib/owner';
+import { imageAutonomy } from '@/lib/types';
+import type { ImageModeSettings } from '@/lib/types';
 import type { Choom } from '@prisma/client';
 
 export interface SystemPromptParams {
@@ -142,18 +144,26 @@ When presenting search results:
     // throw on EVERY turn for this Choom until the row is hand-fixed. The
     // route's own imageSettings parse (settings-hierarchy log) is already
     // defensive — mirror it.
-    let choomImageSettings: { selfPortrait?: { choomDecides?: boolean }; general?: { choomDecides?: boolean } } | null = null;
+    let choomImageSettings: { selfPortrait?: ImageModeSettings; general?: ImageModeSettings } | null = null;
     try {
       choomImageSettings = choom.imageSettings ? JSON.parse(choom.imageSettings) : null;
     } catch { /* malformed imageSettings — skip choomDecides block */ }
     let finalSystemPrompt = systemPrompt;
-    if (choomImageSettings?.selfPortrait?.choomDecides || choomImageSettings?.general?.choomDecides) {
-      finalSystemPrompt += `\n\n## IMAGE SIZE/ASPECT AUTONOMY\nWhen generating images, you should pick the most appropriate size and aspect ratio for the content. For example:
-- Self-portraits: use "portrait" or "portrait-tall" aspect
-- Landscapes/scenery: use "landscape" or "wide" aspect
-- General art: use "medium" or "large" size with appropriate aspect
-- Quick sketches: use "small" size
-Always include both \`size\` and \`aspect\` parameters when calling generate_image.`;
+    // Size and aspect are separate grants per mode, and the handler enforces
+    // them — so tell the Choom exactly what is hers to pick and what to leave
+    // out, rather than "always include both".
+    const autonomyLines: string[] = [];
+    for (const [label, mode] of [['Self-portraits', choomImageSettings?.selfPortrait], ['Other images', choomImageSettings?.general]] as const) {
+      const a = imageAutonomy(mode);
+      if (!a.size && !a.aspect) continue;
+      const may = [a.size && '`size`', a.aspect && '`aspect`'].filter(Boolean).join(' and ');
+      const fixed = [!a.size && 'size', !a.aspect && 'aspect'].filter(Boolean).join(' and ');
+      autonomyLines.push(`- ${label}: choose ${may} to suit the picture${fixed ? ` — ${fixed} is fixed by your settings, so leave that parameter out` : ''}.`);
+    }
+    if (autonomyLines.length > 0) {
+      finalSystemPrompt += `\n\n## IMAGE SIZE/ASPECT AUTONOMY\nWhen calling generate_image, some framing choices are yours:\n${autonomyLines.join('\n')}
+Aspect guide: "portrait" or "portrait-tall" for a close-up or a standing figure; "landscape" or "wide" when the setting matters — a dock, a road, a room, a group; "square" for a centred subject. A self-portrait may be landscape when the scene is the point of the picture.
+Size guide: "large" or "xx-large" for people (faces need the pixels), "medium" for quick sketches and objects, "small" only for throwaway drafts.`;
     }
 
     // Group-room context: this Choom is one participant in a shared, turn-based

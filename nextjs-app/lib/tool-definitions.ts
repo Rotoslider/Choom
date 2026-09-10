@@ -225,7 +225,7 @@ export const utilityTools: ToolDefinition[] = [
         },
         aspect: {
           type: 'string',
-          description: 'Image aspect ratio: "portrait" (3:4), "portrait-tall" (9:16), "square" (1:1), "landscape" (16:9), "wide" (21:9). For self-portraits, prefer "portrait" or "portrait-tall".',
+          description: 'Image aspect ratio: "portrait" (3:4), "portrait-tall" (9:16), "square" (1:1), "landscape" (16:9), "wide" (21:9). Portrait suits a close-up or a standing figure; landscape or wide when the setting is part of the picture, including a self-portrait in a scene.',
           enum: ['portrait', 'portrait-tall', 'square', 'landscape', 'wide'],
         },
         width: {

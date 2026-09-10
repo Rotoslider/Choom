@@ -738,7 +738,6 @@ function ImageModeSettingsEditor({
               <SelectContent>
                 <SelectItem value="__default__">Default</SelectItem>
                 {(Object.entries(IMAGE_ASPECTS) as [ImageAspect, { label: string }][]).map(([key, { label }]) => {
-                  if (mode === 'selfPortrait' && !['portrait', 'portrait-tall', 'square'].includes(key)) return null;
                   return <SelectItem key={key} value={key}>{label}</SelectItem>;
                 })}
               </SelectContent>
@@ -828,12 +827,27 @@ function ImageModeSettingsEditor({
           <div className="space-y-0.5">
             <label className="text-sm font-medium">Choom Decides Size</label>
             <p className="text-xs text-muted-foreground">
-              Let the LLM pick size and aspect for each image
+              Let the Choom pick the size preset per image. Off: the Default Size above is
+              enforced even if the Choom asks for another.
             </p>
           </div>
           <Switch
-            checked={modeSettings.choomDecides || false}
-            onCheckedChange={(checked) => onSettingsChange({ choomDecides: checked || undefined })}
+            checked={modeSettings.choomDecidesSize ?? modeSettings.choomDecides ?? false}
+            onCheckedChange={(checked) => onSettingsChange({ choomDecidesSize: checked, choomDecidesAspect: modeSettings.choomDecidesAspect ?? modeSettings.choomDecides ?? false, choomDecides: undefined })}
+          />
+        </div>
+
+        <div className="flex items-center justify-between">
+          <div className="space-y-0.5">
+            <label className="text-sm font-medium">Choom Decides Aspect</label>
+            <p className="text-xs text-muted-foreground">
+              Let the Choom pick portrait, landscape, square, etc. per image. Off: the Default
+              Aspect above is enforced.
+            </p>
+          </div>
+          <Switch
+            checked={modeSettings.choomDecidesAspect ?? modeSettings.choomDecides ?? false}
+            onCheckedChange={(checked) => onSettingsChange({ choomDecidesAspect: checked, choomDecidesSize: modeSettings.choomDecidesSize ?? modeSettings.choomDecides ?? false, choomDecides: undefined })}
           />
         </div>
 
@@ -1107,7 +1121,10 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave, onDelete }: 
         if (s.hiresScale !== undefined && s.hiresScale !== null) result.hiresScale = s.hiresScale;
         if (s.hiresDenoise !== undefined && s.hiresDenoise !== null) result.hiresDenoise = s.hiresDenoise;
         if (s.hiresSteps !== undefined && s.hiresSteps !== null) result.hiresSteps = s.hiresSteps;
-        if (s.choomDecides) result.choomDecides = s.choomDecides;
+        // Legacy single toggle folds into the two new ones on save.
+        const autonomy = { size: s.choomDecidesSize ?? s.choomDecides, aspect: s.choomDecidesAspect ?? s.choomDecides };
+        if (autonomy.size) result.choomDecidesSize = true;
+        if (autonomy.aspect) result.choomDecidesAspect = true;
         if (s.modules && s.modules.length > 0) result.modules = s.modules;
         if (s.referenceImages && s.referenceImages.length > 0) result.referenceImages = s.referenceImages;
         if (s.referenceMaxDim !== undefined && s.referenceMaxDim !== null) result.referenceMaxDim = s.referenceMaxDim;

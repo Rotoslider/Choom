@@ -22,7 +22,7 @@ import type {
   ToolCall, ToolResult, ImageGenSettings, WeatherSettings, SearchSettings, ImageSize, ImageAspect,
   CheckpointType, ReferenceImage,
 } from '@/lib/types';
-import { computeImageDimensions, HIRES_FIX_DEFAULTS } from '@/lib/types';
+import { computeImageDimensions, HIRES_FIX_DEFAULTS, imageAutonomy } from '@/lib/types';
 import { detectCheckpointType } from '@/lib/checkpoint-modules';
 import { loadReferenceImagesBase64 } from '@/lib/reference-images';
 import { resolveReferences } from '@/lib/reference-library';
@@ -285,12 +285,19 @@ export async function executeToolCall(
       let genWidth: number;
       let genHeight: number;
 
-      if (toolCall.arguments.width && toolCall.arguments.height) {
+      // What the Choom may choose. Anything it is not allowed to choose is
+      // taken from the mode settings even if the tool call supplied it.
+      const autonomy = imageAutonomy(modeSettings);
+      if (toolCall.arguments.width && toolCall.arguments.height && autonomy.size && autonomy.aspect) {
         genWidth = toolCall.arguments.width as number;
         genHeight = toolCall.arguments.height as number;
       } else {
-        const size = (toolCall.arguments.size as ImageSize) || modeSettings.size || 'medium';
-        const aspect = (toolCall.arguments.aspect as ImageAspect) || modeSettings.aspect
+        const argSize = toolCall.arguments.size as ImageSize | undefined;
+        const argAspect = toolCall.arguments.aspect as ImageAspect | undefined;
+        if (argSize && !autonomy.size) console.log(`   📐 Ignoring requested size "${argSize}" — Choom may not choose size in this mode`);
+        if (argAspect && !autonomy.aspect) console.log(`   📐 Ignoring requested aspect "${argAspect}" — Choom may not choose aspect in this mode`);
+        const size = (autonomy.size ? argSize : undefined) || modeSettings.size || 'medium';
+        const aspect = (autonomy.aspect ? argAspect : undefined) || modeSettings.aspect
           || (isSelfPortrait ? 'portrait' : 'square');
 
         const dims = computeImageDimensions(size, aspect);

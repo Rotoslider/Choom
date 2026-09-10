@@ -284,7 +284,25 @@ export interface ImageModeSettings {
   hiresScale?: number; // default 2
   hiresDenoise?: number; // default 0.5
   hiresSteps?: number; // second-pass steps, default 6
-  choomDecides?: boolean; // Let LLM pick size/aspect
+  // Image autonomy: which of size / aspect the Choom may choose per image.
+  // The tool's size/aspect arguments are ignored for whatever is off, so the
+  // setting is enforced, not just suggested in the system prompt. Split
+  // because they are different risks: with Klein a Choom picking "small" for
+  // a group shot loses the faces, but picking landscape for a selfie of
+  // herself on a dock is exactly the kind of choice worth giving her.
+  choomDecidesSize?: boolean;
+  choomDecidesAspect?: boolean;
+  // Legacy single toggle (both at once). Read as a fallback for either new
+  // field when that field is unset; the edit panel migrates it on save.
+  choomDecides?: boolean;
+}
+
+export function imageAutonomy(mode: Pick<ImageModeSettings, 'choomDecides' | 'choomDecidesSize' | 'choomDecidesAspect'> | undefined): { size: boolean; aspect: boolean } {
+  if (!mode) return { size: false, aspect: false };
+  return {
+    size: !!(mode.choomDecidesSize ?? mode.choomDecides),
+    aspect: !!(mode.choomDecidesAspect ?? mode.choomDecides),
+  };
 }
 
 export interface ImageSettings {

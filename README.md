@@ -266,7 +266,7 @@ Each Choom can override specific settings stored in the database:
 | `llmEndpoint` | LLM API endpoint |
 | `llmProviderId` | External provider from Settings > Providers (triggers Layer 3b — provider endpoint + API key + model profile auto-applied) |
 | `voiceId` | TTS voice |
-| `imageSettings` | Image generation config (JSON): checkpoint, modules, LoRA, reference images, size, aspect, upscale, hires fix, choomDecides |
+| `imageSettings` | Image generation config (JSON): checkpoint, modules, LoRA, reference images, size, aspect, upscale, hires fix, choomDecidesSize/Aspect |
 | `companionId` | Memory isolation ID |
 | `systemPrompt` | Character instructions |
 
@@ -374,7 +374,12 @@ Images use a size + aspect combination. All dimensions are computed to be divisi
 
 - **General**: Standard txt2img with configurable checkpoint, sampler, LoRA, reference images
 - **Self-Portrait**: Character-specific settings (dedicated checkpoint, LoRA, reference images, prompt prefix/suffix)
-- **LLM-Guided** (`choomDecides`): The LLM picks size and aspect ratio based on what it's generating
+- **LLM-Guided** (`choomDecidesSize` / `choomDecidesAspect`, per mode): two separate grants. With
+  aspect on and size off, a Choom can decide a self-portrait works better as a landscape (her
+  on a dock, feet over the edge) while the size stays pinned to what the model needs for faces.
+  These are enforced — a `size` or `aspect` the Choom passes without the grant is ignored and
+  logged, and `width`/`height` overrides need both. The old single `choomDecides` is read as
+  both and migrated to the pair on the next save.
 
 ### Reference Images (character consistency without LoRAs)
 
