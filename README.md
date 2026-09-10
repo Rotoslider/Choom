@@ -502,14 +502,20 @@ Two per-mode options in the Choom edit panel → Image:
 
 - **2x Upscaling** — Forge's `extra-single-image` API (Lanczos). Enlarges the pixels you already
   have; cannot add detail.
-- **Hires Fix** — a second denoising pass at *scale* × the base size (default 2×, denoise 0.45,
+- **Hires Fix** — a second denoising pass at *scale* × the base size (default 2×, denoise 0.30,
   6 steps), with the reference images still attached. This is the one that fixes likeness in
   group and full-body shots: a standing person in a 1536×864 landscape has a face about 100px
   tall, which is too few pixels for freckles or fine bone structure, so the model paints a
   generic face there no matter how good the references are. The second pass regenerates that
   face at 2× with the references in play. Measured on a solo three-quarter shot: the base pass
-  gave a generic redhead, the 2× pass brought back the reference's freckles. Roughly triples the
+  gave a generic redhead, the 2× pass brought back the reference's freckles. Roughly doubles the
   generation time. When both options are on, Hires Fix wins and the Lanczos pass is skipped.
+
+  **Denoise is the knob that matters.** Klein is a 4-step distilled model and at 0.45 the second
+  pass over-cooks every texture — crunchy skin, exaggerated stucco, burnt highlights, a look
+  the opposite of the usual oily-smooth AI skin. 0.30 keeps the likeness gain with natural skin.
+  If faces still come back generic, try 0.35; do not go higher. More second-pass steps (16 vs
+  6) and the second-pass guidance made no visible difference at a fixed seed, so leave them.
 
 Landscape is the wrong shape for a solo portrait, but for group shots it is the right one —
 Hires Fix is what lets a group stay landscape and still look like the people in it.
