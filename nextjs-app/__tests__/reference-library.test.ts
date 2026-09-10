@@ -146,6 +146,30 @@ describe('reference resolution', () => {
     expect(res.unknown).toEqual(['genesis-2031']);
   });
 
+  it('orders references the way the prompt introduces people', async () => {
+    // Observed live: a four-person portrait resolved aloy, eve, genesis, donny
+    // while the prompt read Donny, Eve, Aloy, Genesis — and only the first
+    // reference came out looking right, because Flux.2 bleeds features from
+    // earlier references onto later ones.
+    const res = await resolveReferences({
+      choomId: 'choom-genesis',
+      requested: ['genesis', 'eve', 'owner'],
+      prompt: 'Owner stands on the left, Eve beside him, Genesis on the right.',
+    });
+    expect(res.used.map((u) => u.slug)).toEqual(['owner', 'eve', 'genesis']);
+  });
+
+  it('leaves order alone when the prompt names nobody', async () => {
+    const res = await resolveReferences({
+      choomId: 'choom-genesis',
+      requested: ['eve', 'owner'],
+      isSelfPortrait: true,
+      prompt: 'a warm photo at golden hour on the porch',
+    });
+    // Bare selfie prompt: the Choom's own subject still leads.
+    expect(res.used[0]?.slug).toBe('genesis');
+  });
+
   it('reports names that match nothing instead of failing', async () => {
     const result = await resolveReferences({
       choomId: 'choom-genesis',

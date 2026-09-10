@@ -378,6 +378,7 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
         choomId,
         requested: requestedReferences,
         isSelfPortrait,
+        prompt,
       });
       const pinned = await loadReferenceImagesBase64(
         choomId,

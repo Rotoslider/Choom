@@ -122,8 +122,10 @@ export async function resolveReferences(options: {
   requested?: string[];
   isSelfPortrait?: boolean;
   maxReferences?: number;
+  /** The image prompt, used to order references the way the prompt reads. */
+  prompt?: string;
 }): Promise<ResolvedReferences> {
-  const { choomId, requested = [], isSelfPortrait = false } = options;
+  const { choomId, requested = [], isSelfPortrait = false, prompt = '' } = options;
   const cap = options.maxReferences ?? MAX_REFERENCES_PER_IMAGE;
 
   const subjects = await loadSubjects();
@@ -131,7 +133,7 @@ export async function resolveReferences(options: {
     return { images: [], used: [], unknown: [], truncated: false };
   }
 
-  const ordered: SubjectRow[] = [];
+  let ordered: SubjectRow[] = [];
   const seen = new Set<string>();
   const unknown: string[] = [];
 
@@ -154,6 +156,39 @@ export async function resolveReferences(options: {
     } else {
       unknown.push(request);
     }
+  }
+
+  // Reference order is meaningful to Flux.2: features bleed from earlier
+  // references onto later ones unless the prompt introduces people in the same
+  // order. Models do not naturally do that — a four-person portrait resolved
+  // aloy, eve, genesis, donny while the prompt read Donny, Eve, Aloy, Genesis,
+  // and only the first reference came out right. Rather than asking the model to
+  // keep two lists in sync, sort the references to match the prompt.
+  if (prompt.trim() && ordered.length > 1) {
+    const haystack = prompt.toLowerCase();
+    const mentionAt = (subject: SubjectRow): number => {
+      const needles = [subject.slug, subject.name]
+        .filter(Boolean)
+        .map((v) => v.toLowerCase().replace(/[-_]+/g, ' '));
+      let best = Infinity;
+      for (const n of needles) {
+        if (!n) continue;
+        const i = haystack.indexOf(n);
+        if (i !== -1 && i < best) best = i;
+      }
+      return best;
+    };
+    const positions = new Map(ordered.map((sub) => [sub.id, mentionAt(sub)]));
+    // Stable: subjects the prompt never names keep their existing relative order
+    // at the end, so a bare-prompt selfie still leads with the Choom herself.
+    ordered = ordered
+      .map((sub, i) => ({ sub, i }))
+      .sort((a, b) => {
+        const pa = positions.get(a.sub.id) ?? Infinity;
+        const pb = positions.get(b.sub.id) ?? Infinity;
+        return pa === pb ? a.i - b.i : pa - pb;
+      })
+      .map((e) => e.sub);
   }
 
   // Flatten to individual images, stopping at the cap. Trimming whole subjects
