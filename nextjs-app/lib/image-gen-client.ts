@@ -23,6 +23,14 @@ export interface ForgeGenerationRequest {
   batch_size?: number;
   n_iter?: number;
   alwayson_scripts?: Record<string, { args: unknown[] }>;
+  // Hires-fix (see hiresFix below)
+  enable_hr?: boolean;
+  hr_scale?: number;
+  hr_upscaler?: string;
+  hr_second_pass_steps?: number;
+  denoising_strength?: number;
+  hr_additional_modules?: string[];
+  hr_checkpoint_name?: string;
 }
 
 export interface ForgeGenerationResponse {
@@ -61,6 +69,22 @@ export class ImageGenClient {
       batch_size: 1,
       n_iter: 1,
     };
+
+    // Hires-fix is a second denoising pass on the Lanczos-enlarged first pass.
+    // The two "Use same ..." fields are not optional: without hr_additional_modules
+    // Forge fails with "'NoneType' object is not iterable", and hr_sampler_name /
+    // hr_scheduler must be left OUT — passing "Use same sampler" is rejected with
+    // "bad sampler name" through the API even though the UI accepts it. The
+    // references stay attached for the second pass, which is the whole point.
+    if (settings.hiresFix) {
+      request.enable_hr = true;
+      request.hr_scale = settings.hiresFix.scale;
+      request.hr_upscaler = 'Lanczos';
+      request.hr_second_pass_steps = settings.hiresFix.steps;
+      request.denoising_strength = settings.hiresFix.denoise;
+      request.hr_additional_modules = ['Use same choices'];
+      request.hr_checkpoint_name = 'Use same checkpoint';
+    }
 
     // Reference images ride along as an always-on script rather than as top-level
     // fields. Forge decodes each entry with its normal base64 image decoder.

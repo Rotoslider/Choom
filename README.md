@@ -266,7 +266,7 @@ Each Choom can override specific settings stored in the database:
 | `llmEndpoint` | LLM API endpoint |
 | `llmProviderId` | External provider from Settings > Providers (triggers Layer 3b — provider endpoint + API key + model profile auto-applied) |
 | `voiceId` | TTS voice |
-| `imageSettings` | Image generation config (JSON): checkpoint, modules, LoRA, reference images, size, aspect, upscale, choomDecides |
+| `imageSettings` | Image generation config (JSON): checkpoint, modules, LoRA, reference images, size, aspect, upscale, hires fix, choomDecides |
 | `companionId` | Memory isolation ID |
 | `systemPrompt` | Character instructions |
 
@@ -496,9 +496,23 @@ Klein filenames contain "flux" but need a Flux.2 VAE and a Qwen3 text encoder, n
 `ae` + `clip_l` + `t5xxl`. Klein also generates at CFG 1 with no distilled-CFG and ignores
 negative prompts, which Choom applies automatically.
 
-### Upscaling
+### Upscaling and Hires Fix
 
-Optional 2x upscaling via Forge's `extra-single-image` API (Lanczos).
+Two per-mode options in the Choom edit panel → Image:
+
+- **2x Upscaling** — Forge's `extra-single-image` API (Lanczos). Enlarges the pixels you already
+  have; cannot add detail.
+- **Hires Fix** — a second denoising pass at *scale* × the base size (default 2×, denoise 0.45,
+  6 steps), with the reference images still attached. This is the one that fixes likeness in
+  group and full-body shots: a standing person in a 1536×864 landscape has a face about 100px
+  tall, which is too few pixels for freckles or fine bone structure, so the model paints a
+  generic face there no matter how good the references are. The second pass regenerates that
+  face at 2× with the references in play. Measured on a solo three-quarter shot: the base pass
+  gave a generic redhead, the 2× pass brought back the reference's freckles. Roughly triples the
+  generation time. When both options are on, Hires Fix wins and the Lanczos pass is skipped.
+
+Landscape is the wrong shape for a solo portrait, but for group shots it is the right one —
+Hires Fix is what lets a group stay landscape and still look like the people in it.
 
 ### Image Naming Convention
 Images can be saved via the chat window by clicking on them. Auto downloaded to your Downloads folder

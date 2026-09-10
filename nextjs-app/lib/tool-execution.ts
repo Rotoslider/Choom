@@ -22,7 +22,7 @@ import type {
   ToolCall, ToolResult, ImageGenSettings, WeatherSettings, SearchSettings, ImageSize, ImageAspect,
   CheckpointType, ReferenceImage,
 } from '@/lib/types';
-import { computeImageDimensions } from '@/lib/types';
+import { computeImageDimensions, HIRES_FIX_DEFAULTS } from '@/lib/types';
 import { detectCheckpointType } from '@/lib/checkpoint-modules';
 import { loadReferenceImagesBase64 } from '@/lib/reference-images';
 import { resolveReferences } from '@/lib/reference-library';
@@ -378,6 +378,18 @@ export async function executeToolCall(
         prompt = `${lead}: ${roster}. ${prompt}`;
       }
       const referenceMaxDim = (modeSettings.referenceMaxDim as number) || REFERENCE_IMAGE_DEFAULT_MAX_DIM;
+      // Hires-fix regenerates the face at scale, so it fixes likeness where a
+      // Lanczos upscale cannot; when both are on the Lanczos pass is redundant.
+      const hiresFix = modeSettings.hiresFix
+        ? {
+            scale: (modeSettings.hiresScale as number) || HIRES_FIX_DEFAULTS.scale,
+            denoise: (modeSettings.hiresDenoise as number) || HIRES_FIX_DEFAULTS.denoise,
+            steps: (modeSettings.hiresSteps as number) || HIRES_FIX_DEFAULTS.steps,
+          }
+        : undefined;
+      if (hiresFix) {
+        console.log(`   🔬 Hires-fix ${hiresFix.scale}x, denoise ${hiresFix.denoise}, ${hiresFix.steps} steps`);
+      }
       if (referenceImages.length > 0) {
         const named = library.used
           .map(u => (requestedReferences.some(r => r.toLowerCase() === u.slug.toLowerCase())
@@ -435,6 +447,7 @@ export async function executeToolCall(
           scheduler: modeSettings.scheduler || imageGenSettings.defaultScheduler,
           referenceImages,
           referenceMaxDim,
+          hiresFix,
           isSelfPortrait,
         });
 
@@ -442,7 +455,7 @@ export async function executeToolCall(
         const userPromptLower = (toolCall.arguments.prompt as string || '').toLowerCase();
         const userRequestedUpscale = /\b(upscale|high[- ]?res|2x|hires)\b/.test(userPromptLower);
         let imageUrl = result.imageUrl;
-        if (modeSettings.upscale || userRequestedUpscale) {
+        if (!hiresFix && (modeSettings.upscale || userRequestedUpscale)) {
           try {
             console.log(`   🔍 Upscaling image 2x with Lanczos...`);
             const base64Data = result.imageUrl.split(',')[1] || result.imageUrl;
@@ -506,7 +519,7 @@ export async function executeToolCall(
         name: toolCall.name,
         result: {
           success: true,
-          message: `Image generated successfully with seed ${genResult.seed}${modeSettings.upscale ? ' (upscaled 2x)' : ''}.${library.used.length > 0 ? ` References used: ${library.used.map(u => requestedSlugs.has(u.slug.toLowerCase()) ? u.slug : `${u.slug} (auto-attached)`).join(', ')}.` : ''}${library.unknown.length > 0 ? ` No reference exists named: ${library.unknown.join(', ')} — ask the user to add it to the reference library if it should.` : ''} The image has been displayed to the user. To analyze this image, call analyze_image with image_id="${savedImage.id}".`,
+          message: `Image generated successfully with seed ${genResult.seed}${hiresFix ? ` (hires-fix ${hiresFix.scale}x)` : modeSettings.upscale ? ' (upscaled 2x)' : ''}.${library.used.length > 0 ? ` References used: ${library.used.map(u => requestedSlugs.has(u.slug.toLowerCase()) ? u.slug : `${u.slug} (auto-attached)`).join(', ')}.` : ''}${library.unknown.length > 0 ? ` No reference exists named: ${library.unknown.join(', ')} — ask the user to add it to the reference library if it should.` : ''} The image has been displayed to the user. To analyze this image, call analyze_image with image_id="${savedImage.id}".`,
           imageId: savedImage.id,
         },
       };

@@ -30,7 +30,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Separator } from '@/components/ui/separator';
 import type { Choom, ChoomPermissions, LoraConfig, ImageModeSettings, ImageSize, ImageAspect, LLMProviderConfig, CheckpointType, ReferenceImage } from '@/lib/types';
-import { IMAGE_SIZES, IMAGE_ASPECTS, computeImageDimensions } from '@/lib/types';
+import { IMAGE_SIZES, IMAGE_ASPECTS, computeImageDimensions, HIRES_FIX_DEFAULTS } from '@/lib/types';
 import { useLiveModels } from '@/lib/hooks/use-live-models';
 import { Switch } from '@/components/ui/switch';
 import { useAppStore } from '@/lib/store';
@@ -767,6 +767,61 @@ function ImageModeSettingsEditor({
           />
         </div>
 
+        {/* Hires-fix */}
+        <div className="flex items-center justify-between">
+          <div className="space-y-0.5">
+            <label className="text-sm font-medium">Hires Fix</label>
+            <p className="text-xs text-muted-foreground">
+              Second denoising pass at scale — regenerates faces with the references still
+              attached. Fixes likeness in group and full-body shots where the face is too small
+              on the first pass. Replaces 2x Upscaling when both are on.
+            </p>
+          </div>
+          <Switch
+            checked={modeSettings.hiresFix || false}
+            onCheckedChange={(checked) => onSettingsChange({ hiresFix: checked || undefined })}
+          />
+        </div>
+        {modeSettings.hiresFix && (
+          <div className="grid grid-cols-3 gap-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Scale</label>
+              <Input
+                type="number"
+                value={modeSettings.hiresScale ?? ''}
+                onChange={(e) => onSettingsChange({ hiresScale: e.target.value ? parseFloat(e.target.value) : undefined })}
+                placeholder={String(HIRES_FIX_DEFAULTS.scale)}
+                min={1.1}
+                max={3}
+                step={0.1}
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Denoise</label>
+              <Input
+                type="number"
+                value={modeSettings.hiresDenoise ?? ''}
+                onChange={(e) => onSettingsChange({ hiresDenoise: e.target.value ? parseFloat(e.target.value) : undefined })}
+                placeholder={String(HIRES_FIX_DEFAULTS.denoise)}
+                min={0.1}
+                max={0.9}
+                step={0.05}
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Hires Steps</label>
+              <Input
+                type="number"
+                value={modeSettings.hiresSteps ?? ''}
+                onChange={(e) => onSettingsChange({ hiresSteps: e.target.value ? parseInt(e.target.value) : undefined })}
+                placeholder={String(HIRES_FIX_DEFAULTS.steps)}
+                min={1}
+                max={50}
+              />
+            </div>
+          </div>
+        )}
+
         <div className="flex items-center justify-between">
           <div className="space-y-0.5">
             <label className="text-sm font-medium">Choom Decides Size</label>
@@ -1046,6 +1101,10 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave, onDelete }: 
         if (s.size) result.size = s.size;
         if (s.aspect) result.aspect = s.aspect;
         if (s.upscale) result.upscale = s.upscale;
+        if (s.hiresFix) result.hiresFix = s.hiresFix;
+        if (s.hiresScale !== undefined && s.hiresScale !== null) result.hiresScale = s.hiresScale;
+        if (s.hiresDenoise !== undefined && s.hiresDenoise !== null) result.hiresDenoise = s.hiresDenoise;
+        if (s.hiresSteps !== undefined && s.hiresSteps !== null) result.hiresSteps = s.hiresSteps;
         if (s.choomDecides) result.choomDecides = s.choomDecides;
         if (s.modules && s.modules.length > 0) result.modules = s.modules;
         if (s.referenceImages && s.referenceImages.length > 0) result.referenceImages = s.referenceImages;

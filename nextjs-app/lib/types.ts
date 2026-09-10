@@ -273,6 +273,16 @@ export interface ImageModeSettings {
   size?: ImageSize;
   aspect?: ImageAspect;
   upscale?: boolean;
+  // Forge hires-fix: a second denoising pass at hiresScale x the base size.
+  // Unlike `upscale` (Lanczos, which only enlarges the pixels it is given) this
+  // regenerates detail, and with Klein it keeps the references — measured on a
+  // solo three-quarter shot, the base pass gave a generic redhead while a 2x
+  // pass at 0.45 denoise brought back the freckles from the reference. When
+  // both are on, hires-fix wins and the Lanczos pass is skipped.
+  hiresFix?: boolean;
+  hiresScale?: number; // default 2
+  hiresDenoise?: number; // default 0.45
+  hiresSteps?: number; // second-pass steps, default 6
   choomDecides?: boolean; // Let LLM pick size/aspect
 }
 
@@ -324,9 +334,19 @@ export interface ImageGenerationSettings {
   // Base64-encoded reference images (no data: prefix), already resolved from disk.
   referenceImages?: string[];
   referenceMaxDim?: number;
+  // Second-pass hires-fix; omitted means a single pass.
+  hiresFix?: HiresFixSettings;
   // Mode indicators
   isSelfPortrait?: boolean;
 }
+
+export interface HiresFixSettings {
+  scale: number;
+  denoise: number;
+  steps: number;
+}
+
+export const HIRES_FIX_DEFAULTS: HiresFixSettings = { scale: 2, denoise: 0.45, steps: 6 };
 
 // Aspect ratio presets
 export type AspectRatio = '1:1' | '4:3' | '3:4' | '16:9' | '9:16' | '3:2' | '2:3' | 'custom';

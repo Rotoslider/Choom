@@ -2,7 +2,7 @@ import { BaseSkillHandler, SkillHandlerContext } from '@/lib/skill-handler';
 import { ImageGenClient, buildPromptWithLoras } from '@/lib/image-gen-client';
 import { WorkspaceService } from '@/lib/workspace-service';
 import prisma from '@/lib/db';
-import { computeImageDimensions } from '@/lib/types';
+import { computeImageDimensions, HIRES_FIX_DEFAULTS } from '@/lib/types';
 import type { ImageSize, ImageAspect, ImageGenSettings, ToolCall, ToolResult } from '@/lib/types';
 import { REFERENCE_IMAGE_DEFAULT_MAX_DIM, WORKSPACE_ROOT, WORKSPACE_ALLOWED_EXTENSIONS, WORKSPACE_IMAGE_EXTENSIONS } from '@/lib/config';
 import { waitForGpu } from '@/lib/gpu-lock';
@@ -331,6 +331,18 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
         prompt = `${lead}: ${roster}. ${prompt}`;
       }
       const referenceMaxDim = (modeSettings.referenceMaxDim as number) || REFERENCE_IMAGE_DEFAULT_MAX_DIM;
+      // Hires-fix regenerates the face at scale, so it fixes likeness where a
+      // Lanczos upscale cannot; when both are on the Lanczos pass is redundant.
+      const hiresFix = modeSettings.hiresFix
+        ? {
+            scale: (modeSettings.hiresScale as number) || HIRES_FIX_DEFAULTS.scale,
+            denoise: (modeSettings.hiresDenoise as number) || HIRES_FIX_DEFAULTS.denoise,
+            steps: (modeSettings.hiresSteps as number) || HIRES_FIX_DEFAULTS.steps,
+          }
+        : undefined;
+      if (hiresFix) {
+        console.log(`   🔬 Hires-fix ${hiresFix.scale}x, denoise ${hiresFix.denoise}, ${hiresFix.steps} steps`);
+      }
       if (referenceImages.length > 0) {
         const named = library.used.map(u => u.slug).join(', ') || 'none';
         console.log(`   🖼️  ${referenceImages.length} reference image(s) @ max ${referenceMaxDim}px — subjects: ${named}${pinned.length ? `, +${pinned.length} pinned` : ''}`);
@@ -388,6 +400,7 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
           scheduler: (modeSettings.scheduler as string) || imageGenSettings.defaultScheduler,
           referenceImages,
           referenceMaxDim,
+          hiresFix,
           isSelfPortrait,
         });
 
@@ -395,7 +408,7 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
         const userPromptLower = (toolCall.arguments.prompt as string || '').toLowerCase();
         const userRequestedUpscale = /\b(upscale|high[- ]?res|2x|hires)\b/.test(userPromptLower);
         let imageUrl = result.imageUrl;
-        if (modeSettings.upscale || userRequestedUpscale) {
+        if (!hiresFix && (modeSettings.upscale || userRequestedUpscale)) {
           try {
             console.log(`   🔍 Upscaling image 2x with Lanczos...`);
             const base64Data = result.imageUrl.split(',')[1] || result.imageUrl;
@@ -460,7 +473,7 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
 
       return this.success(toolCall, {
         success: true,
-        message: `Image generated successfully with seed ${genResult.seed}${modeSettings.upscale ? ' (upscaled 2x)' : ''}.${library.used.length > 0 ? ` References used: ${library.used.map(u => u.slug).join(', ')}.` : ''}${library.unknown.length > 0 ? ` No reference exists named: ${library.unknown.join(', ')} — ask the user to add it to the reference library if it should.` : ''} The image has been displayed to the user. To analyze this image, call analyze_image with image_id="${savedImage.id}". To save this image to a project folder, call save_generated_image with image_id="${savedImage.id}" and a save_path like "project_name/images/filename.png".`,
+        message: `Image generated successfully with seed ${genResult.seed}${hiresFix ? ` (hires-fix ${hiresFix.scale}x)` : modeSettings.upscale ? ' (upscaled 2x)' : ''}.${library.used.length > 0 ? ` References used: ${library.used.map(u => u.slug).join(', ')}.` : ''}${library.unknown.length > 0 ? ` No reference exists named: ${library.unknown.join(', ')} — ask the user to add it to the reference library if it should.` : ''} The image has been displayed to the user. To analyze this image, call analyze_image with image_id="${savedImage.id}". To save this image to a project folder, call save_generated_image with image_id="${savedImage.id}" and a save_path like "project_name/images/filename.png".`,
         imageId: savedImage.id,
       });
     } catch (imageError) {

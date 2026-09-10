@@ -187,6 +187,41 @@ describe('Forge request payload', () => {
     expect(captured.body!.alwayson_scripts).toBeUndefined();
   });
 
+  it('sends hires-fix as a second pass with the fields Forge insists on', async () => {
+    const captured = mockFetchCapturingBody();
+    const client = new ImageGenClient(settings);
+
+    await client.generate({
+      prompt: 'x',
+      referenceImages: ['AAAA'],
+      hiresFix: { scale: 2, denoise: 0.45, steps: 6 },
+    });
+
+    const body = captured.body!;
+    expect(body.enable_hr).toBe(true);
+    expect(body.hr_scale).toBe(2);
+    expect(body.denoising_strength).toBe(0.45);
+    expect(body.hr_second_pass_steps).toBe(6);
+    expect(body.hr_upscaler).toBe('Lanczos');
+    // Without these Forge throws "'NoneType' object is not iterable".
+    expect(body.hr_additional_modules).toEqual(['Use same choices']);
+    expect(body.hr_checkpoint_name).toBe('Use same checkpoint');
+    // And with these it throws "bad sampler name" — they must stay absent.
+    expect(body).not.toHaveProperty('hr_sampler_name');
+    expect(body).not.toHaveProperty('hr_scheduler');
+    // References still ride along for the second pass.
+    expect(body.alwayson_scripts).toBeDefined();
+  });
+
+  it('runs a single pass when hires-fix is off', async () => {
+    const captured = mockFetchCapturingBody();
+    const client = new ImageGenClient(settings);
+
+    await client.generate({ prompt: 'x' });
+
+    expect(captured.body!.enable_hr).toBeUndefined();
+  });
+
   it('defaults the reference max side to 1024', async () => {
     const captured = mockFetchCapturingBody();
     const client = new ImageGenClient(settings);
