@@ -418,10 +418,17 @@ subjects dropped from the end. So a four-person portrait sends sheet + face for 
 adding the truck to that scene costs the last person their sheet, not their face. Name the
 people who matter most first.
 
-**Prompting two or more people:** describe each one distinctly, in the same order as the
-references — *"the first woman, with round glasses, in a green flannel; the second woman, no
-glasses, in a navy jacket"*. Without that, clothing and features bleed from the first person onto
-everyone else. The tool description tells the Choom this, but it is worth knowing when tuning.
+**Prompting two or more people — reference order is seating order.** Tested on Forge with a
+fixed seed: the first reference lands in the leftmost seat, the second next to it, and the prompt
+then dresses each seat. So *"Genesis on the left"* with the references sent Aloy-first produced
+Aloy's face in Genesis's cardigan. Choom now sorts references (and the roster it prepends) by any
+seating the prompt states — *left / middle / right* — and otherwise by the order people are first
+mentioned. The reliable habit is to say where everyone sits: *"Genesis on the left, Aloy in the
+middle, Eve on the right"*. The tool description tells the Choom this, but it is worth knowing when
+tuning.
+
+Shedding at the cap happens from the **end** of that order, so with positions given it is the
+rightmost person who loses their sheet first.
 
 #### Subjects change over time — snapshot before you overwrite
 

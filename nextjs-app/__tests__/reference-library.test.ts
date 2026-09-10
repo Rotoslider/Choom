@@ -234,6 +234,29 @@ describe('reference resolution', () => {
     expect(res.used.map((u) => u.slug)).toEqual(['genesis']);
   });
 
+  it('seats references left to right when the prompt says where people sit', async () => {
+    // Reference order is placement: the first reference lands leftmost. A
+    // prompt that lists "Owner, Eve and Genesis" but seats Genesis on the left
+    // must send Genesis first, or her face ends up in someone else's seat.
+    const res = await resolveReferences({
+      choomId: 'choom-genesis',
+      requested: ['owner', 'eve', 'genesis'],
+      prompt: 'Owner, Eve and Genesis on the bench. Owner in the middle in a cream sweater. '
+        + 'Genesis on the left in a rust cardigan. Eve on the right in a dark henley.',
+    });
+    expect(res.used.map((u) => u.slug)).toEqual(['genesis', 'owner', 'eve']);
+  });
+
+  it('falls back to mention order unless everyone has a seat', async () => {
+    // "to Eve's right" is a relation, not a seat; nothing says where Owner is.
+    const res = await resolveReferences({
+      choomId: 'choom-genesis',
+      requested: ['owner', 'eve', 'genesis'],
+      prompt: 'Owner laughing, Eve beside him, Genesis standing to Eve\'s right.',
+    });
+    expect(res.used.map((u) => u.slug)).toEqual(['owner', 'eve', 'genesis']);
+  });
+
   it('reports names that match nothing instead of failing', async () => {
     const result = await resolveReferences({
       choomId: 'choom-genesis',

@@ -221,6 +221,73 @@ export async function resolveReferences(options: {
       .map((e) => e.sub);
   }
 
+  // Reference order IS left-to-right placement. Tested on Forge with a fixed
+  // seed: whichever subject is the first reference lands in the leftmost seat,
+  // and the prompt then dresses that seat — so "Genesis on the left" with the
+  // references sent Aloy-first produced Aloy's face in Genesis's cardigan.
+  // Reordering the references (and the roster, which is read the same way) to
+  // match the described seating put all three people in the right place.
+  //
+  // When the prompt states where everyone sits, sort by that. Only when every
+  // subject has a position; a half-sorted list is worse than mention order.
+  if (prompt.trim() && ordered.length > 1) {
+    const text = prompt;
+    const nameForms = (sub: SubjectRow) =>
+      [sub.slug, sub.name]
+        .filter(Boolean)
+        .map((v) => v.replace(/[-_]+/g, ' ').trim())
+        .filter((v) => v.replace(/[^A-Za-z0-9]/g, '').length >= 3);
+    const esc = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // A seat word and where it sits in a chunk; the nearest one to the name wins.
+    const SEAT = /(?:on|to|at|from) the (?:far )?(left|right)\b|\b(left|right)(?:most| side)\b|\bin the (middle|center|centre)\b|\b(between)\b|\b(LEFT|MIDDLE|CENTER|CENTRE|RIGHT)\s*:/gi;
+    const seatIn = (chunk: string, pickLast: boolean): number | undefined => {
+      let found: { at: number; seat: number } | undefined;
+      for (const m of chunk.matchAll(SEAT)) {
+        const word = (m[1] || m[2] || m[3] || m[4] || m[5] || '').toLowerCase();
+        const seat = word === 'left' ? 0 : word === 'right' ? 2 : 1;
+        const at = m.index ?? 0;
+        if (!found || (pickLast ? at > found.at : at < found.at)) found = { at, seat };
+      }
+      return found?.seat;
+    };
+    const seatOf = (subject: SubjectRow): number | undefined => {
+      const others = ordered.filter((o) => o.id !== subject.id).flatMap(nameForms);
+      const otherRe = others.length
+        ? new RegExp(`(^|[^a-z0-9])(?:${others.map(esc).join('|')})(?=[^a-z0-9]|$)`, 'i')
+        : null;
+      let best: { dist: number; seat: number } | undefined;
+      for (const n of nameForms(subject)) {
+        const re = new RegExp(`(^|[^a-z0-9])${esc(n)}(?=[^a-z0-9]|$)`, 'gi');
+        for (const m of text.matchAll(re)) {
+          const at = (m.index ?? 0) + m[1].length;
+          // Same clause only: stop at punctuation or at another subject's name,
+          // or "Eve and Genesis on the bench. Owner in the middle" hands Eve
+          // the middle seat.
+          let after = text.slice(at + n.length, at + n.length + 90);
+          const stopA = after.search(/[.!?;]/);
+          if (stopA !== -1) after = after.slice(0, stopA);
+          const oa = otherRe ? after.search(otherRe) : -1;
+          if (oa !== -1) after = after.slice(0, oa);
+          let before = text.slice(Math.max(0, at - 60), at);
+          const stopB = Math.max(before.lastIndexOf('.'), before.lastIndexOf('!'), before.lastIndexOf('?'), before.lastIndexOf(';'));
+          if (stopB !== -1) before = before.slice(stopB + 1);
+          const a = seatIn(after, false);
+          if (a !== undefined && (!best || best.dist > 0)) best = { dist: 0, seat: a };
+          const b = seatIn(before, true);
+          if (b !== undefined && !best) best = { dist: 1, seat: b };
+        }
+      }
+      return best?.seat;
+    };
+    const seats = ordered.map((sub) => seatOf(sub));
+    if (seats.every((seat) => seat !== undefined)) {
+      ordered = ordered
+        .map((sub, i) => ({ sub, i, seat: seats[i] as number }))
+        .sort((a, b) => (a.seat === b.seat ? a.i - b.i : a.seat - b.seat))
+        .map((e) => e.sub);
+    }
+  }
+
   // Every subject starts with all of its enabled images, in stored order. When
   // the total exceeds the cap, shed from the BACK: the last-mentioned subject
   // loses its least important image (an extra, then its sheet), then the one

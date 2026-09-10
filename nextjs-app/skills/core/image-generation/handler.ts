@@ -317,7 +317,9 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
         if (characterPrompt && prompt.includes(`${characterPrompt}, `)) {
           prompt = prompt.replace(`${characterPrompt}, `, '');
         }
-        prompt = `People in this image, matching the reference images in order: ${roster}. ${prompt}`;
+        // "left to right" is literal: reference order is where people land in the
+        // frame, and the roster is read the same way.
+        prompt = `People in this image, left to right, matching the reference images in order: ${roster}. ${prompt}`;
       }
       const referenceMaxDim = (modeSettings.referenceMaxDim as number) || REFERENCE_IMAGE_DEFAULT_MAX_DIM;
       if (referenceImages.length > 0) {
