@@ -417,7 +417,18 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
           choomId,
           prompt,
           imageUrl: finalImageUrl,
-          settings: JSON.stringify(genResult.settings),
+          settings: JSON.stringify({
+            ...genResult.settings,
+            // NEVER persist the reference payload. It is the base64 of every
+            // reference image — up to 8 x ~3MB per row — and 32 such rows made
+            // the gallery query for one Choom return 600MB, at which point
+            // Prisma failed with "Failed to convert rust String into napi
+            // string" and the gallery showed nothing, then the previous
+            // Choom's images. Keep a summary of what was used instead.
+            referenceImages: undefined,
+            references: library.used.map((u) => ({ slug: u.slug, images: u.images.map((i) => i.kind) })),
+            referenceCount: referenceImages.length,
+          }),
         },
       });
 

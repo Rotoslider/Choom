@@ -2514,6 +2514,10 @@ Be practical. Only work on things that can actually be accomplished with the too
         # rewrite); their dirs are stale, so they're no longer snapshotted.
         directories = [
             (app_root / "data/self_followups", "self_followups"),
+            # Reference sheets and faces. Their rows are in dev.db, but the
+            # files only exist here — lose the folder and every subject is an
+            # empty shell that the UI can't rebuild.
+            (app_root / "data/reference-images", "reference-images"),
         ]
         for src_dir, name in directories:
             if src_dir.is_dir():
@@ -2639,10 +2643,29 @@ Be practical. Only work on things that can actually be accomplished with the too
             finally:
                 os.unlink(bundle_path)
 
+            # Reference images as their own archive: the library rows live in
+            # dev.db, the pixels only live here. ~50MB, rotated like the DBs.
+            ref_dir = app_root / "data/reference-images"
+            if ref_dir.is_dir():
+                with tempfile.NamedTemporaryFile(suffix='.tar.gz', delete=False) as tmp:
+                    ref_path = tmp.name
+                try:
+                    with tarfile.open(ref_path, 'w:gz') as tar:
+                        tar.add(str(ref_dir), arcname="reference-images")
+                    drive_name = f"reference-images-{date_stamp}.tar.gz"
+                    if google.upload_to_drive(ref_path, folder_id, drive_name):
+                        uploaded.append(drive_name)
+                        logger.info(f"Backed up reference images as {drive_name}")
+                    else:
+                        logger.error("Failed to upload reference images")
+                finally:
+                    os.unlink(ref_path)
+
             if uploaded:
                 logger.info(f"Full backup complete: {', '.join(uploaded)}")
                 self._rotate_backups(google, folder_id, "dev-", 5)
                 self._rotate_backups(google, folder_id, "memories-", 5)
+                self._rotate_backups(google, folder_id, "reference-images-", 5)
                 self._rotate_backups(google, folder_id, "config-bundle-", 5)
             else:
                 logger.warning("Full backup: no files were uploaded")
