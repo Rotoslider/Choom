@@ -140,93 +140,6 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
       }
 
       // -------------------------------------------------------------------
-      // Selfie anti-repetition: inject diversity for self-portraits
-      // -------------------------------------------------------------------
-      let selfieDiversityNote = '';
-      let selfieNegativeKeywords = '';
-      if (isSelfPortrait) {
-        try {
-          const self = await prisma.choom.findUnique({ where: { id: choomId }, select: { name: true } });
-          const recentImages = await prisma.generatedImage.findMany({
-            where: { choomId },
-            orderBy: { createdAt: 'desc' },
-            take: 20,
-            select: { prompt: true },
-          });
-
-          if (recentImages.length > 0) {
-            const stopWords = new Set([
-              'a', 'an', 'the', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
-              'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
-              'should', 'may', 'might', 'can', 'need', 'to', 'of', 'in', 'for',
-              'on', 'with', 'at', 'by', 'from', 'as', 'into', 'through', 'during',
-              'before', 'after', 'above', 'below', 'between', 'out', 'off', 'over',
-              'under', 'and', 'but', 'or', 'not', 'so', 'yet', 'both', 'each',
-              'few', 'more', 'most', 'other', 'some', 'such', 'very', 'just',
-              'because', 'if', 'when', 'where', 'how', 'all', 'any', 'every',
-              'this', 'that', 'these', 'those', 'who', 'which', 'what',
-              'image', 'photo', 'picture', 'portrait', 'self', 'selfie', 'woman',
-              'man', 'person', 'looking', 'wearing', 'standing', 'sitting', 'style',
-              'her', 'his', 'she', 'him', 'its', 'they', 'them', 'their', 'your',
-            ]);
-
-            const wordCounts = new Map<string, number>();
-            for (const img of recentImages) {
-              const words = img.prompt.toLowerCase().replace(/[^a-z\s]/g, '').split(/\s+/);
-              const seen = new Set<string>();
-              for (const w of words) {
-                if (w.length > 2 && !stopWords.has(w) && !seen.has(w)) {
-                  seen.add(w);
-                  wordCounts.set(w, (wordCounts.get(w) || 0) + 1);
-                }
-              }
-            }
-
-            // Keywords appearing in 2+ recent prompts are "overused"
-            let repeatedKeywords = [...wordCounts.entries()]
-              .filter(([, count]) => count >= 2)
-              .sort((a, b) => b[1] - a[1])
-              .slice(0, 20)
-              .map(([word]) => word);
-
-            // A Choom looks the same in every picture, so her identity words are
-            // repeated on purpose. Banning them as "overused" told the model to
-            // avoid its own name and hair colour — which is how a blonde Choom in
-            // glasses came back brunette once references were in play. Vary the
-            // scene, never the person.
-            // Read straight from the parsed settings: modeSettings is not bound
-            // until later, and this block only runs for self-portraits.
-            const selfCharacterPrompt =
-              ((choomImageSettings?.selfPortrait as Record<string, unknown> | undefined)
-                ?.characterPrompt as string) || '';
-            const identityTerms = new Set<string>(
-              selfCharacterPrompt
-                .toLowerCase()
-                .split(/[^a-z0-9]+/)
-                .filter(Boolean)
-            );
-            if (self?.name) identityTerms.add(self.name.toLowerCase());
-            for (const w of ['hair', 'eyes', 'glasses', 'skin', 'freckles', 'beard', 'tattoo', 'blonde', 'brunette', 'redhead']) {
-              identityTerms.add(w);
-            }
-            const dropped = repeatedKeywords.filter((w) => identityTerms.has(w));
-            repeatedKeywords = repeatedKeywords.filter((w) => !identityTerms.has(w));
-            if (dropped.length > 0) {
-              console.log(`   🎲 Kept identity terms out of the diversity ban: ${dropped.join(', ')}`);
-            }
-
-            if (repeatedKeywords.length > 0) {
-              selfieDiversityNote = `. DIVERSITY: Make this selfie visually DISTINCT from recent ones. Vary the setting, outfit, lighting, mood or activity — keep the person's appearance exactly as described. Overused concepts to AVOID: ${repeatedKeywords.join(', ')}`;
-              selfieNegativeKeywords = repeatedKeywords.slice(0, 10).join(', ');
-              console.log(`   🎲 Selfie diversity: excluding ${repeatedKeywords.length} overused keywords: ${repeatedKeywords.slice(0, 8).join(', ')}...`);
-            }
-          }
-        } catch (diversityErr) {
-          console.warn(`   ⚠️ Selfie diversity check failed:`, diversityErr instanceof Error ? diversityErr.message : diversityErr);
-        }
-      }
-
-      // -------------------------------------------------------------------
       // Get the appropriate mode settings
       // -------------------------------------------------------------------
       const modeSettings = isSelfPortrait
@@ -263,11 +176,6 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
           toolCall,
           `generate_image requires a 'prompt' argument describing the image to create. You called it with ${argKeys.length === 0 ? 'no arguments' : `args: [${argKeys.join(', ')}]`}. Retry with {"prompt": "a detailed description of the image", "aspect": "portrait"} (or another aspect). Do NOT call generate_image again without a prompt.`
         );
-      }
-
-      // Append selfie diversity instruction (before character/prefix additions)
-      if (selfieDiversityNote) {
-        prompt = prompt + selfieDiversityNote;
       }
 
       // Applied on self-portraits, and on any image where the Choom named her own
@@ -397,10 +305,18 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
       if (library.used.length > 1) {
         const roster = library.used
           .map((u, i) => {
-            const look = (u.appearance || '').replace(/\s+/g, ' ').trim().slice(0, 160);
+            let look = (u.appearance || '').replace(/\s+/g, ' ').trim();
+            // Descriptions often open with the name ("Donny — Donny, a tall...").
+            const lead = new RegExp(`^${u.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*[,.:—–-]*\\s*`, 'i');
+            look = look.replace(lead, '').slice(0, 160);
             return `${i + 1}. ${u.name}${look ? ` — ${look}` : ''}`;
           })
           .join(' ');
+        // The speaker's characterPrompt was prepended earlier; the roster now
+        // carries it, so drop the duplicate rather than stating her twice.
+        if (characterPrompt && prompt.includes(`${characterPrompt}, `)) {
+          prompt = prompt.replace(`${characterPrompt}, `, '');
+        }
         prompt = `People in this image, matching the reference images in order: ${roster}. ${prompt}`;
       }
       const referenceMaxDim = (modeSettings.referenceMaxDim as number) || REFERENCE_IMAGE_DEFAULT_MAX_DIM;
@@ -451,9 +367,7 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
 
         const result = await imageGenClient.generate({
           prompt,
-          negativePrompt: (toolCall.arguments.negative_prompt as string || (modeSettings.negativePrompt as string) || imageGenSettings.defaultNegativePrompt)
-            // CFG-1 distilled models (Flux.1 dev, Flux.2 Klein) ignore the negative prompt.
-            + (selfieNegativeKeywords && checkpointType !== 'flux' && checkpointType !== 'klein' ? `, ${selfieNegativeKeywords}` : ''),
+          negativePrompt: (toolCall.arguments.negative_prompt as string || (modeSettings.negativePrompt as string) || imageGenSettings.defaultNegativePrompt),
           width: genWidth,
           height: genHeight,
           steps: (typeof toolCall.arguments.steps === 'number' ? toolCall.arguments.steps : parseInt(toolCall.arguments.steps as string)) || (modeSettings.steps as number) || imageGenSettings.defaultSteps,

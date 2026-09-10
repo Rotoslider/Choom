@@ -88,8 +88,8 @@ describe('reference resolution', () => {
     });
 
     expect(result.used.map(u => u.slug)).toEqual(['genesis', 'owner', 'cabin-exterior']);
-    // Three subjects, so one image each (see the per-subject budget).
-    expect(result.images).toHaveLength(3);
+    // genesis(2) + owner(2) + cabin(1): all fit under the cap, nothing shed.
+    expect(result.images).toHaveLength(5);
   });
 
   it('lets one Choom reference another (Genesis with her sister Eve)', async () => {
@@ -171,18 +171,34 @@ describe('reference resolution', () => {
     expect(res.used[0]?.slug).toBe('genesis');
   });
 
-  it('sends one image each once three or more subjects are in frame', async () => {
-    // Three people at sheet+face is six reference latents, which OOMs a 20GB
-    // card with Klein resident. One face each renders all three correctly.
+  it('keeps sheet and face for everyone while the cap allows it', async () => {
+    // Three people at sheet+face is six images — comfortably under the cap of
+    // eight, so nothing is shed. (An earlier rule cut everyone to one image at
+    // three subjects; that came from a 20GB card and threw sheets away for
+    // nothing on a card with headroom.)
     const res = await resolveReferences({
       choomId: 'choom-genesis',
       requested: ['genesis', 'eve', 'owner'],
     });
     expect(res.used).toHaveLength(3);
-    expect(res.images).toHaveLength(3);
-    for (const u of res.used) expect(u.images).toHaveLength(1);
-    // The face is the stronger likeness signal, so it is the one kept.
-    expect(res.used.every((u) => u.images[0].kind === 'face')).toBe(true);
+    expect(res.images).toHaveLength(6);
+    for (const u of res.used) expect(u.images).toHaveLength(2);
+  });
+
+  it('sheds sheets from the back before dropping anyone', async () => {
+    // genesis(2) + eve(2) + owner(2) = 6 against a cap of 5: the LAST-named
+    // subject loses its sheet and keeps its face. Nobody is dropped.
+    const res = await resolveReferences({
+      choomId: 'choom-genesis',
+      requested: ['genesis', 'eve', 'owner'],
+      maxReferences: 5,
+    });
+    expect(res.used.map((u) => u.slug)).toEqual(['genesis', 'eve', 'owner']);
+    expect(res.images).toHaveLength(5);
+    expect(res.used[0].images).toHaveLength(2);
+    expect(res.used[1].images).toHaveLength(2);
+    expect(res.used[2].images.map((i) => i.kind)).toEqual(['face']);
+    expect(res.truncated).toBe(false);
   });
 
   it('keeps the sheet as well when only one or two subjects are in frame', async () => {
@@ -229,18 +245,32 @@ describe('reference resolution', () => {
     expect(result.images).toHaveLength(2);
   });
 
-  it('trims whole subjects at the cap so a sheet is never split from its face', async () => {
-    // Two subjects, so each keeps its sheet AND face; the cap of 3 cannot fit
-    // the second pair, and half a subject is never sent.
+  it('sheds a sheet rather than dropping the person', async () => {
+    // genesis(2) + eve(2) = 4 against a cap of 3: Eve keeps her face and loses
+    // her sheet. She is still in the picture.
     const result = await resolveReferences({
       choomId: 'choom-genesis',
       isSelfPortrait: true,
       requested: ['eve'],
       maxReferences: 3,
     });
+    expect(result.used.map((u) => u.slug)).toEqual(['genesis', 'eve']);
+    expect(result.used[0].images).toHaveLength(2);
+    expect(result.used[1].images.map((i) => i.kind)).toEqual(['face']);
+    expect(result.images).toHaveLength(3);
+    expect(result.truncated).toBe(false);
+  });
 
-    expect(result.used.map(u => u.slug)).toEqual(['genesis']);
-    expect(result.images).toHaveLength(2);
+  it('drops whole subjects only once everyone is already down to one image', async () => {
+    // Cap of 2 for three people: every sheet goes first, and only then is the
+    // last-named subject dropped entirely.
+    const result = await resolveReferences({
+      choomId: 'choom-genesis',
+      requested: ['genesis', 'eve', 'owner'],
+      maxReferences: 2,
+    });
+    expect(result.used.map((u) => u.slug)).toEqual(['genesis', 'eve']);
+    for (const u of result.used) expect(u.images.map((i) => i.kind)).toEqual(['face']);
     expect(result.truncated).toBe(true);
   });
 

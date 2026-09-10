@@ -221,38 +221,44 @@ export async function resolveReferences(options: {
       .map((e) => e.sub);
   }
 
-  // Budget images per subject by how many subjects there are. Sending a sheet
-  // AND a face for everyone does not scale: measured on a 20GB card with Klein
-  // resident (~18GB), three people at sheet+face is six reference latents and
-  // Forge dies with CUDA OOM — "Currently allocated 17.92 GiB, free 19.44 MiB".
+  // Every subject starts with all of its enabled images, in stored order. When
+  // the total exceeds the cap, shed from the BACK: the last-mentioned subject
+  // loses its least important image (an extra, then its sheet), then the one
+  // before it, and so on. A face is never shed while the subject still has one —
+  // on a multi-panel sheet the face is a small fraction of the pixels, so the
+  // crop is the stronger likeness signal. Only when everyone is already down to
+  // a single image and it still does not fit are whole subjects dropped from
+  // the end.
   //
-  // It is also unnecessary. With one face each and no appearance text at all,
-  // three people came back correct — ginger braids, blonde, blonde-with-glasses.
-  // The sheet earns its place for a solo or a pair, where the extra angles and
-  // full-body proportions help; past that the face is what carries likeness.
-  const perSubject = ordered.length >= 3 ? 1 : 2;
-  const budgeted = ordered.map((subject) => {
-    if (subject.images.length <= perSubject) return subject;
-    // Prefer the face: on a multi-panel sheet the face is a small fraction of
-    // the pixels, so it is the weaker likeness signal of the two.
-    const byKind = [...subject.images].sort((a, b) => {
-      const rank = (k: string) => (k === 'face' ? 0 : k === 'sheet' ? 1 : 2);
-      return rank(a.kind) - rank(b.kind);
-    });
-    return { ...subject, images: byKind.slice(0, perSubject) };
-  });
+  // So a four-person portrait sends sheet+face for all four (8), and adding the
+  // truck costs the last-named person their sheet, not their face.
+  //
+  // This replaces a rule that cut everyone to one image at three subjects. That
+  // came from a 20GB card where six reference latents OOMed with Klein
+  // resident; on a card with headroom it threw sheets away for no reason. The
+  // cap is the lever if the generator moves back to a small card.
+  const rank = (k: string) => (k === 'face' ? 0 : k === 'sheet' ? 1 : 2);
+  const budgeted = ordered.map((subject) => ({ ...subject, images: [...subject.images] }));
+  const total = () => budgeted.reduce((n, sub) => n + sub.images.length, 0);
 
-  // Flatten to individual images, stopping at the cap. Trimming whole subjects
-  // rather than half of one keeps a person's sheet and face together.
+  while (total() > cap) {
+    const victim = [...budgeted].reverse().find((sub) => sub.images.length > 1);
+    if (!victim) break;
+    let worst = 0;
+    victim.images.forEach((img, i) => {
+      if (rank(img.kind) >= rank(victim.images[worst].kind)) worst = i;
+    });
+    victim.images.splice(worst, 1);
+  }
+  let truncated = false;
+  while (total() > cap && budgeted.length > 0) {
+    budgeted.pop();
+    truncated = true;
+  }
+
   const used: ResolvedSubject[] = [];
   const files: { subjectId: string; file: string }[] = [];
-  let truncated = false;
-
   for (const subject of budgeted) {
-    if (files.length + subject.images.length > cap) {
-      truncated = true;
-      break;
-    }
     used.push({
       slug: subject.slug,
       name: subject.name,

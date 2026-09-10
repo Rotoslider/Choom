@@ -351,10 +351,19 @@ export async function executeToolCall(
       if (library.used.length > 1) {
         const roster = library.used
           .map((u, i) => {
-            const look = (u.appearance || '').replace(/\s+/g, ' ').trim().slice(0, 160);
+            let look = (u.appearance || '').replace(/\s+/g, ' ').trim();
+            // Descriptions often open with the name ("Donny — Donny, a tall...").
+            const lead = new RegExp(`^${u.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*[,.:—–-]*\\s*`, 'i');
+            look = look.replace(lead, '').slice(0, 160);
             return `${i + 1}. ${u.name}${look ? ` — ${look}` : ''}`;
           })
           .join(' ');
+        // The speaker's characterPrompt was prepended earlier; the roster now
+        // carries it, so drop the duplicate rather than stating her twice.
+        const cp = (modeSettings.characterPrompt as string) || '';
+        if (cp && prompt.includes(`${cp}, `)) {
+          prompt = prompt.replace(`${cp}, `, '');
+        }
         prompt = `People in this image, matching the reference images in order: ${roster}. ${prompt}`;
       }
       const referenceMaxDim = (modeSettings.referenceMaxDim as number) || REFERENCE_IMAGE_DEFAULT_MAX_DIM;
