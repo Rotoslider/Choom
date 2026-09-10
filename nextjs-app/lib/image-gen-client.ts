@@ -70,7 +70,14 @@ export class ImageGenClient {
       n_iter: 1,
     };
 
-    // Hires-fix is a second denoising pass on the Lanczos-enlarged first pass.
+    // Hires-fix is a second denoising pass on an enlarged first pass. The
+    // enlargement is done in LATENT space, not pixels: every pixel-space
+    // upscaler (Lanczos, ESRGAN) at any denoise from 0.20 to 0.45, any step
+    // count and either scheduler gave Klein a crunchy, over-sharpened, burnt
+    // look on every surface — it re-interprets the resampled pixels as texture.
+    // Latent upscale at 0.45-0.50 came out photographic with better freckle
+    // detail than any of them. Below 0.40 latent ghosts (doubled mouths); above
+    // 0.55 faces drift from the references.
     // The two "Use same ..." fields are not optional: without hr_additional_modules
     // Forge fails with "'NoneType' object is not iterable", and hr_sampler_name /
     // hr_scheduler must be left OUT — passing "Use same sampler" is rejected with
@@ -79,7 +86,7 @@ export class ImageGenClient {
     if (settings.hiresFix) {
       request.enable_hr = true;
       request.hr_scale = settings.hiresFix.scale;
-      request.hr_upscaler = 'Lanczos';
+      request.hr_upscaler = 'Latent';
       request.hr_second_pass_steps = settings.hiresFix.steps;
       request.denoising_strength = settings.hiresFix.denoise;
       request.hr_additional_modules = ['Use same choices'];

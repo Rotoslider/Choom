@@ -772,9 +772,10 @@ function ImageModeSettingsEditor({
           <div className="space-y-0.5">
             <label className="text-sm font-medium">Hires Fix</label>
             <p className="text-xs text-muted-foreground">
-              Second denoising pass at scale — regenerates faces with the references still
-              attached. Fixes likeness in group and full-body shots where the face is too small
-              on the first pass. Replaces 2x Upscaling when both are on.
+              Second denoising pass at scale (latent upscale) — regenerates faces with the
+              references still attached. Fixes likeness in group and full-body shots where the
+              face is too small on the first pass. Denoise 0.45–0.50: lower ghosts, higher
+              drifts from the references. Replaces 2x Upscaling when both are on.
             </p>
           </div>
           <Switch
@@ -803,8 +804,8 @@ function ImageModeSettingsEditor({
                 value={modeSettings.hiresDenoise ?? ''}
                 onChange={(e) => onSettingsChange({ hiresDenoise: e.target.value ? parseFloat(e.target.value) : undefined })}
                 placeholder={String(HIRES_FIX_DEFAULTS.denoise)}
-                min={0.1}
-                max={0.9}
+                min={0.4}
+                max={0.7}
                 step={0.05}
               />
             </div>

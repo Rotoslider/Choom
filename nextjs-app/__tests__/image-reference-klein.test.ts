@@ -202,7 +202,8 @@ describe('Forge request payload', () => {
     expect(body.hr_scale).toBe(2);
     expect(body.denoising_strength).toBe(0.45);
     expect(body.hr_second_pass_steps).toBe(6);
-    expect(body.hr_upscaler).toBe('Lanczos');
+    // Latent, not Lanczos/ESRGAN: pixel-space upscalers burn Klein's textures.
+    expect(body.hr_upscaler).toBe('Latent');
     // Without these Forge throws "'NoneType' object is not iterable".
     expect(body.hr_additional_modules).toEqual(['Use same choices']);
     expect(body.hr_checkpoint_name).toBe('Use same checkpoint');

@@ -277,15 +277,15 @@ export interface ImageModeSettings {
   // Unlike `upscale` (Lanczos, which only enlarges the pixels it is given) this
   // regenerates detail, and with Klein it keeps the references — measured on a
   // solo three-quarter shot, the base pass gave a generic redhead while a 2x
-  // pass brought back the freckles from the reference. Denoise is the knob
-  // that matters: at 0.45 a 4-step distilled model over-cooks every texture
-  // (crunchy skin, burnt highlights); 0.30 keeps the likeness with natural
-  // skin. Second-pass steps (6 vs 16) and hr_distilled_cfg made no visible
-  // difference at a fixed seed. When both are on, hires-fix wins and the
-  // Lanczos pass is skipped.
+  // pass brought back the freckles from the reference. The upscale is latent
+  // (see image-gen-client.ts for why pixel-space upscalers are unusable with
+  // Klein); latent needs denoise 0.45-0.50 — it ghosts below 0.40 and faces
+  // drift from the references above 0.55. Second-pass steps (6 vs 12/16/20)
+  // and hr_distilled_cfg made no visible difference at a fixed seed. When
+  // both are on, hires-fix wins and the Lanczos pass is skipped.
   hiresFix?: boolean;
   hiresScale?: number; // default 2
-  hiresDenoise?: number; // default 0.3
+  hiresDenoise?: number; // default 0.5
   hiresSteps?: number; // second-pass steps, default 6
   choomDecides?: boolean; // Let LLM pick size/aspect
 }
@@ -350,7 +350,7 @@ export interface HiresFixSettings {
   steps: number;
 }
 
-export const HIRES_FIX_DEFAULTS: HiresFixSettings = { scale: 2, denoise: 0.3, steps: 6 };
+export const HIRES_FIX_DEFAULTS: HiresFixSettings = { scale: 2, denoise: 0.5, steps: 6 };
 
 // Aspect ratio presets
 export type AspectRatio = '1:1' | '4:3' | '3:4' | '16:9' | '9:16' | '3:2' | '2:3' | 'custom';
