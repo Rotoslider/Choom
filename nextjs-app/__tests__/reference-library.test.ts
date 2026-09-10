@@ -88,8 +88,8 @@ describe('reference resolution', () => {
     });
 
     expect(result.used.map(u => u.slug)).toEqual(['genesis', 'owner', 'cabin-exterior']);
-    // genesis(2) + owner(2) + cabin(1): all fit under the cap, nothing shed.
-    expect(result.images).toHaveLength(5);
+    // Three subjects, so one image each.
+    expect(result.images).toHaveLength(3);
   });
 
   it('lets one Choom reference another (Genesis with her sister Eve)', async () => {
@@ -171,34 +171,17 @@ describe('reference resolution', () => {
     expect(res.used[0]?.slug).toBe('genesis');
   });
 
-  it('keeps sheet and face for everyone while the cap allows it', async () => {
-    // Three people at sheet+face is six images — comfortably under the cap of
-    // eight, so nothing is shed. (An earlier rule cut everyone to one image at
-    // three subjects; that came from a 20GB card and threw sheets away for
-    // nothing on a card with headroom.)
+  it('sends one image each — the face — once three or more subjects are in frame', async () => {
+    // A sheet is seven views of one person. Four sheets put twenty-eight
+    // figures in the reference set and the count blows up: measured 7, 5 and 6
+    // people for a four-person prompt. Faces only held the count.
     const res = await resolveReferences({
       choomId: 'choom-genesis',
       requested: ['genesis', 'eve', 'owner'],
     });
     expect(res.used).toHaveLength(3);
-    expect(res.images).toHaveLength(6);
-    for (const u of res.used) expect(u.images).toHaveLength(2);
-  });
-
-  it('sheds sheets from the back before dropping anyone', async () => {
-    // genesis(2) + eve(2) + owner(2) = 6 against a cap of 5: the LAST-named
-    // subject loses its sheet and keeps its face. Nobody is dropped.
-    const res = await resolveReferences({
-      choomId: 'choom-genesis',
-      requested: ['genesis', 'eve', 'owner'],
-      maxReferences: 5,
-    });
-    expect(res.used.map((u) => u.slug)).toEqual(['genesis', 'eve', 'owner']);
-    expect(res.images).toHaveLength(5);
-    expect(res.used[0].images).toHaveLength(2);
-    expect(res.used[1].images).toHaveLength(2);
-    expect(res.used[2].images.map((i) => i.kind)).toEqual(['face']);
-    expect(res.truncated).toBe(false);
+    expect(res.images).toHaveLength(3);
+    expect(res.used.every((u) => u.images.length === 1 && u.images[0].kind === 'face')).toBe(true);
   });
 
   it('keeps the sheet as well when only one or two subjects are in frame', async () => {

@@ -294,24 +294,31 @@ export async function resolveReferences(options: {
     }
   }
 
-  // Every subject starts with all of its enabled images, in stored order. When
-  // the total exceeds the cap, shed from the BACK: the last-mentioned subject
-  // loses its least important image (an extra, then its sheet), then the one
-  // before it, and so on. A face is never shed while the subject still has one —
-  // on a multi-panel sheet the face is a small fraction of the pixels, so the
-  // crop is the stronger likeness signal. Only when everyone is already down to
-  // a single image and it still does not fit are whole subjects dropped from
-  // the end.
+  // One or two subjects get everything (sheet + face); three or more get ONE
+  // image each, the face. Not a VRAM rule — a duplication one. A character
+  // sheet is seven views of the same person, and four of them put twenty-eight
+  // figures in the reference set. Measured on the 96GB host, same prompt
+  // ("Four people ... from left to right: ..."), three seeds:
   //
-  // So a four-person portrait sends sheet+face for all four (8), and adding the
-  // truck costs the last-named person their sheet, not their face.
+  //   sheet+face x4 (8 refs):  7, 5, 6 people   — never the right count
+  //   face only x4 (4 refs):   4, 4, 5 people
   //
-  // This replaces a rule that cut everyone to one image at three subjects. That
-  // came from a 20GB card where six reference latents OOMed with Klein
-  // resident; on a card with headroom it threw sheets away for no reason. The
-  // cap is the lever if the generator moves back to a small card.
+  // The extras were copies: three Genesises on the right, a second Donny
+  // standing behind the seated one. At two subjects the text anchors the
+  // count and the sheet's extra angles help; past that it does not.
+  //
+  // Anything still over the cap (extras, or more than eight subjects) sheds
+  // from the BACK — the last-seated subject loses its least important image,
+  // then the one before it — and whole subjects are dropped from the end only
+  // once everyone is down to a single image.
   const rank = (k: string) => (k === 'face' ? 0 : k === 'sheet' ? 1 : 2);
   const budgeted = ordered.map((subject) => ({ ...subject, images: [...subject.images] }));
+  if (budgeted.length >= 3) {
+    for (const sub of budgeted) {
+      const face = sub.images.find((i) => i.kind === 'face');
+      sub.images = face ? [face] : sub.images.slice(0, 1);
+    }
+  }
   const total = () => budgeted.reduce((n, sub) => n + sub.images.length, 0);
 
   while (total() > cap) {

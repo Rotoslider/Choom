@@ -411,12 +411,14 @@ request, so a Choom always sees the current list and calls subjects by name:
 generate_image(prompt: "...", references: ["genesis", "owner", "cabin-exterior"])
 ```
 
-Up to `MAX_REFERENCES_PER_IMAGE` (8) images per generation. Every subject starts with all of
-its images. Over the cap, the **last-named** subject loses its sheet first (the face is always
-kept), then the one before it, and only once everyone is down to a single image are whole
-subjects dropped from the end. So a four-person portrait sends sheet + face for all four, and
-adding the truck to that scene costs the last person their sheet, not their face. Name the
-people who matter most first.
+Up to `MAX_REFERENCES_PER_IMAGE` (8) images per generation. **One or two subjects send sheet +
+face; three or more send the face only.** That is not a VRAM limit — a character sheet is seven
+views of one person, and four sheets in a group shot put twenty-eight figures in the reference
+set. Measured on a 96 GB card with the same four-person prompt over three seeds, sheet + face
+produced 7, 5 and 6 people; faces only produced 4, 4 and 5. The extras were copies — three
+Genesises on the right, a second Donny standing behind the seated one. Anything still over the
+cap sheds from the **last-seated** subject first, and whole subjects are dropped from the end
+only once everyone is down to a single image.
 
 **Prompting two or more people — reference order is seating order.** Tested on Forge with a
 fixed seed: the first reference lands in the leftmost seat, the second next to it, and the prompt
@@ -470,8 +472,8 @@ Two habits that keep this cheap:
 For a discontinuous change, name the state rather than the year: `genesis-preinjury`,
 `donny-beard`. The slug only has to be memorable to you.
 
-Remember the cap when a scene grows: 8 images per generation. Four people at sheet + face
-fills it exactly; a fifth subject starts costing the last-named people their sheets.
+Remember the budget when a scene grows: at three or more subjects everyone is a single face,
+so eight people fit — but four is already the practical limit for likeness.
 
 #### Per-Choom pinned references (Choom edit panel → Image)
 

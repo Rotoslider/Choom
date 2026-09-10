@@ -354,7 +354,10 @@ export async function executeToolCall(
             let look = (u.appearance || '').replace(/\s+/g, ' ').trim();
             // Descriptions often open with the name ("Donny — Donny, a tall...").
             const lead = new RegExp(`^${u.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*[,.:—–-]*\\s*`, 'i');
-            look = look.replace(lead, '').slice(0, 160);
+            look = look.replace(lead, '');
+            // Cut at a word, not mid-token: "grey-speckled beard and glasses" was
+            // arriving as "gre" and the beard and glasses never reached Forge.
+            if (look.length > 260) look = look.slice(0, 260).replace(/\s+\S*$/, '');
             return `${i + 1}. ${u.name}${look ? ` — ${look}` : ''}`;
           })
           .join(' ');
