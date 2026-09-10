@@ -76,17 +76,42 @@ export class ImageGenClient {
       };
     }
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(request),
-    });
+    const post = () =>
+      fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(request),
+      });
 
+    let response = await post();
+
+    // VRAM fragments as Forge runs, and reference latents are what tips it over.
+    // Measured on a 20GB card with Klein resident: free VRAM fell to 1.27 GB
+    // after a run of generations, and unloading the checkpoint took it back to
+    // 14.36 GB — the identical request then succeeded. So an OOM here is often
+    // fragmentation rather than a request that genuinely cannot fit. Reclaim
+    // once and retry before giving up; Forge reloads the checkpoint itself.
     if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Image generation failed: ${response.status} - ${error}`);
+      const firstError = await response.text();
+      if (/outofmemory|out of memory/i.test(firstError)) {
+        console.warn('   🧹 Forge out of memory — unloading checkpoint to defragment VRAM, then retrying once');
+        try {
+          await fetch(`${this.endpoint}/sdapi/v1/unload-checkpoint`, { method: 'POST' });
+          await new Promise((r) => setTimeout(r, 2000));
+        } catch (e) {
+          console.warn('   ⚠️ unload-checkpoint failed:', e instanceof Error ? e.message : e);
+        }
+        response = await post();
+        if (!response.ok) {
+          const retryError = await response.text();
+          throw new Error(
+            `Image generation failed after VRAM reclaim: ${response.status} - ${retryError}. ` +
+            'Too many reference images for this GPU — try fewer subjects.'
+          );
+        }
+      } else {
+        throw new Error(`Image generation failed: ${response.status} - ${firstError}`);
+      }
     }
 
     const data: ForgeGenerationResponse = await response.json();
