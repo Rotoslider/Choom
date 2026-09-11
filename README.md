@@ -51,6 +51,7 @@ All 116 tools are organized into 27 modular **skills** with progressive disclosu
 
 - **Mobile-Friendly Web UI**: The web app is responsive for phone use (e.g. over ngrok while traveling). The chat input stacks into a full-width box + tool row on phones; the main sidebar, the `/rooms` room list, and the `/settings` nav all become tap-to-close overlays instead of pushing content off-screen; settings panels stack their columns. A `device-width` viewport and `allowedDevOrigins` (LAN subnet, plus `*.local`) make a phone on the local network load the dev server correctly
 - **LAN HTTPS (working mic off-box)**: The microphone needs a browser **secure context**, which is `https://` or `localhost` and nothing else — so `http://<lan-ip>:3000` leaves `navigator.mediaDevices` undefined and the mic button dead on every machine but the host. `pnpm lan:https` runs a small TLS front door on **:3443** that forwards to the untouched http dev server on 3000, so the mic works over the LAN without routing through ngrok, and the dev-server service, the ngrok tunnel and the server-side self-calls all keep working unchanged. `scripts/setup-lan-https.sh` issues the certificate with mkcert (covering `localhost`, the `.local` mDNS name and the current LAN IP) and prints how to trust the CA on the other machines — including Firefox, which ignores the OS trust store. The proxy forwards the real `X-Forwarded-For` and `Host`, so LAN devices still count as non-local for the settings confirmation above. See [Using Choom from another machine on the LAN](#using-choom-from-another-machine-on-the-lan-and-the-microphone)
+- **Stream Recovery**: If the response stream dies mid-turn — a dropped wifi link, a flaky tunnel — the server doesn't care: it finishes the agent loop and persists the reply anyway. The UI used to drop that turn on the floor, leaving a question with no answer and nothing looking for one. Now a broken stream triggers a **resync**, polling `/api/chats/<id>/messages` with backoff out to ~3 minutes until the reply the server already wrote shows up. Deliberately a resync and **not** a retry: re-POSTing `/api/chat` would re-run the whole turn — tool calls, image generation, memory writes — racing the original that is usually still running, and leaving duplicate images behind. A newer send supersedes an in-flight recovery so it can never overwrite a turn you've moved past. Logic and rationale in `lib/stream-recovery.ts`, unit-tested in `__tests__/stream-recovery.test.ts`
 - **Cross-Device Settings Safety**: The server (the box running Choom) is the single source of truth for config. On load, every browser **adopts the server's settings**, overwriting its own — so a stale/blank/off-site device can never silently push bad values back (this previously broke Home Assistant when a phone's empty config synced over the good one). Per-device cosmetics (theme, font size, animations, avatar, mic input mode) stay local. **Only the server itself (via localhost) may change config freely** — any other device (LAN Mac/phone, or off-site via ngrok) gets a **"Change server settings? — [Cancel] / [Yes, I'm sure]"** confirmation, enforced server-side. A blank value or empty list can never overwrite a real one. See [Cross-Device Settings & Safety](#cross-device-settings--safety)
 - **Backup & Restore**: A daily 5am full backup snapshots `bridge-config.json`, the `.env` files, credentials, and `self_followups/` to `data/backups/daily/<date>/`, and a pre-change snapshot is taken before every settings write. **Settings → Backup** lists both trails (newest first) with one-click restore (which itself snapshots first, so it's undoable) and reset-to-defaults
 - **Weather**: OpenWeatherMap integration with caching
@@ -577,6 +578,53 @@ TTS uses [Fatterbox](https://github.com/justinlime/Fatterbox) (Chatterbox TTS wr
 7. Large single chunks (the server buffers post-tool replies for repeat/dedup checks and flushes them as one event) are split into ~350-char sentence groups so Chatterbox never receives one monolithic request
 
 Per-Choom voice: set `voiceId` on the Choom to override the default.
+
+### Speaking Pace
+
+`chatterbox-turbo` sounds better than the older model — cleaner, fewer
+mispronunciations, no random artefacts — but it speaks noticeably slower,
+because it clones its *cadence* from the reference clip along with the timbre.
+
+**Settings → Audio → Speech Speed** controls it. 1.0 is the voice as cloned;
+1.05–1.15 is the useful range. The bridge retimes the WAV with ffmpeg's
+`atempo` filter, which changes tempo only — sample rate and pitch are untouched,
+so it sounds brisker rather than sped-up. Costs ~45 ms on a ~1.6 s render.
+
+> **That slider did nothing before.** The value was plumbed all the way from
+> Settings to the TTS bridge, and then dropped: the bridge's `/v1/audio/speech`
+> only ever read `input` and `voice`. Forwarding it upstream wouldn't have
+> helped either — **the `speed` field in rapid-mlx's API is a no-op for this
+> model.** It sits in the OpenAPI schema with a default of `1.0`, which makes it
+> look available, but measured over repeated runs `speed=0.5` and `speed=2.0`
+> produce the same ~5.7 s of audio for a fixed sentence, and mlx_audio says so
+> outright in `tts/models/chatterbox/chatterbox.py`: *"speed: Ignored
+> (Chatterbox doesn't support speed adjustment)"*. chatterbox-turbo likewise
+> ignores `cfg_weight`, `exaggeration` and `min_p`. The retiming in the bridge
+> is what makes the slider real.
+
+The slider is 0.8–1.5 in 0.05 steps. It used to be 0.5–2.0 in 0.1 steps, which
+skipped straight from 1.10 to 1.20 — past the range that matters — and offered a
+top half nobody could use, since a time-stretch audibly degrades beyond ~1.25.
+
+**For more than ~1.15, re-cut the reference clip instead:**
+
+```bash
+ffmpeg -i sophie.wav -filter:a "atempo=1.20" sophie_faster.wav   # in VOICES_DIR
+```
+
+That makes the model genuinely speak faster rather than stretching the output,
+so it holds up at larger changes — at the cost of re-cloning the voice, so keep
+the original and check each one still sounds right. Measured: a 20% faster
+reference gave ~11% faster speech (mean 5.63 s → 5.02 s over 5 runs each). The
+two compose — references for the bulk, the slider to trim the rest.
+
+`TTS_SPEED` on the bridge (`CHOOM_TTS_SPEED=1.10 ./install-launchd.sh
+--with-tts`) sets the fallback for callers that send no speed of their own,
+such as Home Assistant and the keep-warm ping. An explicit request value always
+wins, so it does not affect Choom's own playback. The active value is in
+`GET /health` and `GET /v1/info` on port 8004. The filter fails **open**: if
+ffmpeg is missing or errors, it logs and serves unadjusted audio rather than
+letting a cosmetic setting silence a Choom.
 
 ### Per-Message Playback
 

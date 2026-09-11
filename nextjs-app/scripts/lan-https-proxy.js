@@ -49,6 +49,20 @@ const tlsOptions = {
   cert: fs.readFileSync(CERT_FILE),
 };
 
+// Node's global agent carries `timeout: 5000`, a five-second socket idle
+// timeout. A chat stream goes quiet for far longer than that whenever the agent
+// loop stops to run a tool — a vision call against LM Studio is tens of seconds
+// of silence — so the upstream leg gets its own agent with no idle timeout.
+// (Measured: the proxy already survived 65s of silence and a 4.5MB burst with
+// the default agent, so this is belt-and-braces rather than a known fix.)
+const upstreamAgent = new http.Agent({ keepAlive: true, timeout: 0, maxSockets: Infinity });
+
+function logStreamFailure(req, what, err) {
+  const when = new Date().toISOString();
+  console.error(`[${when}] ${what} ${req.method} ${req.url} from ${req.socket.remoteAddress}` +
+                (err ? ` — ${err.message}` : ''));
+}
+
 /** Everything the dev server needs to know it is being fronted by TLS. */
 function forwardedHeaders(req) {
   return {
@@ -61,22 +75,43 @@ function forwardedHeaders(req) {
 
 const server = https.createServer(tlsOptions, (req, res) => {
   const upstream = http.request(
-    { host: TARGET_HOST, port: TARGET_PORT, path: req.url, method: req.method, headers: forwardedHeaders(req) },
+    {
+      host: TARGET_HOST, port: TARGET_PORT, path: req.url, method: req.method,
+      headers: forwardedHeaders(req), agent: upstreamAgent,
+    },
     (upstreamRes) => {
       res.writeHead(upstreamRes.statusCode, upstreamRes.headers);
       // Straight pipe, no buffering — chat responses stream as SSE and would
       // otherwise arrive all at once when the request finished.
       upstreamRes.pipe(res);
+
+      // A chat stream dying mid-flight leaves the browser with a vanished turn
+      // (the app recovers via lib/stream-recovery.ts). Whatever breaks it, say
+      // so here — silence on this path made one real failure impossible to
+      // attribute.
+      upstreamRes.on('error', (err) => logStreamFailure(req, 'upstream stream error on', err));
+      res.on('close', () => {
+        if (!res.writableEnded) logStreamFailure(req, 'client went away mid-response on');
+      });
     }
   );
 
   upstream.on('error', (err) => {
+    logStreamFailure(req, 'upstream request failed for', err);
     if (!res.headersSent) res.writeHead(502, { 'content-type': 'text/plain' });
     res.end(`Dev server unreachable at ${TARGET_HOST}:${TARGET_PORT} — ${err.message}\n`);
   });
 
   req.pipe(upstream);
 });
+
+// A chat turn can stream for minutes. Node would otherwise cut the request off
+// at five minutes (requestTimeout), and close idle keep-alive connections after
+// five seconds — which races a browser reusing one for the next POST, and a
+// POST is not safe for the browser to auto-retry.
+server.requestTimeout = 0;
+server.keepAliveTimeout = 120000;
+server.headersTimeout = 125000; // must exceed keepAliveTimeout
 
 // Turbopack's HMR channel is a WebSocket, and a plain request handler never
 // sees it — without this the LAN page loads once and then stops hot-reloading.
@@ -89,6 +124,7 @@ server.on('upgrade', (req, socket, head) => {
     path: req.url,
     method: req.method,
     headers: forwardedHeaders(req),
+    agent: upstreamAgent,
   });
 
   upstream.on('upgrade', (upstreamRes, upstreamSocket, upstreamHead) => {
