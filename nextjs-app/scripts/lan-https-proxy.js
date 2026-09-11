@@ -57,10 +57,10 @@ const tlsOptions = {
 // the default agent, so this is belt-and-braces rather than a known fix.)
 const upstreamAgent = new http.Agent({ keepAlive: true, timeout: 0, maxSockets: Infinity });
 
-function logStreamFailure(req, what, err) {
+function logStreamFailure(req, what, err, extra = '') {
   const when = new Date().toISOString();
   console.error(`[${when}] ${what} ${req.method} ${req.url} from ${req.socket.remoteAddress}` +
-                (err ? ` — ${err.message}` : ''));
+                (extra ? ` ${extra}` : '') + (err ? ` — ${err.code || ''} ${err.message}` : ''));
 }
 
 /** Everything the dev server needs to know it is being fronted by TLS. */
@@ -90,8 +90,24 @@ const server = https.createServer(tlsOptions, (req, res) => {
       // so here — silence on this path made one real failure impossible to
       // attribute.
       upstreamRes.on('error', (err) => logStreamFailure(req, 'upstream stream error on', err));
+
+      // Who hung up, and how. A clean FIN from the browser looks very different
+      // from an RST, and the difference is what distinguishes "the user closed
+      // the tab" from "something reset the connection underneath us" — e.g. the
+      // DHCP T1 renewal at the 30-minute mark making Firefox drop live sockets.
+      const startedAt = Date.now();
+      let clientError = null;
+      req.socket.on('error', (err) => { clientError = err; });
       res.on('close', () => {
-        if (!res.writableEnded) logStreamFailure(req, 'client went away mid-response on');
+        if (res.writableEnded) return;
+        logStreamFailure(
+          req,
+          'response cut short on',
+          clientError,
+          `after ${((Date.now() - startedAt) / 1000).toFixed(1)}s, ` +
+          `${res.socket ? res.socket.bytesWritten : '?'} bytes written, ` +
+          `close=${clientError ? 'socket-error' : 'clean-fin'}`
+        );
       });
     }
   );
