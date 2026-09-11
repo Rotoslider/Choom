@@ -235,18 +235,28 @@ export function AudioSettings() {
                     <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" />
                   </TooltipTrigger>
                   <TooltipContent>
-                    <p className="max-w-xs">Playback speed multiplier. 1.0 = normal speed</p>
+                    <p className="max-w-xs">
+                      Speaking pace. 1.0 is the voice as cloned. The bridge retimes the
+                      audio with ffmpeg&apos;s atempo filter, so pitch is unchanged — it
+                      does not sound sped-up, just brisker. 1.05&ndash;1.15 is transparent;
+                      past ~1.25 you can start to hear the stretch, and at that point
+                      re-cutting the voice&apos;s reference clip is the better fix.
+                    </p>
                   </TooltipContent>
                 </Tooltip>
               </div>
-              <span className="text-sm text-muted-foreground">{tts.speed}x</span>
+              <span className="text-sm text-muted-foreground">{(tts.speed ?? 1).toFixed(2)}x</span>
             </div>
             <Slider
-              value={[tts.speed]}
+              value={[tts.speed ?? 1]}
               onValueChange={([v]) => updateTTSSettings({ speed: v })}
-              min={0.5}
-              max={2}
-              step={0.1}
+              // 0.1 steps skipped straight from 1.10 to 1.20, missing the range that
+              // actually matters. Ceiling is 1.5 rather than 2.0 because this is a
+              // time-stretch: past ~1.25 it audibly degrades, so the top half of a
+              // 2.0 slider was travel nobody could use.
+              min={0.8}
+              max={1.5}
+              step={0.05}
               className="hover:cursor-pointer"
             />
           </div>

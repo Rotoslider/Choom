@@ -40,6 +40,12 @@
     <string>__KEEP_WARM_VOICE__</string>
     <key>KEEP_WARM_INTERVAL</key>
     <string>240</string>
+    <!-- Cadence FALLBACK, for callers that send no speed of their own —
+         Home Assistant and the keep-warm ping. Choom's own playback is driven
+         by Settings > Audio > Speech Speed, which always wins over this.
+         1.0 is untouched audio. Override at install: CHOOM_TTS_SPEED=1.1 -->
+    <key>TTS_SPEED</key>
+    <string>__TTS_SPEED__</string>
   </dict>
 
   <key>RunAtLoad</key>

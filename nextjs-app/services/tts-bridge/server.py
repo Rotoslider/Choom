@@ -4,7 +4,7 @@ Chatterbox-compatible TTS shim in front of a Rapid-MLX server.
 
 Choom (and Home Assistant) already speak the QUITE_CHATTER API:
 
-    POST /v1/audio/speech  {"input": "...", "voice": "sophie"}  -> WAV
+    POST /v1/audio/speech  {"input": "...", "voice": "sophie", "speed": 1.1}  -> WAV
     GET  /v1/voices                                             -> {"voices": [...]}
     GET  /v1/info                                               -> name/paths
 
@@ -26,6 +26,8 @@ import base64
 import io
 import logging
 import os
+import subprocess
+import tempfile
 import threading
 import time
 import wave
@@ -48,6 +50,44 @@ DEFAULT_VOICE = os.getenv("DEFAULT_VOICE", "sophie")
 KEEP_WARM_VOICE = os.getenv("KEEP_WARM_VOICE", DEFAULT_VOICE)
 KEEP_WARM_INTERVAL = int(os.getenv("KEEP_WARM_INTERVAL", "240"))
 REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "300"))
+
+# Cadence. chatterbox-turbo clones its pace from the reference clip, and it
+# speaks slower than the older model did. Note the upstream /v1/audio/speech
+# API advertises a `speed` field — it is a NO-OP for this model. Measured:
+# speed=0.5 and speed=2.0 both yield the same ~5.7s of audio for a fixed
+# sentence, and mlx_audio/tts/models/chatterbox/chatterbox.py says outright
+# "speed: Ignored (Chatterbox doesn't support speed adjustment)". So the tempo
+# is fixed up here instead, with ffmpeg's atempo filter (tempo only — sample
+# rate and pitch are untouched).
+#
+# The live control is Choom's Settings > Audio > Speech Speed, which arrives as
+# `speed` in the request body; TTS_SPEED is only the fallback for callers that
+# send none. 1.0 disables the retiming entirely — the audio is returned exactly
+# as synthesised.
+# 1.05-1.15 is the transparent range; past ~1.25 stretching artefacts creep in,
+# and at that point re-cutting the reference clip is the better fix (see the
+# VOICES_DIR notes in MAC-SETUP.md).
+
+
+def _parse_speed(raw, source: str = "TTS_SPEED") -> float:
+    """Never let a bad value take the service down — it crash-loops under launchd."""
+    if raw is None or not str(raw).strip():
+        return 1.0  # unset, or an empty value from a rendered plist
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        logging.warning("%s=%r is not a number; using 1.0", source, raw)
+        return 1.0
+    # One atempo instance is only valid over 0.5-2.0, and anything near those
+    # ends is unlistenable anyway.
+    if not 0.5 <= value <= 2.0:
+        clamped = min(2.0, max(0.5, value))
+        logging.warning("%s=%s is outside 0.5-2.0; clamping to %s", source, value, clamped)
+        return clamped
+    return value
+
+
+TTS_SPEED = _parse_speed(os.getenv("TTS_SPEED", "1.0"))
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"),
                     format="%(asctime)s - %(levelname)s - %(message)s")
@@ -73,7 +113,40 @@ def list_voices():
     )
 
 
-def synthesize(text: str, voice: str) -> bytes:
+def apply_speed(audio: bytes, speed: float) -> bytes:
+    """Retime the WAV with ffmpeg's atempo. Pitch and sample rate are unchanged.
+
+    Fails OPEN: any problem here (no ffmpeg, a bad filter string, a timeout)
+    logs and returns the untouched audio. Cadence is cosmetic — it must never
+    be the reason a Choom goes silent.
+    """
+    if abs(speed - 1.0) < 1e-3:
+        return audio
+
+    # Temp files rather than pipes: a WAV header carries a length field, and
+    # ffmpeg cannot seek back to fix it up when writing to stdout.
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "in.wav")
+            dst = os.path.join(tmp, "out.wav")
+            with open(src, "wb") as fh:
+                fh.write(audio)
+            proc = subprocess.run(
+                ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin",
+                 "-y", "-i", src, "-filter:a", f"atempo={speed:g}", dst],
+                capture_output=True, timeout=30,
+            )
+            if proc.returncode == 0 and os.path.getsize(dst) > 0:
+                with open(dst, "rb") as fh:
+                    return fh.read()
+            logger.warning("atempo failed (rc=%s): %s", proc.returncode,
+                           proc.stderr.decode("utf-8", "replace")[:200])
+    except Exception as e:  # noqa: BLE001
+        logger.warning("atempo unavailable (%s); serving unadjusted audio", e)
+    return audio
+
+
+def synthesize(text: str, voice: str, speed: float = None) -> bytes:
     wav, txt = voice_path(voice)
     if not wav:
         raise KeyError(voice)
@@ -97,7 +170,7 @@ def synthesize(text: str, voice: str) -> bytes:
     r.raise_for_status()
     global _last_synth
     _last_synth = time.time()
-    return r.content
+    return apply_speed(r.content, TTS_SPEED if speed is None else speed)
 
 
 @app.get("/v1/voices")
@@ -114,6 +187,7 @@ def info():
         "model": TTS_MODEL,
         "upstream": RAPID_MLX_URL,
         "keep_warm": KEEP_WARM_VOICE or None,
+        "speed": TTS_SPEED,
         "voices": [{"name": v, "path": os.path.join(VOICES_DIR, f"{v}.wav")}
                    for v in list_voices()],
     })
@@ -127,7 +201,7 @@ def health():
     except Exception as e:  # noqa: BLE001
         upstream = f"unreachable: {e}"
     return jsonify({"status": "ok", "upstream": upstream,
-                    "voices": len(list_voices()),
+                    "voices": len(list_voices()), "speed": TTS_SPEED,
                     "seconds_since_synth": round(time.time() - _last_synth, 1) if _last_synth else None})
 
 
@@ -136,10 +210,14 @@ def speech():
     body = request.get_json(silent=True) or {}
     text = (body.get("input") or "").strip()
     voice = body.get("voice") or DEFAULT_VOICE
+    # Choom's Settings > Audio > Speech Speed slider arrives here. An explicit
+    # value always wins; TTS_SPEED is only the fallback for callers that send
+    # none (Home Assistant, the keep-warm ping).
+    speed = _parse_speed(body["speed"], "request speed") if body.get("speed") is not None else TTS_SPEED
     if not text:
         return jsonify({"error": "input is required"}), 400
     try:
-        audio = synthesize(text, voice)
+        audio = synthesize(text, voice, speed)
     except KeyError:
         return jsonify({"error": f"unknown voice {voice!r}",
                         "voices": list_voices()}), 400
@@ -167,6 +245,8 @@ if __name__ == "__main__":
     logger.info("voices dir : %s (%d voices)", VOICES_DIR, len(list_voices()))
     logger.info("upstream   : %s (%s)", RAPID_MLX_URL, TTS_MODEL)
     logger.info("keep-warm  : %s every %ss", KEEP_WARM_VOICE or "disabled", KEEP_WARM_INTERVAL)
+    logger.info("speed      : %s%s", TTS_SPEED,
+                "" if abs(TTS_SPEED - 1.0) < 1e-3 else " (atempo retime)")
     if KEEP_WARM_VOICE:
         threading.Thread(target=keep_warm, daemon=True).start()
     app.run(host=BIND, port=PORT, threaded=True)

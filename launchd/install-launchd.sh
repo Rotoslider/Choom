@@ -68,6 +68,7 @@ NGROK_DOMAIN=""
 TRAFFIC_POLICY=""
 RAPID_MLX=""
 TTS_MODEL="chatterbox"
+TTS_SPEED="1.0"
 VOICES_DIR=""
 KEEP_WARM_VOICE=""
 
@@ -104,6 +105,7 @@ render() {  # render <template> <installed-plist-name>
       -e "s|__TRAFFIC_POLICY__|$TRAFFIC_POLICY|g" \
       -e "s|__RAPID_MLX__|$RAPID_MLX|g" \
       -e "s|__TTS_MODEL__|$TTS_MODEL|g" \
+      -e "s|__TTS_SPEED__|$TTS_SPEED|g" \
       -e "s|__VOICES_DIR__|$VOICES_DIR|g" \
       -e "s|__KEEP_WARM_VOICE__|$KEEP_WARM_VOICE|g" \
       "$src" > "$dest"
@@ -193,6 +195,8 @@ if [ "$WITH_TTS" = true ]; then
   RAPID_MLX="${CHOOM_RAPID_MLX:-$HOME/.local/share/rapid-mlx-audio/venv/bin/rapid-mlx}"
   VOICES_DIR="${CHOOM_VOICES_DIR:-$HOME/Library/Application Support/Choom/voices-prepared}"
   KEEP_WARM_VOICE="${CHOOM_KEEP_WARM_VOICE:-sophie}"
+  # 1.0 leaves the synthesised audio untouched; see the plist template.
+  TTS_SPEED="${CHOOM_TTS_SPEED:-1.0}"
 
   if [ ! -x "$RAPID_MLX" ]; then
     echo -e "\n${YELLOW}Skipping local TTS: no audio-capable rapid-mlx at $RAPID_MLX${NC}"
