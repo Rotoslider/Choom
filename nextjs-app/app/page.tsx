@@ -12,6 +12,7 @@ import { useAppStore } from '@/lib/store';
 import { StreamingTTS } from '@/lib/tts-client';
 import { broadcastMute } from '@/lib/audio-registry';
 import { log, useLogStore } from '@/lib/log-store';
+import { recoverReply } from '@/lib/stream-recovery';
 import type { Message, Choom, Chat, StreamingChatChunk, ServiceHealth } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
@@ -99,6 +100,11 @@ export default function Home() {
 
   // Abort controller for stopping generation
   const abortControllerRef = useRef<AbortController | null>(null);
+  // Bumped per send so an in-flight stream recovery abandons itself as soon
+  // as a newer turn starts, instead of overwriting it with stale messages.
+  const sendGenerationRef = useRef(0);
+  // Holds the in-flight recovery so it is not an unobserved floating promise.
+  const streamRecoveryRef = useRef<Promise<void> | null>(null);
 
   // Initialize TTS when settings or current Choom change
   useEffect(() => {
@@ -540,6 +546,39 @@ export default function Home() {
     [currentChoomId, currentChatId, chats]
   );
 
+  /**
+   * Pull the turn back from the server after the response stream dies mid-flight.
+   * The decision logic (and why this resyncs instead of retrying) lives in
+   * lib/stream-recovery.ts, where it is unit-tested.
+   */
+  const recoverAfterStreamError = async (
+    chatId: string,
+    sentAt: number,
+    generation: number
+  ) => {
+    log.system('Response stream dropped — recovering the reply from the server…', 'warning');
+
+    const recovered = await recoverReply({
+      sentAt,
+      loadMessages: async () => {
+        const res = await fetch(`/api/chats/${chatId}/messages`);
+        return res.ok ? ((await res.json()) as Message[]) : null;
+      },
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      isStale: () => sendGenerationRef.current !== generation,
+    });
+
+    if (recovered) {
+      setMessages(recovered);
+      log.system('Reply recovered — the server had finished it.', 'success');
+    } else if (sendGenerationRef.current === generation) {
+      log.system(
+        'Could not recover the reply. It may still be generating — reopen the chat to check before resending.',
+        'error'
+      );
+    }
+  };
+
   const sendMessageToChat = async (chatId: string, content: string) => {
     // Save last user message for regenerate
     setLastUserMessage(content);
@@ -570,6 +609,8 @@ export default function Home() {
 
     // Create abort controller for this request
     abortControllerRef.current = new AbortController();
+    const generation = ++sendGenerationRef.current;
+    const sentAt = Date.now();
 
     try {
       const response = await fetch('/api/chat', {
@@ -810,6 +851,9 @@ export default function Home() {
         console.error('Failed to send message:', error);
         log.llmError(error instanceof Error ? error.message : 'Failed to send message');
         ttsRef.current?.stop();
+        // The stream died, but the server keeps going and persists the reply.
+        // Go and get it rather than dropping the turn on the floor.
+        streamRecoveryRef.current = recoverAfterStreamError(chatId, sentAt, generation);
       }
     } finally {
       setIsStreaming(false);
