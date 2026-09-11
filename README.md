@@ -539,6 +539,20 @@ model family and is in the Scheduler dropdown once the checkpoint list has loade
 8–12 steps are fine again, so you get coherence and clean texture together. `Turbo` is broken
 with Klein (pure noise); the prompt tail ("photorealistic, DSLR quality") makes no difference.
 
+**Steps: 8.** At 12, groups of three or more start to diverge from their references — oversized
+bodies, duplicated people, a missing third. Across 40 fixed-seed three-person renders at
+Flux2 / 8 steps there were no extra people or limbs at all.
+
+**What still fails in groups, and what does not help.** With three faces, the one recurring
+error is a distinctive feature migrating to the wrong person — Genesis's glasses landing on
+Eve, who is described almost identically ("short young petite woman … blonde"). Measured over
+ten seeds each: 2048×1152 got the glasses right 6/10; **1856×1044 (`x-large`) got 9/10**, with
+faces no worse. So for three-or-more-person general images, `x-large` is the better default.
+Adding "no glasses" to Eve's description did nothing (6/10 — naming the feature tends to add
+it). Stripping the roster down to bare names was much worse: the name "Aloy" on its own pulls
+in the video-game character — leather straps, tribal armour, darker hair — in 9 of 10. The
+appearance text in each roster line is what keeps her a redhead in a tank top; keep it.
+
 ### Image Naming Convention
 Images can be saved via the chat window by clicking on them. Auto downloaded to your Downloads folder
 From the Image Gallery of your Selected Choom. Each Choom has its own Gallery. Click the download arrow on image or Download button when zoomed in. 
