@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  HTTPS front door for the dev server, on port 3443.
+
+  The microphone (getUserMedia) only exists in a secure context, which means
+  https:// or localhost and nothing else — so http://192.168.1.44:3000 has a
+  dead mic button on every machine but this one. This agent terminates TLS and
+  forwards to the untouched http dev server on 3000, leaving com.choom.dev and
+  the ngrok tunnel exactly as they were.
+
+  Needs a certificate first:  nextjs-app/scripts/setup-lan-https.sh
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.choom.lan-https</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__PNPM__</string>
+    <string>lan:https</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__PROJECT_PATH__/nextjs-app</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>__HOMEBREW_BIN__:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>HOME</key>
+    <string>__HOME__</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>StandardOutPath</key>
+  <string>__PROJECT_PATH__/nextjs-app/data/logs/lan-https.log</string>
+  <key>StandardErrorPath</key>
+  <string>__PROJECT_PATH__/nextjs-app/data/logs/lan-https.log</string>
+</dict>
+</plist>

@@ -6,8 +6,12 @@ const nextConfig = {
   // ("loading" forever). The 192.168.1.* wildcard is fine (private LAN only). The
   // ngrok host is pinned to our ONE stable reserved domain — NOT a *.ngrok-free.app
   // wildcard — so no other random ngrok app can reach the dev HMR resources.
+  // '*.local' is mDNS/Bonjour, which only resolves on the LAN — it is how the
+  // HTTPS front door (scripts/lan-https-proxy.cjs) is reached from other
+  // machines, since a .local name survives the DHCP lease changing the IP.
   allowedDevOrigins: [
     '192.168.1.*',
+    '*.local',
     'cool-sincerely-lioness.ngrok-free.app',
   ],
   // Hide the floating dev-build "N" badge — on phones it sits right over the

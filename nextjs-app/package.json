@@ -6,6 +6,8 @@
     "dev": "concurrently --kill-others-on-fail --names \"memory,next\" --prefix-colors \"yellow,blue\" \"pnpm run memory:start 2>&1 | node scripts/log-filter.js\" \"next dev 2>&1 | node scripts/log-filter.js\"",
     "dev:verbose": "pnpm run memory:start & next dev",
     "dev:app": "next dev",
+    "lan:https": "node scripts/lan-https-proxy.js",
+    "lan:https:setup": "./scripts/setup-lan-https.sh",
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",

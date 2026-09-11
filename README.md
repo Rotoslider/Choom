@@ -49,7 +49,8 @@ All 116 tools are organized into 27 modular **skills** with progressive disclosu
 
 ![Token Usage Dashboard](docs/screenshots/Token-Usage.png)
 
-- **Mobile-Friendly Web UI**: The web app is responsive for phone use (e.g. over ngrok while traveling). The chat input stacks into a full-width box + tool row on phones; the main sidebar, the `/rooms` room list, and the `/settings` nav all become tap-to-close overlays instead of pushing content off-screen; settings panels stack their columns. A `device-width` viewport and `allowedDevOrigins` (LAN subnet) make a phone on the local network load the dev server correctly
+- **Mobile-Friendly Web UI**: The web app is responsive for phone use (e.g. over ngrok while traveling). The chat input stacks into a full-width box + tool row on phones; the main sidebar, the `/rooms` room list, and the `/settings` nav all become tap-to-close overlays instead of pushing content off-screen; settings panels stack their columns. A `device-width` viewport and `allowedDevOrigins` (LAN subnet, plus `*.local`) make a phone on the local network load the dev server correctly
+- **LAN HTTPS (working mic off-box)**: The microphone needs a browser **secure context**, which is `https://` or `localhost` and nothing else — so `http://<lan-ip>:3000` leaves `navigator.mediaDevices` undefined and the mic button dead on every machine but the host. `pnpm lan:https` runs a small TLS front door on **:3443** that forwards to the untouched http dev server on 3000, so the mic works over the LAN without routing through ngrok, and the dev-server service, the ngrok tunnel and the server-side self-calls all keep working unchanged. `scripts/setup-lan-https.sh` issues the certificate with mkcert (covering `localhost`, the `.local` mDNS name and the current LAN IP) and prints how to trust the CA on the other machines — including Firefox, which ignores the OS trust store. The proxy forwards the real `X-Forwarded-For` and `Host`, so LAN devices still count as non-local for the settings confirmation above. See [Using Choom from another machine on the LAN](#using-choom-from-another-machine-on-the-lan-and-the-microphone)
 - **Cross-Device Settings Safety**: The server (the box running Choom) is the single source of truth for config. On load, every browser **adopts the server's settings**, overwriting its own — so a stale/blank/off-site device can never silently push bad values back (this previously broke Home Assistant when a phone's empty config synced over the good one). Per-device cosmetics (theme, font size, animations, avatar, mic input mode) stay local. **Only the server itself (via localhost) may change config freely** — any other device (LAN Mac/phone, or off-site via ngrok) gets a **"Change server settings? — [Cancel] / [Yes, I'm sure]"** confirmation, enforced server-side. A blank value or empty list can never overwrite a real one. See [Cross-Device Settings & Safety](#cross-device-settings--safety)
 - **Backup & Restore**: A daily 5am full backup snapshots `bridge-config.json`, the `.env` files, credentials, and `self_followups/` to `data/backups/daily/<date>/`, and a pre-change snapshot is taken before every settings write. **Settings → Backup** lists both trails (newest first) with one-click restore (which itself snapshots first, so it's undoable) and reset-to-defaults
 - **Weather**: OpenWeatherMap integration with caching
@@ -1811,6 +1812,90 @@ the Agent Console goes stale until the unit runs again.)
 
 Open `http://localhost:3000`. Create your first Choom from the sidebar.
 
+### Using Choom from another machine on the LAN (and the microphone)
+
+`http://<server-ip>:3000` works for everything **except the microphone**.
+
+`getUserMedia()` — the API behind the mic button — only exists in a browser's
+**secure context**, and browsers grant that to `https://` and to `localhost`,
+and to nothing else. A plain-http LAN address leaves `navigator.mediaDevices`
+undefined, so the mic button is dead. This is not a recent "private networks are
+untrusted" rule and no server header opts out of it: it has been true since
+Chrome 47 and Firefox 68. An ngrok tunnel worked only because ngrok hands you an
+`https://` URL.
+
+So give the LAN its own HTTPS address. **On the machine hosting Choom**, once:
+
+```bash
+cd nextjs-app
+./scripts/setup-lan-https.sh     # installs mkcert + NSS tools, issues the cert
+npm run lan:https                # TLS front door on :3443
+```
+
+Then browse to `https://<hostname>.local:3443` (or `https://<server-ip>:3443`).
+Prefer the `.local` mDNS name — every OS on the LAN resolves it with no DNS
+setup, and it keeps working when DHCP hands out a different IP. Re-run
+`setup-lan-https.sh` if the IP does change; it is baked into the certificate.
+
+Port 3000 is deliberately left alone. `scripts/lan-https-proxy.js` terminates
+TLS on 3443 and forwards to the untouched http dev server, so `choom-dev`, any
+ngrok tunnel (it forwards to `http://localhost:3000`) and the server-side
+self-calls in `lib/tool-execution.ts` all keep working unchanged. The
+alternative, `next dev --experimental-https`, would have moved port 3000 itself
+to TLS and broken all three. On macOS, `install-launchd.sh --with-lan-https`
+runs the proxy as a launchd agent; on Linux, point a `systemd --user` unit at
+`npm run lan:https` the same way `choom-dev` is set up.
+
+#### Trusting the CA on the other machines
+
+Each client needs the certificate authority installed once, or it gets a
+"not secure" warning. `setup-lan-https.sh` prints the path to `rootCA.pem` when
+it finishes. Copy **that** file — it is a public certificate. **Never copy
+`rootCA-key.pem`**: it can mint a valid-looking certificate for *any* site, for
+every machine that trusts the CA, so it stays on the server.
+
+Installing a CA does not require the CA key, so mkcert can do the whole job on
+the client from `rootCA.pem` alone — OS store *and* browser stores in one shot.
+This is the recommended route on every platform:
+
+```bash
+sudo apt install mkcert libnss3-tools     # Debian/Mint/Ubuntu
+                                          # dnf: mkcert nss-tools | pacman: mkcert nss
+                                          # macOS: brew install mkcert nss
+mkdir -p ~/choom-ca && cp /path/to/rootCA.pem ~/choom-ca/
+CAROOT=~/choom-ca mkcert -install
+```
+
+Then fully quit and reopen the browser. Doing it by hand instead:
+
+| Where | How |
+| --- | --- |
+| macOS | double-click, then set it to **Always Trust** in Keychain Access |
+| Windows | double-click → Install Certificate → Local Machine → **Trusted Root Certification Authorities** |
+| **Firefox, any OS** | Settings → Privacy & Security → Certificates → View Certificates → **Authorities** → Import, and tick *Trust this CA to identify websites*. Firefox reads the file wherever it sits — it does not need to be in a system directory |
+| Chrome/Chromium on Linux | `certutil -d sql:$HOME/.pki/nssdb -A -t "C,," -n choom-lan-ca -i rootCA.pem` |
+| Linux system store (curl, wget — **not** browsers) | `sudo cp rootCA.pem /usr/local/share/ca-certificates/choom-lan-ca.crt && sudo update-ca-certificates` |
+
+Two Linux traps, both of which look like "I did it and it didn't work":
+
+- **The system CA store does nothing for browsers.** Firefox has always kept its
+  own NSS store, and Chrome/Chromium on Linux reads `~/.pki/nssdb` rather than
+  `/etc/ssl`. Dropping the file into `/usr/local/share/ca-certificates/` only
+  helps command-line tools. That is why `libnss3-tools` is in the install line
+  above — without it, mkcert silently skips both browsers.
+- `update-ca-certificates` **ignores any file not ending in `.crt`**, so a
+  certificate copied in as `rootCA.pem` is skipped without an error.
+
+Skipping the CA install and clicking through the browser's warning also works,
+because the origin is still `https://`. It just means dismissing an
+interstitial on every machine, every time the certificate is reissued.
+
+Nothing about the settings trust model changes: the proxy forwards the real
+client IP in `X-Forwarded-For` and the original `Host`, so a LAN device on
+`:3443` still counts as a non-local device and still gets the "Change server
+settings?" confirmation — see
+[Cross-Device Settings & Safety](#cross-device-settings--safety).
+
 ### Signal Bridge (optional)
 
 ```bash
@@ -1839,6 +1924,9 @@ sudo systemctl start signal-bridge.service
 | `npm run signal:logs` | View Signal bridge logs (systemd or launchd) |
 | `npm run signal:restart` | Restart Signal bridge (systemd or launchd) |
 | `npm run services:check` | Health check all services |
+| `npm run lan:https:setup` | Issue the LAN certificate with mkcert (run once, and after an IP change) |
+| `npm run lan:https` | HTTPS front door on :3443 — what makes the mic work off-box |
+| `npm run icons:sync` | Copy the canonical `docs/` icon set into `app/` |
 
 ## Troubleshooting
 

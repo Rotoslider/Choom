@@ -240,6 +240,7 @@ cd ~/Projects/Choom/launchd
 ./install-launchd.sh --dev-only     # just Next.js + memory server
 ./install-launchd.sh --with-ngrok   # also the ngrok tunnel
 ./install-launchd.sh --no-searxng   # skip the local SearXNG instance
+./install-launchd.sh --with-lan-https  # HTTPS on :3443 so the LAN mic works
 ```
 
 This writes `~/Library/LaunchAgents/com.choom.*.plist` and loads them. They are
@@ -252,6 +253,63 @@ account registered for `SIGNAL_PHONE_NUMBER` yet, so it is safe to run before
 step 4.
 
 Open <http://localhost:3000>.
+
+### Using Choom from another machine on the LAN
+
+`http://192.168.1.44:3000` works for everything **except the microphone**.
+
+`getUserMedia()` — the API behind the mic button — only exists in a browser's
+**secure context**, and browsers grant that to `https://` and to `localhost`,
+and to nothing else. A plain-http LAN address gets `navigator.mediaDevices ===
+undefined`, so the mic button is dead. This is not a recent "private networks
+are untrusted" rule and there is no server header that opts out of it — it has
+been true since Chrome 47 and Firefox 68. ngrok worked only because ngrok hands
+you an `https://` URL.
+
+The fix is to give the LAN its own HTTPS address. Once, on this Mac:
+
+```bash
+cd ~/Projects/Choom/nextjs-app
+./scripts/setup-lan-https.sh     # installs mkcert + nss, issues the cert
+pnpm lan:https                   # or: install-launchd.sh --with-lan-https
+```
+
+Then browse to **`https://<this-mac>.local:3443`** — the script prints the
+exact name, or `scutil --get LocalHostName` does — or `https://192.168.1.44:3443`.
+Prefer the `.local` name: it is mDNS, every OS on
+the LAN resolves it with no DNS setup, and it keeps working when DHCP hands out
+a different IP. Re-run `setup-lan-https.sh` if the IP does change — the IP is
+baked into the certificate.
+
+Port 3000 is deliberately left alone. `scripts/lan-https-proxy.js` terminates
+TLS on 3443 and forwards to the untouched http dev server, so `com.choom.dev`,
+the ngrok tunnel (which forwards to `http://localhost:3000`) and the server-side
+self-calls in `tool-execution.ts` all keep working exactly as before. The
+alternative, `next dev --experimental-https`, would have moved port 3000 itself
+to TLS and broken all three.
+
+**Each other machine needs the certificate authority installed once**, or it
+will show a "not secure" warning. `setup-lan-https.sh` prints the path to
+`rootCA.pem` when it finishes — copy that file (it is a public certificate;
+`rootCA-key.pem` never leaves this Mac) and install it on the client. The full
+per-platform instructions, including the two Linux traps that make it look like
+it worked when it didn't, are in the README:
+**[Trusting the CA on the other machines](README.md#trusting-the-ca-on-the-other-machines)**.
+
+The macOS-specific part: Firefox keeps its own trust store and ignores the
+keychain, so it needs an explicit import even here. `mkcert -install` handles
+that for you — but only when `nss` is installed, which is why
+`setup-lan-https.sh` installs it alongside mkcert.
+
+Skipping the CA install and clicking through the browser's warning does also
+work, because the origin is still `https://`. It just means dismissing a scary
+interstitial on every machine, every time the certificate is reissued.
+
+Nothing about the settings trust model changes: the proxy forwards the real
+client IP in `X-Forwarded-For` and the original `Host`, so a LAN device on
+`:3443` still counts as a non-local device and still gets the
+"Change server settings?" confirmation. See
+[Cross-Device Settings & Safety](README.md#cross-device-settings--safety).
 
 ### Why run under launchd at all?
 
