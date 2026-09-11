@@ -164,6 +164,13 @@ interface AppState {
   // Streaming state
   streamingContent: string;
   isStreaming: boolean;
+  /**
+   * Set while a dropped response stream is being recovered (lib/stream-recovery).
+   * Without this the recovery is invisible — it only wrote to the Activity Log,
+   * so a dropped turn looked like a dead window and the natural reaction was to
+   * hard-refresh, which kills the very recovery that was about to succeed.
+   */
+  streamRecovery: { status: 'recovering' | 'failed' } | null;
 
   // TTS state
   ttsQueue: string[];
@@ -240,6 +247,7 @@ interface AppState {
   appendStreamingContent: (content: string) => void;
   clearStreamingContent: () => void;
   setIsStreaming: (streaming: boolean) => void;
+  setStreamRecovery: (state: { status: 'recovering' | 'failed' } | null) => void;
 
   // Actions - TTS
   addToTTSQueue: (text: string) => void;
@@ -421,6 +429,7 @@ export const useAppStore = create<AppState>()(
 
       streamingContent: '',
       isStreaming: false,
+      streamRecovery: null,
 
       ttsQueue: [],
       isSpeaking: false,
@@ -665,6 +674,7 @@ export const useAppStore = create<AppState>()(
         set((state) => ({ streamingContent: state.streamingContent + content })),
       clearStreamingContent: () => set({ streamingContent: '' }),
       setIsStreaming: (streaming) => set({ isStreaming: streaming }),
+      setStreamRecovery: (state) => set({ streamRecovery: state }),
 
       // TTS actions
       addToTTSQueue: (text) => set((state) => ({ ttsQueue: [...state.ttsQueue, text] })),

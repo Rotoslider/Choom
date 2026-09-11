@@ -9,6 +9,8 @@ import type { PlanProgress } from './plan-display';
 import { TypingIndicator } from './typing-indicator';
 import { useAppStore } from '@/lib/store';
 import type { Message } from '@/lib/types';
+import { Loader2, AlertTriangle } from 'lucide-react';
+import { cn } from '@/lib/utils';
 
 interface MessageListProps {
   messages: Message[];
@@ -33,7 +35,7 @@ export function MessageList({ messages, isLoading = false, streamingImage, agent
   const userScrolledUp = useRef(false);
   const isProgrammaticScroll = useRef(false);
   const lastMessageCount = useRef(messages.length);
-  const { isStreaming, streamingContent, currentChoom } = useAppStore();
+  const { isStreaming, streamingContent, currentChoom, streamRecovery } = useAppStore();
 
   // Helper: scroll to bottom without triggering the "user scrolled up" detection
   const scrollToBottom = useCallback((behavior: ScrollBehavior = 'instant') => {
@@ -166,6 +168,41 @@ export function MessageList({ messages, isLoading = false, streamingImage, agent
 
         {/* Show typing indicator when loading but not streaming yet */}
         {isLoading && !isStreaming && <TypingIndicator />}
+
+        {/* The connection dropped mid-reply. The server keeps going and saves
+            the answer regardless, so say so plainly — the worst outcome here is
+            the user refreshing the page and killing the recovery in flight. */}
+        {streamRecovery && (
+          <div
+            role="status"
+            aria-live="polite"
+            className={cn(
+              'mx-auto my-2 flex max-w-md items-start gap-2.5 rounded-lg border px-3 py-2 text-xs',
+              streamRecovery.status === 'recovering'
+                ? 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300'
+                : 'border-destructive/30 bg-destructive/10 text-destructive'
+            )}
+          >
+            {streamRecovery.status === 'recovering' ? (
+              <>
+                <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin" />
+                <span>
+                  Connection dropped mid-reply. She&apos;s still working on the server —
+                  waiting for the answer. <strong>Don&apos;t refresh</strong>, it&apos;ll
+                  appear here on its own.
+                </span>
+              </>
+            ) : (
+              <>
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <span>
+                  Couldn&apos;t recover the reply. It may still be generating — reopen this
+                  chat to check before sending again.
+                </span>
+              </>
+            )}
+          </div>
+        )}
 
         {/* Invisible marker for auto-scroll */}
         <div ref={bottomRef} />

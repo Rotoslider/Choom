@@ -32,6 +32,7 @@ export default function Home() {
     ui,
     setSettingsOpen,
     setIsStreaming,
+    setStreamRecovery,
     setStreamingContent,
     clearStreamingContent,
     updateServiceHealth,
@@ -557,6 +558,10 @@ export default function Home() {
     generation: number
   ) => {
     log.system('Response stream dropped — recovering the reply from the server…', 'warning');
+    // Say so in the chat itself, not just the Activity Log. A silent recovery
+    // reads as a dead window, and the user's natural response — refresh — is
+    // exactly what aborts it.
+    setStreamRecovery({ status: 'recovering' });
 
     const recovered = await recoverReply({
       sentAt,
@@ -570,12 +575,17 @@ export default function Home() {
 
     if (recovered) {
       setMessages(recovered);
+      setStreamRecovery(null);
       log.system('Reply recovered — the server had finished it.', 'success');
     } else if (sendGenerationRef.current === generation) {
+      setStreamRecovery({ status: 'failed' });
       log.system(
         'Could not recover the reply. It may still be generating — reopen the chat to check before resending.',
         'error'
       );
+    } else {
+      // Superseded by a newer send; that turn owns the banner now.
+      setStreamRecovery(null);
     }
   };
 
@@ -611,6 +621,7 @@ export default function Home() {
     abortControllerRef.current = new AbortController();
     const generation = ++sendGenerationRef.current;
     const sentAt = Date.now();
+    setStreamRecovery(null);
 
     try {
       const response = await fetch('/api/chat', {
