@@ -529,6 +529,12 @@ renders 2048×1152 landscape / 1536×2048 portrait cleanly in a single pass in r
 time of a `large` image (40s vs 18s on an RTX 6000), and a face in a three-person landscape goes from ~100px to
 ~135px tall — enough for freckles. Group shots stay landscape; just make the canvas bigger.
 
+**At xx-large, drop the steps to 4–6.** Klein is distilled for 4 steps, and on a 2048px canvas
+every step past that sharpens texture until it looks over-baked — wood grain, stucco and skin
+all go crunchy. Fixed-seed on a 2048×1152 selfie: 12 steps crunchy, 8 noticeably, 6 clean,
+4 clean and a touch soft. The "photorealistic, DSLR quality" prompt tail made no difference.
+The 8/12-step defaults that looked fine at `large` are too many at `xx-large`.
+
 ### Image Naming Convention
 Images can be saved via the chat window by clicking on them. Auto downloaded to your Downloads folder
 From the Image Gallery of your Selected Choom. Each Choom has its own Gallery. Click the download arrow on image or Download button when zoomed in. 
