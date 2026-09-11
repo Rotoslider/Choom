@@ -529,11 +529,15 @@ renders 2048×1152 landscape / 1536×2048 portrait cleanly in a single pass in r
 time of a `large` image (40s vs 18s on an RTX 6000), and a face in a three-person landscape goes from ~100px to
 ~135px tall — enough for freckles. Group shots stay landscape; just make the canvas bigger.
 
-**At xx-large, drop the steps to 4–6.** Klein is distilled for 4 steps, and on a 2048px canvas
-every step past that sharpens texture until it looks over-baked — wood grain, stucco and skin
-all go crunchy. Fixed-seed on a 2048×1152 selfie: 12 steps crunchy, 8 noticeably, 6 clean,
-4 clean and a touch soft. The "photorealistic, DSLR quality" prompt tail made no difference.
-The 8/12-step defaults that looked fine at `large` are too many at `xx-large`.
+**Use the `Flux2` scheduler, not `Beta`.** Beta piles its steps at the low-noise end, which is
+where fine texture is decided — on a 2048px canvas with a 4-step-distilled model that turns
+into over-baked wood grain, stucco and skin at 8–12 steps. Dropping to 6 steps cures the bake
+but costs coherence (extra limbs, extra people). The way out of that squeeze is the schedule:
+fixed-seed on a busy 2048×1152 workshop selfie, `Beta` at 12 steps was crunchy while `Flux2`
+and `Simple` at 12 were clean, with the same likeness. `Flux2` is Forge's schedule for this
+model family and is in the Scheduler dropdown once the checkpoint list has loaded. With it,
+8–12 steps are fine again, so you get coherence and clean texture together. `Turbo` is broken
+with Klein (pure noise); the prompt tail ("photorealistic, DSLR quality") makes no difference.
 
 ### Image Naming Convention
 Images can be saved via the chat window by clicking on them. Auto downloaded to your Downloads folder
