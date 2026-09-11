@@ -20,7 +20,8 @@
     "services:check": "./services/signal-bridge/start.sh",
     "signal:logs": "./services/signal-bridge/servicectl.sh logs signal-bridge",
     "signal:restart": "./services/signal-bridge/servicectl.sh restart signal-bridge",
-    "db:seed": "pnpm dlx tsx prisma/seed.ts"
+    "db:seed": "pnpm dlx tsx prisma/seed.ts",
+    "icons:sync": "node scripts/sync-icons.js"
   },
   "prisma": {
     "seed": "pnpm dlx tsx prisma/seed.ts"
