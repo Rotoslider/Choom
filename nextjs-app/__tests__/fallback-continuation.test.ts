@@ -40,7 +40,7 @@ jest.mock('@/lib/chat-shared', () => ({
 // Scripted LLM client: each streamChat call consumes the next scripted reply.
 // ---------------------------------------------------------------------------
 type Delta = { content?: string; reasoning_content?: string; tool_calls?: ChatCompletionChunk['choices'][0]['delta']['tool_calls'] };
-type Reply = { deltas: Delta[]; finish?: string };
+type Reply = { deltas: Delta[]; finish?: string; usage?: { prompt_tokens: number; completion_tokens: number } };
 
 const chunk = (delta: Delta, finish_reason: string | null = null): ChatCompletionChunk => ({
   id: 'c', object: 'chat.completion.chunk', created: 0, model: 'scripted',
@@ -62,6 +62,7 @@ function scriptedClient(replies: Reply[]) {
           yield chunk(reply.deltas[i], last ? (reply.finish ?? 'stop') : null);
         }
         if (reply.deltas.length === 0) yield chunk({}, reply.finish ?? 'stop');
+        if (reply.usage) yield { id: 'u', object: 'chat.completion.chunk', created: 0, model: 'scripted', choices: [], usage: reply.usage } as unknown as ChatCompletionChunk;
       },
     },
   };
@@ -368,5 +369,48 @@ describe('a tool call dropped for empty arguments is retried', () => {
     expect(note.content).toMatch(/without any arguments|requires: query/);
     expect(outcome.allToolCalls.map(t => t.name)).toEqual(['music_play']);
     expect(outcome.fullContent).toContain('Playing it now');
+  });
+});
+
+describe('token estimate calibration (Phase 3)', () => {
+  test('the real prompt count from the provider rescales the compaction budget', async () => {
+    const primary = scriptedClient([
+      { deltas: [{ content: 'Hello!' }], usage: { prompt_tokens: 4000, completion_tokens: 5 } },
+    ]);
+    const params = buildParams(primary, { client: scriptedClient([]) }, [], { message: 'x'.repeat(40_000) });
+    const before = params.compactionService.getTokenScale();
+    await runAgenticLoop(params);
+    const after = params.compactionService.getTokenScale();
+    expect(before).toBe(1);
+    // chars/4 said ~10k for a 40k-char message; the provider counted 4k.
+    expect(after).toBeLessThan(0.6);
+    expect(after).toBeGreaterThan(0.3);
+  });
+});
+
+/**
+ * 2026-09-12: a 4B model called search_memories 100 iterations running with a
+ * paraphrased query each time (107 calls, 2.4M prompt tokens). The dedup
+ * loop-breaker keys on identical arguments, so it never fired.
+ */
+describe('same-tool streak guard', () => {
+  test('six iterations of one tool draws a nudge; ten disables it and the turn finishes', async () => {
+    const replies: Reply[] = [];
+    for (let i = 0; i < 11; i++) replies.push(toolCall('search_memories', `tc${i}`, '', { query: `rack build variant ${i}` }));
+    replies.push(text('Here is what I found about the rack.'));
+    const primary = scriptedClient(replies);
+    const params = buildParams(primary, { client: scriptedClient([]) }, [], { message: 'tell me about the rack build' });
+    params.maxIterations = 30;
+    const outcome = await runAgenticLoop(params);
+    // Nudge after the 6th call (visible to the 7th), block after the 10th.
+    const msgsBefore7th = primary.calls[6].messages.map(m => String((m as { content?: string }).content));
+    expect(msgsBefore7th.some(c => c.includes('6 times in a row'))).toBe(true);
+    const msgsBefore11th = primary.calls[10].messages.map(m => String((m as { content?: string }).content));
+    expect(msgsBefore11th.some(c => c.includes('unavailable for the rest of this turn'))).toBe(true);
+    // The 11th call is refused (tool blocked — the attempt is recorded with an
+    // error result) and the loop still reaches a reply.
+    const blocked = params.allToolResults.filter(r => r.name === 'search_memories' && r.error);
+    expect(blocked.length).toBeGreaterThanOrEqual(1);
+    expect(outcome.fullContent).toContain('Here is what I found');
   });
 });

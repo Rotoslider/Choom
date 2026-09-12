@@ -206,7 +206,9 @@ describe('2. Critical Tool Results Protected from Compaction', () => {
 
   test('route.ts passes CRITICAL_TOOLS set to compactWithinTurn', () => {
     expect(routeContent).toContain("const CRITICAL_TOOLS = new Set(['workspace_read_file', 'workspace_read_pdf', 'workspace_list_files'])");
-    expect(routeContent).toContain('compactWithinTurn(currentMessages, systemPromptWithSummary, activeTools, 2, CRITICAL_TOOLS)');
+    // Phase 3 (2026-09-12): budgets read the LIVE system prompt and the request
+    // message is passed so compaction never stubs it.
+    expect(routeContent).toContain("currentMessages, currentMessages[0]?.content || systemPromptWithSummary, activeTools, 2, CRITICAL_TOOLS, requestIndex,");
   });
 });
 

@@ -98,6 +98,13 @@ export default class ImageAnalysisHandler extends BaseSkillHandler {
 
       // If image_id is provided, look up the generated image from the database
       let imageBase64 = toolCall.arguments.image_base64 as string | undefined;
+      // A small model put a workspace path in image_id ("selfies_genesis/…jpg")
+      // and got "Image id not found" (2026-09-12). A path is a path.
+      if (typeof toolCall.arguments.image_id === 'string' && !toolCall.arguments.image_path
+          && /[\/\\]|\.(png|jpe?g|webp|gif)$/i.test(toolCall.arguments.image_id)) {
+        toolCall.arguments.image_path = toolCall.arguments.image_id;
+        delete toolCall.arguments.image_id;
+      }
       if (toolCall.arguments.image_id && !imageBase64) {
         const imageId = toolCall.arguments.image_id as string;
         try {

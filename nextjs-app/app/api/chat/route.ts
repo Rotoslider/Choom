@@ -165,9 +165,15 @@ export async function POST(request: NextRequest) {
       prisma.choom.findUnique({ where: { id: choomId } }),
       prisma.chat.findUnique({
         where: { id: chatId },
-        include: { messages: { orderBy: { createdAt: 'asc' }, take: 200 } },
+        // NEWEST 200. `asc` + take 200 returned the OLDEST 200 once a chat passed
+        // that size — the Choom would have seen the start of a long chat and
+        // none of its recent turns (Phase 3, 2026-09-12; biggest chat was 81
+        // messages when caught). Reversed below so the rest of the route keeps
+        // its oldest-first order.
+        include: { messages: { orderBy: { createdAt: 'desc' }, take: 200 } },
       }),
     ]);
+    if (chat?.messages) chat.messages.reverse();
 
     if (!choom || !chat) {
       return new Response(

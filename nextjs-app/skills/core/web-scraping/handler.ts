@@ -451,7 +451,10 @@ export default class WebScrapingHandler extends BaseSkillHandler {
 
   private async fetchUrl(toolCall: ToolCall): Promise<ToolResult> {
     const requestedUrl = toolCall.arguments.url as string;
-    const maxChars = Math.min(Math.max((toolCall.arguments.max_chars as number) || 100_000, 1_000), 300_000);
+    // 20k default / 80k max (Phase 3, 2026-09-12): 100k / 300k was 25k-75k
+    // tokens in ONE result, re-sent on every later iteration, and enough to
+    // overflow a 32k local window by itself. She can re-call for more.
+    const maxChars = Math.min(Math.max((toolCall.arguments.max_chars as number) || 20_000, 1_000), 80_000);
 
     // Validate URL
     let parsedUrl: URL;

@@ -97,6 +97,18 @@ export default class PDFProcessingHandler extends BaseSkillHandler {
       });
 
       console.log(`   📄 PDF read: ${pdfPath} (${text.length} chars)`);
+      // Bounded like every other result (Phase 3): a whole PDF's text was the
+      // one payload with no cap at all. Page ranges give her the rest.
+      const PDF_CAP = 30_000;
+      if (text.length > PDF_CAP) {
+        return this.success(toolCall, {
+          success: true,
+          text: text.slice(0, PDF_CAP),
+          truncated: true,
+          total_chars: text.length,
+          note: `Text cut at ${PDF_CAP} chars of ${text.length}. Re-call with page_start/page_end to read a specific range.`,
+        });
+      }
       return this.success(toolCall, { success: true, text });
     } catch (err) {
       console.error('   ❌ PDF read error:', err instanceof Error ? err.message : err);

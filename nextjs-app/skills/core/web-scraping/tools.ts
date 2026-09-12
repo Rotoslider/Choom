@@ -106,7 +106,7 @@ export const tools: ToolDefinition[] = [
         },
         max_chars: {
           type: 'number',
-          description: 'Maximum characters of text to return (default 100000, max 300000). Re-call with a larger value to read more of a truncated file.',
+          description: 'Maximum characters of text to return (default 20000, max 80000). Re-call with a larger value to read more of a truncated file.',
         },
       },
       required: ['url'],

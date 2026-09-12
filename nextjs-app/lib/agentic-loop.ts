@@ -140,6 +140,10 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
   let llmClient = params.llmClient;
   let activeTools = params.activeTools;
   const toolExposure = params.toolExposure ?? 'full';
+  // The user message this turn is answering — the last user message on entry.
+  // Compaction anchors on it and never stubs it (Phase 3).
+  let requestIndex = params.currentMessages.length - 1;
+  while (requestIndex > 0 && params.currentMessages[requestIndex].role !== 'user') requestIndex--;
   // Skills mode: add a skill's tool definitions to the turn (open_skill, or a
   // narrated tool the model cannot see). Returns the names actually added.
   const exposeSkillTools = (skillName: string): string[] => {
@@ -483,6 +487,16 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
           // When tools were called earlier but the Choom has gone silent for 1+ turns,
           // it usually means she's hedging or summarizing instead of finishing the job.
           let consecutiveNoToolIters = 0;
+          // Same-tool streak guard (2026-09-12): a 4B model called search_memories
+          // 100 iterations running with a paraphrased query each time — 107 calls,
+          // 2.4M prompt tokens, 17 minutes — and nothing stopped it: the dedup
+          // loop-breaker keys on IDENTICAL arguments and the per-tool budget is
+          // the iteration cap. Count consecutive iterations whose only tool is
+          // the same one; nudge at STREAK_NUDGE, disable the tool at STREAK_BLOCK.
+          let sameToolName = '';
+          let sameToolStreak = 0;
+          const STREAK_NUDGE = 6;
+          const STREAK_BLOCK = 10;
           // Set once an integrity nudge (fabrication callout / hedge) has fired
           // this turn. A reply that ANSWERS such a nudge with an apology must
           // end the turn, never be re-nudged (C-58: the 2026-08-06 spiral —
@@ -536,15 +550,20 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
               const AGGRESSIVE_COMPACTION_THRESHOLD = 3;
               {
                 // Pass the actual context budget so compaction only fires when needed
-                const budget = compactionService.calculateBudget(systemPromptWithSummary, activeTools);
+                // Budget from the LIVE system prompt: the route appends workspace and
+                // project blocks to currentMessages[0] after systemPromptWithSummary
+                // was frozen, so the frozen copy under-counted (Phase 3).
+                const liveSystemPrompt = currentMessages[0]?.content || systemPromptWithSummary;
+                const budget = compactionService.calculateBudget(liveSystemPrompt, activeTools);
                 const aggressiveResult = compactionService.compactAggressiveWithinTurn(
-                  currentMessages, iteration, AGGRESSIVE_COMPACTION_THRESHOLD, budget.availableForMessages
+                  currentMessages, iteration, AGGRESSIVE_COMPACTION_THRESHOLD, budget.availableForMessages, requestIndex
                 );
                 if (aggressiveResult.tokensRecovered > 0) {
                   traceBuilder.recordCompaction();
                   const beforeCount = currentMessages.length;
                   currentMessages.length = 0;
                   currentMessages.push(...aggressiveResult.messages);
+                  if (aggressiveResult.requestIndex !== undefined) requestIndex = aggressiveResult.requestIndex;
                   console.log(`   ⚡ ${choomTag} Aggressive compaction: ${beforeCount} → ${currentMessages.length} msgs, recovered ~${aggressiveResult.tokensRecovered.toLocaleString()} tokens`);
                 }
               }
@@ -554,13 +573,15 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
               // the model needs their results to complete multi-step tasks.
               // This runs AFTER aggressive compaction as a second safety net.
               const CRITICAL_TOOLS = new Set(['workspace_read_file', 'workspace_read_pdf', 'workspace_list_files']);
-              const withinTurnResult = compactionService.compactWithinTurn(currentMessages, systemPromptWithSummary, activeTools, 2, CRITICAL_TOOLS);
+              const withinTurnResult = compactionService.compactWithinTurn(
+                currentMessages, currentMessages[0]?.content || systemPromptWithSummary, activeTools, 2, CRITICAL_TOOLS, requestIndex,
+              );
               if (withinTurnResult.truncatedCount > 0) {
                 const beforeTokens = Math.ceil(currentMessages.map(m => m.content || '').join('').length / 4);
                 currentMessages.length = 0;
                 currentMessages.push(...withinTurnResult.messages);
                 const afterTokens = Math.ceil(currentMessages.map(m => m.content || '').join('').length / 4);
-                const budget = compactionService.calculateBudget(systemPromptWithSummary, activeTools);
+                const budget = compactionService.calculateBudget(currentMessages[0]?.content || systemPromptWithSummary, activeTools);
                 console.log(`   🗜️  Pre-LLM compaction: truncated ${withinTurnResult.truncatedCount} tool results, recovered ~${withinTurnResult.tokensRecovered.toLocaleString()} tokens (~${beforeTokens.toLocaleString()} → ~${afterTokens.toLocaleString()}, budget: ~${budget.availableForMessages.toLocaleString()})`);
               }
             }
@@ -640,6 +661,8 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
               maxPromptTokens = Math.max(maxPromptTokens, st.usage.maxPromptTokens);
             };
 
+            // Raw estimate of this call, for calibration against the real count below.
+            const rawPromptEstimate = compactionService.estimatePromptTokens(currentMessages, iterationTools);
             try {
               await readLlmStream(stream, {
                 client: llmClient, messages: currentMessages, tools: iterationTools, toolChoice: toolChoiceOverride,
@@ -884,6 +907,16 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                 break;
               }
               // If fallback succeeded, continue processing this iteration's results normally
+            }
+
+            // Calibrate the estimator against what the provider actually counted
+            // (Phase 3). Every compaction decision from here on scales by it.
+            if (stream.usage.promptTokens > 500 && rawPromptEstimate > 500) {
+              const before = compactionService.getTokenScale();
+              const after = compactionService.calibrate(stream.usage.promptTokens, rawPromptEstimate);
+              if (Math.abs(after - before) > 0.05) {
+                console.log(`   📐 ${choomTag} Token estimate calibrated: real ${stream.usage.promptTokens.toLocaleString()} vs est ~${rawPromptEstimate.toLocaleString()} → scale ${after.toFixed(2)}`);
+              }
             }
 
             // Convert accumulated tool calls — parse each individually so one bad call
@@ -2470,6 +2503,30 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                 tool_call_id: tr.toolCallId,
                 name: tr.name,
               });
+            }
+
+            // --- Same-tool streak: only one tool this iteration, same as last time?
+            {
+              const namesThisIter = new Set(iterationResults.map(r => r.name));
+              const only = namesThisIter.size === 1 ? [...namesThisIter][0] : '';
+              if (only && only === sameToolName) sameToolStreak++;
+              else { sameToolName = only; sameToolStreak = only ? 1 : 0; }
+              if (sameToolStreak === STREAK_NUDGE) {
+                traceBuilder.recordNudge('tool_use');
+                console.log(`   🔁 ${choomTag} ${only} called ${sameToolStreak} iterations in a row — nudging to act on what she has`);
+                currentMessages.push({
+                  role: 'user',
+                  content: `[System] You have called ${only} ${sameToolStreak} times in a row. Its results are above — stop calling it and act on what you have: write your reply, or take the next step with a different tool.`,
+                });
+              } else if (sameToolStreak >= STREAK_BLOCK && !brokenTools.has(only)) {
+                brokenTools.add(only);
+                console.log(`   🚫 ${choomTag} ${only} disabled for this turn after ${sameToolStreak} consecutive calls`);
+                currentMessages.push({
+                  role: 'user',
+                  content: `[System] ${only} is now unavailable for the rest of this turn after ${sameToolStreak} repeated calls. Use the results you already have and finish: reply to the user now.`,
+                });
+                forceToolCall = false;
+              }
             }
 
             // --- open_skill: the handler returned the skill's instructions; the

@@ -79,19 +79,50 @@ Write the summary now:`;
 export class CompactionService {
   private llmSettings: LLMSettings;
   private budgetRatio: number;
+  // Real-token calibration (Phase 3, 2026-09-12). Every estimate here is
+  // chars/4; the provider reports the real prompt token count on every call
+  // and it was never used. The loop feeds the ratio back through calibrate()
+  // and every budget decision scales by it. Also absorbs the systematic errors
+  // (tool schemas priced unslimmed, ~2x too high).
+  private tokenScale = 1;
 
   constructor(llmSettings: LLMSettings, budgetRatio: number = 0.85) {
     this.llmSettings = llmSettings;
     this.budgetRatio = budgetRatio;
   }
 
+  getTokenScale(): number { return this.tokenScale; }
+  setTokenScale(scale: number): void { this.tokenScale = Math.min(2.5, Math.max(0.4, scale)); }
+
+  /**
+   * Feed back one call's real prompt token count against the raw (unscaled)
+   * estimate made for that call. Exponential smoothing so one odd call can't
+   * swing the budget; clamped so a broken usage report can't zero it.
+   */
+  calibrate(realPromptTokens: number, rawEstimate: number): number {
+    if (!(realPromptTokens > 500) || !(rawEstimate > 500)) return this.tokenScale;
+    const observed = realPromptTokens / rawEstimate;
+    const next = this.tokenScale === 1 ? observed : this.tokenScale * 0.5 + observed * 0.5;
+    this.setTokenScale(next);
+    return this.tokenScale;
+  }
+
+  /** Raw (unscaled) estimate of what a call will cost — the calibration base. */
+  estimatePromptTokens(messages: ChatMessage[], tools: ToolDefinition[]): number {
+    return messages.reduce((sum, m) => sum + messageTokens(m), 0) + toolSchemaTokens(tools);
+  }
+
+  private est(text: string): number { return Math.ceil(estimateTokens(text) * this.tokenScale); }
+  private msgTok(msg: ChatMessage): number { return Math.ceil(messageTokens(msg) * this.tokenScale); }
+  private toolTok(tools: ToolDefinition[]): number { return Math.ceil(toolSchemaTokens(tools) * this.tokenScale); }
+
   /**
    * Calculate the token budget for messages given fixed overhead.
    */
   calculateBudget(systemPrompt: string, tools: ToolDefinition[]): BudgetInfo {
     const totalBudget = Math.floor(this.llmSettings.contextLength * this.budgetRatio);
-    const systemTokens = estimateTokens(systemPrompt);
-    const toolTokens = toolSchemaTokens(tools);
+    const systemTokens = this.est(systemPrompt);
+    const toolTokens = this.toolTok(tools);
     const responseReserve = this.llmSettings.maxTokens || 4096;
     const fixedOverhead = systemTokens + toolTokens + responseReserve;
     const availableForMessages = Math.max(0, totalBudget - fixedOverhead);
@@ -113,13 +144,13 @@ export class CompactionService {
     const { availableForMessages } = this.calculateBudget(systemPrompt, tools);
 
     // Subtract existing summary tokens from available budget
-    const summaryTokens = existingSummary ? estimateTokens(existingSummary) + 50 : 0; // +50 for section header
+    const summaryTokens = existingSummary ? this.est(existingSummary) + 50 : 0; // +50 for section header
     const effectiveAvailable = availableForMessages - summaryTokens;
 
     // Calculate total history tokens
     let totalHistoryTokens = 0;
     for (const msg of historyMessages) {
-      totalHistoryTokens += messageTokens(msg);
+      totalHistoryTokens += this.msgTok(msg);
     }
 
     // If history fits within budget, return unchanged
@@ -140,7 +171,7 @@ export class CompactionService {
     let splitIndex = historyMessages.length;
 
     for (let i = historyMessages.length - 1; i >= 0; i--) {
-      const msgToks = messageTokens(historyMessages[i]);
+      const msgToks = this.msgTok(historyMessages[i]);
       if (keptTokens + msgToks > keepBudget) {
         splitIndex = i + 1;
         break;
@@ -202,9 +233,9 @@ export class CompactionService {
     // Calculate kept message tokens
     let afterTokens = 0;
     for (const msg of keptMessages) {
-      afterTokens += messageTokens(msg);
+      afterTokens += this.msgTok(msg);
     }
-    afterTokens += estimateTokens(newSummary) + 50;
+    afterTokens += this.est(newSummary) + 50;
 
     return {
       messages: keptMessages,
@@ -225,14 +256,16 @@ export class CompactionService {
     systemPrompt: string,
     tools: ToolDefinition[],
     preserveLastN: number = 2,
-    criticalToolNames: Set<string> = new Set()
+    criticalToolNames: Set<string> = new Set(),
+    /** Index of the user message that is THIS turn's request — never stubbed. */
+    protectIndex?: number,
   ): WithinTurnResult {
     const { availableForMessages } = this.calculateBudget(systemPrompt, tools);
 
     // Calculate current total tokens (excluding system message at index 0)
     let totalTokens = 0;
     for (let i = 1; i < currentMessages.length; i++) {
-      totalTokens += messageTokens(currentMessages[i]);
+      totalTokens += this.msgTok(currentMessages[i]);
     }
 
     // If under budget, return unchanged
@@ -266,12 +299,12 @@ export class CompactionService {
       // Never stub critical tool results — the model needs these to complete the task
       if (msg.name && criticalToolNames.has(msg.name)) continue;
 
-      const contentTokens = estimateTokens(msg.content || '');
+      const contentTokens = this.est(msg.content || '');
       if (contentTokens <= minTokensToTruncate) continue;
 
       // Try to create a compact stub
       const stub = this.createToolStub(msg.content || '');
-      const stubTokens = estimateTokens(stub);
+      const stubTokens = this.est(stub);
       const recovered = contentTokens - stubTokens;
 
       if (recovered > 0) {
@@ -291,9 +324,9 @@ export class CompactionService {
         // Never drop critical tool results
         if (msg.role === 'tool' && msg.name && criticalToolNames.has(msg.name)) continue;
         if (msg.role === 'tool') {
-          const toks = estimateTokens(msg.content || '');
+          const toks = this.est(msg.content || '');
           compacted[i] = { ...msg, content: '[result dropped — context too large]' };
-          const saved = toks - estimateTokens('[result dropped — context too large]');
+          const saved = toks - this.est('[result dropped — context too large]');
           if (saved > 0) {
             tokensRecovered += saved;
             currentTotal -= saved;
@@ -305,17 +338,26 @@ export class CompactionService {
 
     // Pass 3: If STILL over budget, drop older assistant+user message pairs
     // (keep system at 0, keep everything from preserveBoundary onward)
+    // Stubbing an assistant message drops its tool_calls; the tool rows that
+    // answered them must go too, or the transcript carries tool results with
+    // no parent call and strict endpoints reject it with a 400 (Phase 3).
+    const orphanedToolIds = new Set<string>();
     if (currentTotal > availableForMessages) {
       // Find droppable pairs: user messages and their preceding/following context
       for (let i = 1; i < preserveBoundary; i++) {
         if (currentTotal <= availableForMessages) break;
+        if (i === protectIndex) continue; // the request she is working on
         const msg = compacted[i];
         // Skip already-dropped tool messages, skip system
         if (msg.content === '[result dropped — context too large]') continue;
-        const toks = messageTokens(msg);
+        if (msg.role === 'tool') continue; // handled through its parent below
+        const toks = this.msgTok(msg);
         const stub = `[${msg.role} message dropped — context compaction]`;
+        if (msg.role === 'assistant' && msg.tool_calls) {
+          for (const tc of msg.tool_calls) orphanedToolIds.add(tc.id);
+        }
         compacted[i] = { role: msg.role as 'user' | 'assistant', content: stub };
-        const saved = toks - estimateTokens(stub);
+        const saved = toks - this.est(stub);
         if (saved > 0) {
           tokensRecovered += saved;
           currentTotal -= saved;
@@ -324,7 +366,16 @@ export class CompactionService {
       }
     }
 
-    return { messages: compacted, truncatedCount, tokensRecovered };
+    let result = compacted;
+    if (orphanedToolIds.size > 0) {
+      result = compacted.filter(m => {
+        if (m.role !== 'tool' || !m.tool_call_id || !orphanedToolIds.has(m.tool_call_id)) return true;
+        tokensRecovered += this.msgTok(m);
+        return false;
+      });
+    }
+
+    return { messages: result, truncatedCount, tokensRecovered };
   }
 
   /**
@@ -388,7 +439,9 @@ export class CompactionService {
     iteration: number,
     threshold: number = 3,
     contextBudget: number = 0,
-  ): { messages: ChatMessage[]; progressSummary: string; tokensRecovered: number } {
+    /** Index of the user message that is THIS turn's request. */
+    requestIndex?: number,
+  ): { messages: ChatMessage[]; progressSummary: string; tokensRecovered: number; requestIndex?: number } {
     // Only activate after threshold iterations AND when context is large enough to need it.
     // Without the budget check, this fires every iteration and erases web search results,
     // delegation responses, and file reads before the model can use them — causing
@@ -399,7 +452,7 @@ export class CompactionService {
 
     // Budget-aware gating: only compact when messages use >70% of available context.
     // If contextBudget is 0 (not provided), use a generous default based on message count.
-    const currentTokens = currentMessages.reduce((sum, m) => sum + messageTokens(m), 0);
+    const currentTokens = currentMessages.reduce((sum, m) => sum + this.msgTok(m), 0);
     const effectiveBudget = contextBudget > 0 ? contextBudget : 24000; // safe default
     if (currentTokens < effectiveBudget * 0.70) {
       return { messages: currentMessages, progressSummary: '', tokensRecovered: 0 };
@@ -407,7 +460,22 @@ export class CompactionService {
 
     // Identify key messages
     const systemMsg = currentMessages[0]; // Always system prompt
-    const firstUserMsg = currentMessages.find((m, i) => i > 0 && m.role === 'user');
+    // The request she is working on is the LAST user message before the loop's
+    // first tool call — not the oldest user message in the window, which with
+    // any history present was a stale ask from an earlier turn (Phase 3).
+    let firstUserMsg: ChatMessage | undefined;
+    if (requestIndex !== undefined && currentMessages[requestIndex]?.role === 'user') {
+      firstUserMsg = currentMessages[requestIndex];
+    } else {
+      let firstToolAssistant = currentMessages.length;
+      for (let i = 1; i < currentMessages.length; i++) {
+        if (currentMessages[i].role === 'assistant' && currentMessages[i].tool_calls?.length) { firstToolAssistant = i; break; }
+      }
+      for (let i = firstToolAssistant - 1; i >= 1; i--) {
+        if (currentMessages[i].role === 'user') { firstUserMsg = currentMessages[i]; break; }
+      }
+      firstUserMsg ??= currentMessages.find((m, i) => i > 0 && m.role === 'user');
+    }
 
     // Find the last assistant message that has tool_calls (the most recent iteration)
     let lastAssistantIdx = -1;
@@ -534,11 +602,11 @@ export class CompactionService {
     compacted.push(...lastToolResults);
 
     // Calculate token savings
-    const beforeTokens = currentMessages.reduce((sum, m) => sum + messageTokens(m), 0);
-    const afterTokens = compacted.reduce((sum, m) => sum + messageTokens(m), 0);
+    const beforeTokens = currentMessages.reduce((sum, m) => sum + this.msgTok(m), 0);
+    const afterTokens = compacted.reduce((sum, m) => sum + this.msgTok(m), 0);
     const tokensRecovered = Math.max(0, beforeTokens - afterTokens);
 
-    return { messages: compacted, progressSummary, tokensRecovered };
+    return { messages: compacted, progressSummary, tokensRecovered, requestIndex: firstUserMsg ? 1 : undefined };
   }
 
   /**
