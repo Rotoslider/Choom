@@ -858,6 +858,18 @@ class TTSClient:
     def __init__(self, endpoint: str = None):
         self.endpoint = endpoint or config.TTS_ENDPOINT
 
+    @staticmethod
+    def timeout_for(text: str) -> int:
+        """Read timeout for one synthesis, scaled to the text.
+
+        A flat 60s dropped the audio from a 1,000-char wake-up on 2026-09-12:
+        the Mac's GPU was busy with local LLM inference, Chatterbox slowed from
+        ~150 to ~10 tokens/s, and synthesis took ~3 minutes. Roughly one second
+        per three characters, floor 120s, cap 300s — long enough for a slow
+        machine, short enough that a hung engine can't hold a message forever.
+        """
+        return max(120, min(300, len(text) // 3))
+
     def synthesize(self, text: str, voice: str = "sophie", output_path: str = None) -> Optional[str]:
         """
         Convert text to speech
@@ -873,14 +885,25 @@ class TTSClient:
         try:
             text = normalize_times_for_speech(text)
             text = normalize_units_for_speech(text)
-            response = requests.post(
-                f"{self.endpoint}/v1/audio/speech",
-                json={
-                    "input": text,
-                    "voice": voice
-                },
-                timeout=60
-            )
+            timeout = self.timeout_for(text)
+            response = None
+            # One retry on a timeout: the engine is usually just busy (another
+            # synthesis, or GPU contention), not broken.
+            for attempt in (1, 2):
+                try:
+                    response = requests.post(
+                        f"{self.endpoint}/v1/audio/speech",
+                        json={
+                            "input": text,
+                            "voice": voice
+                        },
+                        timeout=timeout
+                    )
+                    break
+                except requests.exceptions.Timeout:
+                    if attempt == 2:
+                        raise
+                    logger.warning(f"TTS timed out after {timeout}s ({len(text)} chars) — retrying once")
 
             if response.status_code == 200:
                 # Check if we got audio data (WAV starts with RIFF)
