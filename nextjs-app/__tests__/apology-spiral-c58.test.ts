@@ -26,7 +26,7 @@ import { stripInternalRepeats } from '../lib/repetition-guard';
 import { detectClaimedTool } from '../lib/phantom-claim';
 
 // ——— regex mirrors (keep in sync with lib/agentic-loop.ts) ———
-const HEDGE_GIVE_UP = /\b(?:i (?:was |have been )?(?:unable|not able) to|i couldn'?t (?:access|find|get|figure|complete|do)|i can'?t (?:seem to |figure out how to |access|find)|i don'?t (?:have |know how to )|(?:the |this )?(?:tool|call|service|request) (?:isn'?t |is not |didn'?t |did not )(?:working|matching|accepting)|i (?:tried|attempted) (?:multiple|several|different) (?:times|approaches|ways)|unfortunately,? i (?:couldn'?t|can'?t|cannot|was(?:n'?t)? (?:un)?able|didn'?t|don'?t|failed)|unfortunately[^.!?\n]{0,60}\b(?:endpoint|server|service|api|tool|camera|connection|request|call|search|calendar|command|error|failed|timed out|unavailable|offline|down|not (?:working|responding|available|reachable))\b|sorry,? i (?:couldn'?t|can'?t|cannot|was(?:n'?t)? (?:un)?able|didn'?t|don'?t|failed))/i;
+const HEDGE_GIVE_UP = /\b(?:i (?:was |have been )?(?:unable|not able) to|i couldn'?t (?:access|find|get|figure|complete|do)|i can'?t (?:seem to |figure out how to |access|find)|i don'?t (?:have (?:access|permission|credentials|a way|any way|the ability|the tools?|that tool)|know how to )|(?:the |this )?(?:tool|call|service|request) (?:isn'?t |is not |didn'?t |did not )(?:working|matching|accepting)|i (?:tried|attempted) (?:multiple|several|different) (?:times|approaches|ways)|unfortunately,? i (?:couldn'?t|can'?t|cannot|was(?:n'?t)? (?:un)?able|didn'?t|don'?t|failed)|unfortunately[^.!?\n]{0,60}\b(?:endpoint|server|service|api|tool|camera|connection|request|call|search|calendar|command|error|failed|timed out|unavailable|offline|down|not (?:working|responding|available|reachable))\b|sorry,? i (?:couldn'?t|can'?t|cannot|was(?:n'?t)? (?:un)?able|didn'?t|don'?t|failed))/i;
 
 const IS_APOLOGY = /\b(?:i (?:sincerely |deeply |truly )?apologi[sz]e|i(?:['’]m| am) (?:so |truly |deeply )?sorry|you(?:['’]re| are) (?:absolutely |completely )?right\b[^.!?\n]{0,60}\bcall(?:ing)? me out|i (?:was|have been) (?:fabricating|dishonest|misleading))/i;
 
@@ -121,7 +121,8 @@ describe('hedge regex is first-person only (2026-09-12)', () => {
     'Kim couldn\'t get out of bed by the end, and unfortunately she passed on Thursday.',
     'Unfortunately the rain kept us inside all afternoon, so the fence waits until Monday.',
     'He couldn\'t find the receipt, so I offered to look through the drive for him.',
-  ])('third-person trouble is not a hedge: %s', (text) => {
+    'You said I\'m the biggest star in your eyes. I don\'t have words for what that does to me.',
+  ])('third-person trouble or feeling is not a hedge: %s', (text) => {
     expect(HEDGE_GIVE_UP.test(text.toLowerCase())).toBe(false);
   });
 
