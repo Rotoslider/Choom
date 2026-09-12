@@ -558,7 +558,16 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
         case 'ha_render_template': {
           const template = args.template as string;
           if (!template) return this.error(toolCall, 'template is required');
-          const rendered = await ha.renderTemplate(template);
+          let rendered = await ha.renderTemplate(template);
+          // A template can loop over every sensor in the house — Qwen wrote one
+          // that rendered 30k chars (2026-09-12). Bound it like every other
+          // result; the note tells her how to get the rest.
+          const RENDER_CAP = 8000;
+          let renderTruncated = false;
+          if (rendered.length > RENDER_CAP) {
+            rendered = rendered.slice(0, RENDER_CAP);
+            renderTruncated = true;
+          }
           // Attempt JSON parse so structured results aren't dumped as raw strings.
           let parsed: unknown = rendered;
           try {
@@ -569,6 +578,7 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
           return this.success(toolCall, {
             success: true,
             rendered: parsed,
+            ...(renderTruncated && { truncated: true, note: `Output cut at ${RENDER_CAP} chars. Narrow the template (filter by name/domain, or render a few entities at a time).` }),
             ...(typeof parsed === 'string' && parsed !== rendered && { raw: rendered }),
           });
         }
@@ -632,24 +642,65 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
 
         case 'ha_get_home_status': {
           const includeOff = args.include_off === true;
-          const groups = await ha.getHomeSummary(includeOff);
+          const wantDetail = args.detail === true || includeOff;
+          const focus = typeof args.focus === 'string' ? args.focus.trim() : '';
+          const domainFilter = typeof args.domain === 'string' ? args.domain.trim().toLowerCase() : '';
 
-          // Format for readability
-          const formatted: Record<string, unknown[]> = {};
+          // Compact by default (Phase 1, 2026-09-12). The full dump of this
+          // homestead is ~1,000 entities and 51k chars (~13k tokens) — the
+          // single largest tool result in the system, and the one called on
+          // nearly every grounding turn. The compact view is what a person
+          // glancing at the house would notice; `focus`, `domain` and `detail`
+          // open the rest one call at a time.
+          if (!wantDetail && !focus && !domainFilter) {
+            return this.success(toolCall, await ha.getCompactHomeStatus());
+          }
+
+          const groups = await ha.getHomeSummary(includeOff);
+          const focusLower = focus.toLowerCase();
+          // Even the "full" views are bounded. detail=true with no domain used
+          // to return every entity (90k chars with include_off on 2026-09-12 —
+          // DeepSeek reached for it to answer "is anything left on", which the
+          // compact glance already answers). A domain or focus view shows up to
+          // PER_VIEW_CAP entities; the unfiltered dump shows PER_DOMAIN_CAP per
+          // domain and says how many more there are.
+          const PER_DOMAIN_CAP = domainFilter || focusLower ? 80 : 25;
+          const formatted: Record<string, unknown> = {};
           let totalEntities = 0;
+          let matched = 0;
+          let omitted = 0;
           for (const [domain, entities] of Object.entries(groups)) {
-            formatted[domain] = entities.map(e => ({
+            totalEntities += entities.length;
+            if (domainFilter && domain !== domainFilter) continue;
+            const kept = focusLower
+              ? entities.filter(e => e.id.toLowerCase().includes(focusLower) || e.name.toLowerCase().includes(focusLower))
+              : entities;
+            if (kept.length === 0) continue;
+            matched += kept.length;
+            const shown = kept.slice(0, PER_DOMAIN_CAP).map(e => ({
+              id: e.id,
               name: e.name,
               state: e.state,
               ...(e.extras && { details: e.extras }),
             }));
-            totalEntities += entities.length;
+            if (kept.length > shown.length) {
+              omitted += kept.length - shown.length;
+              formatted[domain] = { shown, more: kept.length - shown.length };
+            } else {
+              formatted[domain] = shown;
+            }
           }
 
           return this.success(toolCall, {
             total_entities: totalEntities,
+            matched_entities: matched,
+            ...(focus && { focus }),
+            ...(domainFilter && { domain: domainFilter }),
             domains: formatted,
             include_off: includeOff,
+            ...(omitted > 0 && {
+              note: `${omitted} entities not shown. Narrow with domain="<domain>" or focus="<keyword>" to see a specific set.`,
+            }),
           });
         }
 

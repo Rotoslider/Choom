@@ -38,13 +38,17 @@ export const tools: ToolDefinition[] = [
   {
     name: 'workspace_list_files',
     description:
-      'List files and folders in the project workspace. Shows file sizes and types. Omit path to list all projects at root level.',
+      'List files and folders in the project workspace. Omit path for the map of all projects (one level, each folder with a count of what is inside); pass a path to open a folder two levels deep, or depth (up to 4) to see deeper.',
     parameters: {
       type: 'object',
       properties: {
         path: {
           type: 'string',
           description: 'Relative directory path to list (omit for workspace root)',
+        },
+        depth: {
+          type: 'number',
+          description: 'How many folder levels to descend (default 2, max 4)',
         },
       },
     },

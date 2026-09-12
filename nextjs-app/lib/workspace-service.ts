@@ -302,6 +302,16 @@ export class WorkspaceService {
   }
 
   /** List files in a workspace directory */
+  /** Does this workspace-relative path exist as a directory? */
+  async directoryExists(relativePath: string): Promise<boolean> {
+    try {
+      const st = await stat(this.resolveSafe(relativePath || '.'));
+      return st.isDirectory();
+    } catch {
+      return false;
+    }
+  }
+
   async listFiles(relativePath: string = ''): Promise<FileEntry[]> {
     const fullPath = this.resolveSafe(relativePath || '.');
     await this.ensureRoot();
@@ -345,8 +355,8 @@ export class WorkspaceService {
     relativePath: string = '',
     maxDepth: number = 4,
     maxEntries: number = 300,
-  ): Promise<{ entries: Array<{ path: string; type: 'file' | 'directory'; size: number }>; truncated: boolean }> {
-    const out: Array<{ path: string; type: 'file' | 'directory'; size: number }> = [];
+  ): Promise<{ entries: Array<{ path: string; type: 'file' | 'directory'; size: number; children?: number }>; truncated: boolean }> {
+    const out: Array<{ path: string; type: 'file' | 'directory'; size: number; children?: number }> = [];
     let truncated = false;
     const walk = async (absRel: string, depth: number): Promise<void> => {
       if (out.length >= maxEntries) { truncated = true; return; }
@@ -357,9 +367,17 @@ export class WorkspaceService {
         // Root-relative path → directly usable in read/write tools, no ambiguity
         // about which folder it lives in.
         const childAbs = absRel ? `${absRel}/${e.name}` : e.name;
-        out.push({ path: childAbs, type: e.type, size: e.size });
-        if (e.type === 'directory' && depth < maxDepth) {
-          await walk(childAbs, depth + 1);
+        const entry: { path: string; type: 'file' | 'directory'; size: number; children?: number } =
+          { path: childAbs, type: e.type, size: e.size };
+        out.push(entry);
+        if (e.type === 'directory') {
+          if (depth < maxDepth) {
+            await walk(childAbs, depth + 1);
+          } else {
+            // At the depth cut-off, say how much is inside instead of hiding it —
+            // a folder of 400 selfies reads as "(400 inside)" rather than as empty.
+            try { entry.children = (await this.listFiles(childAbs)).length; } catch { /* unreadable: leave undefined */ }
+          }
         }
       }
     };

@@ -311,21 +311,25 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
       return this.success(toolCall, { success: true, followups: [], message: 'No pending self-followups.' });
     }
     const userTz = 'America/Denver';
+    // Compact (Phase 1, 2026-09-12): one line per pending entry, soonest first.
+    // The object-per-entry form cost ~400 chars each — 31 pending entries was a
+    // 12k-char result on every grounding turn. A line carries what she needs to
+    // decide (when, where, what) plus the id for cancel_self_followup.
+    const sorted = [...pending].sort((a, b) => a.trigger_at.localeCompare(b.trigger_at));
+    const lines = sorted.map(e => {
+      const when = new Date(e.trigger_at).toLocaleString('en-US', {
+        weekday: 'short', month: 'short', day: 'numeric',
+        hour: 'numeric', minute: '2-digit', timeZone: userTz,
+      });
+      const where = e.target === 'room' ? `room${e.room_id ? ' ' + e.room_id : ''}` : 'signal';
+      const what = e.prompt.replace(/\s+/g, ' ').trim();
+      return `${e.id} | ${when} | ${where} | ${what.length > 90 ? what.slice(0, 89) + '…' : what}`;
+    });
     return this.success(toolCall, {
       success: true,
-      followups: pending.map(e => ({
-        id: e.id,
-        target: e.target === 'room' ? 'room' : 'signal',
-        room_id: e.room_id,
-        trigger_at: e.trigger_at,
-        trigger_at_local: new Date(e.trigger_at).toLocaleString('en-US', {
-          weekday: 'short', month: 'short', day: 'numeric',
-          hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
-          timeZone: userTz,
-        }),
-        prompt: e.prompt.slice(0, 200),
-        reason: e.reason,
-      })),
+      pending_count: pending.length,
+      format: 'id | when (Mountain time) | where | prompt',
+      followups: lines,
     });
   }
 

@@ -23,12 +23,13 @@ export const tools: ToolDefinition[] = [
   },
   {
     name: 'search_memories',
-    description: 'Search memories using natural language queries. Use for general recall when the user asks about past conversations, facts, or preferences.',
+    description: 'Search memories using natural language queries. Use for general recall when the user asks about past conversations, facts, or preferences. Returns the best 5 as short excerpts by default; raise limit or pass detail=true for full text.',
     parameters: {
       type: 'object',
       properties: {
         query: { type: 'string', description: 'Natural language search query' },
-        limit: { type: 'number', description: 'Maximum results to return (default 10)' },
+        limit: { type: 'number', description: 'Maximum results to return (default 5)' },
+        detail: { type: 'boolean', description: 'true = full memory text and metadata instead of 300-char excerpts' },
       },
       required: ['query'],
     },
@@ -39,6 +40,7 @@ export const tools: ToolDefinition[] = [
     parameters: {
       type: 'object',
       properties: {
+        detail: { type: 'boolean', description: 'true = full memory text and metadata instead of 300-char excerpts' },
         memory_type: {
           type: 'string',
           description: 'Category to search: "conversation", "fact", "preference", "event", "task", "ephemeral"',
@@ -55,6 +57,7 @@ export const tools: ToolDefinition[] = [
     parameters: {
       type: 'object',
       properties: {
+        detail: { type: 'boolean', description: 'true = full memory text and metadata instead of 300-char excerpts' },
         tags: { type: 'string', description: 'Comma-separated tags to search for, e.g., "camping, truck"' },
         limit: { type: 'number', description: 'Maximum results to return (default 20)' },
       },
@@ -67,6 +70,7 @@ export const tools: ToolDefinition[] = [
     parameters: {
       type: 'object',
       properties: {
+        detail: { type: 'boolean', description: 'true = full memory text and metadata instead of 300-char excerpts' },
         limit: { type: 'number', description: 'Maximum results to return (default 20)' },
       },
     },
@@ -77,6 +81,7 @@ export const tools: ToolDefinition[] = [
     parameters: {
       type: 'object',
       properties: {
+        detail: { type: 'boolean', description: 'true = full memory text and metadata instead of 300-char excerpts' },
         date_from: { type: 'string', description: 'Start date in ISO format, e.g., "2025-01-01"' },
         date_to: { type: 'string', description: 'End date in ISO format (defaults to now if omitted)' },
         limit: { type: 'number', description: 'Maximum results to return (default 50)' },

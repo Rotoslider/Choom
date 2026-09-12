@@ -261,25 +261,45 @@ export default class WorkspaceFilesHandler extends BaseSkillHandler {
       const dirPath = stripMisplacedSharedPrefix(this.sanitizePath((toolCall.arguments.path as string) || ''));
 
       const ws = new WorkspaceService(WORKSPACE_ROOT, WORKSPACE_MAX_FILE_SIZE_KB, WORKSPACE_ALLOWED_EXTENSIONS);
+      // A folder that does not exist used to list as "(empty directory)" — the
+      // scheduler prompt points at choom_commons/for_<name>/ and DeepSeek spent
+      // five iterations probing the same missing folder at different depths
+      // (2026-09-12). Say it is missing so she can move on or create it.
+      if (dirPath && !(await ws.directoryExists(dirPath))) {
+        return this.error(toolCall, `Folder "${dirPath}" does not exist in the workspace. Call workspace_list_files with no path to see what is there, or workspace_create_folder to create it.`);
+      }
       // Recursive so files nested in subfolders are visible (prevents the
       // "didn't see my journal in journals/, made a new one" duplication). Paths
       // are root-relative and directly usable in read/write tools.
-      const { entries, truncated } = await ws.listFilesRecursive(dirPath);
+      // Depth 2 / 80 entries by default (Phase 1, 2026-09-12): depth 4 / 300
+      // returned 51k chars for a folder of selfies on a grounding turn. Folders
+      // at the cut-off show how many items are inside; `depth` opens deeper.
+      // The ROOT lists one level: it is the map of projects, and at depth 2 a
+      // big selfie album filled the 80-entry cap before other projects showed
+      // ("that listing got truncated by Aloy's big album" — DeepSeek, 2026-09-12).
+      // Inside a project, depth 2 so a nested journal is visible.
+      const depthArg = Number(toolCall.arguments.depth);
+      const maxDepth = Number.isFinite(depthArg) && depthArg > 0 ? Math.min(4, Math.floor(depthArg)) : (dirPath ? 2 : 1);
+      const maxEntries = maxDepth >= 3 ? 300 : 80;
+      const { entries, truncated } = await ws.listFilesRecursive(dirPath, maxDepth, maxEntries);
 
       const formatted = entries.length === 0
         ? '(empty directory)'
         : entries.map(e => {
             if (e.type === 'directory') {
-              return `\uD83D\uDCC1 ${e.path}/`;
+              const inside = typeof e.children === 'number' && e.children > 0 ? ` (${e.children} inside)` : '';
+              return `\uD83D\uDCC1 ${e.path}/${inside}`;
             }
             const sizeStr = e.size < 1024
               ? `${e.size}B`
               : `${(e.size / 1024).toFixed(1)}KB`;
             return `\uD83D\uDCC4 ${e.path} (${sizeStr})`;
-          }).join('\n') + (truncated ? '\n\u2026 (more entries not shown \u2014 list a subfolder to see the rest)' : '');
+          }).join('\n') + (truncated ? '\n\u2026 (more entries not shown \u2014 list a subfolder, or pass depth, to see the rest)' : '');
 
-      console.log(`   📂 Workspace list (recursive): ${dirPath || '/'} (${entries.length} entries${truncated ? ', truncated' : ''})`);
-      return this.success(toolCall, { success: true, entries, formatted });
+      console.log(`   📂 Workspace list (depth ${maxDepth}): ${dirPath || '/'} (${entries.length} entries${truncated ? ', truncated' : ''})`);
+      // `formatted` is the copy the model reads; the structured entries were a
+      // second, larger copy of the same information.
+      return this.success(toolCall, { success: true, entry_count: entries.length, truncated, formatted });
     } catch (err) {
       console.error('   ❌ Workspace list error:', err instanceof Error ? err.message : err);
       return this.error(toolCall, `Failed to list files: ${err instanceof Error ? err.message : 'Unknown error'}`);

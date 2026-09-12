@@ -484,6 +484,112 @@ export class HomeAssistantService {
   }
 
   /**
+   * Compact "glance at the house" (Phase 1, 2026-09-12). The full summary of
+   * this homestead is ~1,000 entities / 51k chars and was the largest tool
+   * result in the system, called on almost every grounding turn. This returns
+   * what a person glancing around would notice — who's home, what's on, what's
+   * open or wrong, low batteries, climate, and the key power / solar / battery /
+   * temperature readings — in a few thousand chars. Everything else is one
+   * `focus`, `domain` or `detail` call away (see the ha_get_home_status tool).
+   */
+  async getCompactHomeStatus(): Promise<Record<string, unknown>> {
+    const entities = await this.listStates();
+    const live = entities.filter(e => e.state !== 'unavailable' && e.state !== 'unknown');
+    const name = (e: HAEntity) => String(e.attributes.friendly_name || e.entity_id);
+    const domainOf = (e: HAEntity) => e.entity_id.split('.')[0];
+    const cls = (e: HAEntity) => String(e.attributes.device_class || '');
+    const unit = (e: HAEntity) => String(e.attributes.unit_of_measurement || '');
+    const reading = (e: HAEntity) => {
+      const u = unit(e);
+      const v = Number(e.state);
+      const val = Number.isFinite(v) ? String(Math.round(v * 10) / 10) : e.state;
+      return `${name(e)}: ${val}${u ? ' ' + u : ''}`;
+    };
+    // Prefer the readings a person actually asks about; cap each block so a
+    // house with 60 per-plug power meters still reads in one glance.
+    const pick = (list: HAEntity[], prefer: RegExp, cap: number) => {
+      const preferred = list.filter(e => prefer.test(name(e)) || prefer.test(e.entity_id));
+      const rest = list.filter(e => !preferred.includes(e));
+      return [...preferred, ...rest].slice(0, cap);
+    };
+
+    const people = live.filter(e => domainOf(e) === 'person').map(e => `${name(e)}: ${e.state}`);
+    const lightsOn = live.filter(e => domainOf(e) === 'light' && e.state === 'on').map(e => {
+      const b = Number(e.attributes.brightness);
+      return Number.isFinite(b) && b > 0 ? `${name(e)} (${Math.round((b / 255) * 100)}%)` : name(e);
+    });
+    const switchesOn = live.filter(e => domainOf(e) === 'switch' && e.state === 'on').map(name);
+    const ALERT_CLASSES = new Set(['motion', 'occupancy', 'door', 'window', 'opening', 'garage_door', 'problem', 'smoke', 'gas', 'carbon_monoxide', 'moisture', 'safety', 'tamper', 'vibration', 'sound']);
+    const alerts = live
+      .filter(e => domainOf(e) === 'binary_sensor' && e.state === 'on' && ALERT_CLASSES.has(cls(e)))
+      .map(e => `${name(e)}: ${cls(e) === 'problem' ? 'problem' : cls(e) === 'motion' || cls(e) === 'occupancy' ? 'motion' : 'open'}`);
+    const locks = live.filter(e => domainOf(e) === 'lock').map(e => `${name(e)}: ${e.state}`);
+    const alarms = live.filter(e => domainOf(e) === 'alarm_control_panel').map(e => `${name(e)}: ${e.state}`);
+    const climate = live.filter(e => domainOf(e) === 'climate').map(e => {
+      const t = e.attributes.temperature; const cur = e.attributes.current_temperature;
+      const mode = e.attributes.hvac_action || e.attributes.hvac_mode || e.state;
+      return `${name(e)}: ${mode}${cur !== undefined ? `, now ${cur}°` : ''}${t !== undefined ? `, target ${t}°` : ''}`;
+    });
+    const lowBattery = live.filter(e => {
+      if (domainOf(e) === 'binary_sensor') return cls(e) === 'battery' && e.state === 'on';
+      if (domainOf(e) !== 'sensor' || cls(e) !== 'battery') return false;
+      const v = Number(e.state); return Number.isFinite(v) && v < 20;
+    }).map(reading);
+    const offline = live.filter(e => domainOf(e) === 'binary_sensor' && cls(e) === 'connectivity' && e.state === 'off').map(name);
+    const updates = live.filter(e => domainOf(e) === 'update' && e.state === 'on').map(name);
+    const cameras = live.filter(e => domainOf(e) === 'camera').map(name);
+
+    const sensors = live.filter(e => domainOf(e) === 'sensor');
+    const ENERGY_WORDS = /solar|pv|inverter|battery|soc|grid|load|consum|house|home|total|charge|generat/i;
+    const energy = pick(
+      sensors.filter(e => ['power', 'energy', 'battery', 'current', 'voltage'].includes(cls(e)) && Number.isFinite(Number(e.state))),
+      ENERGY_WORDS, 12,
+    ).map(reading);
+    const ENV_WORDS = /outdoor|outside|indoor|inside|living|bedroom|kitchen|office|shop|garage|greenhouse|barn|coop|porch|basement|attic/i;
+    const environment = pick(
+      sensors.filter(e => ['temperature', 'humidity'].includes(cls(e)) && Number.isFinite(Number(e.state))),
+      ENV_WORDS, 12,
+    ).map(reading);
+
+    const domainCounts: Record<string, number> = {};
+    for (const e of live) domainCounts[domainOf(e)] = (domainCounts[domainOf(e)] || 0) + 1;
+
+    const parts = [
+      `${live.length} live entities`,
+      people.length ? `${people.length} people tracked` : '',
+      `${lightsOn.length} lights on`,
+      `${switchesOn.length} switches on`,
+      alerts.length ? `${alerts.length} open/motion/problem` : 'nothing open, no motion, no problems',
+      lowBattery.length ? `${lowBattery.length} low batteries` : '',
+      offline.length ? `${offline.length} devices offline` : '',
+      updates.length ? `${updates.length} updates available` : '',
+    ].filter(Boolean);
+
+    const cap = <T>(list: T[], n: number) => list.length > n
+      ? { shown: list.slice(0, n), more: list.length - n }
+      : list;
+
+    return {
+      summary: parts.join('; '),
+      ...(people.length && { people }),
+      ...(alerts.length && { alerts }),
+      ...(locks.length && { locks }),
+      ...(alarms.length && { alarms }),
+      ...(lightsOn.length && { lights_on: cap(lightsOn, 15) }),
+      ...(switchesOn.length && { switches_on: cap(switchesOn, 15) }),
+      ...(climate.length && { climate }),
+      ...(energy.length && { energy }),
+      ...(environment.length && { environment }),
+      ...(lowBattery.length && { low_batteries: lowBattery }),
+      ...(offline.length && { offline_devices: cap(offline, 10) }),
+      ...(updates.length && { updates_available: cap(updates, 8) }),
+      ...(cameras.length && { cameras }),
+      domains: domainCounts,
+      hint: 'This is the compact glance. For more: focus="<keyword>" (e.g. "solar", "garage") lists every matching entity, domain="sensor" lists one domain, detail=true is the full dump.',
+    };
+  }
+
+  /**
    * Format a concise sensor summary for system prompt injection (~200 token budget).
    * Only includes entities listed in promptEntities setting.
    */

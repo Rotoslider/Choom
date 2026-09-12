@@ -167,13 +167,25 @@ export const tools: ToolDefinition[] = [
   },
   {
     name: 'ha_get_home_status',
-    description: 'Get a full snapshot of all monitored Home Assistant entities, grouped by domain. Shows all active sensors, lights, switches, etc.',
+    description: 'Glance at the house — this alone answers "who is home", "what is on", "is anything open", "any problems", plus climate and the key power/solar/battery/temperature readings. Call it with no arguments first. Only if you need a specific set, pass focus="solar" (any keyword) or domain="sensor"; detail=true lists every entity (capped per domain).',
     parameters: {
       type: 'object',
       properties: {
+        focus: {
+          type: 'string',
+          description: 'Keyword to match against entity names/ids (e.g. "solar", "garage", "temperature") — returns every matching entity',
+        },
+        domain: {
+          type: 'string',
+          description: 'Limit to one domain, e.g. "light", "switch", "sensor", "binary_sensor", "camera"',
+        },
+        detail: {
+          type: 'boolean',
+          description: 'true = every active entity grouped by domain, capped per domain (large). Rarely needed — the default glance already covers what is on, open, home and wrong.',
+        },
         include_off: {
           type: 'boolean',
-          description: 'Include entities that are currently off (default: false)',
+          description: 'With detail=true, also include entities that are currently off (default: false)',
         },
       },
     },
