@@ -550,6 +550,29 @@ export function LLMSettings() {
         </div>
       </div>
 
+      {/* Tool exposure default */}
+      <div className="border-t pt-4 space-y-2">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <h3 className="text-sm font-medium">Tools loaded per turn</h3>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              <b>Skills</b> sends a core set plus the skills that match the message; a Choom opens any other
+              skill with <code>open_skill</code> when she needs it. About 40% fewer prompt tokens per call and a
+              shorter list for small models to choose from. <b>Full</b> sends every tool every time. A model
+              profile can override this per model.
+            </p>
+          </div>
+          <select
+            className="text-sm border rounded px-2 py-1 bg-background"
+            value={llm.toolExposure || 'full'}
+            onChange={(e) => updateLLMSettings({ toolExposure: e.target.value as 'full' | 'skills' })}
+          >
+            <option value="full">Full</option>
+            <option value="skills">Skills</option>
+          </select>
+        </div>
+      </div>
+
       {/* ================================================================ */}
       {/* Simple Tasks Model Section */}
       {/* ================================================================ */}
@@ -789,6 +812,7 @@ export function LLMSettings() {
                     {profile.topK !== undefined && <span>topK={profile.topK}</span>}
                     {profile.repetitionPenalty !== undefined && <span>repPen={profile.repetitionPenalty}</span>}
                     {profile.enableThinking !== undefined && <span>thinking={profile.enableThinking ? 'on' : 'off'}</span>}
+                    {profile.toolExposure !== undefined && <span>tools={profile.toolExposure}</span>}
                     {profile.frequencyPenalty !== undefined && profile.frequencyPenalty > 0 && <span>freqPen={profile.frequencyPenalty}</span>}
                     {profile.presencePenalty !== undefined && profile.presencePenalty > 0 && <span>presPen={profile.presencePenalty}</span>}
                   </div>
@@ -966,6 +990,23 @@ function ProfileEditor({
           checked={draft.enableThinking === true}
           onCheckedChange={(checked) => setDraft(d => ({ ...d, enableThinking: checked ? true : undefined }))}
         />
+      </div>
+
+      {/* Tool exposure (per model; overrides the global default) */}
+      <div className="flex items-center justify-between">
+        <div>
+          <label className="text-xs font-medium">Tools loaded per turn</label>
+          <p className="text-[11px] text-muted-foreground">Skills = core set + matched skills, open_skill for the rest. Blank = use the global setting.</p>
+        </div>
+        <select
+          className="text-xs border rounded px-2 py-1 bg-background"
+          value={draft.toolExposure ?? ''}
+          onChange={(e) => setDraft(d => ({ ...d, toolExposure: e.target.value ? (e.target.value as 'full' | 'skills') : undefined }))}
+        >
+          <option value="">Global default</option>
+          <option value="full">Full</option>
+          <option value="skills">Skills</option>
+        </select>
       </div>
     </div>
   );

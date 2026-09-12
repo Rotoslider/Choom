@@ -396,6 +396,9 @@ class ChoomClient:
                 "simpleTasksProviderId": llm_cfg.get("simpleTasksProviderId"),
                 "simpleTasksEnabled": llm_cfg.get("simpleTasksEnabled", False),
                 "compressToolOutputs": llm_cfg.get("compressToolOutputs", False),
+                # Global default for which tools a turn loads ('full' | 'skills');
+                # a model profile overrides it server-side.
+                "toolExposure": llm_cfg.get("toolExposure"),
                 # Forward the context window so Signal/followup turns honor the
                 # Settings>LLM slider (compaction budget). Without this they fell back
                 # to the 262K default and ballooned huge prompts on long agentic runs.

@@ -50,6 +50,7 @@ export const CORE_TOOLS: ReadonlyArray<string> = [
   'send_notification', 'heartbeat_complete',
   'schedule_self_followup', 'schedule_room_followup', 'list_self_followups',
   'list_my_rooms', 'talk_with_sisters', 'delegate_to_choom',
+  'check_inbox', 'leave_for_sister',
   // the web
   'web_search',
 ];

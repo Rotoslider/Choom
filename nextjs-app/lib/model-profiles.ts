@@ -46,6 +46,10 @@ export const BUILTIN_LLM_PROFILES: LLMModelProfile[] = [
     topP: 0.95,
     maxTokens: 4096,
     contextLength: 1048576,
+    // Measured 2026-09-12 on real turns: skills exposure cut peak prompt
+    // tokens ~40% (27.8k → 16.7k grounding, 25.7k → 13.7k a YouTube ask) with
+    // the same tool paths and no nudges. Cloud tokens are money.
+    toolExposure: 'skills',
   },
   // OpenRouter stealth tier. Window is OpenRouter's published context_length
   // (1,048,576, verified live 2026-08-23). Without a profile the model was

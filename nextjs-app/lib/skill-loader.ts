@@ -53,6 +53,8 @@ import { tools as musicTools } from '@/skills/core/music-assistant/tools';
 import { tools as groupChatTools } from '@/skills/core/group-chat/tools';
 import { tools as skillLoaderTools } from '@/skills/core/skill-loader/tools';
 import SkillLoaderHandler from '@/skills/core/skill-loader/handler';
+import { tools as sisterMailTools } from '@/skills/core/sister-mail/tools';
+import SisterMailHandler from '@/skills/core/sister-mail/handler';
 
 // Import all core skill handlers
 import { default as MemoryHandler } from '@/skills/core/memory-management/handler';
@@ -173,6 +175,7 @@ const CORE_SKILLS: SkillDef[] = [
   { dirName: 'music-assistant', tools: musicTools, handler: MusicHandler },
   { dirName: 'group-chat', tools: groupChatTools, handler: GroupChatHandler },
   { dirName: 'skill-loader', tools: skillLoaderTools, handler: SkillLoaderHandler },
+  { dirName: 'sister-mail', tools: sisterMailTools, handler: SisterMailHandler },
 ];
 
 let loaded = false;

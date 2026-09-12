@@ -1876,8 +1876,8 @@ Be practical. Only work on things that can actually be accomplished with the too
                     "Call search_memories to recall recent conversations with Donny — "
                     "what he's told you, where he's been, what he's been working on. "
                     "You also have get_weather, get_calendar_events, "
-                    f"and workspace_list_files (check choom_commons/for_{choom_lower}/ "
-                    "for sibling messages) if relevant to your task."
+                    "check_inbox (what your sisters or Donny left for you), "
+                    "and workspace_list_files if relevant to your task."
                 )
 
                 awareness = "\n".join(awareness_parts) + "\n\n"

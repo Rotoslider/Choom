@@ -497,6 +497,10 @@ export interface HomeAssistantSettings {
   injectIntoPrompt: boolean;
   promptEntities?: string;
   cacheSeconds: number;
+  // Only entities Home Assistant itself exposes to Assist (Settings → Voice
+  // assistants → Expose). The same curated list HA's own assistant sees — on
+  // this homestead 60 entities instead of 1,016 (2026-09-12).
+  assistExposedOnly?: boolean;
 }
 
 export interface AppearanceSettings {

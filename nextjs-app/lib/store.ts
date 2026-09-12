@@ -111,6 +111,7 @@ const defaultSettings: AppSettings = {
     injectIntoPrompt: false,
     promptEntities: '',
     cacheSeconds: 30,
+    assistExposedOnly: false,
   },
   ownerName: '',
   ownerLocation: '',
@@ -281,6 +282,7 @@ function buildBridgePayload(settings: AppSettings): Record<string, unknown> {
       // bridge-config — otherwise the UI switch never reaches Signal turns (the
       // Python bridge reads this flag from bridge-config, defaulting to off).
       compressToolOutputs: settings.llm.compressToolOutputs || false,
+      toolExposure: settings.llm.toolExposure || undefined,
       // Persist the context-window slider too — the bridge reads it from here to
       // set the compaction budget on Signal/followup turns (else it defaulted to
       // 262K and prompts ballooned on long agentic runs).
@@ -317,6 +319,9 @@ function buildBridgePayload(settings: AppSettings): Record<string, unknown> {
       accessToken: settings.homeAssistant.accessToken,
       entityFilter: settings.homeAssistant.entityFilter,
       cacheSeconds: settings.homeAssistant.cacheSeconds,
+      assistExposedOnly: settings.homeAssistant.assistExposedOnly || false,
+      promptEntities: settings.homeAssistant.promptEntities,
+      injectIntoPrompt: settings.homeAssistant.injectIntoPrompt,
     },
     providers: settings.providers?.map(p => ({
       id: p.id, name: p.name, type: p.type, endpoint: p.endpoint,

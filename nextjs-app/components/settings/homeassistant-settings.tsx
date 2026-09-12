@@ -67,6 +67,7 @@ export function HomeAssistantSettings() {
         accessToken: ha.accessToken,
       });
       if (ha.entityFilter) params.set('entityFilter', ha.entityFilter);
+      if (ha.assistExposedOnly) params.set('assistExposedOnly', 'true');
       const resp = await fetch(`/api/homeassistant?${params}`);
       const data = await resp.json();
 
@@ -205,6 +206,20 @@ export function HomeAssistantSettings() {
             Limits which entities are exposed to tools. Leave empty for all.
           </p>
         </div>
+      </div>
+
+      {/* Only entities exposed to Assist */}
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-medium">Only entities exposed to Assist</h3>
+          <Switch
+            checked={!!ha.assistExposedOnly}
+            onCheckedChange={(checked) => updateHomeAssistantSettings({ assistExposedOnly: checked })}
+          />
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Use the same curated list Home Assistant&apos;s own assistant sees (Settings → Voice assistants → Expose). Entities pinned below are always included. Turns a 1,000-entity house into the few dozen that matter.
+        </p>
       </div>
 
       {/* System Prompt Injection */}

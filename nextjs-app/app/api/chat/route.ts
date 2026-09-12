@@ -10,6 +10,7 @@ import { findLLMProfile } from '@/lib/model-profiles';
 import { getSkillRegistry } from '@/lib/skill-registry';
 import { buildExposedTools, toolNamesFromHistory, openSkillToolDefinition, skillsModeNote, OPEN_SKILL_TOOL, type ToolExposure } from '@/lib/tool-exposure';
 import { ensureRoomDigest } from '@/lib/room-digest';
+import { ensureCommonsLayout, inboxPath } from '@/lib/commons';
 import { getLiveContextWindow } from '@/lib/model-metadata';
 import { allTools, getAllToolsFromSkills, useSkillDispatch } from '@/lib/tool-definitions';
 import { buildReferenceCatalog } from '@/lib/reference-library';
@@ -384,6 +385,15 @@ export async function POST(request: NextRequest) {
       defaultWeatherSettings,
       settings?.weather as Partial<WeatherSettings> | undefined,
     );
+
+    // The commons must exist on disk for the inbox convention below to mean
+    // anything (it did not until 2026-09-12). Cheap: a few stat calls.
+    const siblingNames = (await prisma.choom.findMany({ select: { name: true } })).map(c => c.name);
+    try {
+      const created = ensureCommonsLayout(siblingNames);
+      if (created.length) console.log(`   📮 Commons layout created: ${created.join(', ')}`);
+    } catch (e) { console.warn('   ⚠️  Could not ensure commons layout:', e instanceof Error ? e.message : e); }
+    const inboxList = siblingNames.map(n => `\`${inboxPath(n)}/\``).join(', ');
 
     // Build tool documentation section
     // When USE_SKILL_DISPATCH=true, uses progressive disclosure from skill registry
@@ -804,7 +814,7 @@ export async function POST(request: NextRequest) {
           // Softer hint: this is the Choom's default workspace, not a hard lock.
           // They can still create a new project if the user asks for one explicitly.
           enrichedMessage += `\n\n[System: Your default workspace is "${detectedProject.folder}" (this is YOUR project folder as ${choom.name}). Save any files you create inside "${detectedProject.folder}/" — do NOT create a new top-level folder for everyday work. Only create a new project if the user explicitly asks for one.]`;
-          currentMessages[0].content += `\n\n## YOUR WORKSPACE\nYour home project folder is \`${detectedProject.folder}/\`. When saving files without an explicit project named by the user, save them inside \`${detectedProject.folder}/\` (e.g. \`${detectedProject.folder}/notes/today.md\`). Do NOT create new top-level folders unless the user explicitly asks you to start a new project.\n\n**Shared folder — \`choom_commons/\`** (NOT inside your home folder, NEVER prefix with \`selfies_*/\`):\n\`choom_commons/\` is where ALL cross-Choom communication happens: letters, notes, delegation handoffs, shared drafts, research, and any content meant for a sibling. Each sibling has a folder: \`choom_commons/for_eve/\`, \`choom_commons/for_genesis/\`, \`choom_commons/for_aloy/\`, \`choom_commons/for_lissa/\`, \`choom_commons/for_anya/\`, \`choom_commons/for_optic/\`. Write content FOR a sibling in their folder. Shared drafts go in \`choom_commons/drafts/\`.\n\n\`sibling_journal/\` is an old archive — you may read it for historical context but do NOT write new content there. All new cross-Choom content goes in \`choom_commons/\`.\n\nYour \`growth_journal.md\` IS inside your home folder: \`${detectedProject.folder}/growth_journal.md\`.\n\nYou may NEVER write to another Choom's \`selfies_*/\` folder. If you need to leave something for another Choom, use \`choom_commons/for_[their_name]/\`.\n\n**BEFORE cross-Choom actions** (writing to a sibling, delegating, modifying shared files): read \`choom_commons/COMMUNICATION_PROTOCOL.md\` first. If unsure whether a protocol exists for what you're about to do, search \`choom_commons/\` for relevant guidelines. Don't rely on what you think you remember — read the actual file.`;
+          currentMessages[0].content += `\n\n## YOUR WORKSPACE\nYour home project folder is \`${detectedProject.folder}/\`. When saving files without an explicit project named by the user, save them inside \`${detectedProject.folder}/\` (e.g. \`${detectedProject.folder}/notes/today.md\`). Do NOT create new top-level folders unless the user explicitly asks you to start a new project.\n\n**Shared folder — \`choom_commons/\`** (NOT inside your home folder, NEVER prefix with \`selfies_*/\`):\n\`choom_commons/\` is where ALL cross-Choom communication happens: letters, notes, delegation handoffs, shared drafts, research, and any content meant for a sibling. Each sibling has an INBOX there — ${inboxList} — and it is hers: leave things FOR her in it with \`leave_for_sister\` (a letter, plus an image or file if you pass one). Read your own with \`check_inbox\` when you wake up. Do not use an inbox as a working folder. Shared drafts go in \`choom_commons/drafts/\`.\n\n\`sibling_journal/\` is an old archive — you may read it for historical context but do NOT write new content there. All new cross-Choom content goes in \`choom_commons/\`.\n\nYour \`growth_journal.md\` IS inside your home folder: \`${detectedProject.folder}/growth_journal.md\`.\n\nYou may NEVER write to another Choom's \`selfies_*/\` folder. If you need to leave something for another Choom, use \`choom_commons/for_[their_name]/\`.\n\n**BEFORE cross-Choom actions** (writing to a sibling, delegating, modifying shared files): read \`choom_commons/COMMUNICATION_PROTOCOL.md\` first. If unsure whether a protocol exists for what you're about to do, search \`choom_commons/\` for relevant guidelines. Don't rely on what you think you remember — read the actual file.`;
         } else {
           enrichedMessage += `\n\n[System: Active project: "${detectedProject.folder}" (${projMaxIter} thinking rounds available). Use this EXACT folder name for all workspace file operations. Do NOT create a new folder with different casing or naming.]`;
         }
@@ -819,7 +829,7 @@ export async function POST(request: NextRequest) {
         const selfiesFolder = `selfies_${choom.name.toLowerCase()}`;
         const defaultRounds = resolveMaxIterations({ maxIterationsOverride, choomMaxIterations, isHeartbeat }).maxIterations;
         // Same rule as everywhere else: advertise the budget resolveMaxIterations will actually enforce (heartbeat turns cap at 15, directives win).
-        currentMessages[0].content += `\n\n## YOUR WORKSPACE\nYour default workspace is \`${selfiesFolder}/\` — your own personal folder. When you save a file without a project being named, save it inside \`${selfiesFolder}/\` (e.g. \`${selfiesFolder}/notes/today.md\`). Don't spin up a new top-level folder for one-off saves — those belong in \`${selfiesFolder}/\`. But if what you're working on genuinely grows into its own body of work, use your judgment and create a dedicated project for it with \`workspace_create_project\` (the user can also name or pick one from the chat's project menu). One-off note → selfies; a real project worth keeping together → its own folder.\n\n**Shared folder — \`choom_commons/\`** (NOT inside your selfies folder): where ALL cross-Choom communication happens — letters, notes, delegation handoffs, shared drafts, research. Each sibling has a folder (e.g. \`choom_commons/for_eve/\`, \`choom_commons/for_aloy/\`); shared drafts go in \`choom_commons/drafts/\`. Write content FOR a sibling in their folder. You may NEVER write into another Choom's \`selfies_*/\` folder. Your \`growth_journal.md\` lives in \`${selfiesFolder}/growth_journal.md\`.\n\nYou have ${defaultRounds} thinking rounds available. Each round can include multiple parallel tool calls — calling 5 tools in one round only uses 1 round, not 5.`;
+        currentMessages[0].content += `\n\n## YOUR WORKSPACE\nYour default workspace is \`${selfiesFolder}/\` — your own personal folder. When you save a file without a project being named, save it inside \`${selfiesFolder}/\` (e.g. \`${selfiesFolder}/notes/today.md\`). Don't spin up a new top-level folder for one-off saves — those belong in \`${selfiesFolder}/\`. But if what you're working on genuinely grows into its own body of work, use your judgment and create a dedicated project for it with \`workspace_create_project\` (the user can also name or pick one from the chat's project menu). One-off note → selfies; a real project worth keeping together → its own folder.\n\n**Shared folder — \`choom_commons/\`** (NOT inside your selfies folder): where ALL cross-Choom communication happens — letters, notes, delegation handoffs, shared drafts, research. Each sibling has an INBOX there — ${inboxList} — and it is hers: leave things FOR her with \`leave_for_sister\`, read your own with \`check_inbox\` when you wake up. Do not use an inbox as a working folder. Shared drafts go in \`choom_commons/drafts/\`. You may NEVER write into another Choom's \`selfies_*/\` folder. Your \`growth_journal.md\` lives in \`${selfiesFolder}/growth_journal.md\`.\n\nYou have ${defaultRounds} thinking rounds available. Each round can include multiple parallel tool calls — calling 5 tools in one round only uses 1 round, not 5.`;
         console.log(`   🪪 ${choom.name} — no active project; default workspace ${selfiesFolder}/`);
       }
     } catch { /* ignore project detection errors */ }
@@ -1008,9 +1018,12 @@ export async function POST(request: NextRequest) {
     // in this chat, and anything she opens with open_skill. Decided here, after
     // the model profile is final. Client settings can override the profile so
     // a single run can be compared either way.
+    // Precedence: the model's profile (per-model, set in the profile editor) wins;
+    // the global LLM setting is the default for models whose profile says
+    // nothing; 'full' otherwise.
     const toolExposure: ToolExposure =
-      ((clientLLMSettings as Record<string, unknown>)?.toolExposure as ToolExposure | undefined)
-      ?? llmSettings.toolExposure
+      llmSettings.toolExposure
+      ?? ((clientLLMSettings as Record<string, unknown>)?.toolExposure as ToolExposure | undefined)
       ?? 'full';
     if (activeTools.length > 0 && skillDispatch) {
       const registry = getSkillRegistry();

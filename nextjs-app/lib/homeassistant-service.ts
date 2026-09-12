@@ -8,6 +8,7 @@ export interface HomeAssistantSettings {
   injectIntoPrompt: boolean; // Auto-inject sensor summary into system prompt
   promptEntities?: string;   // Comma-separated entity IDs for prompt injection
   cacheSeconds: number;      // Cache TTL (default 30)
+  assistExposedOnly?: boolean; // Only entities HA exposes to Assist (plus promptEntities)
 }
 
 export interface HAEntity {
@@ -38,7 +39,45 @@ const allStatesCache: { data: HAEntity[]; expiresAt: number } | null = { data: [
 let allStatesCacheRef = allStatesCache;
 let servicesCatalogCache: { data: Record<string, Record<string, unknown>>; expiresAt: number } | null = null;
 
+// The Assist-exposed entity list, per base URL. HA has no REST endpoint for
+// it; the websocket command `homeassistant/expose_entity/list` returns it.
+// Cached for a few minutes — it changes only when the user edits exposure.
+const exposedCache = new Map<string, { ids: Set<string>; expiresAt: number }>();
+const EXPOSED_TTL_MS = 5 * 60 * 1000;
+
+export async function fetchAssistExposedIds(baseUrl: string, accessToken: string, timeoutMs: number = 6000): Promise<Set<string>> {
+  const cached = exposedCache.get(baseUrl);
+  if (cached && cached.expiresAt > Date.now()) return cached.ids;
+  const wsUrl = baseUrl.replace(/^http/i, 'ws').replace(/\/+$/, '') + '/api/websocket';
+  const ids = await new Promise<Set<string>>((resolve, reject) => {
+    const WS = (globalThis as { WebSocket?: typeof WebSocket }).WebSocket;
+    if (!WS) { reject(new Error('WebSocket not available in this runtime')); return; }
+    const ws = new WS(wsUrl);
+    const timer = setTimeout(() => { try { ws.close(); } catch { /* ignore */ } reject(new Error('expose_entity/list timed out')); }, timeoutMs);
+    const done = (fn: () => void) => { clearTimeout(timer); try { ws.close(); } catch { /* ignore */ } fn(); };
+    ws.onerror = () => done(() => reject(new Error('websocket error')));
+    ws.onmessage = (ev: MessageEvent) => {
+      let m: { type?: string; success?: boolean; result?: { exposed_entities?: Record<string, { conversation?: boolean }> }; error?: { message?: string } };
+      try { m = JSON.parse(String(ev.data)); } catch { return; }
+      if (m.type === 'auth_required') ws.send(JSON.stringify({ type: 'auth', access_token: accessToken }));
+      else if (m.type === 'auth_ok') ws.send(JSON.stringify({ id: 1, type: 'homeassistant/expose_entity/list' }));
+      else if (m.type === 'auth_invalid') done(() => reject(new Error('Home Assistant rejected the access token')));
+      else if (m.type === 'result') {
+        if (!m.success) { done(() => reject(new Error(m.error?.message || 'expose_entity/list failed'))); return; }
+        const ex = m.result?.exposed_entities || {};
+        done(() => resolve(new Set(Object.entries(ex).filter(([, v]) => v && v.conversation).map(([k]) => k))));
+      }
+    };
+  });
+  exposedCache.set(baseUrl, { ids, expiresAt: Date.now() + EXPOSED_TTL_MS });
+  return ids;
+}
+
+export function clearAssistExposedCache(): void { exposedCache.clear(); }
+
 export class HomeAssistantService {
+  /** Resolver for the Assist-exposed list; tests swap it. */
+  static exposedResolver: (baseUrl: string, token: string) => Promise<Set<string>> = fetchAssistExposedIds;
   private settings: HomeAssistantSettings;
   private cacheTTL: number;
 
@@ -124,6 +163,18 @@ export class HomeAssistantService {
     } else {
       entities = await this.apiFetch<HAEntity[]>('/api/states');
       allStatesCacheRef = { data: entities, expiresAt: Date.now() + this.cacheTTL };
+    }
+
+    // Only what Home Assistant exposes to Assist (plus the prompt entities the
+    // user pinned). Falls back to the full list if the websocket call fails.
+    if (this.settings.assistExposedOnly) {
+      try {
+        const exposed = await HomeAssistantService.exposedResolver(this.settings.baseUrl, this.settings.accessToken);
+        const pinned = new Set((this.settings.promptEntities || '').split(',').map(x => x.trim()).filter(Boolean));
+        entities = entities.filter(e => exposed.has(e.entity_id) || pinned.has(e.entity_id));
+      } catch (err) {
+        console.warn(`   ⚠️  Home Assistant exposed-entity list unavailable (${err instanceof Error ? err.message : err}) — using the full list`);
+      }
     }
 
     // Apply entity filter from settings

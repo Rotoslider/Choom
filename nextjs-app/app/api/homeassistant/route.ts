@@ -23,6 +23,7 @@ export async function GET(request: NextRequest) {
     baseUrl,
     accessToken,
     entityFilter: params.get('entityFilter') || '',
+    assistExposedOnly: params.get('assistExposedOnly') === 'true',
     injectIntoPrompt: false,
     promptEntities: '',
     cacheSeconds: 30,
