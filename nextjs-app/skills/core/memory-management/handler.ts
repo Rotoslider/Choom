@@ -14,15 +14,21 @@ const MEMORY_TOOLS = new Set([
   'get_memory_stats',
 ]);
 
-// Tools whose result is a list of memories. Their raw form (~850 chars per
-// memory: full content, tags, metadata, companion id, match type, raw score)
+// Tools whose result is a list of memories. Their raw form (~1,200 chars per
+// memory: content plus tags, metadata, companion id, match type, raw score)
 // made search_memories a ~9k-char result on every grounding turn. The compact
-// form keeps what she reads — title, type, date, importance, a 300-char
-// excerpt — and drops the bookkeeping. `detail: true` returns the raw form.
+// form keeps what she reads — title, type, date, importance, the content —
+// and drops the bookkeeping. `detail: true` returns the raw form.
+//
+// Content is kept WHOLE up to EXCERPT_CHARS. A 300-char excerpt was tried
+// first (2026-09-12) and lost the detail she wakes up to string together:
+// the "GENESIS + SISTERS nameplate" sat 380 chars into a 614-char memory, and
+// DeepSeek ran three extra searches hunting for it. Genesis's memories run
+// median 857 / p90 1,229 chars, so 1,500 keeps ~95% intact.
 const LIST_TOOLS = new Set([
   'search_memories', 'search_by_type', 'search_by_tags', 'search_by_date_range', 'get_recent_memories',
 ]);
-const EXCERPT_CHARS = 300;
+const EXCERPT_CHARS = 1500;
 const DEFAULT_SEARCH_LIMIT = 5;
 
 type RawMemory = Record<string, unknown>;
@@ -68,7 +74,7 @@ export default class MemoryManagementHandler extends BaseSkillHandler {
         success: true,
         count: memories.length,
         memories,
-        ...(memories.some(m => m.truncated) ? { note: 'Excerpts are cut at 300 chars — call again with detail=true for full text.' } : {}),
+        ...(memories.some(m => m.truncated) ? { note: `Long memories are cut at ${EXCERPT_CHARS} chars — call again with detail=true for full text.` } : {}),
       };
     }
 

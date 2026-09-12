@@ -281,11 +281,25 @@ export default class WorkspaceFilesHandler extends BaseSkillHandler {
       const depthArg = Number(toolCall.arguments.depth);
       const maxDepth = Number.isFinite(depthArg) && depthArg > 0 ? Math.min(4, Math.floor(depthArg)) : (dirPath ? 2 : 1);
       const maxEntries = maxDepth >= 3 ? 300 : 80;
-      const { entries, truncated } = await ws.listFilesRecursive(dirPath, maxDepth, maxEntries);
+      const { entries, truncated, newest } = await ws.listFilesRecursive(dirPath, maxDepth, maxEntries);
+
+      // "What did I make lately" in one call: the newest files in the listed
+      // tree, named up front with a relative age. This is what a wake-up needs
+      // to find yesterday's image without opening folders one by one.
+      const age = (ms: number) => {
+        const m = Math.max(0, Math.round((Date.now() - ms) / 60000));
+        if (m < 60) return `${m}m ago`;
+        const h = Math.round(m / 60);
+        if (h < 48) return `${h}h ago`;
+        return `${Math.round(h / 24)}d ago`;
+      };
+      const newestLine = newest.length > 0
+        ? `Newest files: ${newest.map(n => `${n.path} (${age(n.mtimeMs)})`).join(', ')}\n\n`
+        : '';
 
       const formatted = entries.length === 0
         ? '(empty directory)'
-        : entries.map(e => {
+        : newestLine + entries.map(e => {
             if (e.type === 'directory') {
               const inside = typeof e.children === 'number' && e.children > 0 ? ` (${e.children} inside)` : '';
               return `\uD83D\uDCC1 ${e.path}/${inside}`;

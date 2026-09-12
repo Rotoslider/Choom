@@ -2126,7 +2126,7 @@ export async function executeToolCall(
     return {
       toolCallId: toolCall.id,
       name: toolCall.name,
-      result: { success: true, message: 'Notification suppressed — response will be delivered directly.' },
+      result: { success: true, message: 'Notification suppressed — your reply text is what gets delivered to the user. Do not call send_notification again this turn; just write the message.' },
     };
   }
   if (toolCall.name === 'send_notification') {
@@ -2576,7 +2576,7 @@ export async function executeToolCallViaSkills(
     return {
       toolCallId: toolCall.id,
       name: toolCall.name,
-      result: { success: true, message: 'Notification suppressed — response will be delivered directly.' },
+      result: { success: true, message: 'Notification suppressed — your reply text is what gets delivered to the user. Do not call send_notification again this turn; just write the message.' },
     };
   }
 

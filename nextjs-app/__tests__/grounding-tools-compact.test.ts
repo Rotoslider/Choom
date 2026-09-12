@@ -128,13 +128,37 @@ describe('workspace_list_files depth and folder counts', () => {
 
   test('depth 2 still shows a nested journal, and a deep image folder shows a count instead of 40 paths', async () => {
     const ws = new WorkspaceService(root, 1024, ['.md', '.png']);
-    const { entries, truncated } = await ws.listFilesRecursive('', 2, 80);
+    const { entries, truncated, newest } = await ws.listFilesRecursive('', 2, 80);
     const paths = entries.map(e => e.path);
     expect(paths).toContain('journals/journal.md');
     expect(paths).toContain('selfies/images');
     expect(paths).not.toContain('selfies/images/img_0.png');
     expect(entries.find(e => e.path === 'selfies/images')?.children).toBe(40);
     expect(truncated).toBe(false);
+    // The newest-file scan looks below the cut-off too: the 40 images written
+    // after the journal are the newest things in the tree.
+    expect(newest).toHaveLength(5);
+    expect(newest.every(n => n.path.startsWith('selfies/images/'))).toBe(true);
+  });
+
+  test('folders stay on the map even when files overflow the entry cap', async () => {
+    // Folders list first, so the 40 files inside `aa_gallery/` exhaust a cap of
+    // 10 before the walk reaches its sibling `zz_images/`; the old walk then
+    // dropped the folder entirely (this is how DeepSeek lost `images/` under a
+    // folder whose gallery came first).
+    const r2 = fs.mkdtempSync(path.join(os.tmpdir(), 'ws2-'));
+    fs.mkdirSync(path.join(r2, 'album', 'aa_gallery'), { recursive: true });
+    fs.mkdirSync(path.join(r2, 'album', 'zz_images'), { recursive: true });
+    for (let i = 0; i < 40; i++) fs.writeFileSync(path.join(r2, 'album', 'aa_gallery', `snap_${i}.png`), 'x');
+    for (let i = 0; i < 7; i++) fs.writeFileSync(path.join(r2, 'album', 'zz_images', `img_${i}.png`), 'x');
+    const ws = new WorkspaceService(r2, 1024, ['.png']);
+    const { entries, truncated } = await ws.listFilesRecursive('album', 2, 10);
+    expect(truncated).toBe(true);
+    const dir = entries.find(e => e.path === 'album/zz_images');
+    expect(dir?.type).toBe('directory');
+    expect(dir?.children).toBe(7);
+    expect(entries.filter(e => e.type === 'file').length).toBeLessThanOrEqual(10);
+    fs.rmSync(r2, { recursive: true, force: true });
   });
 
   test('a folder that does not exist is an error, not an empty listing', async () => {
@@ -166,7 +190,8 @@ describe('workspace_list_files depth and folder counts', () => {
     const rootText = (rootMap.result as { formatted: string }).formatted;
     expect(rootText).toContain('selfies/ (1 inside)');
     expect(rootText).toContain('journals/ (1 inside)');
-    expect(rootText).not.toContain('journal.md');
+    expect(rootText).not.toContain('📄 journals/journal.md'); // not listed as an entry at depth 1…
+    expect(rootText).toMatch(/^Newest files: /);                // …but named up front as the newest file
     expect(rootMap.result).not.toHaveProperty('entries'); // no second copy of the listing
     // Inside a folder: two levels, so a file nested one folder down is visible.
     const inside = await h.execute({ id: '1', name: 'workspace_list_files', arguments: { path: 'selfies' } }, ctx);
@@ -181,15 +206,21 @@ describe('workspace_list_files depth and folder counts', () => {
 
 describe('search_memories compact excerpts', () => {
   const raw = {
-    id: 'mem_1', title: 'Rack build', content: 'x'.repeat(700), timestamp: '2026-09-11T10:00:00-06:00',
+    id: 'mem_1', title: 'Rack build', content: 'x'.repeat(1700), timestamp: '2026-09-11T10:00:00-06:00',
     tags: "['a','b']", importance: '9.5', memory_type: 'event', metadata: "{'reinforcement_accum': 0.4}",
     companion_id: 'c1', relevance_score: '0.678796', match_type: 'semantic',
   };
 
-  test('compactMemory keeps title, type, date, importance and a 300-char excerpt', () => {
+  test('a typical 900-char memory is kept whole, only the bookkeeping is dropped', () => {
+    const m = compactMemory({ ...raw, content: 'y'.repeat(900) });
+    expect((m.excerpt as string).length).toBe(900);
+    expect(m.truncated).toBeUndefined();
+  });
+
+  test('compactMemory keeps title, type, date, importance and cuts only very long content', () => {
     const m = compactMemory(raw);
     expect(m).toMatchObject({ id: 'mem_1', title: 'Rack build', type: 'event', date: '2026-09-11', importance: 9.5, relevance: 0.68, truncated: true });
-    expect((m.excerpt as string).length).toBe(300);
+    expect((m.excerpt as string).length).toBe(1500);
     expect(m).not.toHaveProperty('metadata');
     expect(m).not.toHaveProperty('companion_id');
   });
@@ -227,5 +258,24 @@ describe('list_self_followups one line per entry', () => {
     expect(r.followups[1]).toContain(' | signal | ');
     expect(r.followups[0].length).toBeLessThan(160);
     expect(JSON.stringify(out.result).length).toBeLessThan(6000);
+  });
+});
+
+describe('wake-up turn guards (2026-09-12)', () => {
+  const chatStream = fs.readFileSync(path.join(__dirname, '..', 'lib', 'chat-stream.ts'), 'utf-8');
+
+  test('the planner never runs on a heartbeat or self follow-up', () => {
+    // Its summary line is delivered to Signal and spoken otherwise.
+    expect(chatStream).toContain('!isGroupTurn && !isHeartbeat && !noTools && isMultiStepRequest(message)');
+  });
+
+  test('analyze_image refuses an image_path that is a paragraph, not a path', async () => {
+    jest.resetModules();
+    const Handler = (await import('@/skills/core/image-analysis/handler')).default;
+    const h = new Handler();
+    const ctx = { settings: {}, choomId: 'c', chatId: 'ch', send: () => {} } as unknown as Parameters<typeof h.execute>[1];
+    const listing = Array.from({ length: 40 }, (_, i) => `📄 selfies_genesis/images/img_${i}.png (2.1MB)`).join('\n');
+    const r = await h.execute({ id: '1', name: 'analyze_image', arguments: { image_path: listing, prompt: 'which is the nameplate?' } }, ctx);
+    expect(r.error).toMatch(/must be a single workspace path/);
   });
 });

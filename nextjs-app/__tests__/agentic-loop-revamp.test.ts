@@ -565,7 +565,7 @@ describe('11. Delegation Not Broken by Changes', () => {
     // instead: a delegated worker's cap is LOCKED for the turn — the worker's
     // own directive (or the default) is the whole budget, and mid-loop project
     // re-detection may not move it.
-    expect(routeContent).toContain('let iterationCapLocked = iterationCap.locked || isDelegation');
+    expect(routeContent).toContain('const iterationCapLocked = iterationCap.locked || isDelegation');
   });
 
   test('delegation timeout in handler is 600s default, 900s max', () => {

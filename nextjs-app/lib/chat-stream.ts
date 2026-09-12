@@ -129,7 +129,7 @@ export async function runChatTurn(params: ChatTurnParams): Promise<void> {
         // iterationCapLocked doubles as "don't re-derive the cap mid-turn".
         // Delegation keeps it true unconditionally: the worker's own directive (or
         // the global default) is the whole budget for that task.
-        let iterationCapLocked = iterationCap.locked || isDelegation;
+        const iterationCapLocked = iterationCap.locked || isDelegation;
 
         for (const shadowedSource of iterationCap.shadowed) {
           console.log(`   🔒 [${choom.name}] ${shadowedSource} maxIterations ignored — ${iterationCap.source} takes precedence`);
@@ -226,7 +226,14 @@ export async function runChatTurn(params: ChatTurnParams): Promise<void> {
           // Multi-step work still happens fine via the normal agentic loop (the
           // Choom just calls tools across iterations), and plan tools are already
           // stripped for group turns anyway.
-          if (skillDispatch && !isDelegation && !isGroupTurn && !noTools && isMultiStepRequest(message)) {
+          // Also never on a heartbeat / self follow-up: the reply is delivered as a
+          // Signal message and spoken, and the plan summary ("Plan …: 2/5 steps
+          // completed, 3 skipped") leaked into it verbatim on Qwen and Gemma
+          // wake-ups (2026-09-12). Those turns also produced template-resolved
+          // steps that passed a whole file listing as an image path. The
+          // scheduler prompts describe multi-step work in plain words ("ground
+          // yourself, then write") which trips the heuristic every time.
+          if (skillDispatch && !isDelegation && !isGroupTurn && !isHeartbeat && !noTools && isMultiStepRequest(message)) {
             traceBuilder.setPlanMode();
             try {
               console.log(`   📋 Multi-step request detected — creating plan...`);

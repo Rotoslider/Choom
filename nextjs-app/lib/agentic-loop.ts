@@ -1350,7 +1350,15 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                 // APOLOGY reads ("sorry I misled you"), so a model answering a
                 // fabrication callout re-matched here and got nudged for
                 // apologizing (C-58). Require a failure verb after the sorry.
-                const hedgeGiveUp = /\b(?:i (?:was |have been )?(?:unable|not able) to|(?:i )?couldn'?t (?:access|find|get|figure|complete|do)|(?:i )?can'?t (?:seem to |figure out how to |access|find)|(?:i )?don'?t (?:have |know how to )|(?:the |this )?(?:tool|call|service|request) (?:isn'?t |is not |didn'?t |did not )(?:working|matching|accepting)|i (?:tried|attempted) (?:multiple|several|different) (?:times|approaches|ways)|unfortunately|sorry,? i (?:couldn'?t|can'?t|cannot|was(?:n'?t)? (?:un)?able|didn'?t|don'?t|failed))/i.test(lc);
+                // First-person only. "(?:i )?couldn't get" and bare "unfortunately"
+                // matched a wake-up message ABOUT a neighbour ("Kim couldn't…",
+                // "unfortunately she…") after the real work was done, and the
+                // nudge to "try a different approach — call a tool NOW" made Qwen
+                // re-send the notification twice (2026-09-12). A Choom's replies
+                // are full of other people's troubles; only her own count —
+                // "unfortunately" alone needs a system-failure word in the same
+                // sentence ("unfortunately the endpoint is down" still fires).
+                const hedgeGiveUp = /\b(?:i (?:was |have been )?(?:unable|not able) to|i couldn'?t (?:access|find|get|figure|complete|do)|i can'?t (?:seem to |figure out how to |access|find)|i don'?t (?:have |know how to )|(?:the |this )?(?:tool|call|service|request) (?:isn'?t |is not |didn'?t |did not )(?:working|matching|accepting)|i (?:tried|attempted) (?:multiple|several|different) (?:times|approaches|ways)|unfortunately,? i (?:couldn'?t|can'?t|cannot|was(?:n'?t)? (?:un)?able|didn'?t|don'?t|failed)|unfortunately[^.!?\n]{0,60}\b(?:endpoint|server|service|api|tool|camera|connection|request|call|search|calendar|command|error|failed|timed out|unavailable|offline|down|not (?:working|responding|available|reachable))\b|sorry,? i (?:couldn'?t|can'?t|cannot|was(?:n'?t)? (?:un)?able|didn'?t|don'?t|failed))/i.test(lc);
 
                 // Check 1c: Model FABRICATES tool call success — claims to have
                 // executed something without actually making a tool call. Typical

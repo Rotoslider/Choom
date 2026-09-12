@@ -14,6 +14,8 @@ interface FileEntry {
   name: string;
   type: 'file' | 'directory';
   size: number;
+  /** Last modification time (ms since epoch); files only. */
+  mtimeMs?: number;
 }
 
 export class WorkspaceService {
@@ -326,7 +328,7 @@ export class WorkspaceService {
           results.push({ name: entry.name, type: 'directory', size: 0 });
         } else if (entry.isFile()) {
           const stats = await stat(entryPath);
-          results.push({ name: entry.name, type: 'file', size: stats.size });
+          results.push({ name: entry.name, type: 'file', size: stats.size, mtimeMs: stats.mtimeMs });
         }
       }
 
@@ -355,34 +357,73 @@ export class WorkspaceService {
     relativePath: string = '',
     maxDepth: number = 4,
     maxEntries: number = 300,
-  ): Promise<{ entries: Array<{ path: string; type: 'file' | 'directory'; size: number; children?: number }>; truncated: boolean }> {
-    const out: Array<{ path: string; type: 'file' | 'directory'; size: number; children?: number }> = [];
+  ): Promise<{
+    entries: Array<{ path: string; type: 'file' | 'directory'; size: number; children?: number; mtimeMs?: number }>;
+    truncated: boolean;
+    /** The most recently modified files seen anywhere in the walk, newest first (up to 5). */
+    newest: Array<{ path: string; mtimeMs: number }>;
+  }> {
+    type Entry = { path: string; type: 'file' | 'directory'; size: number; children?: number; mtimeMs?: number };
+    const out: Entry[] = [];
+    const seenFiles: Array<{ path: string; mtimeMs: number }> = [];
     let truncated = false;
-    const walk = async (absRel: string, depth: number): Promise<void> => {
-      if (out.length >= maxEntries) { truncated = true; return; }
+    // Below the listing cut-off, still look for the newest files (bounded):
+    // a one-level root map would otherwise never know that yesterday's image
+    // is three folders down.
+    let scanBudget = 3000;
+    const scanNewest = async (absRel: string, depthLeft: number): Promise<void> => {
+      if (depthLeft <= 0 || scanBudget <= 0) return;
       let entries: FileEntry[];
       try { entries = await this.listFiles(absRel); } catch { return; }
       for (const e of entries) {
-        if (out.length >= maxEntries) { truncated = true; return; }
+        if (scanBudget-- <= 0) return;
+        const childAbs = `${absRel}/${e.name}`;
+        if (e.type === 'file' && typeof e.mtimeMs === 'number') seenFiles.push({ path: childAbs, mtimeMs: e.mtimeMs });
+        else if (e.type === 'directory') await scanNewest(childAbs, depthLeft - 1);
+      }
+    };
+    const countInside = async (entry: Entry, childAbs: string) => {
+      // Say how much is inside instead of hiding it — a folder of 400 selfies
+      // reads as "(400 inside)" rather than as empty.
+      try { entry.children = (await this.listFiles(childAbs)).length; } catch { /* unreadable: leave undefined */ }
+      await scanNewest(childAbs, 3);
+    };
+    const walk = async (absRel: string, depth: number): Promise<void> => {
+      let entries: FileEntry[];
+      try { entries = await this.listFiles(absRel); } catch { return; }
+      for (const e of entries) {
         // Root-relative path → directly usable in read/write tools, no ambiguity
         // about which folder it lives in.
         const childAbs = absRel ? `${absRel}/${e.name}` : e.name;
-        const entry: { path: string; type: 'file' | 'directory'; size: number; children?: number } =
-          { path: childAbs, type: e.type, size: e.size };
+        if (e.type === 'file' && typeof e.mtimeMs === 'number') seenFiles.push({ path: childAbs, mtimeMs: e.mtimeMs });
+        if (out.length >= maxEntries) {
+          // Past the cap: FOLDERS still get a line (with a count) so the map
+          // stays complete — files are what overflowed it. Previously the cap
+          // fell mid-alphabet and `images/` never appeared under a folder whose
+          // camera snapshots came first (DeepSeek opened four subfolders one by
+          // one hunting for it, 2026-09-12).
+          if (e.type === 'directory') {
+            const entry: Entry = { path: childAbs, type: 'directory', size: 0 };
+            await countInside(entry, childAbs);
+            out.push(entry);
+          }
+          truncated = true;
+          continue;
+        }
+        const entry: Entry = { path: childAbs, type: e.type, size: e.size, ...(e.mtimeMs !== undefined && { mtimeMs: e.mtimeMs }) };
         out.push(entry);
         if (e.type === 'directory') {
           if (depth < maxDepth) {
             await walk(childAbs, depth + 1);
           } else {
-            // At the depth cut-off, say how much is inside instead of hiding it —
-            // a folder of 400 selfies reads as "(400 inside)" rather than as empty.
-            try { entry.children = (await this.listFiles(childAbs)).length; } catch { /* unreadable: leave undefined */ }
+            await countInside(entry, childAbs);
           }
         }
       }
     };
     await walk(relativePath, 1);
-    return { entries: out, truncated };
+    const newest = seenFiles.sort((a, b) => b.mtimeMs - a.mtimeMs).slice(0, 5);
+    return { entries: out, truncated, newest };
   }
 
   /** Extract text from a PDF file using pdftotext */

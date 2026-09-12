@@ -133,6 +133,14 @@ export default class ImageAnalysisHandler extends BaseSkillHandler {
         }
       }
 
+      // A planner template once resolved image_path to an entire directory
+      // listing and the OS answered ENAMETOOLONG (2026-09-12). Refuse anything
+      // that is not shaped like one path so the model gets a usable error.
+      const rawImagePath = toolCall.arguments.image_path;
+      if (typeof rawImagePath === 'string' && (rawImagePath.length > 400 || /[\n\r]/.test(rawImagePath))) {
+        return this.error(toolCall, `image_path must be a single workspace path (got ${rawImagePath.length} chars${/[\n\r]/.test(rawImagePath) ? ', multiple lines' : ''}). Pass one file path such as "selfies_genesis/images/rack_day.png".`);
+      }
+
       const visionService = new VisionService({
         ...visionSettings,
         maxImageDimension: visionMaxDimension,
