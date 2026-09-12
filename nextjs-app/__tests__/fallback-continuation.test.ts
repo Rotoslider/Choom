@@ -79,9 +79,8 @@ const toolCall = (name: string, id: string, preamble = ''): Reply => ({
 });
 
 const TOOLS: ToolDefinition[] = ['search_memories', 'get_weather', 'get_calendar_events'].map(name => ({
-  type: 'function',
-  function: { name, description: name, parameters: { type: 'object', properties: {} } },
-})) as unknown as ToolDefinition[];
+  name, description: name, parameters: { type: 'object' as const, properties: {} },
+}));
 
 /**
  * `retry` answers the same-model retry the loop prepends to the chain on its
