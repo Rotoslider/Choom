@@ -62,6 +62,7 @@ export interface ChatTurnParams {
   llmClient: { streamChat: LLMClient['streamChat'] };
   llmSettings: LLMSettings;
   activeTools: ToolDefinition[];
+  toolExposure: 'full' | 'skills';
   usingCloudProvider: boolean;
   activeProviderId: string;
   fallbackConfigs: FallbackConfig[];
@@ -84,7 +85,7 @@ export async function runChatTurn(params: ChatTurnParams): Promise<void> {
     memoryClient, memoryCompanionId, weatherSettings,
     llmSettings, usingCloudProvider, activeProviderId,
     fallbackConfigs, createClientForFallback,
-    currentMessages, activeTools, systemPromptWithSummary, compactionService,
+    currentMessages, activeTools, toolExposure, systemPromptWithSummary, compactionService,
     compactionWasPerformed, compactionStats,
   } = params;
   const llmClient = params.llmClient;
@@ -349,7 +350,7 @@ export async function runChatTurn(params: ChatTurnParams): Promise<void> {
           // ================================================================
           const loop = await runAgenticLoop({
             send, sse, ctx, traceBuilder,
-            currentMessages, activeTools, llmClient, llmSettings, clientLLMSettings,
+            currentMessages, activeTools, toolExposure, llmClient, llmSettings, clientLLMSettings,
             settings, providers, usingCloudProvider, resolvedProvider,
             fallbackConfigs, createClientForFallback, taskOverrideActive, taskModelOverride,
             choom, chat, choomId, chatId, logChatId, message,

@@ -7,6 +7,8 @@ import { isLocalEndpoint } from '@/lib/stream-timeouts';
 import { ProjectService } from '@/lib/project-service';
 import type { LLMProviderConfig, LLMModelProfile } from '@/lib/types';
 import { findLLMProfile } from '@/lib/model-profiles';
+import { getSkillRegistry } from '@/lib/skill-registry';
+import { buildExposedTools, toolNamesFromHistory, openSkillToolDefinition, skillsModeNote, OPEN_SKILL_TOOL, type ToolExposure } from '@/lib/tool-exposure';
 import { getLiveContextWindow } from '@/lib/model-metadata';
 import { allTools, getAllToolsFromSkills, useSkillDispatch } from '@/lib/tool-definitions';
 import { buildReferenceCatalog } from '@/lib/reference-library';
@@ -939,6 +941,7 @@ export async function POST(request: NextRequest) {
         if (profile.repetitionPenalty !== undefined) llmSettings.repetitionPenalty = profile.repetitionPenalty;
         if (profile.enableThinking !== undefined) llmSettings.enableThinking = profile.enableThinking;
         if (profile.replyInReasoning !== undefined) llmSettings.replyInReasoning = profile.replyInReasoning;
+        if (profile.toolExposure !== undefined) llmSettings.toolExposure = profile.toolExposure;
 
         // Reconstruct llmClient with updated settings.
         // Use the actual resolved provider state (usingCloudProvider) to determine
@@ -966,6 +969,35 @@ export async function POST(request: NextRequest) {
         }
 
         console.log(`   📋 Model profile applied: "${profile.label || profile.modelId}" (temp=${profile.temperature}, topP=${profile.topP}, maxTokens=${profile.maxTokens}${profile.topK !== undefined ? `, topK=${profile.topK}` : ''}${profile.enableThinking !== undefined ? `, thinking=${profile.enableThinking}` : ''})`);
+      }
+    }
+
+    // Tool exposure (Phase 2, 2026-09-12): in `skills` mode the tools array is
+    // the core set plus the skills matched to the message, tools used earlier
+    // in this chat, and anything she opens with open_skill. Decided here, after
+    // the model profile is final. Client settings can override the profile so
+    // a single run can be compared either way.
+    const toolExposure: ToolExposure =
+      ((clientLLMSettings as Record<string, unknown>)?.toolExposure as ToolExposure | undefined)
+      ?? llmSettings.toolExposure
+      ?? 'full';
+    if (activeTools.length > 0 && skillDispatch) {
+      const registry = getSkillRegistry();
+      if (toolExposure === 'skills') {
+        const historyToolNames = toolNamesFromHistory(chat.messages);
+        const exposure = buildExposedTools({
+          activeTools, registry, message,
+          historyToolNames,
+          maxMatchedSkills: 3,
+        });
+        const total = activeTools.length;
+        const skillNames = registry.getSkillNames().filter(n => n !== 'skill-loader');
+        activeTools = exposure.tools.map(t => t.name === OPEN_SKILL_TOOL ? openSkillToolDefinition(skillNames) : t);
+        currentMessages[0].content += skillsModeNote(activeTools.length, total, exposure.matchedSkills);
+        console.log(`   🧰 Tool exposure: skills — ${activeTools.length}/${total} tools (core + ${exposure.matchedSkills.join(', ') || 'no matched skills'}${exposure.fromHistory.length ? ` + ${exposure.fromHistory.length} from chat history` : ''})`);
+      } else {
+        // Every tool is already loaded; open_skill would only confuse.
+        activeTools = activeTools.filter(t => t.name !== OPEN_SKILL_TOOL);
       }
     }
 
@@ -1113,7 +1145,7 @@ export async function POST(request: NextRequest) {
           taskModelOverride, taskOverrideActive,
           autoSetProjectInfo, detectedProject, choomMaxIterations, skillDispatch,
           memoryClient, memoryCompanionId, weatherSettings,
-          llmClient, llmSettings, activeTools,
+          llmClient, llmSettings, activeTools, toolExposure,
           usingCloudProvider, activeProviderId, fallbackConfigs, createClientForFallback,
           currentMessages, systemPromptWithSummary, compactionService,
           compactionWasPerformed, compactionStats,

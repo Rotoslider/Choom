@@ -198,6 +198,23 @@ export const BUILTIN_LLM_PROFILES: LLMModelProfile[] = [
     presencePenalty: 1.5,
     enableThinking: false,
     replyInReasoning: true,
+    toolExposure: 'skills',
+  },
+  {
+    // Qwen 3.8 27B in LM Studio (2026-09-12). Sampling follows the 3.6
+    // instruct values until the model card says otherwise; thinking arrives on
+    // reasoning_content and its reply on content, so no replyInReasoning.
+    modelId: 'qwen/qwen3.8-27b',
+    label: 'Qwen 3.8 27B (Local)',
+    builtIn: true,
+    temperature: 0.7,
+    topP: 0.80,
+    maxTokens: 8192,
+    contextLength: 262144,
+    topK: 20,
+    presencePenalty: 1.5,
+    enableThinking: false,
+    toolExposure: 'skills',
   },
   {
     modelId: 'minimaxai/minimax-m2.7',
@@ -280,6 +297,7 @@ export const BUILTIN_LLM_PROFILES: LLMModelProfile[] = [
     topK: 40,
     repetitionPenalty: 1.0,
     enableThinking: false,
+    toolExposure: 'skills',
   },
   {
     modelId: 'gemma-4-31b-it',
@@ -298,6 +316,7 @@ export const BUILTIN_LLM_PROFILES: LLMModelProfile[] = [
     topK: 40,
     repetitionPenalty: 1.0,
     enableThinking: false,
+    toolExposure: 'skills',
   },
   {
     // LM Studio reports this id with an underscore after the org.

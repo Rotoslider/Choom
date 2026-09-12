@@ -25,6 +25,7 @@ import {
 } from '@/lib/tool-error-classification';
 import { classifyEndpoint, isLocalEndpoint } from '@/lib/stream-timeouts';
 import { readLlmStream, newStreamState, streamHasToolCalls, type StreamState } from '@/lib/llm-stream-reader';
+import { unexposedToolMentions } from '@/lib/tool-exposure';
 import { detectClaimedTool, detectZeroToolClaim, detectUncalledToolClaim, findFabricatedImageRefs } from '@/lib/phantom-claim';
 import { isNearVerbatimRepeat, stripRepeatedParagraphs, stripInternalRepeats } from '@/lib/repetition-guard';
 import {
@@ -55,6 +56,8 @@ export interface AgenticLoopParams {
   traceBuilder: TraceBuilder;
   currentMessages: ChatMessage[];
   activeTools: ToolDefinition[];
+  /** 'skills' = only part of the registry is exposed; open_skill and narration auto-open add more. */
+  toolExposure?: 'full' | 'skills';
   llmClient: { streamChat: LLMClient['streamChat'] };
   llmSettings: LLMSettings;
   clientLLMSettings: Record<string, unknown>;
@@ -136,6 +139,17 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
   } = params;
   let llmClient = params.llmClient;
   let activeTools = params.activeTools;
+  const toolExposure = params.toolExposure ?? 'full';
+  // Skills mode: add a skill's tool definitions to the turn (open_skill, or a
+  // narrated tool the model cannot see). Returns the names actually added.
+  const exposeSkillTools = (skillName: string): string[] => {
+    const skill = getSkillRegistry().getSkill(skillName);
+    if (!skill) return [];
+    const have = new Set(activeTools.map(t => t.name));
+    const added = skill.toolDefinitions.filter(t => !have.has(t.name));
+    if (added.length) activeTools = [...activeTools, ...added];
+    return added.map(t => t.name);
+  };
   let usingCloudProvider = params.usingCloudProvider;
   let resolvedProvider = params.resolvedProvider;
   let maxIterations = params.maxIterations;
@@ -479,6 +493,7 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
           let retriedCurrentFallback = false; // Guard: only retry a timed-out fallback once
           let relaxedToolChoice = false; // Guard: only drop forced tool_choice once per request (on a forced-empty turn)
           let deliberationNudged = false; // Guard: one "you thought but didn't act" nudge per request
+          const autoOpenedSkills = new Set<string>(); // skills-mode: each skill auto-opened at most once per request
 
           while (iteration < maxIterations) {
             iteration++;
@@ -930,6 +945,9 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
               toolCalls = validToolCalls;
             }
 
+            // Synthetic error results for calls dropped below; read again after every
+            // parser has run, so a turn whose ONLY call was dropped gets a retry.
+            let droppedForEmptyArgs: ToolResult[] = [];
             // Empty-args guard: some models (Gemma 4 26B observed) emit structured
             // tool_calls with an empty arguments string that parses to `{}`. Without
             // this check, the call proceeds into the handler with no params and fails
@@ -943,6 +961,7 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
             // failure on the next iteration and retries with the correct arguments.
             if (toolCalls.length > 0) {
               const emptyArgReplacements: ToolResult[] = [];
+              droppedForEmptyArgs = emptyArgReplacements;
               const keptCalls: typeof toolCalls = [];
               for (const tc of toolCalls) {
                 const hasArgs = tc.arguments && Object.keys(tc.arguments).length > 0;
@@ -1254,6 +1273,25 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
               }
             }
 
+            // A turn whose ONLY call was dropped for empty arguments used to fall
+            // into the "no tool calls" branch and END — the synthetic error was
+            // recorded but the model never saw it (found 2026-09-12 with a
+            // scripted music_play {} call). Tell her what was missing and give
+            // her the iteration back. Bounded by the normal nudge budget.
+            if (toolCalls.length === 0 && droppedForEmptyArgs.length > 0 && nudgeCount < 3 && iteration < maxIterations - 1) {
+              nudgeCount++;
+              traceBuilder.recordNudge('tool_use');
+              const lines = droppedForEmptyArgs.map(r => `- ${r.name}: ${r.error}`).join('\n');
+              console.log(`   🔁 ${choomTag} Only call(s) this turn were dropped for empty arguments — asking for a retry: ${droppedForEmptyArgs.map(r => r.name).join(', ')}`);
+              if (iterationContent.trim()) currentMessages.push({ role: 'assistant', content: iterationContent });
+              currentMessages.push({
+                role: 'user',
+                content: `[System] Your tool call was not run:\n${lines}\nCall it again with the required arguments filled in.`,
+              });
+              forceToolCall = true;
+              continue;
+            }
+
             // Still no tool calls after extraction — check if we should nudge or stop
             if (toolCalls.length === 0) {
               // noTools mode: tools were stripped (e.g. scheduler briefings with pre-fetched data).
@@ -1262,6 +1300,38 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
               if (noTools || activeTools.length === 0) {
                 break;
               }
+
+              // Skills mode: she named a tool that is not loaded ("let me check
+              // music_now_playing"). Load its skill and let her call it, instead
+              // of nudging her to call a tool she cannot see. Once per skill.
+              if (toolExposure === 'skills' && iterationContent && nudgeCount < 3 && iteration < maxIterations - 1) {
+                const registry = getSkillRegistry();
+                const mentions = unexposedToolMentions(
+                  iterationContent, new Set(activeTools.map(t => t.name)), registry,
+                  registry.getAllToolDefinitions().map(t => t.name),
+                ).filter(m => !autoOpenedSkills.has(m.skill));
+                if (mentions.length > 0) {
+                  const loaded: string[] = [];
+                  for (const m of mentions) {
+                    autoOpenedSkills.add(m.skill);
+                    const added = exposeSkillTools(m.skill);
+                    if (added.length) loaded.push(`${m.skill} (${added.join(', ')})`);
+                  }
+                  if (loaded.length > 0) {
+                    nudgeCount++;
+                    traceBuilder.recordNudge('tool_use');
+                    console.log(`   🧰 ${choomTag} Narrated unloaded tool → opened ${loaded.join('; ')}`);
+                    currentMessages.push({ role: 'assistant', content: iterationContent });
+                    currentMessages.push({
+                      role: 'user',
+                      content: `[System] The tools you mentioned are now loaded: ${loaded.join('; ')}. Call the tool now.`,
+                    });
+                    forceToolCall = true;
+                    continue;
+                  }
+                }
+              }
+
 
               // C-45 structural fabrication signal, computed for both blocks
               // below: image markdown whose id was not produced by a
@@ -2400,6 +2470,16 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                 tool_call_id: tr.toolCallId,
                 name: tr.name,
               });
+            }
+
+            // --- open_skill: the handler returned the skill's instructions; the
+            // loop owns the tools array, so the definitions are added here.
+            for (const tr of iterationResults) {
+              if (tr.name !== 'open_skill' || tr.error) continue;
+              const skillName = (tr.result as { skill?: string } | null)?.skill;
+              if (!skillName) continue;
+              const added = exposeSkillTools(skillName);
+              console.log(`   🧰 ${choomTag} open_skill(${skillName}) → +${added.length} tools (${activeTools.length} loaded)`);
             }
 
             // --- Heartbeat terminator: the Choom signaled it's done with this heartbeat.

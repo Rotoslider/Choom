@@ -70,10 +70,10 @@ function scriptedClient(replies: Reply[]) {
 const text = (s: string): Reply => ({ deltas: [{ content: s }] });
 const empty: Reply = { deltas: [] };
 const reasoningOnly = (s: string): Reply => ({ deltas: [{ reasoning_content: s }] });
-const toolCall = (name: string, id: string, preamble = ''): Reply => ({
+const toolCall = (name: string, id: string, preamble = '', args: Record<string, unknown> = {}): Reply => ({
   deltas: [
     ...(preamble ? [{ content: preamble }] : []),
-    { tool_calls: [{ index: 0, id, type: 'function', function: { name, arguments: '{}' } }] },
+    { tool_calls: [{ index: 0, id, type: 'function', function: { name, arguments: JSON.stringify(args) } }] },
   ],
   finish: 'tool_calls',
 });
@@ -91,7 +91,7 @@ function buildParams(
   primary: ReturnType<typeof scriptedClient>,
   retry: { client: ReturnType<typeof scriptedClient>; settings?: Partial<LLMSettings> },
   fallbacks: Array<{ label: string; client: ReturnType<typeof scriptedClient>; settings?: Partial<LLMSettings> }> = [],
-  opts: { message?: string; settings?: Partial<LLMSettings> } = {},
+  opts: { message?: string; settings?: Partial<LLMSettings>; toolExposure?: 'full' | 'skills' } = {},
 ): AgenticLoopParams {
   const llmSettings: LLMSettings = { ...defaultLLMSettings, endpoint: 'https://api.example.com/v1', model: 'primary', ...opts.settings };
   const message = opts.message ?? 'Scheduled follow-up: say good morning.';
@@ -109,6 +109,7 @@ function buildParams(
       { role: 'user', content: message },
     ],
     activeTools: TOOLS,
+    toolExposure: opts.toolExposure,
     llmClient: primary.client,
     llmSettings,
     clientLLMSettings: {},
@@ -299,5 +300,73 @@ describe('reasoning channel and forcing on a multi-tool grounding prompt', () =>
     const outcome = await runAgenticLoop(buildParams(primary, { client: scriptedClient([]) }, [],
       { message: 'say good morning', settings: { enableThinking: false } }));
     expect(outcome.fullContent).toContain('Coffee is on');
+  });
+});
+
+/**
+ * Skills mode (Phase 2): the loop owns the tools array, so it is the loop that
+ * adds a skill's definitions after open_skill succeeds, and that opens a skill
+ * when the model narrates a tool it cannot see.
+ */
+describe('skills-mode tool exposure in the loop', () => {
+  const { getAllToolsFromSkills } = jest.requireActual('@/lib/tool-definitions') as typeof import('@/lib/tool-definitions');
+  const exec = jest.requireMock('@/lib/tool-execution') as { executeToolCall: jest.Mock };
+
+  beforeAll(() => { getAllToolsFromSkills(); }); // load the real registry
+
+  test('a successful open_skill adds that skill\'s tools for the next call', async () => {
+    exec.executeToolCall.mockImplementationOnce(async (tc: { id: string; name: string }) => ({
+      toolCallId: tc.id, name: tc.name, result: { success: true, skill: 'music-assistant', tools_loaded: ['music_play'] },
+    }));
+    const primary = scriptedClient([
+      toolCall('open_skill', 'tc1', '', { skill: 'music-assistant' }),
+      toolCall('music_play', 'tc2', '', { query: 'some jazz' }),
+      text('Playing it now.'),
+    ]);
+    const params = buildParams(primary, { client: scriptedClient([]) }, [], { message: 'put some music on', toolExposure: 'skills' });
+    params.activeTools = [{ name: 'open_skill', description: 'open', parameters: { type: 'object', properties: {} } }];
+    const outcome = await runAgenticLoop(params);
+    expect(primary.calls[0].tools).toEqual(['open_skill']);
+    expect(primary.calls[1].tools).toContain('music_play');
+    expect(outcome.allToolCalls.map(t => t.name)).toEqual(['open_skill', 'music_play']);
+  });
+
+  test('narrating an unloaded tool opens its skill and asks for the call, instead of scolding', async () => {
+    const primary = scriptedClient([
+      text('Let me check music_now_playing for you.'),
+      toolCall('music_now_playing', 'tc1', '', { player: 'shop' }),
+      text('Nothing is playing right now.'),
+    ]);
+    const params = buildParams(primary, { client: scriptedClient([]) }, [], { message: 'what is playing?', toolExposure: 'skills' });
+    params.activeTools = [{ name: 'search_memories', description: 'm', parameters: { type: 'object', properties: {} } }];
+    const outcome = await runAgenticLoop(params);
+    expect(primary.calls[1].tools).toContain('music_now_playing');
+    const note = primary.calls[1].messages.at(-1) as { content: string };
+    expect(note.content).toMatch(/now loaded: music-assistant/);
+    expect(outcome.fullContent).toContain('Nothing is playing');
+  });
+});
+
+/**
+ * Found while testing skills mode (2026-09-12): when a turn's ONLY tool call
+ * was dropped for empty arguments, the synthetic error was recorded but the
+ * loop then saw "no tool calls" and ended the turn — the model never got to
+ * retry, and the user got nothing.
+ */
+describe('a tool call dropped for empty arguments is retried', () => {
+  test('the model is told what was missing and gets another iteration', async () => {
+    const primary = scriptedClient([
+      toolCall('music_play', 'tc1'), // {} — music_play requires a query
+      toolCall('music_play', 'tc2', '', { query: 'some jazz' }),
+      text('Playing it now.'),
+    ]);
+    const params = buildParams(primary, { client: scriptedClient([]) }, [], { message: 'play something' });
+    params.activeTools = [{ name: 'music_play', description: 'play', parameters: { type: 'object', properties: { query: { type: 'string', description: 'q' } }, required: ['query'] } }];
+    const outcome = await runAgenticLoop(params);
+    expect(primary.calls).toHaveLength(3);
+    const note = primary.calls[1].messages.at(-1) as { content: string };
+    expect(note.content).toMatch(/without any arguments|requires: query/);
+    expect(outcome.allToolCalls.map(t => t.name)).toEqual(['music_play']);
+    expect(outcome.fullContent).toContain('Playing it now');
   });
 });

@@ -125,6 +125,12 @@ export interface LLMModelProfile {
   // call. Leave unset for models whose reasoning channel is genuine
   // chain-of-thought (Gemma 4) — there the loop nudges instead of salvaging.
   replyInReasoning?: boolean;
+  // Which tool definitions a turn sends. 'full' = every tool (default; cloud
+  // models). 'skills' = a core set plus the skills matched to the message,
+  // tools used earlier in the chat, and anything opened with open_skill —
+  // ~5k tokens of schema per iteration instead of ~14k, and a short list for
+  // a small model to choose from. See lib/tool-exposure.ts.
+  toolExposure?: 'full' | 'skills';
 }
 
 export interface VisionModelProfile {
@@ -183,6 +189,7 @@ export interface LLMSettings {
   repetitionPenalty?: number;
   enableThinking?: boolean;
   replyInReasoning?: boolean; // see LLMModelProfile.replyInReasoning
+  toolExposure?: 'full' | 'skills'; // see LLMModelProfile.toolExposure
   // Planner model — optional fast model for plan creation (JSON generation)
   plannerModel?: string;
   plannerEndpoint?: string;

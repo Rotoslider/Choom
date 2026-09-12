@@ -51,6 +51,8 @@ import { tools as habitTools } from '@/skills/core/habit-tracker/tools';
 import { tools as selfSchedulingTools } from '@/skills/core/self-scheduling/tools';
 import { tools as musicTools } from '@/skills/core/music-assistant/tools';
 import { tools as groupChatTools } from '@/skills/core/group-chat/tools';
+import { tools as skillLoaderTools } from '@/skills/core/skill-loader/tools';
+import SkillLoaderHandler from '@/skills/core/skill-loader/handler';
 
 // Import all core skill handlers
 import { default as MemoryHandler } from '@/skills/core/memory-management/handler';
@@ -170,6 +172,7 @@ const CORE_SKILLS: SkillDef[] = [
   { dirName: 'self-scheduling', tools: selfSchedulingTools, handler: SelfSchedulingHandler },
   { dirName: 'music-assistant', tools: musicTools, handler: MusicHandler },
   { dirName: 'group-chat', tools: groupChatTools, handler: GroupChatHandler },
+  { dirName: 'skill-loader', tools: skillLoaderTools, handler: SkillLoaderHandler },
 ];
 
 let loaded = false;
