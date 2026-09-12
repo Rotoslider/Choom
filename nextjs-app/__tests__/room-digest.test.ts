@@ -74,3 +74,15 @@ describe('stripDsmlMarkup', () => {
     expect(stripDsmlMarkup('plain text')).toBe('plain text');
   });
 });
+
+describe('group-chat route: owner preemption and user-asked rooms (source contract)', () => {
+  const route = fs.readFileSync(path.join(__dirname, '..', 'app', 'api', 'group-chat', 'route.ts'), 'utf-8');
+  test('an owner message into a running room asks the run to yield and waits for the lock', () => {
+    expect(route).toContain('preemptRequested.add(roomId);');
+    expect(route).toContain('while (runningRooms.has(roomId) && Date.now() < waitUntil)');
+    expect(route).toContain('if (preemptRequested.has(roomId)) {');
+  });
+  test('a room the user asked her to start from a chat is never a "duplicate"', () => {
+    expect(route).toContain("const isInitiatorRun = !!initiatorChoomId && !continueRun && triggerSourceForLock !== 'chat';");
+  });
+});

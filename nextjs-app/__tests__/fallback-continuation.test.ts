@@ -439,3 +439,25 @@ describe('pre-fallback nudge strip (Phase 4)', () => {
     expect(retryMsgs.some(c => c.startsWith('[System] Tools are off'))).toBe(true);
   });
 });
+
+/**
+ * 2026-09-12: after tool calls, a would-be final reply that repeated an earlier
+ * line of the turn was dropped by the buffered dedup and the turn ended on the
+ * stale narration ("Let me try that room again…"). Now she is asked once for a
+ * real reply.
+ */
+describe('a final reply dropped as a repeat is retried', () => {
+  test('the user gets a real reply, not the earlier narration', async () => {
+    const primary = scriptedClient([
+      toolCall('search_memories', 'tc1', 'Let me check the room first.', { query: 'room' }),
+      text('Let me check the room first.'),          // repeat of the preamble → dropped
+      text('Aloy is already in the room; I left her the plan.'),
+    ]);
+    const params = buildParams(primary, { client: scriptedClient([]) }, [], { message: 'start a room with Aloy' });
+    const outcome = await runAgenticLoop(params);
+    expect(primary.calls).toHaveLength(3);
+    const nudge = primary.calls[2].messages.at(-1) as { content: string };
+    expect(nudge.content).toMatch(/repeated an earlier line of this turn and was dropped/);
+    expect(outcome.fullContent).toContain('I left her the plan');
+  });
+});

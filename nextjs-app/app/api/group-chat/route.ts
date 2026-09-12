@@ -35,6 +35,13 @@ const TURN_CEILING_MS = Number(process.env.GROUP_TURN_CEILING_MS) > 0
 // talk_with_sisters, so the room ran in full TWICE. Keyed by roomId.
 const runningRooms = new Map<string, number>(); // roomId -> startedAt (ms)
 const lastRunAt = new Map<string, number>();     // roomId -> finishedAt (ms)
+// Owner preemption (2026-09-12): a Choom-initiated run (a room follow-up she
+// scheduled herself) was holding the room lock while the owner's message got a
+// bare 409. The owner now asks the running loop to stop between speakers and
+// waits briefly for the lock; only if the run does not yield does 409 remain.
+const preemptRequested = new Set<string>();
+const PREEMPT_WAIT_MS = 25 * 1000;
+const PREEMPT_POLL_MS = 500;
 const RUN_LOCK_STALE_MS = 15 * 60 * 1000; // auto-release a crashed/abandoned run
 // A Choom-initiated run (heartbeat / self-wakeup) within this window of the last
 // run on the same room is treated as an accidental duplicate and skipped — covers
@@ -175,8 +182,21 @@ export async function POST(request: NextRequest) {
   const initiator = initiatorChoomId ? activeParticipants.find(p => p.choomId === initiatorChoomId) : null;
 
   // ── Acquire the per-room run lock (prevents the same room running twice) ──
-  const nowMs = Date.now();
-  const runningSince = runningRooms.get(roomId);
+  let nowMs = Date.now();
+  let runningSince = runningRooms.get(roomId);
+  if (runningSince && nowMs - runningSince < RUN_LOCK_STALE_MS && !initiatorChoomId) {
+    // The OWNER is speaking into a room that a Choom-initiated run is using.
+    // Ask that run to stop at the next speaker boundary and wait for the lock.
+    preemptRequested.add(roomId);
+    console.log(`   ✋ Room ${roomId}: owner message while a run is in progress — asking it to yield`);
+    const waitUntil = Date.now() + PREEMPT_WAIT_MS;
+    while (runningRooms.has(roomId) && Date.now() < waitUntil) {
+      await new Promise(res => setTimeout(res, PREEMPT_POLL_MS));
+    }
+    preemptRequested.delete(roomId);
+    nowMs = Date.now();
+    runningSince = runningRooms.get(roomId);
+  }
   if (runningSince && nowMs - runningSince < RUN_LOCK_STALE_MS) {
     return new Response(
       JSON.stringify({ busy: true, error: 'A conversation is already in progress in this room.' }),
@@ -185,7 +205,11 @@ export async function POST(request: NextRequest) {
   }
   // A Choom-initiated run that lands right after a previous one finished is almost
   // certainly an accidental duplicate (e.g. a heartbeat echoing a just-run task).
-  const isInitiatorRun = !!initiatorChoomId && !continueRun;
+  // Not when the USER asked her to start it from a 1:1 chat (triggerSource
+  // 'chat'): "start a room with Aloy right now" got a 409 skip, three retries,
+  // and no reply (2026-09-12).
+  const triggerSourceForLock = (body.triggerSource as string) || 'chat';
+  const isInitiatorRun = !!initiatorChoomId && !continueRun && triggerSourceForLock !== 'chat';
   if (isInitiatorRun) {
     const finishedAt = lastRunAt.get(roomId);
     if (finishedAt && nowMs - finishedAt < INITIATOR_COOLDOWN_MS) {
@@ -318,6 +342,11 @@ export async function POST(request: NextRequest) {
             lastRound = round;
             currentSpeakerName = p.choom.name;
             if (cancelled) break;
+            if (preemptRequested.has(roomId)) {
+              console.log(`   ✋ Room ${roomId}: yielding to the owner's message before ${p.choom.name} speaks`);
+              cancelled = true;
+              break;
+            }
             if (priorTurnRan) await new Promise(res => setTimeout(res, 800));
             priorTurnRan = true;
             const scratchChatId = await ensureScratchChat(p);

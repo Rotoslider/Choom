@@ -148,7 +148,7 @@ export function letterText(from: string, to: string, title: string | undefined, 
     `# ${title || `A note from ${from}`}`,
     `From: ${from}`,
     `To: ${to}`,
-    `Date: ${when.toISOString().slice(0, 16).replace('T', ' ')}`,
+    `Date: ${when.toLocaleString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`,
     ...(attachments.length ? [`Attached: ${attachments.join(', ')}`] : []),
   ].join('\n');
   return `${head}\n\n${message.trim()}\n`;

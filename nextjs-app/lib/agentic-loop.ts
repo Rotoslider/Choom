@@ -527,6 +527,7 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
           let relaxedToolChoice = false; // Guard: only drop forced tool_choice once per request (on a forced-empty turn)
           let deliberationNudged = false; // Guard: one "you thought but didn't act" nudge per request
           const autoOpenedSkills = new Set<string>(); // skills-mode: each skill auto-opened at most once per request
+          let duplicateFinalNudged = false; // one retry when the would-be final reply was dropped as a repeat
 
           while (iteration < maxIterations) {
             iteration++;
@@ -1254,6 +1255,21 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
               if (isDuplicate) {
                 console.log(`   🔄 ${choomTag} Suppressed duplicate post-tool content (${iterationContent.length} chars)`);
                 iterationContent = ''; // Don't track or send
+                // If this was going to be her FINAL reply (no tool call this
+                // iteration), the user would get only the earlier narration
+                // ("Let me try that room again…") — seen 2026-09-12. Ask once
+                // for the real reply instead of ending the turn on it.
+                if (!streamHasToolCalls(stream) && !duplicateFinalNudged && nudgeCount < 3 && iteration < maxIterations - 1) {
+                  duplicateFinalNudged = true;
+                  nudgeCount++;
+                  traceBuilder.recordNudge('cross_turn_repeat');
+                  console.log(`   🔁 ${choomTag} Dropped reply was the final one — asking for a real reply`);
+                  currentMessages.push({
+                    role: 'user',
+                    content: '[System] Your reply repeated an earlier line of this turn and was dropped. Write your actual reply to the user now — what happened, and what they should know — in words only; do not call tools.',
+                  });
+                  continue;
+                }
               } else {
                 const stripped = stripRepeatedParagraphs(iterationContent, iterationTexts);
                 if (stripped.length < iterationContent.length) {
