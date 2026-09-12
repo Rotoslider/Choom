@@ -1997,6 +1997,43 @@ sudo systemctl start signal-bridge.service
 - Verify server: `curl http://localhost:8100/memory/stats`
 - Check `companionId` for memory isolation between Chooms
 
+### Chat dies mid-reply with "TypeError: Error in input stream" (Firefox)
+
+The reply stops partway, an error appears in the Activity Log, and the turn
+looks lost. **Nothing is actually lost** — the server doesn't care that the
+browser went away, so it finishes the agent loop and persists the reply
+anyway. Stream Recovery polls it back; the chat shows an amber
+"connection dropped, don't refresh" banner while it does.
+
+**Cause: Firefox tearing down its own live connections on a network-change
+signal**, not a network fault and not Choom. On a Starlink LAN the trigger is
+IPv6: the router advertises the prefix with a preferred lifetime of ~99s
+(`ndp -p` on macOS, `ip -6 addr` on Linux — look for addresses cycling through
+`deprecated`/`temporary`), so SLAAC addresses rotate every ~100 seconds and
+each rotation looks like a network change.
+
+**Fix** — on the affected client, either:
+
+```
+about:config -> network.notify.changed -> false        # stop Firefox reacting
+nmcli con mod "<conn>" ipv6.method disabled            # or stop the churn
+```
+
+Confirmed: 4 failures in 3 hours, then zero across 2h23m of active use after
+setting the pref. Do one, not both, or you won't know which worked.
+
+Things it is **not**, each ruled out with measurements — don't re-chase them:
+
+| Suspected | Verdict |
+| --- | --- |
+| The LAN HTTPS proxy | Passes 65s of total silence, a 4.5MB inline burst, and 180s of continuous streaming (90/90 chunks) — past the 132.4s where a real failure hit |
+| Node's default 5s agent idle timeout | Doesn't fire on an active request; hardened anyway |
+| DHCP lease renewal at T1 | Plausible on timing (failures 30.1 and 31.4 min apart, 60-min lease), but a static IPv4 on the client did **not** stop it |
+| A tool call (vision, memory) | Coincidence — long turns are simply the only ones open long enough to be caught |
+
+The giveaway is in `data/logs/lan-https.log`: `close=clean-fin` means the peer
+closed deliberately with everything healthy, as opposed to a socket error.
+
 ## Known Limitations
 
 - Image delivery via Signal can be unreliable (mitigated with delay + logging)
