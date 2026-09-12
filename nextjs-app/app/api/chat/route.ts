@@ -9,6 +9,7 @@ import type { LLMProviderConfig, LLMModelProfile } from '@/lib/types';
 import { findLLMProfile } from '@/lib/model-profiles';
 import { getSkillRegistry } from '@/lib/skill-registry';
 import { buildExposedTools, toolNamesFromHistory, openSkillToolDefinition, skillsModeNote, OPEN_SKILL_TOOL, type ToolExposure } from '@/lib/tool-exposure';
+import { ensureRoomDigest } from '@/lib/room-digest';
 import { getLiveContextWindow } from '@/lib/model-metadata';
 import { allTools, getAllToolsFromSkills, useSkillDispatch } from '@/lib/tool-definitions';
 import { buildReferenceCatalog } from '@/lib/reference-library';
@@ -648,6 +649,30 @@ export async function POST(request: NextRequest) {
         };
       } catch (compactErr) {
         console.warn('   ⚠️  Cross-turn compaction failed, using full history:', compactErr instanceof Error ? compactErr.message : compactErr);
+      }
+    } else if (isGroupTurn && groupRoomId) {
+      // Room digest (Phase 4, 2026-09-12): a room turn sees only the newest
+      // TRANSCRIPT_WINDOW messages and never compacted, so a long room lost
+      // its beginning for every speaker. Summarize everything older than the
+      // window into a per-room file and show it as EARLIER IN THIS ROOM.
+      try {
+        const windowSize = Math.max(groupMessages.length, 1);
+        const olderDesc = await prisma.groupMessage.findMany({
+          where: { roomId: groupRoomId },
+          orderBy: { createdAt: 'desc' },
+          skip: windowSize,
+          take: 400,
+          select: { id: true, authorName: true, content: true, createdAt: true },
+        });
+        if (olderDesc.length > 0) {
+          const digest = await ensureRoomDigest(groupRoomId, olderDesc.reverse(), summarizationClient);
+          if (digest.block) {
+            systemPromptWithSummary = finalSystemPrompt + digest.block;
+            console.log(`   🗂️  Room digest: ${digest.coveredCount} earlier messages summarized${digest.refreshed ? ' (refreshed)' : ''}`);
+          }
+        }
+      } catch (digestErr) {
+        console.warn('   ⚠️  Room digest failed, continuing without it:', digestErr instanceof Error ? digestErr.message : digestErr);
       }
     }
 

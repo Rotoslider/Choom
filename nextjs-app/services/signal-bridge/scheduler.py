@@ -1518,11 +1518,17 @@ Be practical. Only work on things that can actually be accomplished with the too
             logger.error(f"Failed to run prompt_script {script_path}: {e}")
             return fallback_prompt
 
-    def _execute_custom_heartbeat(self, task_id: str, choom_name: str, prompt: str, respect_quiet: bool):
+    def _execute_custom_heartbeat(self, task_id: str, choom_name: str, prompt: str, respect_quiet: bool) -> bool:
+        """Run one heartbeat / self follow-up. Returns False only when the run
+        itself failed (exception); deferrals (quiet hours, owner active) return
+        True because nothing went wrong. On failure the owner gets ONE short
+        Signal line — before 2026-09-12 the error was only logged, the follow-up
+        was marked "fired", and a wake-up that died looked like she chose to
+        stop."""
         """Execute a single custom heartbeat"""
         if respect_quiet and is_quiet_period():
             logger.warning(f"Custom heartbeat {task_id} suppressed (quiet period)")
-            return
+            return True
 
         # Re-read config to get the latest prompt and choom_name
         # (closure values from setup time may be stale after settings edits)
@@ -1542,7 +1548,7 @@ Be practical. Only work on things that can actually be accomplished with the too
         # Skip if user is actively chatting with this Choom (avoid concurrent responses)
         if self.choom.is_user_active(choom_name, window_seconds=120):
             logger.info(f"Custom heartbeat {task_id} deferred: user active with {choom_name}")
-            return
+            return True
 
         # Per-task model override: if the heartbeat has a model configured,
         # pass it through so route.ts applies it as Layer 4 (highest priority)
@@ -1656,9 +1662,19 @@ Be practical. Only work on things that can actually be accomplished with the too
 
             # --- Presence Engine: record heartbeat result for UCB1 learning ---
             self._record_heartbeat_result(task_id, choom_name, response)
+            return True
 
         except Exception as e:
             logger.error(f"Custom heartbeat {task_id} failed: {e}")
+            try:
+                self.send_message_to_owner(
+                    f"({choom_name}) My scheduled wake-up hit an error and didn't finish: {str(e)[:200]}",
+                    include_audio=False,
+                    choom_name=choom_name,
+                )
+            except Exception as notify_err:
+                logger.warning(f"Could not notify owner about heartbeat failure: {notify_err}")
+            return False
 
     # =========================================================================
     # Self-Followups (Choom-scheduled one-shot heartbeats)
@@ -1884,12 +1900,15 @@ Be practical. Only work on things that can actually be accomplished with the too
                     else:
                         # Private 1:1 followup — reuse the heartbeat delivery path.
                         # respect_quiet=False because the Choom scheduled this itself.
-                        self._execute_custom_heartbeat(
+                        ok = self._execute_custom_heartbeat(
                             task_id=task_id,
                             choom_name=choom_name,
                             prompt=prompt,
                             respect_quiet=False,
                         )
+                        if ok is False:
+                            fire_status = "error"
+                            fire_error = "heartbeat run failed (see signal-bridge.log)"
                 except Exception as exec_err:
                     logger.error(f"self_followup fire failed for {entry.get('id')}: {exec_err}")
                     fire_status = "error"

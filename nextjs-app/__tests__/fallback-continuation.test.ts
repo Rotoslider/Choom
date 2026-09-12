@@ -396,7 +396,7 @@ describe('token estimate calibration (Phase 3)', () => {
 describe('same-tool streak guard', () => {
   test('six iterations of one tool draws a nudge; ten disables it and the turn finishes', async () => {
     const replies: Reply[] = [];
-    for (let i = 0; i < 11; i++) replies.push(toolCall('search_memories', `tc${i}`, '', { query: `rack build variant ${i}` }));
+    for (let i = 0; i < 14; i++) replies.push(toolCall('search_memories', `tc${i}`, '', { query: `rack build variant ${i}` }));
     replies.push(text('Here is what I found about the rack.'));
     const primary = scriptedClient(replies);
     const params = buildParams(primary, { client: scriptedClient([]) }, [], { message: 'tell me about the rack build' });
@@ -411,6 +411,31 @@ describe('same-tool streak guard', () => {
     // error result) and the loop still reaches a reply.
     const blocked = params.allToolResults.filter(r => r.name === 'search_memories' && r.error);
     expect(blocked.length).toBeGreaterThanOrEqual(1);
+    // She kept calling the disabled tool; after 13 in a row every tool is gone
+    // and the next call is text-only.
+    expect(primary.calls[13].tools).toEqual([]);
+    const strip = primary.calls[13].messages.map(m => String((m as { content?: string }).content));
+    expect(strip.some(c => c.includes('Tools are off for the rest of this turn'))).toBe(true);
     expect(outcome.fullContent).toContain('Here is what I found');
+  });
+});
+
+describe('pre-fallback nudge strip (Phase 4)', () => {
+  test('behaviour nudges are stripped for the fallback; loop-state notices are kept', async () => {
+    // Primary narrates (draws a nudge), then dies; the retry must not inherit
+    // "[System] You described…" but must still see a state notice.
+    const primary = scriptedClient([
+      text('Let me check the weather for you.'),
+      empty,
+    ]);
+    const retry = scriptedClient([text('It is 84 and sunny.')]);
+    const params = buildParams(primary, { client: retry }, [], { message: 'what is the weather like?' });
+    // A state notice the loop would have pushed earlier in the turn.
+    params.currentMessages.push({ role: 'user', content: '[System] Tools are off for the rest of this turn. Reply to the user now, in your own voice, using what you already found.' });
+    await runAgenticLoop(params);
+    const retryMsgs = retry.calls[0].messages.map(m => String((m as { content?: string }).content));
+    expect(retryMsgs.some(c => c.startsWith('[System] You '))).toBe(false);
+    expect(retryMsgs.some(c => c.startsWith('[Tool guidance]'))).toBe(false);
+    expect(retryMsgs.some(c => c.startsWith('[System] Tools are off'))).toBe(true);
   });
 });

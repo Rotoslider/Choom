@@ -126,6 +126,21 @@ export function looksLikeDeliberation(prose: string): boolean {
   return /^(?:the user (?:wants|asks|asked|is asking|said|has)|okay,? |ok,? |alright,? |hmm|wait,? |first,? |so,? the user|let me (?:think|see|figure|start by|check what|break)|i need to (?:figure|think|check what|understand|determine|call|use|start)|i should (?:probably |first )?(?:call|use|check|start|figure)|looking at (?:the|this) (?:request|prompt|task|instructions)|my task is|the task is)/.test(head);
 }
 
+/**
+ * Gemma 4 e4b, with every tool removed, wrote its "tool calls" as text in
+ * DeepSeek's DSML markup (<｜DSML｜invoke name="…">…</｜DSML｜invoke>) and that
+ * reached the user (2026-09-12). Nothing parses that dialect; strip it.
+ */
+export function stripDsmlMarkup(text: string): string {
+  if (!text.includes('DSML')) return text;
+  return text
+    .replace(/<｜DSML｜invoke[\s\S]*?(?:<\/｜DSML｜invoke>|$)/g, '')
+    .replace(/<｜DSML｜[^>]*>/g, '')
+    .replace(/<\/｜DSML｜[^>]*>/g, '')
+    .replace(/<\|DSML\|[\s\S]*?(?:<\/\|DSML\|invoke>|$)/g, '')
+    .trim();
+}
+
 export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOutcome> {
   const {
     send, sse, ctx, traceBuilder,
@@ -497,6 +512,10 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
           let sameToolStreak = 0;
           const STREAK_NUDGE = 6;
           const STREAK_BLOCK = 10;
+          // A 4B model kept calling the DISABLED tool for 38 more iterations,
+          // eating the error each time. Past this streak every tool comes off
+          // and the next call is text-only: she answers with what she has.
+          const STREAK_STRIP_ALL = STREAK_BLOCK + 3;
           // Set once an integrity nudge (fabrication callout / hedge) has fired
           // this turn. A reply that ANSWERS such a nudge with an apology must
           // end the turn, never be re-nudged (C-58: the 2026-08-06 spiral —
@@ -672,7 +691,7 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
               });
               recordLlmCall(stream.callStart, stream.firstChunkAt);
               countUsage(stream);
-              iterationContent = stream.content;
+              iterationContent = stripDsmlMarkup(stream.content);
               // Empty response guard: model returned 200 OK but streamed 0 content
               // and no tool calls. Treat this the same as a timeout so the fallback
               // chain gets a chance. Without this, an empty response silently breaks
@@ -771,18 +790,21 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                 // Strip nudge/hint messages injected for the primary model —
                 // the fallback model hasn't seen the primary's behavior and these
                 // messages ("You described what you would do...") will confuse it.
+                // Every nudge is a user-role turn starting with "[System]" (strict
+                // chat templates 400 on late system messages). Strip the ones that
+                // describe the PRIMARY'S behaviour ("You described…", "Your reply
+                // repeated…", "STOP. Your reply…", "The tools you mentioned…") —
+                // the fallback never did those things. Keep loop-STATE notices
+                // ("Tools are off…", "<tool> is now unavailable…", "N tool calls in
+                // a row…"): that state still applies to the fallback. Before
+                // 2026-09-12 only two old strings and [Tool guidance] were stripped,
+                // so a replacement model inherited accusations meant for the one
+                // that failed.
+                const BEHAVIOUR_NUDGE = /^(?:\[System\] (?:You |Your |STOP|The tools you mentioned)|\[Tool guidance\])/;
                 const beforeStrip = currentMessages.length;
                 for (let i = currentMessages.length - 1; i >= 1; i--) {
                   const m = currentMessages[i];
-                  if (m.role === 'user' && m.content?.startsWith('[System] You described what')) {
-                    currentMessages.splice(i, 1);
-                  } else if (m.role === 'user' && m.content?.startsWith('[System] You indicated you have more')) {
-                    currentMessages.splice(i, 1);
-                  // role:'user', not 'system' — the guidance is PUSHED as a
-                  // user turn (strict chat templates 400 on late system
-                  // messages), so matching 'system' here meant the strip
-                  // never fired and fallbacks kept the primary's stale hint.
-                  } else if (m.role === 'user' && m.content?.startsWith('[Tool guidance]')) {
+                  if (m.role === 'user' && typeof m.content === 'string' && BEHAVIOUR_NUDGE.test(m.content)) {
                     currentMessages.splice(i, 1);
                   }
                 }
@@ -2517,6 +2539,14 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                 currentMessages.push({
                   role: 'user',
                   content: `[System] You have called ${only} ${sameToolStreak} times in a row. Its results are above — stop calling it and act on what you have: write your reply, or take the next step with a different tool.`,
+                });
+              } else if (sameToolStreak >= STREAK_STRIP_ALL && activeTools.length > 0) {
+                console.log(`   🛑 ${choomTag} ${only} still being called ${sameToolStreak} iterations running after it was disabled — removing every tool for the rest of this turn`);
+                activeTools = [];
+                forceToolCall = false;
+                currentMessages.push({
+                  role: 'user',
+                  content: '[System] Tools are off for the rest of this turn. Reply to the user now, in your own voice, using what you already found.',
                 });
               } else if (sameToolStreak >= STREAK_BLOCK && !brokenTools.has(only)) {
                 brokenTools.add(only);

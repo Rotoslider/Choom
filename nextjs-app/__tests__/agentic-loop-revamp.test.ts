@@ -407,9 +407,12 @@ describe('6. Task Continuation Nudge (Loop Break Fix)', () => {
 
 describe('7. Fallback State Cleanup', () => {
   test('nudge messages are stripped before fallback', () => {
-    expect(routeContent).toContain("m.content?.startsWith('[System] You described what')");
-    expect(routeContent).toContain("m.content?.startsWith('[System] You indicated you have more')");
-    expect(routeContent).toContain("m.content?.startsWith('[Tool guidance]')");
+    // Phase 4 (2026-09-12): every behaviour nudge ("[System] You…", "Your…",
+    // "STOP…", "The tools you mentioned…", "[Tool guidance]") is stripped by one
+    // regex; loop-STATE notices ("Tools are off…", "<tool> is now unavailable…")
+    // are kept because that state still applies to the fallback.
+    expect(routeContent).toContain('const BEHAVIOUR_NUDGE = /^(?:\\[System\\] (?:You |Your |STOP|The tools you mentioned)|\\[Tool guidance\\])/;');
+    expect(routeContent).toContain('BEHAVIOUR_NUDGE.test(m.content)');
   });
 
   test('retract_partial SSE event is sent on fallback', () => {

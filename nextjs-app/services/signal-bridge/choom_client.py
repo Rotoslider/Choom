@@ -14,6 +14,12 @@ from dataclasses import dataclass
 
 import config
 
+# Read timeout for a chat / room turn. The server allows a room turn 900s
+# (GROUP_TURN_CEILING_MS) and a delegation wait up to 900s; the bridge used to
+# give up at 600s, so a legitimate long turn was abandoned bridge-side while
+# the server finished it and wrote it to the DB (Phase 4, 2026-09-12).
+READ_TIMEOUT_S = 960
+
 logger = logging.getLogger(__name__)
 
 
@@ -480,7 +486,7 @@ class ChoomClient:
             payload["ownerName"] = owner_name
 
         response = self._make_request(
-            "POST", "/api/group-chat", json=payload, stream=True, timeout=(10, 600)
+            "POST", "/api/group-chat", json=payload, stream=True, timeout=(10, READ_TIMEOUT_S)
         )
 
         spoke = 0
@@ -538,7 +544,7 @@ class ChoomClient:
             "triggerSource": "room_followup",
         }
         response = self._make_request(
-            "POST", "/api/group-chat", json=payload, stream=True, timeout=(10, 600)
+            "POST", "/api/group-chat", json=payload, stream=True, timeout=(10, READ_TIMEOUT_S)
         )
         spoke = 0
         for line in response.iter_lines(chunk_size=8192):
@@ -644,7 +650,7 @@ class ChoomClient:
             "/api/chat",
             json=payload,
             stream=True,
-            timeout=(10, 600)
+            timeout=(10, READ_TIMEOUT_S)
         )
 
         # Parse SSE response (use larger chunk_size for efficiency with large image payloads)
