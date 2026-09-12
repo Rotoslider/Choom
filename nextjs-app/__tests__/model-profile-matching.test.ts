@@ -37,6 +37,15 @@ describe('findLLMProfile', () => {
     expect(p!.contextLength).toBe(262144);
   });
 
+  test('a dated OpenRouter id resolves the DeepSeek profile (the Genesis case)', () => {
+    // "deepseek/deepseek-v4-flash-0731" matched nothing on 2026-09-12, so the
+    // profile's toolExposure never applied to her real model.
+    const p = findLLMProfile('deepseek/deepseek-v4-flash-0731');
+    expect(p).not.toBeNull();
+    expect(p!.modelId).toBe('deepseek-ai/deepseek-v4-flash');
+    expect(p!.toolExposure).toBe('skills');
+  });
+
   test('unknown models still return null (no false matches)', () => {
     expect(findLLMProfile('totally/unknown-model-9000b')).toBeNull();
   });

@@ -536,8 +536,12 @@ export const BUILTIN_VISION_PROFILES: VisionModelProfile[] = [
 export function normalizeModelId(modelId: string): string {
   let s = (modelId.split('/').pop() || modelId).toLowerCase();
   // Strip trailing variant markers, repeatedly ("…-it-qat" → base name).
+  // Date/build stamps too: OpenRouter serves "deepseek/deepseek-v4-flash-0731"
+  // while the profile is keyed "deepseek-ai/deepseek-v4-flash" — without this
+  // no profile matched Genesis's actual model at all (2026-09-12), so the
+  // DeepSeek profile's settings never applied.
   const VARIANT_SUFFIX =
-    /-(?:it|instruct|qat|gguf|awq|gptq|mlx|4bit|8bit|fp8|fp16|bf16|int[48]|q\d(?:_[a-z0-9]+)?)$/;
+    /-(?:it|instruct|qat|gguf|awq|gptq|mlx|4bit|8bit|fp8|fp16|bf16|int[48]|q\d(?:_[a-z0-9]+)?|\d{4}|\d{6}|\d{8})$/;
   while (VARIANT_SUFFIX.test(s)) s = s.replace(VARIANT_SUFFIX, '');
   return s;
 }
