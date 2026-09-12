@@ -48,12 +48,12 @@ const chunk = (delta: Delta, finish_reason: string | null = null): ChatCompletio
 } as ChatCompletionChunk);
 
 function scriptedClient(replies: Reply[]) {
-  const calls: Array<{ messages: unknown[]; toolChoice: unknown }> = [];
+  const calls: Array<{ messages: unknown[]; toolChoice: unknown; tools: string[] }> = [];
   return {
     calls,
     client: {
-      async *streamChat(messages: unknown[], _tools: unknown, _signal: AbortSignal, toolChoice: unknown, onConnected?: () => void) {
-        calls.push({ messages: [...messages], toolChoice });
+      async *streamChat(messages: unknown[], tools: unknown, _signal: AbortSignal, toolChoice: unknown, onConnected?: () => void) {
+        calls.push({ messages: [...messages], toolChoice, tools: (tools as ToolDefinition[]).map(t => t.name) });
         onConnected?.();
         const reply = replies.shift();
         if (!reply) throw new Error(`scripted client: no reply left for call #${calls.length}`);
@@ -91,8 +91,10 @@ function buildParams(
   primary: ReturnType<typeof scriptedClient>,
   retry: { client: ReturnType<typeof scriptedClient>; settings?: Partial<LLMSettings> },
   fallbacks: Array<{ label: string; client: ReturnType<typeof scriptedClient>; settings?: Partial<LLMSettings> }> = [],
+  opts: { message?: string; settings?: Partial<LLMSettings> } = {},
 ): AgenticLoopParams {
-  const llmSettings: LLMSettings = { ...defaultLLMSettings, endpoint: 'https://api.example.com/v1', model: 'primary' };
+  const llmSettings: LLMSettings = { ...defaultLLMSettings, endpoint: 'https://api.example.com/v1', model: 'primary', ...opts.settings };
+  const message = opts.message ?? 'Scheduled follow-up: say good morning.';
   const sent: Record<string, unknown>[] = [];
   const params = {
     send: (d: Record<string, unknown>) => { sent.push(d); },
@@ -104,7 +106,7 @@ function buildParams(
     } as ConstructorParameters<typeof TraceBuilder>[0]),
     currentMessages: [
       { role: 'system', content: 'You are Genesis.' },
-      { role: 'user', content: 'Scheduled follow-up: say good morning.' },
+      { role: 'user', content: message },
     ],
     activeTools: TOOLS,
     llmClient: primary.client,
@@ -125,7 +127,7 @@ function buildParams(
     choom: { name: 'Genesis', llmTimeoutSec: 30 } as AgenticLoopParams['choom'],
     chat: { messages: [] } as unknown as AgenticLoopParams['chat'],
     choomId: 'choom', chatId: 'chat', logChatId: 'chat',
-    message: 'Scheduled follow-up: say good morning.',
+    message,
     isGroupTurn: false, isHeartbeat: false, isDelegation: false, noTools: false,
     suppressNotifications: true, freshContext: false,
     maxIterationsOverride: undefined,
@@ -222,5 +224,80 @@ describe('agentic loop after a fallback', () => {
     // Before the fix the empty retry counted as success and the escalation model was never called.
     expect(escalation.calls).toHaveLength(1);
     expect(outcome.fullContent).toContain('Good morning from the escalation model');
+  });
+});
+
+/**
+ * 2026-09-12, Gemma 4 31B on a scheduler grounding prompt: the intent detector
+ * saw "workspace_list_files" in the prompt, narrowed the forced first call to
+ * that single tool and injected "do NOT use other tools", while the prompt asked
+ * her to ground with six. She deliberated over the contradiction for two
+ * minutes on reasoning_content, never acted, and the Qwen-3.6 reasoning salvage
+ * then made "The user wants me to… I need to: 1. search_memories…" her reply.
+ */
+describe('reasoning channel and forcing on a multi-tool grounding prompt', () => {
+  const GROUND = 'Before your task, ground yourself. Call search_memories to recall recent conversations. You also have get_weather and get_calendar_events if relevant. Then say good morning.';
+  const GEMMA_THINKING = 'The user wants me to wake up and ground myself before saying good morning.\nI need to:\n1. `search_memories` to recall recent conversations.\n2. `get_weather` for current conditions.\nWait, the [Tool guidance] block says to call workspace_list_files only. However, the main prompt asks for multiple tools…';
+
+  test('a prompt that names several tools is forced broadly, never narrowed to one with guidance', async () => {
+    const primary = scriptedClient([
+      toolCall('search_memories', 'tc1'),
+      text('Good morning! All grounded.'),
+    ]);
+    await runAgenticLoop(buildParams(primary, { client: scriptedClient([]) }, [], { message: GROUND }));
+    expect(primary.calls[0].toolChoice).toBe('required');
+    expect(primary.calls[0].tools).toEqual(['search_memories', 'get_weather', 'get_calendar_events']);
+    const guidance = primary.calls[0].messages.some(m => String((m as { content?: string }).content).startsWith('[Tool guidance]'));
+    expect(guidance).toBe(false);
+  });
+
+  test('broad intent with no mapped tool is not forced at all', async () => {
+    const primary = scriptedClient([text('I can draft that email for you — what should it say?')]);
+    await runAgenticLoop(buildParams(primary, { client: scriptedClient([]) }, [], { message: 'draft an email to the neighbor about the fence' }));
+    expect(primary.calls[0].toolChoice).toBeUndefined();
+  });
+
+  test('Gemma-style deliberation on reasoning_content is nudged to act, not used as the reply', async () => {
+    const primary = scriptedClient([
+      reasoningOnly(GEMMA_THINKING),
+      toolCall('search_memories', 'tc1'),
+      text('Good morning, Donny. Grounded and ready.'),
+    ]);
+    const outcome = await runAgenticLoop(buildParams(primary, { client: scriptedClient([]) }, [],
+      { message: GROUND, settings: { enableThinking: false } }));
+    expect(primary.calls).toHaveLength(3);
+    const nudge = primary.calls[1].messages.at(-1) as { role: string; content: string };
+    expect(nudge.role).toBe('user');
+    expect(nudge.content).toMatch(/^\[System\] You thought through the task/);
+    expect(outcome.fullContent).not.toContain('The user wants me to');
+    expect(outcome.fullContent).toContain('Grounded and ready');
+    expect(outcome.allToolCalls.map(t => t.name)).toEqual(['search_memories']);
+  });
+
+  test('deliberation cut off by max_tokens raises the limit before nudging', async () => {
+    const primary = scriptedClient([
+      { deltas: [{ reasoning_content: GEMMA_THINKING }], finish: 'length' },
+      text('Good morning.'),
+    ]);
+    const params = buildParams(primary, { client: scriptedClient([]) }, [], { message: GROUND, settings: { enableThinking: false, maxTokens: 4096 } });
+    await runAgenticLoop(params);
+    expect(params.llmSettings.maxTokens).toBe(8192);
+    const nudge = primary.calls[1].messages.at(-1) as { content: string };
+    expect(nudge.content).toMatch(/ran past the output limit/);
+  });
+
+  test('a model flagged replyInReasoning (Qwen 3.6) still gets its reasoning-channel reply salvaged', async () => {
+    const primary = scriptedClient([reasoningOnly('Good morning, Donny! Everything is quiet up here.')]);
+    const outcome = await runAgenticLoop(buildParams(primary, { client: scriptedClient([]) }, [],
+      { message: 'say good morning', settings: { enableThinking: false, replyInReasoning: true } }));
+    expect(primary.calls).toHaveLength(1);
+    expect(outcome.fullContent).toContain('Everything is quiet up here');
+  });
+
+  test('a conversational reasoning-channel reply from an unflagged model is still salvaged', async () => {
+    const primary = scriptedClient([reasoningOnly('Good morning, Donny! Coffee is on and the sun is up.')]);
+    const outcome = await runAgenticLoop(buildParams(primary, { client: scriptedClient([]) }, [],
+      { message: 'say good morning', settings: { enableThinking: false } }));
+    expect(outcome.fullContent).toContain('Coffee is on');
   });
 });

@@ -938,6 +938,7 @@ export async function POST(request: NextRequest) {
         if (profile.topK !== undefined) llmSettings.topK = profile.topK;
         if (profile.repetitionPenalty !== undefined) llmSettings.repetitionPenalty = profile.repetitionPenalty;
         if (profile.enableThinking !== undefined) llmSettings.enableThinking = profile.enableThinking;
+        if (profile.replyInReasoning !== undefined) llmSettings.replyInReasoning = profile.replyInReasoning;
 
         // Reconstruct llmClient with updated settings.
         // Use the actual resolved provider state (usingCloudProvider) to determine
@@ -1034,6 +1035,7 @@ export async function POST(request: NextRequest) {
       // (e.g., LM Studio's Qwen template breaks tool calling with this flag).
       // Only re-add if the fallback's own profile explicitly sets it.
       fbSettings.enableThinking = undefined;
+      fbSettings.replyInReasoning = undefined;
 
       // Apply the fallback model's profile (temperature, topP, etc.) instead of
       // inheriting the primary model's tuning which may be wrong for this model.
@@ -1048,6 +1050,7 @@ export async function POST(request: NextRequest) {
         if (fbProfile.presencePenalty !== undefined) fbSettings.presencePenalty = fbProfile.presencePenalty;
         if (fbProfile.repetitionPenalty !== undefined) fbSettings.repetitionPenalty = fbProfile.repetitionPenalty;
         if (fbProfile.enableThinking !== undefined) fbSettings.enableThinking = fbProfile.enableThinking;
+        if (fbProfile.replyInReasoning !== undefined) fbSettings.replyInReasoning = fbProfile.replyInReasoning;
         console.log(`   📋 Applied profile for fallback model ${fb.model}`);
       } else {
         // No profile found — reset sampling params to safe defaults so the

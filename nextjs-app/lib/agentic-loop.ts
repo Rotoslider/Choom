@@ -109,6 +109,20 @@ export interface LoopOutcome {
   brokenTools: Set<string>;
 }
 
+/**
+ * Does reasoning-channel prose read as the model talking to ITSELF rather than
+ * to the user? Gemma 4's thinking opens with "The user wants me to…", "Okay,
+ * I need to…", "Let me…", quotes the [System]/[Tool guidance] injections back,
+ * and lays out numbered plans of tool names. A Qwen 3.6 reply on the same
+ * channel reads like a reply. Deliberately narrow: only the opening matters,
+ * and a quoted system marker is decisive.
+ */
+export function looksLikeDeliberation(prose: string): boolean {
+  const head = prose.trimStart().slice(0, 240).toLowerCase();
+  if (/\[(?:system|tool guidance)\]/.test(head)) return true;
+  return /^(?:the user (?:wants|asks|asked|is asking|said|has)|okay,? |ok,? |alright,? |hmm|wait,? |first,? |so,? the user|let me (?:think|see|figure|start by|check what|break)|i need to (?:figure|think|check what|understand|determine|call|use|start)|i should (?:probably |first )?(?:call|use|check|start|figure)|looking at (?:the|this) (?:request|prompt|task|instructions)|my task is|the task is)/.test(head);
+}
+
 export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOutcome> {
   const {
     send, sse, ctx, traceBuilder,
@@ -290,16 +304,31 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
           // (siblings generate images / play music with force=False), so forcing
           // only ever harms. 1:1 chats keep proactive forcing on strong intent —
           // smaller context, real user commands, and the behavior the user relies on.
-          forceToolCall = !isGroupTurn && (strongToolIntent || !!intentToolHint) && activeTools.length > 0;
+          // Tools the message names LITERALLY (a scheduler grounding prompt says
+          // "call search_memories … you also have get_weather, ha_get_home_status
+          // …"). Two or more means a multi-tool task: narrowing the first call to
+          // one hinted tool and telling her "do NOT use other tools" contradicts
+          // the task. Gemma 4 31B deliberated over exactly that contradiction for
+          // two minutes and never acted (2026-09-12).
+          const literallyNamedTools = activeTools.filter(t => msgLower.includes(t.name)).map(t => t.name);
+          const multiToolTask = literallyNamedTools.length >= 2;
+          // Force only when we can say WHICH tool (the hint ladder) or the task
+          // names its tools itself. Broad intent with no mapped tool used to send
+          // tool_choice=required across every tool with no guidance — the exact
+          // configuration that produced junk calls (C-52) — for phrases like
+          // "delegate", "download", "draft an email" that have no hint arm.
+          forceToolCall = !isGroupTurn && activeTools.length > 0 && (!!intentToolHint || multiToolTask);
           if (forceToolCall) {
             traceBuilder.setForceToolCall();
-            console.log(`   ⚡ ${choomTag} Tool intent detected — using tool_choice='required' on first iteration${intentToolHint ? ` (hint: ${intentToolHint})` : ''}`);
+            console.log(`   ⚡ ${choomTag} Tool intent detected — using tool_choice='required' on first iteration${intentToolHint ? ` (hint: ${intentToolHint})` : ''}${multiToolTask ? ` (message names ${literallyNamedTools.length} tools — no single-tool narrowing)` : ''}`);
+          } else if (strongToolIntent) {
+            console.log(`   ⚡ ${choomTag} Broad tool intent but no specific tool mapped — not forcing (the narration nudge still catches a model that describes instead of acts)`);
           }
           // C-52: when the detected intent names ONE specific tool, the first
           // forced call exposes only that tool (consumed one-shot at the
           // tools/tool_choice build below, like the group + phantom narrows).
           let intentForcedTool: string | null = null;
-          if (forceToolCall && intentToolHint && activeTools.some(t => t.name === intentToolHint)) {
+          if (forceToolCall && intentToolHint && !multiToolTask && activeTools.some(t => t.name === intentToolHint)) {
             intentForcedTool = intentToolHint;
           }
           if (!isGroupTurn && forceToolCall && intentForcedTool && activeTools.length > 0) {
@@ -449,6 +478,7 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
           let fallbackActivated = false; // Set when a fallback model takes over mid-request
           let retriedCurrentFallback = false; // Guard: only retry a timed-out fallback once
           let relaxedToolChoice = false; // Guard: only drop forced tool_choice once per request (on a forced-empty turn)
+          let deliberationNudged = false; // Guard: one "you thought but didn't act" nudge per request
 
           while (iteration < maxIterations) {
             iteration++;
@@ -616,12 +646,43 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
               // group turn) — use it instead of declaring "empty" and firing the
               // fallback chain. Tool turns are unaffected (they have a tool call, so
               // this branch is skipped). This is the actual cause of rooms going silent.
-              if (!iterationContent.trim() && !hasToolCalls && stream.reasoningProse.trim()) {
+              const reasoningOnly = !iterationContent.trim() && !hasToolCalls && !!stream.reasoningProse.trim();
+              // Gemma 4 keeps thinking on reasoning_content with thinking off, and
+              // that thinking is chain-of-thought, not a reply. Salvaging it made
+              // "The user wants me to… I need to: 1. search_memories…" HER REPLY
+              // (2026-09-12). Only models flagged replyInReasoning get salvaged
+              // unconditionally; otherwise prose that reads as deliberation is
+              // answered with a nudge to act, once per request.
+              const deliberation = reasoningOnly && llmSettings.replyInReasoning !== true
+                && looksLikeDeliberation(stream.reasoningProse);
+              if (reasoningOnly && !deliberation) {
                 iterationContent = stream.reasoningProse.trim();
                 if (!bufferForDedup) {
                   send({ type: 'content', content: iterationContent });
                 }
-                console.log(`   💬 ${choomTag} Salvaged reply from reasoning_content channel (${iterationContent.length} chars) — not an empty response`);
+                console.log(`   💬 ${choomTag} Salvaged reply from reasoning_content channel (${iterationContent.length} chars, finish=${stream.finishReason}) — not an empty response`);
+              } else if (deliberation && !deliberationNudged) {
+                deliberationNudged = true;
+                const cutOff = stream.finishReason === 'length';
+                if (cutOff) {
+                  const currentMax = llmSettings.maxTokens || 4096;
+                  const bumpedMax = Math.min(currentMax * 2, 16384);
+                  llmSettings.maxTokens = bumpedMax;
+                  if ('settings' in llmClient && (llmClient as LLMClient).settings) {
+                    (llmClient as LLMClient).settings.maxTokens = bumpedMax;
+                  }
+                  console.log(`   🧠 ${choomTag} Reasoning-only turn cut off by max_tokens (${stream.reasoningProse.length} chars of thinking) — bumping max_tokens ${currentMax} → ${bumpedMax} and nudging to act`);
+                } else {
+                  console.log(`   🧠 ${choomTag} Reasoning-only turn (${stream.reasoningProse.length} chars of deliberation, finish=${stream.finishReason}) — not a reply; nudging to act`);
+                }
+                traceBuilder.recordNudge('reasoning_only');
+                currentMessages.push({
+                  role: 'user',
+                  content: cutOff
+                    ? '[System] Your thinking ran past the output limit before you acted; the limit has been raised. Do not think it through again — act now: make the tool calls you planned, or reply to the user.'
+                    : '[System] You thought through the task but produced no reply and no tool call. Act now: make the tool calls you planned, or reply to the user. Keep the thinking short.',
+                });
+                continue;
               } else if (!iterationContent.trim() && !hasToolCalls && toolChoiceWasRequired && !relaxedToolChoice) {
                 // A FORCED tool call came back genuinely empty (no content, no tool call,
                 // nothing in reasoning_content). The model wanted to converse, not call a

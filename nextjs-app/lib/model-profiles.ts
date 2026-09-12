@@ -197,6 +197,7 @@ export const BUILTIN_LLM_PROFILES: LLMModelProfile[] = [
     topK: 20,
     presencePenalty: 1.5,
     enableThinking: false,
+    replyInReasoning: true,
   },
   {
     modelId: 'minimaxai/minimax-m2.7',
@@ -268,7 +269,13 @@ export const BUILTIN_LLM_PROFILES: LLMModelProfile[] = [
     builtIn: true,
     temperature: 0.7,
     topP: 0.95,
-    maxTokens: 4096,
+    // Gemma 4 thinks on reasoning_content even with thinking off, and those
+    // tokens count against max_tokens: at 4096 a 31B deliberating over a
+    // grounding prompt ran out of room before acting (2026-09-12, see
+    // fallback-continuation.test.ts). 262,144 is the native window (live
+    // audit 2026-08-05); a RAM-capped local load reports its smaller window
+    // through LM Studio's loaded_context_length, which outranks this.
+    maxTokens: 8192,
     contextLength: 262144,
     topK: 40,
     repetitionPenalty: 1.0,
@@ -280,7 +287,13 @@ export const BUILTIN_LLM_PROFILES: LLMModelProfile[] = [
     builtIn: true,
     temperature: 0.7,
     topP: 0.95,
-    maxTokens: 4096,
+    // Gemma 4 thinks on reasoning_content even with thinking off, and those
+    // tokens count against max_tokens: at 4096 a 31B deliberating over a
+    // grounding prompt ran out of room before acting (2026-09-12, see
+    // fallback-continuation.test.ts). 262,144 is the native window (live
+    // audit 2026-08-05); a RAM-capped local load reports its smaller window
+    // through LM Studio's loaded_context_length, which outranks this.
+    maxTokens: 8192,
     contextLength: 262144,
     topK: 40,
     repetitionPenalty: 1.0,
@@ -494,7 +507,8 @@ export const BUILTIN_VISION_PROFILES: VisionModelProfile[] = [
  * weights land on one profile. The concrete failure this fixes (C-53): the
  * client resolves "google/gemma-4-31b-qat" while the profile is keyed
  * "gemma-4-31b-it" — exact match misses, so the model fell through to the
- * store-default 262,144 contextLength when gemma's real window is 128k.
+ * store defaults instead of the gemma profile's sampling and window (the
+ * "128k" once noted here was a gemma-3-era guess; 262,144 is native).
  */
 export function normalizeModelId(modelId: string): string {
   let s = (modelId.split('/').pop() || modelId).toLowerCase();

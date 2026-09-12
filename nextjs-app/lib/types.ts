@@ -119,6 +119,12 @@ export interface LLMModelProfile {
   topK?: number;
   repetitionPenalty?: number;
   enableThinking?: boolean;
+  // The model's conversational REPLY arrives on delta.reasoning_content when
+  // thinking is off (Qwen 3.6 GGUF in LM Studio). The agentic loop then uses
+  // that channel as the reply when there is no normal content and no tool
+  // call. Leave unset for models whose reasoning channel is genuine
+  // chain-of-thought (Gemma 4) — there the loop nudges instead of salvaging.
+  replyInReasoning?: boolean;
 }
 
 export interface VisionModelProfile {
@@ -176,6 +182,7 @@ export interface LLMSettings {
   topK?: number;
   repetitionPenalty?: number;
   enableThinking?: boolean;
+  replyInReasoning?: boolean; // see LLMModelProfile.replyInReasoning
   // Planner model — optional fast model for plan creation (JSON generation)
   plannerModel?: string;
   plannerEndpoint?: string;

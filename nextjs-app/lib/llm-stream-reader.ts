@@ -168,6 +168,9 @@ export async function readLlmStream(st: StreamState, opts: ReadLlmStreamOptions)
   const gemmaToolCallFilter = createGemmaToolCallFilter();
 
   const emit = (text: string) => {
+    // A stripped <think> block leaves its surrounding newlines behind; Qwen's
+    // replies opened with a dozen blank lines that then reached Signal/TTS.
+    if (!st.content && !text.trim()) return;
     st.content += text;
     if (!bufferForDedup) send({ type: 'content', content: text });
   };

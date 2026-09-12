@@ -36,7 +36,10 @@ describe('[Tool guidance] gating', () => {
 
   test('group turns never force tool_choice', () => {
     // The forcing line itself already excludes rooms; guidance depends on it.
-    expect(agenticLoop).toMatch(/forceToolCall = !isGroupTurn && \(strongToolIntent \|\| !!intentToolHint\)/);
+    // 2026-09-12: forcing now requires a mapped tool (intentToolHint) or a
+    // prompt that names several tools itself; broad intent alone no longer
+    // forces. Rooms are still excluded first.
+    expect(agenticLoop).toMatch(/forceToolCall = !isGroupTurn && activeTools\.length > 0 && \(!!intentToolHint \|\| multiToolTask\)/);
   });
 });
 
