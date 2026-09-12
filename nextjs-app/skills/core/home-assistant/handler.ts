@@ -215,9 +215,18 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
         case 'ha_list_entities': {
           const domain = args.domain as string | undefined;
           const area = args.area as string | undefined;
+          const search = typeof args.search === 'string' ? args.search.trim().toLowerCase() : '';
           const entities = await ha.listStates(domain, area);
 
-          const list = entities.map(e => ({
+          // Bounded (2026-09-12): domain="sensor" on this homestead is 722
+          // entities and came back as ~100k chars — the last uncapped result.
+          // `search` narrows by name/id; past the cap the model is told how many
+          // more there are and how to narrow.
+          const LIST_CAP = 60;
+          const matched = search
+            ? entities.filter(e => e.entity_id.toLowerCase().includes(search) || String(e.attributes.friendly_name || '').toLowerCase().includes(search))
+            : entities;
+          const list = matched.slice(0, LIST_CAP).map(e => ({
             entity_id: e.entity_id,
             friendly_name: String(e.attributes.friendly_name || e.entity_id),
             state: e.state,
@@ -225,10 +234,15 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
           }));
 
           return this.success(toolCall, {
-            count: list.length,
+            count: matched.length,
             entities: list,
+            ...(matched.length > list.length && {
+              more: matched.length - list.length,
+              note: `${matched.length - list.length} more not shown. Narrow with search="<word in the name>" (e.g. "solar", "garage") or a more specific domain.`,
+            }),
             ...(domain && { filtered_by_domain: domain }),
             ...(area && { filtered_by_area: area }),
+            ...(search && { filtered_by_search: search }),
           });
         }
 

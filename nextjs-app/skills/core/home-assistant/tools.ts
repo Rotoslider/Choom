@@ -17,7 +17,7 @@ export const tools: ToolDefinition[] = [
   },
   {
     name: 'ha_list_entities',
-    description: 'List available Home Assistant entities. Use to discover entity IDs. Filter by domain (e.g. "light", "sensor") or area/room name.',
+    description: 'List available Home Assistant entities to discover entity IDs (up to 60 per call). Narrow with domain (e.g. "light", "sensor"), area/room name, or search (a word in the entity name or id, e.g. "solar").',
     parameters: {
       type: 'object',
       properties: {
@@ -28,6 +28,10 @@ export const tools: ToolDefinition[] = [
         area: {
           type: 'string',
           description: 'Filter by area/room name (e.g. "kitchen", "bathroom", "garage")',
+        },
+        search: {
+          type: 'string',
+          description: 'Only entities whose name or id contains this word (e.g. "solar", "battery", "shop")',
         },
       },
     },

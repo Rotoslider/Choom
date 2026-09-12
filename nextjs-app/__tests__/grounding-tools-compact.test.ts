@@ -107,6 +107,29 @@ describe('ha_get_home_status compact glance', () => {
     expect(glance.result).toEqual({ summary: 'compact' });
   });
 
+  test('ha_list_entities is capped at 60 and search narrows it', async () => {
+    const entities: HAEntity[] = [];
+    for (let i = 0; i < 300; i++) entities.push(ent(`sensor.s_${i}`, String(i), { friendly_name: i % 50 === 0 ? `Solar Panel ${i}` : `Sensor ${i}` }));
+    jest.resetModules();
+    jest.doMock('@/lib/homeassistant-service', () => ({
+      ...jest.requireActual('@/lib/homeassistant-service'),
+      HomeAssistantService: jest.fn().mockImplementation(() => ({ listStates: () => Promise.resolve(entities) })),
+    }));
+    const Handler = (await import('@/skills/core/home-assistant/handler')).default;
+    const h = new Handler();
+    const ctx = { settings: { homeAssistant: { baseUrl: 'http://ha', accessToken: 't' } } } as unknown as Parameters<typeof h.execute>[1];
+    const all = await h.execute({ id: '1', name: 'ha_list_entities', arguments: { domain: 'sensor' } }, ctx);
+    const r = all.result as { count: number; entities: unknown[]; more?: number; note?: string };
+    expect(r.count).toBe(300);
+    expect(r.entities).toHaveLength(60);
+    expect(r.more).toBe(240);
+    expect(r.note).toMatch(/search=/);
+    expect(JSON.stringify(all.result).length).toBeLessThan(9000);
+    const solar = await h.execute({ id: '2', name: 'ha_list_entities', arguments: { search: 'solar' } }, ctx);
+    expect((solar.result as { count: number; entities: unknown[] }).count).toBe(6);
+    expect((solar.result as { entities: unknown[] }).entities).toHaveLength(6);
+  });
+
   test('a quiet house says so instead of listing nothing', async () => {
     const out = await serviceWith([ent('light.a', 'off', { friendly_name: 'A' })]).getCompactHomeStatus();
     expect(String(out.summary)).toContain('nothing open, no motion, no problems');
