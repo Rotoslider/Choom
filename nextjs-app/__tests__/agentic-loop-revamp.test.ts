@@ -29,12 +29,15 @@ const toolExecPath = path.join(__dirname, '..', 'lib', 'tool-execution.ts');
 // checks stay valid.
 const chatStreamPath = path.join(__dirname, '..', 'lib', 'chat-stream.ts');
 const agenticLoopPath = path.join(__dirname, '..', 'lib', 'agentic-loop.ts');
+// The stream reader shared by the primary call and every fallback attempt.
+const streamReaderPath = path.join(__dirname, '..', 'lib', 'llm-stream-reader.ts');
 const delegationHandlerPath = path.join(__dirname, '..', 'skills', 'core', 'choom-delegation', 'handler.ts');
 const pagePath = path.join(__dirname, '..', 'app', 'page.tsx');
 const typesPath = path.join(__dirname, '..', 'lib', 'types.ts');
 const logFilterPath = path.join(__dirname, '..', 'scripts', 'log-filter.js');
 
 let routeContent: string;
+let readerContent: string;
 let toolExecContent: string;
 let delegationContent: string;
 let pageContent: string;
@@ -45,6 +48,7 @@ beforeAll(() => {
   routeContent = readFileSync(routePath, 'utf-8')
     + readFileSync(chatStreamPath, 'utf-8')
     + readFileSync(agenticLoopPath, 'utf-8');
+  readerContent = readFileSync(streamReaderPath, 'utf-8');
   toolExecContent = readFileSync(toolExecPath, 'utf-8');
   delegationContent = readFileSync(delegationHandlerPath, 'utf-8');
   pageContent = readFileSync(pagePath, 'utf-8');
@@ -260,10 +264,15 @@ describe('3. Three-Tier Timeout System', () => {
     expect(t.betweenTokenMs).toBe(120_000);
   });
 
-  test('fallback path uses the same policy function as the primary', () => {
+  test('fallback path uses the same reader (and so the same timeout policy) as the primary', () => {
     // Regression guard: the fallback used to carry its own copy of the tier
-    // ladder, which is how the two silently diverge.
-    expect(routeContent).toContain('computeStreamTimeouts(fbTier, fbTimeoutMs)');
+    // ladder, then its own copy of the whole stream reader — which is how the
+    // two silently diverged (2026-09-12: the copy dropped reasoning_content).
+    // Now both call sites go through readLlmStream and only the reader
+    // computes timeouts.
+    expect(routeContent.match(/await readLlmStream\(/g)?.length).toBe(2);
+    expect(routeContent).not.toContain('computeStreamTimeouts(');
+    expect(readerContent).toContain('computeStreamTimeouts(opts.tier, opts.timeoutMs)');
     expect(routeContent).not.toMatch(/fbIsCloudInference/);
   });
 
@@ -405,36 +414,31 @@ describe('7. Fallback State Cleanup', () => {
     expect(routeContent).toContain("send({ type: 'retract_partial', length: iterationContent.length })");
   });
 
-  test('primary timer is cleaned up on timeout (before fallback)', () => {
-    // Look for clearTimeout(inactivityTimer) in the catch block
-    const catchPos = routeContent.indexOf('} catch (timeoutError) {');
-    const clearPos = routeContent.indexOf('clearTimeout(inactivityTimer)', catchPos);
-    expect(clearPos).toBeGreaterThan(catchPos);
-    expect(clearPos - catchPos).toBeLessThan(800); // Nudge stripping code sits between catch and clearTimeout
+  test('reader clears both timers in a finally, on success and on failure alike', () => {
+    // One reader serves the primary and every fallback attempt, so one
+    // finally block covers every path that used to need its own cleanup.
+    const racePos = readerContent.indexOf('await Promise.race([streamPromise, inactivityPromise, wallClockPromise])');
+    const finallyPos = readerContent.indexOf('} finally {', racePos);
+    expect(finallyPos).toBeGreaterThan(racePos);
+    const finallyBody = readerContent.slice(finallyPos, finallyPos + 400);
+    expect(finallyBody).toContain('clearTimeout(inactivityTimer)');
+    expect(finallyBody).toContain('clearTimeout(wallClockTimer)');
   });
 
-  test('primary timer is cleaned up on success', () => {
-    // Look for clearTimeout after successful Promise.race
-    const racePos = routeContent.indexOf('await Promise.race([streamPromise, inactivityPromise, wallClockPromise])');
-    const clearAfterRace = routeContent.indexOf('clearTimeout(inactivityTimer)', racePos);
-    expect(clearAfterRace).toBeGreaterThan(racePos);
-    expect(clearAfterRace - racePos).toBeLessThan(200); // Right after the race
+  test('reader aborts a failed stream before rethrowing', () => {
+    const racePos = readerContent.indexOf('await Promise.race([streamPromise, inactivityPromise, wallClockPromise])');
+    const catchPos = readerContent.indexOf('} catch (err) {', racePos);
+    expect(catchPos).toBeGreaterThan(racePos);
+    expect(readerContent.slice(catchPos, catchPos + 500)).toContain('abort.abort()');
   });
 
-  test('fallback timer is cleaned up on success', () => {
-    expect(routeContent).toContain('clearTimeout(fbInactivityTimer); // clean up timer');
-  });
-
-  test('fallback timer is cleaned up on failure', () => {
-    const catchFbPos = routeContent.indexOf('} catch (fbError) {');
-    const clearFbPos = routeContent.indexOf('clearTimeout(fbInactivityTimer)', catchFbPos);
-    expect(clearFbPos).toBeGreaterThan(catchFbPos);
-  });
-
-  test('fbInactivityTimer is hoisted before try block (scope fix)', () => {
-    const hoistPos = routeContent.indexOf('let fbInactivityTimer');
+  test('each fallback attempt reads into fresh state, created before the client is built', () => {
+    const statePos = routeContent.indexOf('const fbStream = newStreamState();');
     const tryPos = routeContent.indexOf("const { client: fbClient, settings: fbSettings } = await createClientForFallback(fb)");
-    expect(hoistPos).toBeLessThan(tryPos);
+    expect(statePos).toBeGreaterThan(-1);
+    expect(statePos).toBeLessThan(tryPos);
+    // A createClientForFallback failure leaves callStart at 0 — nothing to record.
+    expect(routeContent).toContain('if (fbStream.callStart) recordLlmCall(fbStream.callStart, fbStream.firstChunkAt);');
   });
 });
 
@@ -743,16 +747,23 @@ describe('17. Tool Call XML Filter (Streaming Edge Cases)', () => {
     expect(out).toBe('trailing <too');
   });
 
-  test('flush is called after primary stream completes', () => {
-    expect(routeContent).toContain('toolCallXmlFilter.flush()');
+  test('reader flushes every text-form filter when the stream ends', () => {
+    // The reader serves the primary and every fallback attempt, so one flush
+    // covers both. A partial tag still buffered at stream end is emitted as
+    // plain text rather than silently dropped.
+    for (const f of ['toolCallXmlFilter.flush()', 'jsonToolCallFilter.flush()', 'gemmaToolCallFilter.flush()']) {
+      expect(readerContent).toContain(f);
+    }
   });
 
-  test('flush is guarded against fallback corruption', () => {
-    expect(routeContent).toContain('if (!fallbackActivated)');
-  });
-
-  test('flush is called after fallback stream completes', () => {
-    expect(routeContent).toContain('fbToolCallXmlFilter.flush()');
+  test('a late-finishing primary stream cannot corrupt the fallback reply', () => {
+    // Previously an `if (!fallbackActivated)` guard around the primary flush.
+    // Now structural: each attempt owns its own StreamState and its own
+    // filter set, and the loop reads the reply from whichever state won.
+    expect(routeContent).toContain('let stream = newStreamState();');
+    expect(routeContent).toContain('const fbStream = newStreamState();');
+    expect(routeContent).toContain('stream = fbStream;');
+    expect(readerContent).toContain('const toolCallXmlFilter = createToolCallXmlFilter();');
   });
 });
 
@@ -919,8 +930,8 @@ describe('Edge Case: NVIDIA → Local Fallback Timeout Classification', () => {
       routeContent.indexOf('while (iteration < maxIterations)'),
       routeContent.indexOf('// Assemble fullContent from all iterations')
     );
-    expect(whileLoopBody).toContain('classifyEndpoint(llmSettings.endpoint, usingCloudProvider)');
-    expect(whileLoopBody).toContain('computeStreamTimeouts(endpointTier, timeoutMs)');
+    expect(whileLoopBody).toContain('tier: classifyEndpoint(llmSettings.endpoint, usingCloudProvider), timeoutMs');
+    expect(readerContent).toContain('computeStreamTimeouts(opts.tier, opts.timeoutMs)');
 
     // And the behaviour that guards: same budget, different endpoint -> different policy.
     const cloud = computeStreamTimeouts(classifyEndpoint('https://integrate.api.nvidia.com/v1', true), 180_000);

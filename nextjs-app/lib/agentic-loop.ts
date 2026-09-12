@@ -17,18 +17,18 @@
  * usingCloudProvider) come in as initial values and go out in the outcome.
  */
 import prisma from '@/lib/db';
-import { LLMClient, ChatMessage, accumulateToolCalls } from '@/lib/llm-client';
+import { LLMClient, ChatMessage } from '@/lib/llm-client';
 import {
   CONFIG_ERROR, PARAM_ERROR, HA_SHAPE_ERROR, HA_DISCOVERY_ERROR, GPU_BUSY,
   NO_DATA, PATH_ERROR, STALE_REF_ERROR, PERMISSION_BLOCK,
   classifyToolError, type ToolErrorClass,
 } from '@/lib/tool-error-classification';
-import { classifyEndpoint, computeStreamTimeouts, isLocalEndpoint } from '@/lib/stream-timeouts';
+import { classifyEndpoint, isLocalEndpoint } from '@/lib/stream-timeouts';
+import { readLlmStream, newStreamState, streamHasToolCalls, type StreamState } from '@/lib/llm-stream-reader';
 import { detectClaimedTool, detectZeroToolClaim, detectUncalledToolClaim, findFabricatedImageRefs } from '@/lib/phantom-claim';
 import { isNearVerbatimRepeat, stripRepeatedParagraphs, stripInternalRepeats } from '@/lib/repetition-guard';
 import {
-  tryRepairJSON, createThinkFilter, createToolCallXmlFilter, createJsonToolCallFilter,
-  createGemmaToolCallFilter, extractMistralToolCalls, extractBracketToolCalls,
+  tryRepairJSON, extractMistralToolCalls, extractBracketToolCalls,
   parseXmlToolCalls, tryRescueWriteFile, tryRescueContentTool, extractToolCallFromText,
 } from '@/lib/tool-call-parsing';
 import { ProjectService } from '@/lib/project-service';
@@ -522,94 +522,9 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
 
             // Stream LLM response
             let iterationContent = '';
-            // qwen3.6 (enableThinking=false) streams its WHOLE reply through
-            // delta.reasoning_content; tool calls get salvaged from it but the
-            // conversational PROSE was being discarded as "monologue" → empty turn
-            // → false fallback cascade (this is why tool-heavy 1:1 works but a
-            // conversational room reply vanished). Buffer that prose so we can use
-            // it as the reply when the turn produced no normal content and no tool call.
-            let reasoningProse = '';
-            let toolCallsAccumulator = new Map<
-              number,
-              { id: string; name: string; arguments: string }
-            >();
-            let finishReason = 'stop';
-
-            // Three-phase timeout system based on endpoint type:
-            //
-            // Three-phase timeout — tuned per endpoint type:
-            //   Phase 1 — CONNECTION: server alive? (fast fail on ECONNREFUSED/DNS/5xx)
-            //   Phase 2 — PREFILL: processing prompt tokens before first output
-            //   Phase 3 — BETWEEN-TOKEN: gap between streaming tokens (stall detection)
-            //
-            // Policy lives in lib/stream-timeouts.ts (pure + unit-tested).
             const DEFAULT_TIMEOUT_MS = (isDelegation || isGroupTurn) ? 300000 : 180000;
             const timeoutMs = (choom.llmTimeoutSec ? choom.llmTimeoutSec * 1000 : DEFAULT_TIMEOUT_MS);
-            const endpointTier = classifyEndpoint(llmSettings.endpoint, usingCloudProvider);
-            const { connectionMs: CONNECTION_TIMEOUT_MS, prefillMs: PREFILL_TIMEOUT_MS, betweenTokenMs: BETWEEN_TOKEN_MS } =
-              computeStreamTimeouts(endpointTier, timeoutMs);
-            const llmCallStart = Date.now();
-            if (!firstLlmCallAt) firstLlmCallAt = llmCallStart;
-            let llmFirstChunkAt = 0;
-            let connectionEstablished = false;
-            let firstTokenReceived = false;
-            let lastChunkTime = Date.now();
-            let chunkCount = 0;
-            let inactivityTimer: ReturnType<typeof setTimeout> = undefined!;
-            let rejectInactivity: (err: Error) => void;
-            const inactivityPromise = new Promise<never>((_, reject) => {
-              rejectInactivity = reject;
-              // Start with connection timeout — server alive?
-              inactivityTimer = setTimeout(() => reject(new Error(
-                `LLM connection timeout (no HTTP response in ${CONNECTION_TIMEOUT_MS / 1000}s)`
-              )), CONNECTION_TIMEOUT_MS);
-            });
-            inactivityPromise.catch(() => {}); // suppress unhandled rejection after race
-            const onConnected = () => {
-              if (connectionEstablished) return;
-              connectionEstablished = true;
-              clearTimeout(inactivityTimer);
-              console.log(`   🔗 ${choomTag} Connected — ${PREFILL_TIMEOUT_MS / 1000}s prefill timeout`);
-              inactivityTimer = setTimeout(() => rejectInactivity(new Error(
-                `LLM response timeout (connected but no content for ${PREFILL_TIMEOUT_MS / 1000}s)`
-              )), PREFILL_TIMEOUT_MS);
-            };
-            const resetInactivity = (hasContent: boolean = false) => {
-              clearTimeout(inactivityTimer);
-              if (!llmFirstChunkAt) llmFirstChunkAt = Date.now();
-              lastChunkTime = Date.now();
-              chunkCount++;
-              if (!connectionEstablished) {
-                connectionEstablished = true;
-                console.log(`   🔗 ${choomTag} Connected — ${PREFILL_TIMEOUT_MS / 1000}s prefill timeout`);
-              }
-              if (!firstTokenReceived && hasContent) {
-                firstTokenReceived = true;
-                console.log(`   ⚡ ${choomTag} First content token — switching to ${BETWEEN_TOKEN_MS / 1000}s between-token timeout`);
-              }
-              let currentTimeout: number;
-              let timeoutMsg: string;
-              if (firstTokenReceived) {
-                currentTimeout = BETWEEN_TOKEN_MS;
-                timeoutMsg = `LLM response timeout (no data for ${currentTimeout / 1000}s, last chunk ${Math.round((Date.now() - lastChunkTime) / 1000)}s ago, ${chunkCount} chunks received)`;
-              } else {
-                currentTimeout = PREFILL_TIMEOUT_MS;
-                timeoutMsg = `LLM response timeout (connected but no content for ${PREFILL_TIMEOUT_MS / 1000}s)`;
-              }
-              inactivityTimer = setTimeout(() => rejectInactivity(new Error(timeoutMsg)), currentTimeout);
-            };
-            let wallClockTimer: ReturnType<typeof setTimeout> = undefined!;
-            const wallClockPromise = new Promise<never>((_, reject) => {
-              wallClockTimer = setTimeout(() => reject(new Error('LLM response timeout')), timeoutMs);
-            });
-            wallClockPromise.catch(() => {}); // suppress unhandled rejection after race
-            // Abort handle for THIS primary stream. Without it, a timed-out
-            // stream keeps running in the background after the fallback takes
-            // over — appending to iterationContent, send()ing stale chunks,
-            // pouring late tool-call deltas into the fallback's accumulator,
-            // and double-counting usage. Found by the post-C-22 adversarial
-            // review; present in the monolith since the fallback chain landed.
-            const llmAbort = new AbortController();
+            if (!firstLlmCallAt) firstLlmCallAt = Date.now();
 
             // Hard rule: a group turn NEVER sends tool_choice='required'. Beyond the
             // initial intent check, several mid-loop nudges (task-continuation,
@@ -650,21 +565,6 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
             phantomForcedTool = null; // one-shot: consumed this iteration
             intentForcedTool = null; // one-shot: consumed this iteration
 
-            // Think-block filter: strips <think>...</think> from reasoning models
-            const thinkFilter = createThinkFilter();
-            // Tool-call XML filter: strips <tool_call>...</tool_call> emitted as text
-            // by local models and captures them for parsing into real tool calls
-            const toolCallXmlFilter = createToolCallXmlFilter();
-            // JSON tool-call filter: strips [{"name":"...","parameters":{...}}] arrays
-            // emitted as plain text (common with Qwen/Mistral models)
-            const jsonToolCallFilter = createJsonToolCallFilter();
-            // Gemma 4 tool-call filter: strips <|tool_call>call:name{args}<tool_call|>
-            // blocks emitted as text when Gemma's special tokens aren't tokenized
-            const gemmaToolCallFilter = createGemmaToolCallFilter();
-            // Hoisted so fallback loop can also contribute captured blocks
-            let capturedXmlToolCalls: string[] = [];
-            let capturedFbJsonToolCalls: { id: string; name: string; arguments: Record<string, unknown> }[] = [];
-            let thinkTokensFiltered = false;
 
             // Buffer post-first-text content for dedup before sending.
             // Once ANY earlier iteration of this turn produced text, the next
@@ -684,223 +584,40 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
             // always token-streams.
             const bufferForDedup = iterationTexts.length > 0 || (allToolCalls.length > 0 && prevAssistantTexts.length > 0);
 
-            const streamPromise = (async () => {
-              let reasoningContentSalvaged = false;
-              // Inline repetition detector — when the model regenerates the
-              // same paragraph multiple times mid-stream, every chunk has
-              // already been sent to the client and TTS by the time post-
-              // stream dedup runs. Abort the stream as soon as we detect a
-              // 60+ char substring repeating 3 times so TTS doesn't play
-              // duplicates aloud and Chatterbox doesn't get hammered.
-              let streamAbortedForRepetition = false;
-              let lastRepetitionScanLen = 0;
-              const detectRepetition = (text: string): boolean => {
-                if (text.length < 200) return false;
-                // Only scan periodically — every 200 chars of new content —
-                // since a substring search is O(n*m).
-                if (text.length - lastRepetitionScanLen < 200) return false;
-                lastRepetitionScanLen = text.length;
-                // Take the trailing 180 chars as the probe. If it appears
-                // 2+ MORE times earlier in the buffer (3+ total occurrences),
-                // we're in a regenerate-the-same-paragraph loop.
-                const probeLen = 180;
-                const probe = text.slice(-probeLen);
-                if (probe.length < 60) return false;
-                let count = 0;
-                let pos = 0;
-                while (pos < text.length - probeLen) {
-                  const idx = text.indexOf(probe, pos);
-                  if (idx === -1 || idx >= text.length - probeLen) break;
-                  count++;
-                  pos = idx + probeLen;
-                  if (count >= 2) return true; // 2 prior + 1 trailing = 3 total
-                }
-                return false;
-              };
-              for await (const chunk of llmClient.streamChat(currentMessages, iterationTools, llmAbort.signal, toolChoiceOverride, onConnected)) {
-                if (streamAbortedForRepetition) break;
-                if (!chunk.choices || !chunk.choices[0]) {
-                  // Final usage-only chunks have no choices; capture below.
-                  if (chunk.usage) {
-                    totalPromptTokens += chunk.usage.prompt_tokens || 0;
-                    totalCompletionTokens += chunk.usage.completion_tokens || 0;
-                    maxPromptTokens = Math.max(maxPromptTokens, chunk.usage.prompt_tokens || 0);
-                  }
-                  continue;
-                }
-                const choice = chunk.choices[0];
-
-                // Some local models (Qwen 3.6 35B-A3B observed) route their
-                // entire completion — including <tool_call> XML — through
-                // delta.reasoning_content instead of delta.content, even when
-                // the request explicitly set chat_template_kwargs.enable_thinking
-                // = false. When the user disabled thinking, route reasoning
-                // tokens through the tool-call filters so the <tool_call>
-                // blocks get captured — but the leftover prose IS still the
-                // model's chain-of-thought, so we MUST NOT send it to the
-                // user / TTS / DB. Track which deltas came from this channel
-                // and discard their non-tool-call remainder.
-                const deltaAny = choice.delta as { reasoning_content?: string } & typeof choice.delta;
-                let chunkIsReasoningOnly = false;
-                if (
-                  llmSettings.enableThinking === false &&
-                  typeof deltaAny.reasoning_content === 'string' &&
-                  deltaAny.reasoning_content.length > 0 &&
-                  !choice.delta.content
-                ) {
-                  if (!reasoningContentSalvaged) {
-                    console.log(`   🔄 ${choomTag} Routing delta.reasoning_content through tool-call filters (enableThinking=false; reasoning prose will be hidden)`);
-                    reasoningContentSalvaged = true;
-                  }
-                  choice.delta.content = deltaAny.reasoning_content;
-                  chunkIsReasoningOnly = true;
-                }
-
-                const hasContent = !!(choice.delta.content || choice.delta.tool_calls ||
-                  (typeof deltaAny.reasoning_content === 'string' && deltaAny.reasoning_content.length > 0));
-                resetInactivity(hasContent);
-
-                if (choice.delta.content) {
-                  let visible = thinkFilter(choice.delta.content);
-                  if (visible) {
-                    visible = toolCallXmlFilter.filter(visible);
-                    if (visible) {
-                      visible = jsonToolCallFilter.filter(visible);
-                    }
-                    if (visible) {
-                      visible = gemmaToolCallFilter.filter(visible);
-                    }
-                    if (visible) {
-                      // Common model glitch: contraction directly fused to a
-                      // number without a separator ("That's16%", "be17%",
-                      // "the26%"). Insert the missing space. Narrow regex —
-                      // only fires for English contractions ('s/'re/'ll/'ve/
-                      // 'd/'t) immediately followed by a digit, so it won't
-                      // mangle valid sequences like "v1.0" or "$50".
-                      visible = visible.replace(
-                        /([a-zA-Z]'(?:s|re|ll|ve|d|t))(\d)/g,
-                        '$1 $2',
-                      );
-                      // Reasoning-only chunks: tool-call filters have already
-                      // captured any <tool_call> blocks for parsing. The
-                      // remaining `visible` prose is the model's internal
-                      // monologue ("The user is asking...", "Let me check...",
-                      // "Wait, looking back..."). Drop it on the floor —
-                      // don't append to iterationContent, don't stream, don't
-                      // hand it to TTS. The agentic loop still works because
-                      // tool calls were captured separately.
-                      if (!chunkIsReasoningOnly) {
-                        // Repetition check on the WOULD-BE accumulator so we
-                        // can suppress the chunk that completes the 3rd repeat
-                        // instead of streaming it and aborting after the fact.
-                        const wouldBe = iterationContent + visible;
-                        if (detectRepetition(wouldBe)) {
-                          console.warn(`   🔁 ${choomTag} Repetition detected mid-stream (180-char probe seen 3+ times). Aborting stream early to prevent TTS spam.`);
-                          streamAbortedForRepetition = true;
-                          // Keep iterationContent up to the end of the FIRST
-                          // occurrence of the repeating probe — drop the rest.
-                          const probe = wouldBe.slice(-180);
-                          const firstIdx = iterationContent.indexOf(probe);
-                          if (firstIdx !== -1 && firstIdx < iterationContent.length - 180) {
-                            const beforeTrim = iterationContent.length;
-                            iterationContent = iterationContent.slice(0, firstIdx + probe.length);
-                            // Live-streamed iterations already sent the repeated
-                            // copies to the client — retract them so the bubble
-                            // matches the trimmed content NOW (not at 'done')
-                            // and the client can drop the junk from its TTS
-                            // queue (C-44). Buffered iterations sent nothing.
-                            if (!bufferForDedup) {
-                              send({ type: 'retract_partial', length: beforeTrim - iterationContent.length });
-                            }
-                          }
-                        } else {
-                          iterationContent += visible;
-                          if (!bufferForDedup) {
-                            send({ type: 'content', content: visible });
-                          }
-                        }
-                      } else {
-                        // Reasoning-channel prose with thinking OFF: for qwen3.6 this
-                        // IS the reply, not chain-of-thought. Buffer it; salvaged after
-                        // the stream ONLY if the turn produced no normal content and no
-                        // tool call (so tool turns are completely unaffected).
-                        reasoningProse += visible;
-                      }
-                    }
-                  } else if (choice.delta.content.length > 0) {
-                    thinkTokensFiltered = true;
-                  }
-                }
-
-                if (choice.delta.tool_calls) {
-                  accumulateToolCalls(toolCallsAccumulator, choice.delta);
-                }
-
-                if (choice.finish_reason) {
-                  finishReason = choice.finish_reason;
-                }
-
-                // Capture token usage from final chunk (OpenAI sends usage in last chunk,
-                // Anthropic adapter attaches it to the finish_reason chunk)
-                if (chunk.usage) {
-                  totalPromptTokens += chunk.usage.prompt_tokens || 0;
-                  totalCompletionTokens += chunk.usage.completion_tokens || 0;
-                  maxPromptTokens = Math.max(maxPromptTokens, chunk.usage.prompt_tokens || 0);
-                }
-              }
-              // Flush any buffered partial tag that was never completed.
-              // Guard: if a fallback took over, the primary IIFE may still
-              // finish late — don't corrupt iterationContent.
-              if (!fallbackActivated) {
-                const flushed = toolCallXmlFilter.flush();
-                if (flushed) {
-                  iterationContent += flushed;
-                  if (!bufferForDedup) {
-                    send({ type: 'content', content: flushed });
-                  }
-                }
-                const flushedJson = jsonToolCallFilter.flush();
-                if (flushedJson) {
-                  iterationContent += flushedJson;
-                  if (!bufferForDedup) {
-                    send({ type: 'content', content: flushedJson });
-                  }
-                }
-                const flushedGemma = gemmaToolCallFilter.flush();
-                if (flushedGemma) {
-                  iterationContent += flushedGemma;
-                  if (!bufferForDedup) {
-                    send({ type: 'content', content: flushedGemma });
-                  }
-                }
-              }
-              if (thinkTokensFiltered) {
-                console.log(`   🧠 ${choomTag} Think tokens filtered from response`);
-              }
-            })();
+            // One reader for the primary call and every fallback attempt — see
+            // lib/llm-stream-reader.ts. `stream` ends up as the state of whichever
+            // attempt supplied this iteration's reply; the post-stream parsing
+            // below reads captured tool-call blocks and finish_reason from it.
+            let stream = newStreamState();
+            const countUsage = (st: StreamState) => {
+              totalPromptTokens += st.usage.promptTokens;
+              totalCompletionTokens += st.usage.completionTokens;
+              maxPromptTokens = Math.max(maxPromptTokens, st.usage.maxPromptTokens);
+            };
 
             try {
-              await Promise.race([streamPromise, inactivityPromise, wallClockPromise]);
-              // Stream succeeded — clean up timers to prevent leaks
-              clearTimeout(inactivityTimer);
-              clearTimeout(wallClockTimer);
-              recordLlmCall(llmCallStart, llmFirstChunkAt);
+              await readLlmStream(stream, {
+                client: llmClient, messages: currentMessages, tools: iterationTools, toolChoice: toolChoiceOverride,
+                enableThinking: llmSettings.enableThinking,
+                tier: classifyEndpoint(llmSettings.endpoint, usingCloudProvider), timeoutMs,
+                send, bufferForDedup, choomTag,
+              });
+              recordLlmCall(stream.callStart, stream.firstChunkAt);
+              countUsage(stream);
+              iterationContent = stream.content;
               // Empty response guard: model returned 200 OK but streamed 0 content
               // and no tool calls. Treat this the same as a timeout so the fallback
               // chain gets a chance. Without this, an empty response silently breaks
               // out of the loop with no output.
-              const hasToolCalls = toolCallsAccumulator.size > 0 ||
-                toolCallXmlFilter.getCaptured().length > 0 ||
-                jsonToolCallFilter.getCaptured().length > 0 ||
-                gemmaToolCallFilter.getCaptured().length > 0;
+              const hasToolCalls = streamHasToolCalls(stream);
               // Salvage: qwen3.6 routes its whole reply through reasoning_content.
               // If the turn produced no normal content and no tool call but DID stream
               // reasoning-channel prose, that prose IS the reply (e.g. a conversational
               // group turn) — use it instead of declaring "empty" and firing the
               // fallback chain. Tool turns are unaffected (they have a tool call, so
               // this branch is skipped). This is the actual cause of rooms going silent.
-              if (!iterationContent.trim() && !hasToolCalls && reasoningProse.trim()) {
-                iterationContent = reasoningProse.trim();
+              if (!iterationContent.trim() && !hasToolCalls && stream.reasoningProse.trim()) {
+                iterationContent = stream.reasoningProse.trim();
                 if (!bufferForDedup) {
                   send({ type: 'content', content: iterationContent });
                 }
@@ -922,23 +639,16 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
               }
             } catch (timeoutError) {
               // The failed call's wall-clock still counts — it's time the user waited.
-              recordLlmCall(llmCallStart, llmFirstChunkAt);
+              // (The reader has already aborted the dead stream and cleared its timers.)
+              recordLlmCall(stream.callStart, stream.firstChunkAt);
+              countUsage(stream);
+              iterationContent = stream.content;
               const errMsg = timeoutError instanceof Error ? timeoutError.message : String(timeoutError);
               console.warn(`   ⚠️  LLM response error on iteration ${iteration}: ${errMsg}`);
 
               // Try fallback models on timeout/error. Even if partial content was streamed,
               // a broken response is worse than switching models. Partial text was already
               // sent to the user; we clear iterationContent and retry with the fallback.
-              // Clean up primary model's timer to prevent memory leaks
-              clearTimeout(inactivityTimer);
-              clearTimeout(wallClockTimer);
-              // Kill the primary stream BEFORE any fallback runs. On the
-              // empty-response path the stream already completed (abort is a
-              // no-op); on the timeout path this stops the zombie stream from
-              // interleaving with the fallback's reply. Its pending for-await
-              // rejects into the already-settled race — handled, not unhandled.
-              llmAbort.abort();
-
               let fallbackSucceeded = false;
               // If the currently-active fallback timed out (not the primary),
               // allow retrying it once — the timeout may be transient (context
@@ -957,6 +667,7 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                   if (!bufferForDedup) {
                     send({ type: 'retract_partial', length: iterationContent.length });
                   }
+                  iterationContent = '';
                 }
                 // Strip nudge/hint messages injected for the primary model —
                 // the fallback model hasn't seen the primary's behavior and these
@@ -985,7 +696,7 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                   // same model just burns its full budget twice before any
                   // escalation. Retry transient failures (empty bodies etc.);
                   // escalate stalls.
-                  if (fb.sameModelRetry && /LLM response timeout|LLM connection timeout/.test(String(timeoutError instanceof Error ? timeoutError.message : timeoutError ?? ''))) {
+                  if (fb.sameModelRetry && /LLM response timeout|LLM connection timeout/.test(errMsg)) {
                     console.log(`   ⏭️  ${choomTag} Skipping same-model retry (${fb.label}) — primary already consumed its full timeout budget; escalating`);
                     continue;
                   }
@@ -1002,145 +713,55 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                     await new Promise(res => setTimeout(res, fb.retryDelayMs));
                   }
 
-                  let fbInactivityTimer: ReturnType<typeof setTimeout> = undefined!;
-                  let fbWallClockTimer: ReturnType<typeof setTimeout> = undefined!;
-                  // Hoisted like the timers so the catch can abort a stream
-                  // that failed mid-flight (same zombie-stream protection as
-                  // the primary).
-                  const fbAbort = new AbortController();
-                  // Hoisted above the try so the catch can record the failed
-                  // call's wall-clock (0 = failed before the stream started).
-                  let fbCallStart = 0;
-                  let fbFirstChunkAt = 0;
+                  // Fresh state per attempt: a failed attempt's partial content
+                  // and tool-call deltas never leak into the next one.
+                  const fbStream = newStreamState();
                   try {
                     const { client: fbClient, settings: fbSettings } = await createClientForFallback(fb);
-                    // Reset iteration state for the fallback attempt
-                    iterationContent = '';
-                    toolCallsAccumulator = new Map();
-                    finishReason = 'stop';
-
-                    // Fallback timeout: same three-phase policy as the primary,
-                    // via the same function — this was a duplicated copy of the
-                    // tier ladder, which is exactly how the two drift apart.
-                    // Note the fallback classifies on `!fb.providerId` (a fallback
-                    // with no provider is the local default), not usingCloudProvider.
+                    // Fallback timeout: same three-phase policy as the primary, via
+                    // the same reader. Note the fallback classifies on `!fb.providerId`
+                    // (a fallback with no provider is the local default), not
+                    // usingCloudProvider.
                     const fbIsLocal = !fb.providerId || isLocalEndpoint(fbSettings.endpoint);
                     const fbTimeoutMs = fbIsLocal ? timeoutMs : Math.max(60000, Math.floor(timeoutMs * 0.75));
-                    const fbTier = classifyEndpoint(fbSettings.endpoint, !fbIsLocal);
-                    const { connectionMs: fbConnectionMs, prefillMs: fbPrefillMs, betweenTokenMs: fbBetweenTokenMs } =
-                      computeStreamTimeouts(fbTier, fbTimeoutMs);
-                    fbCallStart = Date.now();
-                    let fbConnectionEstablished = false;
-                    let fbFirstTokenReceived = false;
-                    let fbRejectInactivity: (err: Error) => void;
-                    const fbInactivityPromise = new Promise<never>((_, reject) => {
-                      fbRejectInactivity = reject;
-                      fbInactivityTimer = setTimeout(() => reject(new Error(
-                        `LLM connection timeout (no HTTP response in ${fbConnectionMs / 1000}s)`
-                      )), fbConnectionMs);
+                    await readLlmStream(fbStream, {
+                      client: fbClient, messages: currentMessages, tools: iterationTools, toolChoice: toolChoiceOverride,
+                      enableThinking: fbSettings.enableThinking,
+                      tier: classifyEndpoint(fbSettings.endpoint, !fbIsLocal), timeoutMs: fbTimeoutMs,
+                      send, bufferForDedup, choomTag, attemptLabel: 'Fallback ',
                     });
-                    fbInactivityPromise.catch(() => {});
-                    const fbOnConnected = () => {
-                      if (fbConnectionEstablished) return;
-                      fbConnectionEstablished = true;
-                      clearTimeout(fbInactivityTimer);
-                      console.log(`   🔗 ${choomTag} Fallback connected — ${fbPrefillMs / 1000}s prefill timeout`);
-                      fbInactivityTimer = setTimeout(() => fbRejectInactivity(new Error(
-                        `LLM response timeout (connected but no content for ${fbPrefillMs / 1000}s)`
-                      )), fbPrefillMs);
-                    };
-                    const resetFbInactivity = (hasContent: boolean = false) => {
-                      clearTimeout(fbInactivityTimer);
-                      if (!fbFirstChunkAt) fbFirstChunkAt = Date.now();
-                      if (!fbConnectionEstablished) {
-                        fbConnectionEstablished = true;
-                        console.log(`   🔗 ${choomTag} Fallback connected — ${fbPrefillMs / 1000}s prefill timeout`);
-                      }
-                      if (!fbFirstTokenReceived && hasContent) {
-                        fbFirstTokenReceived = true;
-                        console.log(`   ⚡ ${choomTag} Fallback first content token — switching to ${fbBetweenTokenMs / 1000}s between-token timeout`);
-                      }
-                      let currentTimeout: number;
-                      let timeoutMsg: string;
-                      if (fbFirstTokenReceived) {
-                        currentTimeout = fbBetweenTokenMs;
-                        timeoutMsg = `LLM response timeout (no data for ${fbBetweenTokenMs / 1000}s)`;
+                    recordLlmCall(fbStream.callStart, fbStream.firstChunkAt);
+                    countUsage(fbStream);
+
+                    // Empty-response guard, mirroring the primary's. A fallback
+                    // that streamed nothing is a FAILED fallback — throw so the
+                    // catch below moves on to the next one. Without this an
+                    // empty retry counted as success and the turn ended silently.
+                    if (!fbStream.content.trim() && !streamHasToolCalls(fbStream)) {
+                      if (fbStream.reasoningProse.trim()) {
+                        fbStream.content = fbStream.reasoningProse.trim();
+                        if (!bufferForDedup) {
+                          send({ type: 'content', content: fbStream.content });
+                        }
+                        console.log(`   💬 ${choomTag} Fallback: salvaged reply from reasoning_content channel (${fbStream.content.length} chars) — not an empty response`);
                       } else {
-                        currentTimeout = fbPrefillMs;
-                        timeoutMsg = `LLM response timeout (connected but no content for ${fbPrefillMs / 1000}s)`;
+                        throw new Error('Empty response from fallback model (0 characters, no tool calls)');
                       }
-                      fbInactivityTimer = setTimeout(() => fbRejectInactivity(new Error(timeoutMsg)), currentTimeout);
-                    };
-                    const fbWallClockPromise = new Promise<never>((_, reject) => {
-                      fbWallClockTimer = setTimeout(() => reject(new Error('LLM response timeout')), fbTimeoutMs);
-                    });
-                    fbWallClockPromise.catch(() => {});
-                    console.log(`   ⏱️  Fallback timeout: ${fbTimeoutMs / 1000}s wall-clock, ${fbConnectionMs / 1000}s connection, ${fbPrefillMs / 1000}s prefill, ${fbBetweenTokenMs / 1000}s between-token`);
+                    }
 
-                    const fbThinkFilter = createThinkFilter();
-                    const fbToolCallXmlFilter = createToolCallXmlFilter();
-                    const fbJsonToolCallFilter = createJsonToolCallFilter();
-                    const fbStreamPromise = (async () => {
-                      for await (const chunk of fbClient.streamChat(currentMessages, iterationTools, fbAbort.signal, toolChoiceOverride, fbOnConnected)) {
-                        const fbDeltaAny = chunk.choices?.[0]?.delta as { reasoning_content?: string } | undefined;
-                        const fbHasContent = !!(chunk.choices?.[0]?.delta?.content || chunk.choices?.[0]?.delta?.tool_calls ||
-                          (typeof fbDeltaAny?.reasoning_content === 'string' && fbDeltaAny.reasoning_content.length > 0));
-                        resetFbInactivity(fbHasContent);
-                        if (!chunk.choices || !chunk.choices[0]) continue;
-                        const choice = chunk.choices[0];
-                        if (choice.delta.content) {
-                          let visible = fbThinkFilter(choice.delta.content);
-                          if (visible) {
-                            visible = fbToolCallXmlFilter.filter(visible);
-                            if (visible) {
-                              visible = fbJsonToolCallFilter.filter(visible);
-                            }
-                            if (visible) {
-                              iterationContent += visible;
-                              if (!bufferForDedup) {
-                                send({ type: 'content', content: visible });
-                              }
-                            }
-                          }
-                        }
-                        if (choice.delta.tool_calls) {
-                          accumulateToolCalls(toolCallsAccumulator, choice.delta);
-                        }
-                        if (choice.finish_reason) {
-                          finishReason = choice.finish_reason;
-                        }
-                        if (chunk.usage) {
-                          totalPromptTokens += chunk.usage.prompt_tokens || 0;
-                          totalCompletionTokens += chunk.usage.completion_tokens || 0;
-                          maxPromptTokens = Math.max(maxPromptTokens, chunk.usage.prompt_tokens || 0);
-                        }
-                      }
-                      // Flush any buffered partial tag
-                      const fbFlushed = fbToolCallXmlFilter.flush();
-                      if (fbFlushed) {
-                        iterationContent += fbFlushed;
-                        if (!bufferForDedup) {
-                          send({ type: 'content', content: fbFlushed });
-                        }
-                      }
-                      const fbFlushedJson = fbJsonToolCallFilter.flush();
-                      if (fbFlushedJson) {
-                        iterationContent += fbFlushedJson;
-                        if (!bufferForDedup) {
-                          send({ type: 'content', content: fbFlushedJson });
-                        }
-                      }
-                    })();
-
-                    await Promise.race([fbStreamPromise, fbInactivityPromise, fbWallClockPromise]);
-                    clearTimeout(fbInactivityTimer); // clean up timer
-                    clearTimeout(fbWallClockTimer);
-                    recordLlmCall(fbCallStart, fbFirstChunkAt);
-
-                    // Fallback succeeded — switch llmClient for rest of this request
+                    // Fallback succeeded — switch llmClient (and settings) to this
+                    // attempt's for the rest of the request; its stream is the
+                    // iteration's reply.
+                    stream = fbStream;
+                    iterationContent = fbStream.content;
                     llmClient = fbClient;
                     llmSettings.model = fbSettings.model;
                     llmSettings.endpoint = fbSettings.endpoint;
+                    // The thinking flag drives reasoning-channel routing in the
+                    // reader. It was NOT copied before, so iterations after a
+                    // switch (e.g. Qwen 3.6 → Gemma 4) routed with the ORIGINAL
+                    // model's flag.
+                    llmSettings.enableThinking = fbSettings.enableThinking;
 
                     // Chinese-origin models (DeepSeek, GLM, Baichuan, Qwen) sometimes
                     // respond in Chinese. Inject a language enforcement reminder.
@@ -1158,8 +779,6 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                     fallbackSucceeded = true;
                     fallbackActivated = true;
                     resolvedProvider = fb.providerId || 'local';
-                    capturedXmlToolCalls = fbToolCallXmlFilter.getCaptured();
-                    capturedFbJsonToolCalls = fbJsonToolCallFilter.getCaptured();
                     fallbackAttempt = fbIdx + 1;
                     // Allow nudge logic on the next iteration even if tools were already called,
                     // since the fallback model hasn't had a chance to call tools yet and may
@@ -1168,16 +787,13 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                     console.log(`   ✅ ${choomTag} Fallback #${fbIdx + 1} succeeded: ${fb.label} (model=${fbSettings.model})`);
                     break;
                   } catch (fbError) {
-                    if (fbCallStart) recordLlmCall(fbCallStart, fbFirstChunkAt);
-                    clearTimeout(fbInactivityTimer); // clean up timer
-                    clearTimeout(fbWallClockTimer);
-                    fbAbort.abort(); // stop a mid-flight stream before the next attempt
+                    // callStart is 0 when createClientForFallback threw before the
+                    // stream started — nothing to record then.
+                    if (fbStream.callStart) recordLlmCall(fbStream.callStart, fbStream.firstChunkAt);
+                    countUsage(fbStream);
                     const fbErrMsg = fbError instanceof Error ? fbError.message : String(fbError);
                     console.warn(`   ⚠️  ${choomTag} Fallback #${fbIdx + 1} (${fb.label}) also failed: ${fbErrMsg}`);
                     fallbackAttempt = fbIdx + 1;
-                    // Clear any partial content from failed fallback
-                    iterationContent = '';
-                    toolCallsAccumulator = new Map();
                     continue;
                   }
                 }
@@ -1199,8 +815,8 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
             let toolCalls: { id: string; name: string; arguments: Record<string, unknown> }[] = [];
             const droppedToolCalls: string[] = []; // track names of dropped calls for retry logic
             let repairedToolCalls = 0;
-            if (toolCallsAccumulator.size > 0) {
-              for (const tc of toolCallsAccumulator.values()) {
+            if (stream.toolCalls.size > 0) {
+              for (const tc of stream.toolCalls.values()) {
                 const callId = tc.id || `fallback_${Date.now()}_${toolCalls.length}`;
                 try {
                   const args = JSON.parse(tc.arguments || '{}');
@@ -1315,11 +931,7 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
 
             // Parse any XML <tool_call> blocks captured during streaming.
             // These are tool calls emitted as text by local models instead of structured calls.
-            // Primary filter captures are always available; fallback captures are added
-            // to capturedXmlToolCalls when a fallback model succeeds.
-            const allCapturedXml = capturedXmlToolCalls.length > 0
-              ? capturedXmlToolCalls
-              : toolCallXmlFilter.getCaptured();
+            const allCapturedXml = stream.capturedXml;
             if (allCapturedXml.length > 0) {
               const xmlToolCalls = parseXmlToolCalls(allCapturedXml);
               const validXmlCalls = xmlToolCalls.filter(
@@ -1344,9 +956,7 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
             }
 
             // Parse any JSON [{"name":"...","parameters":{...}}] blocks captured during streaming.
-            const capturedJsonTCs = capturedFbJsonToolCalls.length > 0
-              ? capturedFbJsonToolCalls
-              : jsonToolCallFilter.getCaptured();
+            const capturedJsonTCs = stream.capturedJson;
             if (capturedJsonTCs.length > 0) {
               for (const jtc of capturedJsonTCs) {
                 console.log(`   🔧 ${choomTag} Parsed JSON tool call: ${jtc.name}(${JSON.stringify(jtc.arguments).slice(0, 80)})`);
@@ -1357,7 +967,7 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
             // Parse any Gemma 4 <|tool_call>call:name{...}<tool_call|> blocks
             // captured during streaming. These look like tool calls the model
             // "already executed" but actually never hit the API layer.
-            const capturedGemmaTCs = gemmaToolCallFilter.getCaptured();
+            const capturedGemmaTCs = stream.capturedGemma;
             if (capturedGemmaTCs.length > 0) {
               for (const gtc of capturedGemmaTCs) {
                 if (gtc.name && /^[a-zA-Z0-9_-]+$/.test(gtc.name)) {
@@ -1374,7 +984,7 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
             // what makes unforced tool use reliable in rooms without re-introducing
             // forcing (which broke conversational turns). The block is stripped from
             // the saved content so it isn't shown/spoken as text.
-            if (toolCalls.length === 0 && toolCallsAccumulator.size === 0) {
+            if (toolCalls.length === 0 && stream.toolCalls.size === 0) {
               const knownNames = new Set(activeTools.map(t => t.name));
               // Mistral leaked-as-text form first ([TOOL_CALLS]name<SPECIAL_n>{…}).
               const { calls: mistralCalls, cleaned: mCleaned } = extractMistralToolCalls(iterationContent, knownNames);
@@ -1400,7 +1010,7 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
             // When the LLM's output was truncated due to max_tokens AND tool calls
             // were dropped or repaired (truncated content), retry with higher max_tokens
             // instead of proceeding with incomplete results.
-            if (finishReason === 'length' && (droppedToolCalls.length > 0 || repairedToolCalls > 0)) {
+            if (stream.finishReason === 'length' && (droppedToolCalls.length > 0 || repairedToolCalls > 0)) {
               const currentMax = llmSettings.maxTokens || 4096;
               const bumpedMax = Math.min(currentMax * 2, 16384);
               const hasDropped = droppedToolCalls.length > 0;
@@ -1572,9 +1182,9 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                 // Empty content + no tool_calls. Either nothing was streamed OR
                 // every byte was eaten by a stripping filter. Surface what each
                 // filter captured so we can tell which one swallowed everything.
-                const xmlCount = toolCallXmlFilter.getCaptured().length;
-                const jsonCount = jsonToolCallFilter.getCaptured().length;
-                const gemmaCount = gemmaToolCallFilter.getCaptured().length;
+                const xmlCount = stream.capturedXml.length;
+                const jsonCount = stream.capturedJson.length;
+                const gemmaCount = stream.capturedGemma.length;
                 console.log(
                   `   🔬 ${choomTag} Empty content + no tool_calls. ` +
                   `Stripped blocks captured: xml=${xmlCount}, json=${jsonCount}, gemma=${gemmaCount}. ` +
@@ -1652,7 +1262,14 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
               // If tools were already called this request, check if model intends more work.
               // Models often narrate their next step ("Now let me update the file...")
               // before the loop breaks — losing the write-back, notification, etc.
-              if (allToolCalls.length > 0 && !(fallbackActivated && nudgeCount === 0) && !isGroupTurn) {
+              // NOTE: no `!(fallbackActivated && nudgeCount === 0)` clause here. That
+              // clause was added (de87b7e) when this block was "accept text as final
+              // and break", to let the nudge logic below it fire after a model switch.
+              // The nudge logic has since moved INSIDE this block, so the clause had
+              // inverted: after a fallback the continuation checks were skipped and a
+              // retry reply that narrated its next step ended the turn (2026-09-12
+              // scheduled follow-up died on iteration 2 after a same-model retry).
+              if (allToolCalls.length > 0 && !isGroupTurn) {
                 const lc = iterationContent.toLowerCase();
 
                 // Check 1: Model narrates its next step ("now let me update...")
@@ -1770,7 +1387,7 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                 // finish_reason=length on a TEXT-ONLY reply: the model was cut
                 // off mid-thought (trailing colon / half a list). The existing
                 // length-recovery above only handles dropped TOOL calls.
-                const truncatedByLength = finishReason === 'length';
+                const truncatedByLength = stream.finishReason === 'length';
 
                 // C-58: a reply that ANSWERS an integrity nudge with an apology
                 // ends the turn. Re-nudging an apologizing model measured

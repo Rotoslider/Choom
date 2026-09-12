@@ -70,7 +70,7 @@ describe('planningNext announces-pending-work detection', () => {
 
 describe('finish_reason=length continuation (source contract)', () => {
   test('text-only truncation triggers its own nudge branch', () => {
-    expect(src).toContain("const truncatedByLength = finishReason === 'length';");
+    expect(src).toContain("const truncatedByLength = stream.finishReason === 'length';");
     expect(src).toContain('|| truncatedByLength) && nudgeCount < 3');
     expect(src).toContain("'reply cut off by output token limit (finish_reason=length)'");
     expect(src).toContain('cut off mid-sentence by the output token limit');
