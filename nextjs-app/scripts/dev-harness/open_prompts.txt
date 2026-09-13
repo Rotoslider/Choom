@@ -1,0 +1,3 @@
+gym|How many times did I make it to the gym this month? Give me the count.
+tasks|Is there anything on my task list that's overdue or due this weekend?
+youtube|What did the Tesla YouTube channel post most recently? Just the titles.

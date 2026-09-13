@@ -824,7 +824,7 @@ Long conversations are automatically managed with a two-layer compaction system 
 
 ### How It Works
 
-The token budget is `contextLength × 50%` (configurable in Settings > LLM). With a 262K context window, the budget is ~131K tokens. After subtracting the system prompt (~2,250 tokens), tool schemas (~9,500 tokens), and response reserve (`maxTokens`), the remaining budget is available for conversation messages.
+The token budget is `contextLength × 85%` minus the system prompt, the tool schemas and the response reserve. Every estimate is `chars/4`, calibrated each call against the token count the provider actually reports (see *Context Budget & Tool Exposure* below). After subtracting the system prompt (~2,250 tokens), tool schemas (~9,500 tokens), and response reserve (`maxTokens`), the remaining budget is available for conversation messages.
 
 **Cross-turn compaction** runs once before each LLM call:
 1. Loads the last 200 messages from the database
@@ -841,11 +841,11 @@ The token budget is `contextLength × 50%` (configurable in Settings > LLM). Wit
 
 ### Key Design Decisions
 
-- **50% budget ratio**: Models perform best in the lower half of their context window. This leaves headroom for the response and avoids degraded output quality.
+- **85% budget ratio, calibrated**: the raw `chars/4` estimate is scaled by the ratio of the provider's real prompt token count to the estimate (smoothed, clamped 0.4–2.5). Real turns on 2026-09-12 settled around 0.8 — `chars/4` over-charges by about a fifth.
 - **Rolling summary**: The summary is regenerated (not appended) each time, keeping it concise regardless of conversation length.
 - **Zero overhead for short chats**: If history fits within budget, both layers are no-ops — no LLM calls, no truncation.
 - **Mechanical fallback**: If the summarization LLM call fails, a prefix-based mechanical summary is used instead (never blocks the chat).
-- **Token estimation**: `Math.ceil(text.length / 4)` — a conservative heuristic that works well with the 50% budget margin.
+- **Token estimation**: `Math.ceil(text.length / 4)` × the calibration scale above. Budgets read the *live* system prompt and never stub the user message the turn is answering; when an assistant message is stubbed its tool rows go with it, so no tool result is left without its parent call.
 
 ### Console Output
 
@@ -857,11 +857,96 @@ When compaction occurs, you'll see:
 
 The activity panel in the web UI also shows compaction events.
 
+## Context Budget & Tool Exposure
+
+*Added 2026-09-12 ("Room to Think"). Measured on real turns; numbers below are from Genesis on this homestead.*
+
+Chooms are companions, not coding agents, and every one of them needs every tool. On a
+131k local window that is the whole problem: a tool-enabled turn used to pay a fixed
+~35k tokens before a word of conversation (136 tool schemas ≈ 14k tokens alone), and the
+tools a Choom calls to ground herself were the largest results in the system
+(`ha_get_home_status` 31k chars average, `workspace_list_files` 9.7k, `search_memories` 9.4k).
+Four changes, each independently switchable:
+
+### 1. Cheap grounding (tool defaults)
+
+| Tool | Default now | More detail |
+|------|-------------|-------------|
+| `ha_get_home_status` | a compact glance: people, lights/switches on, open/motion/problem, climate, key power/solar/battery/temperature readings (~2.5k chars) | `focus="solar"`, `domain="sensor"`, `detail=true` (capped per domain) |
+| `ha_list_entities` | up to 60 entities | `search="<word>"`, `domain`, `area` |
+| `workspace_list_files` | root = one-level map with per-folder counts; a path opens two levels; newest files named up front | `depth` up to 4 |
+| `search_memories` and the other list tools | 5 results, content kept whole up to 1,500 chars, bookkeeping fields dropped | `detail=true`, `limit` |
+| `list_self_followups` | one line per pending entry, soonest first | — |
+| `fetch_url` / `workspace_read_pdf` / `ha_render_template` | 20k / 30k / 8k chars with a hint to narrow | `max_chars`, page ranges |
+
+Grounding on Gemma 4 31B went from 50k tokens and 378s to 16k and 125s; on Qwen 3.8 27B
+from 47k / 425s to 18k / 200s; on DeepSeek V4 Flash from 45k / 61s to 28k / 29s.
+
+### 2. Tool exposure: `full` or `skills`
+
+`skills` mode sends a **core set** (memory, weather/calendar/reminders, the house, images,
+workspace, notifications, self-scheduling, rooms, delegation, the inbox, web search) plus
+the tools of the skills that match the message, tools used earlier in the chat, and
+anything the Choom opens with **`open_skill(name)`** — which loads a skill's tools for the
+rest of the turn and returns its instructions. A Choom that narrates a tool she cannot see
+gets its skill opened automatically instead of a "call the tool" nudge. The AVAILABLE
+SKILLS list in the prompt stays as the menu.
+
+- Set globally in Settings › LLM ("Tools loaded per turn") and per model in the profile
+  editor; the profile wins. Built-in profiles set `skills` for Gemma 4, Qwen 3.6/3.8 and
+  DeepSeek V4 Flash (an A/B on DeepSeek showed ~40% fewer prompt tokens per call with the
+  same tool paths).
+- Order of the exposed schemas is stable across turns so a local server can reuse its KV cache.
+- Implementation: `lib/tool-exposure.ts`, skill `skill-loader`.
+
+### 3. Honest budgets
+
+History loads the **newest** 200 messages (the old query took the oldest 200). The
+estimator is calibrated against the provider's real token count on every call. Aggressive
+compaction anchors on the request the Choom is working on, not the oldest user message.
+Pass 3 of within-turn compaction never leaves a tool result without its parent `tool_calls`.
+
+### 4. Guards found by testing
+
+- **Same-tool streak**: a 4B model called `search_memories` 100 iterations running with a
+  paraphrased query each time (2.4M prompt tokens). After 6 consecutive iterations of one
+  tool she is nudged, after 10 the tool is disabled for the turn, after 13 every tool is
+  removed and the next call is text-only.
+- **Reasoning channel**: Gemma 4 thinks on `reasoning_content` even with thinking off.
+  Only models flagged `replyInReasoning` (Qwen 3.6) have that channel taken as the reply;
+  otherwise deliberation gets one "act now" nudge (limit doubled first if it was cut off).
+- **Forcing**: `tool_choice=required` is only sent when the intent ladder names a tool or
+  the message names two or more tools itself; a multi-tool prompt is never narrowed to one.
+- **Fallback continuity**: the loop keeps its continuation checks after a model switch;
+  one shared stream reader serves the primary and every fallback; behaviour nudges are
+  stripped before a fallback, loop-state notices are kept.
+- **Rooms**: a rolling digest of everything older than the 24-message window
+  (`data/rooms/<id>/digest.json`); an owner message into a room a Choom-initiated run is
+  using asks it to yield between speakers; a room the user asked for from a 1:1 chat is
+  never treated as a duplicate.
+- **Scheduler**: a heartbeat / self follow-up that fails sends the owner one Signal line
+  and the entry is marked `error`; the bridge read timeout (960s) sits above the room ceiling.
+
+### The inboxes
+
+Every Choom has an inbox in the shared workspace, `choom_commons/for_<name>/`, created on
+demand from the live Choom list (with `choom_commons/drafts/` and
+`COMMUNICATION_PROTOCOL.md`). Two core tools: **`leave_for_sister`** writes a dated
+letter into her inbox (plus an image from this turn or a workspace file), and
+**`check_inbox`** reads what is new and marks it seen (`.seen.json`). The wake-up
+preamble says `check_inbox`.
+
+### Testing against real Chooms
+
+`scripts/dev-harness/` drives real 1:1 turns and real rooms through the dev server the way
+the Signal bridge does, and prints tool calls, result sizes and the trace summary. See its
+README for usage and — important — cleanup.
+
 ## Skills Architecture
 
 ![Skills Catalog](docs/screenshots/skills-catalog.png)
 
-Choom's 113 tools are organized into 27 modular **skills**. Each skill is a self-contained directory with metadata, tool definitions, and a handler implementation. The skill registry provides progressive disclosure to minimize token usage while ensuring the LLM always has the right documentation at the right time.
+Choom's ~136 tools are organized into 29 modular **skills** (27 core plus custom skills under `~/choom-projects/.choom-skills/`). Each skill is a self-contained directory with metadata, tool definitions, and a handler implementation. The skill registry provides progressive disclosure to minimize token usage while ensuring the LLM always has the right documentation at the right time.
 
 ### Progressive Disclosure (3 Levels)
 
@@ -1116,6 +1201,17 @@ Automations can have conditions that must be satisfied before they execute. Cond
 ![Smart Home Settings](docs/screenshots/settings-smart-home.png)
 
 Full integration with [Home Assistant](https://www.home-assistant.io/) for reading sensors, controlling devices, viewing historical trends, and giving Chooms ambient awareness of your physical environment. Works from both the web UI and Signal.
+
+### Only entities exposed to Assist
+
+Settings › Smart Home › **Only entities exposed to Assist** limits every Home Assistant
+tool (and the compact home glance) to the same curated list Home Assistant's own assistant
+sees (Home Assistant: Settings › Voice assistants › Expose). It is read over the websocket
+command `homeassistant/expose_entity/list` and cached for five minutes; entities pinned for
+prompt injection are always included; if the lookup fails the full list is used. On a
+1,000-entity house this is the few dozen that matter, and a sensor listing goes from ~100k
+chars to ~3k. The setting lives in `bridge-config.json` (`homeAssistant.assistExposedOnly`)
+and is hydrated into the web settings from there.
 
 ### Prerequisites
 

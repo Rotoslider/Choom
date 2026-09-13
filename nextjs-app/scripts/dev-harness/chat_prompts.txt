@@ -1,0 +1,5 @@
+weather-house|What's the weather like right now, and is anything open or left on in the house?
+solar-focus|How is the solar doing today? Give me the actual numbers.
+remember|Remember that I moved the Noctua fans to the top of the rack today and the M3 Ultra runs about 4 degrees cooler now.
+recall|What have we talked about lately regarding the rack build?
+commons|Look in choom_commons and tell me if there's anything waiting for you from your sisters.
