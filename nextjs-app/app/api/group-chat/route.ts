@@ -307,12 +307,15 @@ export async function POST(request: NextRequest) {
         // run honors the `rounds` the initiator asked for (round 0 = siblings
         // react to her opening, then `rounds` more full rounds) instead of the
         // room's large auto-rounds ceiling — convergence (below) usually ends it
-        // sooner. Owner-driven web runs keep the room's autoRounds behavior.
+        // sooner. Owner-driven runs keep the room's autoRounds unless the
+        // caller passes `rounds` (the web UI never does on a plain message;
+        // the harness and API callers do — `rounds: 0` used to be ignored and
+        // still ran the room's autoRounds, 2026-09-12).
         const maxRounds = continueRun
           ? Math.max(1, roundsOverride ?? room.autoRounds)
           : initiator
             ? 1 + Math.max(1, roundsOverride ?? 3)
-            : 1 + Math.max(0, room.autoRounds);
+            : 1 + Math.max(0, roundsOverride ?? room.autoRounds);
         // Settle gap between consecutive turns: every Choom usually shares one
         // local model, so firing back-to-back large-context requests at the same
         // LM Studio endpoint can make it return an empty completion (KV-cache

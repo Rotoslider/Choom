@@ -86,3 +86,12 @@ describe('group-chat route: owner preemption and user-asked rooms (source contra
     expect(route).toContain("const isInitiatorRun = !!initiatorChoomId && !continueRun && triggerSourceForLock !== 'chat';");
   });
 });
+
+describe('group-chat round cap (2026-09-12)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'app', 'api', 'group-chat', 'route.ts'), 'utf-8') as string;
+  test('an owner message honours an explicit rounds override (rounds: 0 = one round, no auto-rounds)', () => {
+    expect(src).toContain(': 1 + Math.max(0, roundsOverride ?? room.autoRounds);');
+    expect(src).not.toContain(': 1 + Math.max(0, room.autoRounds);');
+  });
+});
