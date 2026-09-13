@@ -1976,13 +1976,18 @@ Be practical. Only work on things that can actually be accomplished with the too
                 except Exception:
                     pass
 
+                # (A server-side pre-built grounding block was measured on
+                # 2026-09-12 and lost every A/B pair; it stays opt-in in the app
+                # — settings.llm.heartbeatGrounding — so the wording below has
+                # to be right either way: if results are already attached, use
+                # them.)
                 awareness_parts.append(
-                    "Before your task, ground yourself in recent context. "
-                    "Call search_memories to recall recent conversations with Donny — "
-                    "what he's told you, where he's been, what he's been working on. "
-                    "You also have get_weather, get_calendar_events, "
-                    "check_inbox (what your sisters or Donny left for you), "
-                    "and workspace_list_files if relevant to your task."
+                    "Before your task, ground yourself in recent context — in ONE round if you can: "
+                    "call search_memories (recent conversations with Donny — what he's told you, where "
+                    "he's been, what he's been working on) together with whatever else the task needs: "
+                    "get_weather, get_calendar_events, ha_get_home_status, check_inbox (what your "
+                    "sisters or Donny left for you), workspace_list_files. If tool results already "
+                    "appear below this message, that IS your grounding — use it, do not call those tools again."
                 )
 
                 # Routines (2026-09-12): tell her what just happened to HER

@@ -203,6 +203,11 @@ export interface LLMSettings {
   // result full but trims stale re-sends of large tool payloads in the agentic
   // loop. Deterministic, relevance/error-preserving. Off by default.
   compressToolOutputs?: boolean;
+  // Wake-ups (heartbeats / self follow-ups with a fresh context) get their
+  // grounding (weather, calendar, house, inbox, memories) pre-run by the
+  // server as a completed tool exchange. OFF unless true: measured slower
+  // and costlier than letting her ground herself (see lib/chat-stream.ts).
+  heartbeatGrounding?: boolean;
   // Group-room creator model — when set, the room CREATOR (the first/host seat,
   // which is the fragile first-responder) uses this model in group turns,
   // regardless of her own default. Invited Chooms keep their own model. Lets you

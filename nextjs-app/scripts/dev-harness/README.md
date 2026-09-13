@@ -31,8 +31,17 @@ python3 scripts/dev-harness/choomrun.py --choom Genesis --model qwen/qwen3.8-27b
 
 Prompt files: `ground.txt` (the scheduler grounding preamble), `wakeup.txt`
 (a self follow-up that has to reconstruct yesterday and pick an image),
-`chat_prompts.txt` and `open_prompts.txt` (ordinary asks, and asks that need
-skills outside the core set).
+`wakeup3.txt` / `wakeup3_old.txt` (the same evening reflection with the
+"grounding is attached" and the "ground yourself" preambles — the A/B pair for
+`--grounding`, the opt-in pre-built grounding block, which lost 3/3 pairs on
+2026-09-12), `chat_prompts.txt` and `open_prompts.txt` (ordinary asks, and asks
+that need skills outside the core set).
+
+A wake-up prompt is a real turn for her: keep it clear of her real schedule
+(a test "evening wind-down" made DeepSeek try to cancel her real 9 PM entry as
+a duplicate — say "do not change your schedule during this wake-up"), and
+after the run check `selfies_<choom>/growth_journal.md`, `*/snapshots/`,
+`choom_commons/camera_snapshots/` and the memory server for what she wrote.
 
 ## A room
 

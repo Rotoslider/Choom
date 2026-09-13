@@ -27,6 +27,7 @@ import {
   type FallbackConfig, type DetectedProject,
 } from '@/lib/chat-shared';
 import { runAgenticLoop } from '@/lib/agentic-loop';
+import { buildHeartbeatGrounding } from '@/lib/heartbeat-grounding';
 import type { LLMSettings, ToolCall, ToolResult, ToolDefinition, ImageGenSettings, WeatherSettings, LLMProviderConfig } from '@/lib/types';
 import type { Choom, Chat, Message } from '@prisma/client';
 
@@ -186,6 +187,44 @@ export async function runChatTurn(params: ChatTurnParams): Promise<void> {
           if (compactionWasPerformed) {
             send({ type: 'compaction', messagesDropped: compactionStats.messagesDropped,
                    tokensBefore: compactionStats.tokensBefore, tokensAfter: compactionStats.tokensAfter });
+          }
+
+          // ================================================================
+          // WAKE-UP GROUNDING — run the opening tool set server-side, once,
+          // in parallel, before the first model call (lib/heartbeat-grounding).
+          // OPT-IN (settings.llm.heartbeatGrounding = true). Measured 2026-09-12
+          // on three A/B pairs and it lost every one: the block enlarges every
+          // iteration's prefill and she makes her task-driven calls anyway
+          // (DeepSeek 113k/129k vs 62k/65k prompt tokens, 64-83s vs 15-65s;
+          // Gemma 4 31B 40k vs 59k tokens but 308s vs 196s). Her own opening
+          // grounding is already parallel (3-4 calls in iteration 1).
+          // ================================================================
+          if (isHeartbeat && freshContext && !noTools && !isGroupTurn && !isDelegation
+              && (clientLLMSettings as Record<string, unknown>)?.heartbeatGrounding === true
+              && activeTools.length > 0) {
+            const g0 = Date.now();
+            try {
+              const grounding = await buildHeartbeatGrounding({
+                prompt: message,
+                activeTools,
+                execute: async (call) => {
+                  send({ type: 'tool_call', toolCall: call });
+                  traceBuilder.toolCallStart(call.id);
+                  const r = skillDispatch ? await executeToolCallViaSkills(call, ctx) : await executeToolCall(call, ctx);
+                  traceBuilder.recordToolCall({ id: call.id, name: call.name, args: call.arguments, success: !r.error, error: r.error, iteration: 0, parallel: true });
+                  send({ type: 'tool_result', toolResult: r });
+                  return r;
+                },
+              });
+              for (const m of grounding.messages) currentMessages.push(m);
+              allToolCalls.push(...grounding.toolCalls);
+              allToolResults.push(...grounding.toolResults);
+              const line = grounding.summary.map(s => `${s.name} ${s.chars}c/${s.ms}ms${s.error ? ' ✗' : ''}`).join(', ');
+              console.log(`   🌅 [${choom.name}] Wake-up grounding pre-built in ${Date.now() - g0}ms: ${line}${grounding.skipped.length ? ` (skipped: ${grounding.skipped.join(', ')})` : ''}`);
+              serverLog(choomId, logChatId, 'info', 'system', 'Wake-up grounding pre-built', line, { ms: Date.now() - g0, skipped: grounding.skipped });
+            } catch (err) {
+              console.warn(`   ⚠️  [${choom.name}] Wake-up grounding failed, she will ground herself:`, err instanceof Error ? err.message : err);
+            }
           }
 
           // ================================================================

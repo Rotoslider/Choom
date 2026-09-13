@@ -461,7 +461,9 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
   }
 
   private async cancelFollowup(toolCall: ToolCall, ctx: SkillHandlerContext): Promise<ToolResult> {
-    const id = (toolCall.arguments.id as string || '').trim();
+    // `followup_id` / `followupId` / `ids`: names models improvise (DeepSeek, 2026-09-12).
+    const a = toolCall.arguments;
+    const id = String(a.id ?? a.followup_id ?? a.followupId ?? a.followup ?? (Array.isArray(a.ids) && a.ids.length === 1 ? a.ids[0] : '') ?? '').trim();
     if (!id) return this.error(toolCall, 'id is required — use list_self_followups to see your pending ids, or id="all" to cancel them all.');
 
     // Bulk cancel: clear every pending followup in ONE call. Eve had ~15 to clear

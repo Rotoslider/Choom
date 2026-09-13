@@ -66,6 +66,7 @@ def main():
     ap.add_argument('--chat-title', default='[Test] Phase 1')
     ap.add_argument('--fresh', action='store_true')
     ap.add_argument('--heartbeat', action='store_true')
+    ap.add_argument('--grounding', action='store_true', help='heartbeat only: turn on the opt-in pre-built grounding block (A/B; measured worse 2026-09-12)')
     ap.add_argument('--max-iterations', type=int)
     ap.add_argument('--label', default='run')
     ap.add_argument('--out', default=None, help='append JSON summary line to this file')
@@ -90,6 +91,7 @@ def main():
     if a.ha_exposed_only: payload['settings'].setdefault('homeAssistant', {})['assistExposedOnly'] = True
     if a.fresh: payload['freshContext'] = True
     if a.heartbeat: payload['isHeartbeat'] = True
+    if a.grounding: payload['settings']['llm']['heartbeatGrounding'] = True
     if a.max_iterations: payload['maxIterationsOverride'] = a.max_iterations
 
     print(f'▶ {a.label}: {a.choom} on {override["model"]} chat={chat_id}', flush=True)
