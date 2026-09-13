@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { writeFile } from 'fs/promises';
+import { loadConfig, snapshotConfig, CONFIG_PATH } from '@/lib/bridge-config-store';
 import prisma from '@/lib/db';
 
 // GET /api/group-chats/[id] - Room + participants
@@ -69,6 +71,18 @@ export async function DELETE(request: NextRequest, { params }: { params: Promise
     // has no FK relation, so these would otherwise be orphaned forever.
     await prisma.activityLog.deleteMany({ where: { chatId: { in: [id, ...scratchIds] } } });
     await prisma.groupRoom.delete({ where: { id } });
+    // If this was the Signal default room, forget it: a stale pointer made a
+    // "group:" Signal message answer with a bare 404 (2026-09-12).
+    try {
+      const cfg = await loadConfig();
+      if (cfg.defaultGroupRoomId === id) {
+        await snapshotConfig('room-deleted');
+        await writeFile(CONFIG_PATH, JSON.stringify({ ...cfg, defaultGroupRoomId: null }, null, 2));
+        console.log(`   📵 Room ${id} was the Signal default — cleared defaultGroupRoomId`);
+      }
+    } catch (cfgErr) {
+      console.warn('Could not clear the Signal default room from bridge-config:', cfgErr instanceof Error ? cfgErr.message : cfgErr);
+    }
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('Failed to delete room:', error);

@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Optional
 
 import re
+import requests
 import config
 from signal_handler import get_signal_handler, MessageParser
 from choom_client import get_choom_client, get_tts_client, get_stt_client
@@ -44,6 +45,40 @@ logging.basicConfig(
     handlers=_log_handlers,
 )
 logger = logging.getLogger(__name__)
+
+
+def resolve_signal_room(default_id, list_rooms, get_room):
+    """Pick the room a "group:" Signal message goes to.
+
+    The configured default can point at a room that was deleted from the web
+    app (2026-09-12: zero rooms existed and the default id was a deleted one,
+    so a Signal "group:" message would have come back as a bare 404). Returns
+    (room, note): room is None when there is nothing to route to, and `note`
+    is a line for the owner when the default was missing or replaced.
+    """
+    if default_id:
+        try:
+            room = get_room(default_id)
+            if isinstance(room, dict) and room.get("id") and not room.get("archived"):
+                return room, None
+        except Exception as e:
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            if status not in (404, None):
+                raise
+    try:
+        rooms = list_rooms() or []
+    except Exception:
+        rooms = []
+    if isinstance(rooms, dict):
+        rooms = rooms.get("rooms") or rooms.get("data") or []
+    live = [r for r in rooms if isinstance(r, dict) and r.get("id") and not r.get("archived")]
+    if not live:
+        return None, ("No group room to talk to. Open Group Rooms in the web app, create a room, "
+                      "and set it as the Signal default.")
+    live.sort(key=lambda r: str(r.get("updatedAt") or r.get("createdAt") or ""), reverse=True)
+    pick = live[0]
+    why = "was deleted" if default_id else "was never set"
+    return pick, f'(Your Signal room {why}; using "{pick.get("title") or pick["id"]}" instead.)'
 
 
 class SignalBridge:
@@ -356,17 +391,26 @@ class SignalBridge:
         rendered before the next, with images attached. Same room as the web
         app (shared DB), so context carries across devices."""
         try:
-            from task_config import load_config as load_bridge_config
+            from task_config import load_config as load_bridge_config, save_config as save_bridge_config
             cfg = load_bridge_config()
-            room_id = cfg.get("defaultGroupRoomId")
-            if not room_id:
-                self._send_response(
-                    source,
-                    "No default group room is set. Open Group Rooms in the web app, "
-                    "create a room, and set it as the Signal default.",
-                    "Rooms",
-                )
+            room, note = resolve_signal_room(
+                cfg.get("defaultGroupRoomId"),
+                list_rooms=lambda: self.choom._make_request("GET", "/api/group-chats").json(),
+                get_room=lambda rid: self.choom._make_request("GET", f"/api/group-chats/{rid}").json(),
+            )
+            if room is None:
+                self._send_response(source, note, "Rooms")
                 return
+            room_id = room["id"]
+            if note:
+                # The configured room is gone; we fell back to another one. Say
+                # so once and remember the fallback so the next message is quiet.
+                self._send_response(source, note, "Rooms")
+                try:
+                    cfg["defaultGroupRoomId"] = room_id
+                    save_bridge_config(cfg)
+                except Exception as save_err:
+                    logger.warning(f"Could not persist fallback Signal room: {save_err}")
 
             logger.info(f"Routing to group room {room_id} | Message: '{message_text[:80]}'")
 
@@ -374,9 +418,25 @@ class SignalBridge:
                 # Deliver this speaker's turn immediately: text + their voice + images.
                 self._send_response(source, content, name, images)
 
-            spoke = self.choom.send_group_message(room_id, message_text, on_speaker)
+            def on_error(name, error):
+                # A speaker that errored used to vanish silently from the phone.
+                self._send_response(source, f"({name} hit an error and did not reply: {str(error)[:160]})", "Rooms")
+
+            spoke = self.choom.send_group_message(room_id, message_text, on_speaker, on_error=on_error)
             if spoke == 0:
                 self._send_response(source, "(Everyone in the room had nothing to add.)", "Rooms")
+        except requests.HTTPError as e:
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            if status == 409:
+                # The owner's message already waits up to 25s for a running
+                # Choom-initiated run to yield (2026-09-12); this is the rare
+                # case where it did not.
+                self._send_response(source, "The room is busy right now (a conversation is in progress). Try again in a moment.", "Rooms")
+            elif status == 404:
+                self._send_response(source, "That room does not exist any more. Open Group Rooms in the web app and set a Signal default.", "Rooms")
+            else:
+                logger.error(f"Error processing group message: {e}", exc_info=True)
+                self._send_response(source, f"Group room error: {str(e)}", "Rooms")
         except Exception as e:
             logger.error(f"Error processing group message: {e}", exc_info=True)
             self._send_response(source, f"Group room error: {str(e)}", "Rooms")

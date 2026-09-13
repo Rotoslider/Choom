@@ -465,7 +465,7 @@ class ChoomClient:
 
         return default_settings
 
-    def send_group_message(self, room_id: str, message: str, on_speaker, owner_name: str = None) -> int:
+    def send_group_message(self, room_id: str, message: str, on_speaker, owner_name: str = None, on_error=None) -> int:
         """Send a message into a group room and stream each Choom's reply.
 
         Calls the Next.js /api/group-chat orchestrator and invokes
@@ -524,6 +524,13 @@ class ChoomClient:
                         on_speaker(name, content, voice_id, imgs)
                     except Exception as cb_err:
                         logger.error(f"Group on_speaker callback failed for {name}: {cb_err}")
+            elif etype == 'speaker_error':
+                logger.error(f"Group speaker error ({data.get('speakerName')}): {data.get('error')}")
+                if on_error:
+                    try:
+                        on_error(data.get('speakerName') or 'A Choom', data.get('error') or 'unknown error')
+                    except Exception as cb_err:
+                        logger.error(f"Group on_error callback failed: {cb_err}")
             elif etype == 'error':
                 logger.error(f"Group chat error: {data.get('error')}")
                 raise Exception(data.get('error', 'Unknown group error'))

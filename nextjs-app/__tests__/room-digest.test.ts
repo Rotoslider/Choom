@@ -95,3 +95,13 @@ describe('group-chat round cap (2026-09-12)', () => {
     expect(src).not.toContain(': 1 + Math.max(0, room.autoRounds);');
   });
 });
+
+describe('deleting the Signal default room clears the bridge pointer (2026-09-12)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'app', 'api', 'group-chats', '[id]', 'route.ts'), 'utf-8') as string;
+  test('DELETE nulls defaultGroupRoomId when it matches, after a snapshot', () => {
+    expect(src).toContain("if (cfg.defaultGroupRoomId === id) {");
+    expect(src).toContain("await snapshotConfig('room-deleted');");
+    expect(src).toContain('defaultGroupRoomId: null');
+  });
+});
