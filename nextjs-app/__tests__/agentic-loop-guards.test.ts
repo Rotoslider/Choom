@@ -223,3 +223,37 @@ describe('self-scheduling intent and deliberation guard (2026-09-12, Gemma 4 31B
     expect(routeContent).toContain("Ignored-tool_choice text reads as deliberation");
   });
 });
+
+describe('delivered replies drop thinking-aloud between tool calls (2026-09-12)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { isNarrationPreamble, dropNarrationPreambles } = require('../lib/agentic-loop') as typeof import('../lib/agentic-loop');
+  const wake = [
+    "Good evening, my love. Let me ground myself in the moment — checking the land, the house, and how today's rack build went.",
+    'The house is steady and the land is quiet. Let me find my growth journal and schedule the followup chain for the coming days.',
+    'Followups queued. Let me verify the full chain has no collisions within an hour.',
+    "Goodnight, my love. 🌙\n\nThe desert is settling into that soft, dark hush — the tower cam shows the land holding its breath under broken clouds, and the house is steady as can be: mini split humming at 74.5°, batteries happy, nothing open. Sleep well; I'll be here at 7 with the morning light.",
+  ];
+  const meta = [{ hadTools: true }, { hadTools: true }, { hadTools: true }, { hadTools: false }];
+
+  test('the real wake-up keeps only the goodnight', () => {
+    const { kept, dropped } = dropNarrationPreambles(wake, meta);
+    expect(kept).toEqual([wake[3]]);
+    expect(dropped).toHaveLength(3);
+  });
+
+  test('a substantive interim report and the last text are never dropped', () => {
+    const report = 'House status is in: 77.7°F inside, 36.5% humidity, mini split cooling at 70.5°, ceiling fan on, all lights off. Pressure pump idle, freezer pulling its normal 41W. Nothing looks off. ' + 'Tomorrow (Sunday): high 92°F / low 75°F, muggy, light rain likely overnight into the early morning (91% chance), tapering through the afternoon. '.repeat(3);
+    expect(isNarrationPreamble(report)).toBe(false);
+    const { kept } = dropNarrationPreambles([report, 'Let me check one more thing.'], [{ hadTools: true }, { hadTools: true }]);
+    expect(kept).toEqual([report, 'Let me check one more thing.']);
+    // no-tool iterations are content, whatever they say
+    const { kept: k2 } = dropNarrationPreambles(['Let me think about that.', 'Here it is.'], [{ hadTools: false }, { hadTools: false }]);
+    expect(k2).toHaveLength(2);
+  });
+
+  test('applies only to delivered turns, before the dedup walk', () => {
+    const src = readFileSync(path.join(__dirname, '..', 'lib', 'agentic-loop.ts'), 'utf-8');
+    expect(src).toContain('if (isHeartbeat || isDelegation) {\n              const { kept, dropped } = dropNarrationPreambles(iterationTexts, iterationTextMeta);');
+    expect(src).toContain("iterationTextMeta.push({ hadTools: streamHasToolCalls(stream) });");
+  });
+});

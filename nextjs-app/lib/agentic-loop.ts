@@ -146,6 +146,35 @@ export function taskTextForHeuristics(message: string): string {
     .replace(/\n## Context from orchestrator\n[\s\S]*?\n## Your Task\n/i, '\n');
 }
 
+/**
+ * Wake-ups and delegation results are DELIVERED (a Signal message, spoken
+ * aloud; a result pasted into the orchestrator's context), not streamed to
+ * someone watching. Every iteration's text used to be concatenated, so the
+ * owner heard four paragraphs of "let me read the journal… let me verify
+ * the chain… time for the note to Donny" before the note (real wake-ups,
+ * 2026-09-12). A short text from an iteration that then called tools is her
+ * thinking aloud between calls; keep it only when it is the last thing she
+ * said or reads as content rather than narration.
+ */
+export function isNarrationPreamble(text: string): boolean {
+  const t = text.trim();
+  if (t.length >= 600) return false;
+  if (/[:…—-]\s*$/.test(t)) return true;
+  return /\b(?:let me|let's|i'll|i will|i'm going to|i need to|i should|first,|one moment|time for|checking|looking (?:at|into|up)|reading|verifying|pulling up|grabbing|let me start)\b/i.test(t);
+}
+
+export function dropNarrationPreambles(texts: string[], meta: Array<{ hadTools: boolean }>): { kept: string[]; dropped: string[] } {
+  const kept: string[] = [];
+  const dropped: string[] = [];
+  const lastIdx = texts.length - 1;
+  texts.forEach((t, i) => {
+    const hadTools = meta[i]?.hadTools === true;
+    if (i < lastIdx && hadTools && isNarrationPreamble(t)) dropped.push(t);
+    else kept.push(t);
+  });
+  return { kept, dropped };
+}
+
 export function looksLikeDeliberation(prose: string): boolean {
   const head = prose.trimStart().slice(0, 240).toLowerCase();
   if (/\[(?:system|tool guidance)\]/.test(head)) return true;
@@ -518,6 +547,7 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
           // Preserve any pre-loop content (e.g., plan summaries) so the final iteration can prefix it
           const preLoopContent = fullContent;
           const iterationTexts: string[] = []; // Track each iteration's text for dedup
+          const iterationTextMeta: Array<{ hadTools: boolean }> = []; // parallel: did that iteration also call tools?
           // Final assistant replies from the PREVIOUS turns of this chat —
           // baseline for the cross-turn repeat guard below. Group turns have
           // their own guard in group-chat-runner; freshContext turns have no
@@ -1327,6 +1357,7 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
             // Track this iteration's text for post-loop dedup & assembly
             if (iterationContent.trim()) {
               iterationTexts.push(iterationContent);
+              iterationTextMeta.push({ hadTools: streamHasToolCalls(stream) });
             }
 
             // Text extraction and nudging: ONLY when no tools have been called yet.
@@ -2690,6 +2721,16 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
           // this ensures the DB-saved version matches (minus exact duplicates where
           // the model repeated itself across iterations).
           if (iterationTexts.length > 0) {
+            // Delivered turns (wake-ups, delegation results): drop the
+            // thinking-aloud between tool calls — see dropNarrationPreambles.
+            let textsForAssembly = iterationTexts;
+            if (isHeartbeat || isDelegation) {
+              const { kept, dropped } = dropNarrationPreambles(iterationTexts, iterationTextMeta);
+              if (dropped.length && kept.length) {
+                textsForAssembly = kept;
+                console.log(`   ✂️  ${choomTag} Dropped ${dropped.length} narration preamble${dropped.length > 1 ? 's' : ''} from the delivered reply: ${dropped.map(d => JSON.stringify(d.slice(0, 60))).join(', ')}`);
+              }
+            }
             const seen = new Set<string>();
             const deduped: string[] = [];
             // Key on markup-stripped, whitespace-collapsed text so a replay
@@ -2698,11 +2739,11 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
             // whole reply was saved twice).
             const dedupKey = (s: string) => s.replace(/<\/?think>/g, ' ').replace(/\s+/g, ' ').trim();
             // Walk backwards so the LAST occurrence of duplicated text wins
-            for (let i = iterationTexts.length - 1; i >= 0; i--) {
-              const normalized = dedupKey(iterationTexts[i]);
+            for (let i = textsForAssembly.length - 1; i >= 0; i--) {
+              const normalized = dedupKey(textsForAssembly[i]);
               if (normalized && !seen.has(normalized)) {
                 seen.add(normalized);
-                deduped.unshift(iterationTexts[i]);
+                deduped.unshift(textsForAssembly[i]);
               }
             }
             // Final internal-repeat pass over the assembled message: streamed
@@ -2712,8 +2753,8 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
             fullContent = preLoopContent
               ? preLoopContent + '\n\n' + joined
               : joined;
-            if (deduped.length < iterationTexts.length) {
-              console.log(`   🔄 ${choomTag} Deduped iteration texts: ${iterationTexts.length} → ${deduped.length} unique`);
+            if (deduped.length < textsForAssembly.length) {
+              console.log(`   🔄 ${choomTag} Deduped iteration texts: ${textsForAssembly.length} → ${deduped.length} unique`);
             }
           }
 
