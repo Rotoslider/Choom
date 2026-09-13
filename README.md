@@ -926,6 +926,21 @@ Pass 3 of within-turn compaction never leaves a tool result without its parent `
   never treated as a duplicate.
 - **Scheduler**: a heartbeat / self follow-up that fails sends the owner one Signal line
   and the entry is marked `error`; the bridge read timeout (960s) sits above the room ceiling.
+- **Delivered turns** (wake-ups, delegation results): a short text from an iteration that
+  then called tools and reads as narration ("let me read the journal…") is dropped from the
+  assembled reply, so Signal and TTS get the message, not the thinking aloud; a text with
+  no letter or digit is never part of a reply; the suppressed `send_notification` result
+  says the reply already written is the delivery. (Real wake-ups on 2026-09-12/13 reached
+  the phone as four "let me…" paragraphs before the note, then as the same good-morning
+  three times.)
+- **Heuristics read the task, not the boilerplate**: the unfinished-steps check sees the
+  task text only — never a delegation's `RULES` block or a wake-up's awareness preamble.
+  Both contained "read … files", which nudged a worker into rewriting her own growth
+  journal and a 7 AM routine into a third grounding pass.
+- **Self-scheduling**: a one-shot within 20 minutes of an existing wake-up, or of a
+  routine that fires that day, is not added (the reply names what covers it); a new
+  routine returns `now_redundant`, the one-shots it replaces. The first live wake with
+  this guard refused 3 of 5 attempted duplicates.
 
 ### The inboxes
 
