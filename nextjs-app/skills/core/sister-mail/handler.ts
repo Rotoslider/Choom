@@ -1,4 +1,5 @@
 import { BaseSkillHandler, SkillHandlerContext } from '@/lib/skill-handler';
+import { parseDataUri } from '@/lib/data-uri';
 import type { ToolCall, ToolResult } from '@/lib/types';
 import prisma from '@/lib/db';
 import * as fs from 'fs';
@@ -63,11 +64,12 @@ export default class SisterMailHandler extends BaseSkillHandler {
         if (imageId) {
           const gen = await prisma.generatedImage.findUnique({ where: { id: imageId } });
           const dataUrl = gen?.imageUrl || '';
-          const m = /^data:image\/(png|jpe?g|webp|gif);base64,(.+)$/i.exec(dataUrl);
-          if (!gen || !m) return this.error(toolCall, `Image id "${imageId}" was not found or is not a stored image. Use the id returned by generate_image this turn, or file_path for a saved file.`);
-          const ext = m[1].toLowerCase() === 'jpeg' ? 'jpg' : m[1].toLowerCase();
+          const parsed = parseDataUri(dataUrl);
+          const sub = parsed ? parsed.contentType.toLowerCase().replace(/^image\//, '') : '';
+          if (!gen || !parsed || !['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(sub)) return this.error(toolCall, `Image id "${imageId}" was not found or is not a stored image. Use the id returned by generate_image this turn, or file_path for a saved file.`);
+          const ext = sub === 'jpeg' ? 'jpg' : sub;
           const fname = `${when.toISOString().slice(0, 10)}_from_${choomSlug(me)}_${(title || 'image').toLowerCase().replace(/[^a-z0-9]+/g, '_').slice(0, 32) || 'image'}.${ext}`;
-          fs.writeFileSync(path.join(dirAbs, fname), Buffer.from(m[2], 'base64'));
+          fs.writeFileSync(path.join(dirAbs, fname), parsed.buffer);
           attachments.push(fname);
         }
 

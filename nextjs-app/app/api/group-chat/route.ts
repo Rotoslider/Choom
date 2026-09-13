@@ -1,4 +1,5 @@
 import { NextRequest } from 'next/server';
+import { parseDataUri } from '@/lib/data-uri';
 import fs from 'fs';
 import path from 'path';
 import prisma from '@/lib/db';
@@ -64,14 +65,17 @@ const TRANSCRIPT_WINDOW = 24;
 function saveRoomImage(projectFolder: string | null, choomName: string, dataUrl: string, idHint: string): string | null {
   if (!projectFolder || !dataUrl?.startsWith('data:image')) return null;
   try {
-    const m = dataUrl.match(/^data:image\/(\w+);base64,(.+)$/s);
-    if (!m) return null;
-    const ext = m[1] === 'jpeg' ? 'jpg' : m[1];
+    // No regex over the payload: a capture group on a multi-MB base64 string
+    // overflows V8's regex stack (the image file route hit it, 2026-09-13).
+    const parsed = parseDataUri(dataUrl);
+    const sub = parsed?.contentType.startsWith('image/') ? parsed.contentType.slice(6).replace(/[^a-z0-9]/gi, '') : '';
+    if (!parsed || !sub) return null;
+    const ext = sub === 'jpeg' ? 'jpg' : sub;
     const slug = choomName.toLowerCase().replace(/[^a-z0-9]+/g, '');
     const rel = path.join(projectFolder, 'images', `${slug}-${idHint.slice(-8)}.${ext}`);
     const abs = path.join(WORKSPACE_ROOT, rel);
     fs.mkdirSync(path.dirname(abs), { recursive: true });
-    fs.writeFileSync(abs, Buffer.from(m[2], 'base64'));
+    fs.writeFileSync(abs, parsed.buffer);
     return rel;
   } catch (e) {
     console.warn('saveRoomImage failed:', (e as Error).message);
