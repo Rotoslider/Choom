@@ -1,4 +1,5 @@
 import { BaseSkillHandler, type SkillHandlerContext } from '@/lib/skill-handler';
+import { localFileStamp, localTimeString } from '@/lib/time-context';
 import { HomeAssistantService, type HomeAssistantSettings, type HAEntity } from '@/lib/homeassistant-service';
 import { WorkspaceService } from '@/lib/workspace-service';
 import { WORKSPACE_ROOT } from '@/lib/config';
@@ -784,7 +785,8 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
           const choomName = ((ctx.choom as Record<string, unknown>)?.name as string) || 'unassigned';
           const choomSlug = choomName.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'unassigned';
           const entityName = entityId.split('.').pop() || 'camera';
-          const stamp = new Date().toISOString().slice(0, 16).replace('T', '_').replace(/:/g, '-');
+          // Local time, not UTC: a file named …_20-23 was read back as "8:23" (2026-09-13).
+          const stamp = localFileStamp();
           const defaultPath = `selfies_${choomSlug}/${entityName}_${stamp}.jpg`;
 
           let savePath = args.save_path as string | undefined;
@@ -853,7 +855,7 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
             path: savePath,
             ...(savedImageId && { imageId: savedImageId }),
             sizeKB: Math.round(imageBuffer.length / 1024),
-            captured_at: new Date().toISOString(),
+            captured_at: localTimeString(),
             ...(presetInfo && presetInfo.options.length && {
               presets: presetInfo.options,
               move_to_preset: `ha_call_service(domain="select", service="select_option", entity_id="${presetInfo.entity_id}", service_data={"option":"<one of presets>"})`,

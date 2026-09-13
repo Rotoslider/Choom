@@ -1,4 +1,5 @@
 import { BaseSkillHandler, SkillHandlerContext } from '@/lib/skill-handler';
+import { localTimeString } from '@/lib/time-context';
 import type { ToolCall, ToolResult } from '@/lib/types';
 import prisma from '@/lib/db';
 import { Agent, fetch as undiciFetch } from 'undici';
@@ -655,7 +656,7 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
                   `# Delegation Progress — ${targetChoom.name}`,
                   `**Task:** ${task.slice(0, 200)}`,
                   `**Status:** ${stillRunning ? 'Still running (detached)' : 'Connection lost'} after ${elapsed}s (${toolCallsUsed.length} tool calls, ${doneIterations || '?'} iterations)`,
-                  `**Time:** ${new Date().toISOString()}`,
+                  `**Time:** ${localTimeString()}`,
                   '',
                   '## Tool Calls Made',
                   ...toolCallsUsed.map((tc, i) => `${i + 1}. ${tc.name}${tc.result ? `: ${String(tc.result).slice(0, 200)}` : ''}`),

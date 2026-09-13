@@ -321,7 +321,21 @@ export class LLMClient {
 // 200 chars, and REQUIRED parameters keep their docs at up to 80 chars —
 // measured at ~+5k tokens across the full 131-tool set, on prompts that
 // run 80-90k in production.
+/**
+ * Parameters whose full documentation must reach the model even though the
+ * slimming below drops optional-parameter docs and caps the rest at 80 chars.
+ * generate_image: the `prompt` rule ("never describe the hair, face, eyes or
+ * build of anyone referenced") was cut at 80 chars, and `references` — which
+ * carries the "Available references" catalog the chat route appends — is
+ * optional, so its docs were dropped entirely. Three sisters in a room then
+ * described each other's hair and skin and got strangers back (2026-09-13).
+ */
+const KEEP_FULL_PARAM_DOCS: Record<string, ReadonlySet<string>> = {
+  generate_image: new Set(['prompt', 'references']),
+};
+
 export function slimToolDefinition(t: ToolDefinition): Record<string, unknown> {
+  const keepFull = KEEP_FULL_PARAM_DOCS[t.name];
   // Keep whole sentences while they fit in 200 chars.
   let desc = t.description;
   if (desc.length > 200) {
@@ -342,7 +356,9 @@ export function slimToolDefinition(t: ToolDefinition): Record<string, unknown> {
       if (param.default !== undefined) slim.default = param.default;
       // Required params keep their docs — "what goes here" is the difference
       // between a call that works and a param error (or a phantom narration).
-      if (required.has(key) && typeof param.description === 'string' && param.description) {
+      if (keepFull?.has(key) && typeof param.description === 'string' && param.description) {
+        slim.description = param.description;
+      } else if (required.has(key) && typeof param.description === 'string' && param.description) {
         slim.description = param.description.length > 80
           ? param.description.slice(0, 77) + '...'
           : param.description;

@@ -73,3 +73,34 @@ describe('parameter docs', () => {
     expect(out.parameters.required).toEqual(['at', 'prompt']);
   });
 });
+
+describe('generate_image keeps its craft docs on the wire (2026-09-13)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { tools: imageGenerationTools } = require('../skills/core/image-generation/tools') as { tools: ToolDefinition[] };
+  const gen = imageGenerationTools.find(t => t.name === 'generate_image')!;
+
+  test('the likeness rule is in the first sentence and survives the 200-char cut', () => {
+    const out = slimToolDefinition(gen) as Slimmed;
+    expect(out.description).toContain('never the hair, face, eyes or build of anyone referenced');
+    expect(out.description).toContain('`references`');
+  });
+
+  test('prompt and references keep their FULL docs, including an appended catalog; other optional params stay doc-less', () => {
+    const withCatalog: ToolDefinition = {
+      ...gen,
+      parameters: {
+        ...gen.parameters,
+        properties: {
+          ...gen.parameters.properties,
+          references: { ...gen.parameters.properties.references, description: gen.parameters.properties.references.description + '\n\nAvailable references:\n- "genesis" — Genesis\n- "eve" — Eve' },
+        },
+      },
+    };
+    const out = slimToolDefinition(withCatalog) as Slimmed;
+    expect(out.parameters.properties.prompt.description).toBe(gen.parameters.properties.prompt.description);
+    expect(out.parameters.properties.prompt.description).toContain('Do NOT describe the face, hair');
+    expect(out.parameters.properties.references.description).toContain('Available references:\n- "genesis"');
+    expect(out.parameters.properties.references.description).toContain('ORDER MATTERS');
+    expect(out.parameters.properties.negative_prompt.description).toBeUndefined();
+  });
+});

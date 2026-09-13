@@ -937,6 +937,17 @@ Pass 3 of within-turn compaction never leaves a tool result without its parent `
   task text only — never a delegation's `RULES` block or a wake-up's awareness preamble.
   Both contained "read … files", which nudged a worker into rewriting her own growth
   journal and a 7 AM routine into a third grounding pass.
+- **What the model actually sees of a tool**: `slimToolDefinition` keeps whole sentences of
+  a description up to 200 chars, required params' docs to 80 chars, and drops optional
+  params' docs. `generate_image` is the exception: `prompt` and `references` keep their
+  full docs (the likeness rule and the "Available references" catalog the chat route
+  appends), and the rule is the first sentence of the description. Three sisters in a
+  room described each other's hair and skin and got strangers back because none of that
+  reached them (2026-09-13).
+- **Local time in tool results**: anything a Choom might repeat to the owner is formatted
+  in `America/Denver` with the zone name (`localTimeString`, `localFileStamp` in
+  `lib/time-context.ts`). The camera snapshot's UTC `captured_at` and `…_20-23.jpg` file
+  name had Eve announce a 2:23 PM picture as "8:23".
 - **Self-scheduling**: a one-shot within 20 minutes of an existing wake-up, or of a
   routine that fires that day, is not added (the reply names what covers it); a new
   routine returns `now_redundant`, the one-shots it replaces. The first live wake with

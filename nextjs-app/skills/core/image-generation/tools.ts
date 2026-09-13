@@ -3,8 +3,10 @@ import type { ToolDefinition } from '@/lib/types';
 export const tools: ToolDefinition[] = [
   {
     name: 'generate_image',
+    // The first ~200 chars are all a slimmed schema keeps: the likeness rule
+    // has to be in them.
     description:
-      'Generate an image using Stable Diffusion. Use when the user requests an image, picture, or artwork. Use self_portrait mode when generating an image of yourself.',
+      'Generate an image: name each person from the reference library in `references`; describe clothing, pose, expression, lighting, setting, mood, never the hair, face, eyes or build of anyone referenced. Use self_portrait mode for a picture of yourself. Use when the user requests an image, picture, or artwork.',
     parameters: {
       type: 'object',
       properties: {
