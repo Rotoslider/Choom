@@ -1416,7 +1416,7 @@ Everything you can do from a Signal text. Text **`help`** to get this list in-ap
 |-----------|--------------|
 | *(any message)* | Talks to the default Choom |
 | `Eve, …` / `Genesis: …` | Address a specific Choom by name |
-| `group: …` / `room: …` | Talk to the whole group room (the shared `defaultGroupRoomId` room) |
+| `group: …` / `room: …` | Talk to the whole group room (the shared `defaultGroupRoomId` room). If that room was deleted, the bridge falls back to your newest live room and says so once (deleting the default room in the web app also clears the pointer); with no rooms at all it tells you to create one. A busy room or a speaker error comes back as one plain line instead of an HTTP error. |
 | `idea: …` · `note: …` · `todo: …` · `goal: …` · `brain: …` · `capture: …` | Save straight to the **Second Brain** (memory DB) as a task. `goal:` is tagged for the goal-review. Browse everything at `/memories`. Chooms' morning briefing + goal-review surface these |
 | `remind me … at 3pm` / `remind me in 30 minutes …` | Create a reminder (persists across restarts) |
 | `what's on my calendar` · `add event …` | Calendar |
