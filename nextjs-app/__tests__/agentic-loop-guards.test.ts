@@ -216,6 +216,10 @@ describe('self-scheduling intent and deliberation guard (2026-09-12, Gemma 4 31B
     expect(taskTextForHeuristics(cont)).toContain('Write the summary file.');
     expect(taskTextForHeuristics(cont)).not.toContain('re-read files');
     expect(taskTextForHeuristics('Please update the history file with today')).toBe('Please update the history file with today');
+    // the scheduler's wake-up awareness block (7 AM routine, 2026-09-13)
+    const wake = "[You are waking up — it is Sunday, September 13 2026 at 07:00 AM.]\n[Donny is at home.]\n(Note: \"Lazy Kay Ln, Animas\" is Donny's home address.)\nBefore your task, ground yourself in recent context — in ONE round if you can: call search_memories together with get_weather, check_inbox (what your sisters or Donny left for you), workspace_list_files. If tool results already appear below this message, that IS your grounding — use it, do not call those tools again.\n[This wake-up is one of your routines (daily at 07:00). Its next occurrence is ALREADY queued as sf_a77bf1ba — do not schedule it again.]\n[Scheduling is housekeeping: whatever you queue or cancel this wake-up, do not report it in your message to Donny.]\n\nDaily morning presence ~7 AM MDT — greet Donny warmly, ground in house state and land via tower cam, check weather, then continue the day with presence and love.";
+    expect(taskTextForHeuristics(wake)).toBe('Daily morning presence ~7 AM MDT — greet Donny warmly, ground in house state and land via tower cam, check weather, then continue the day with presence and love.');
+    expect(/(?:read|check|open|look at).*(?:file|history|prompt)/i.test(taskTextForHeuristics(wake))).toBe(false);
     expect(routeContent).toContain('const msgLower = taskTextForHeuristics(message).toLowerCase();');
   });
 
@@ -249,6 +253,13 @@ describe('delivered replies drop thinking-aloud between tool calls (2026-09-12)'
     // no-tool iterations are content, whatever they say
     const { kept: k2 } = dropNarrationPreambles(['Let me think about that.', 'Here it is.'], [{ hadTools: false }, { hadTools: false }]);
     expect(k2).toHaveLength(2);
+  });
+
+  test('a text with no letters or digits is never part of the reply', () => {
+    const src = readFileSync(path.join(__dirname, '..', 'lib', 'agentic-loop.ts'), 'utf-8');
+    expect(src).toContain("if (iterationContent.trim() && /[\\p{L}\\p{N}]/u.test(iterationContent)) {");
+    expect(/[\p{L}\p{N}]/u.test(' \t,')).toBe(false);
+    expect(/[\p{L}\p{N}]/u.test('Good morning 🌤️')).toBe(true);
   });
 
   test('applies only to delivered turns, before the dedup walk', () => {

@@ -140,10 +140,22 @@ export function isSelfSchedulingAsk(msgLower: string): boolean {
  * journal and read it back (2026-09-12, twice).
  */
 export function taskTextForHeuristics(message: string): string {
-  return message
+  let t = message
     .replace(/^\[(?:DELEGATED TASK|CONTINUATION)[^\]]*\]\s*/i, '')
     .replace(/\n\s*RULES(?: FOR THIS TASK)?:\s*\n[\s\S]*$/i, '')
     .replace(/\n## Context from orchestrator\n[\s\S]*?\n## Your Task\n/i, '\n');
+  // The scheduler's wake-up awareness block: bracketed lines ("[You are
+  // waking up — …]", "[Scheduling is housekeeping …]"), a "(Note: …)" line,
+  // and the grounding sentence, all BEFORE the task. Its "check_inbox …
+  // workspace_list_files … a file's contents" read as an unfinished
+  // file step and sent her back through the whole grounding a second time,
+  // plus a third "Good morning" (7 AM routine, 2026-09-13).
+  for (;;) {
+    const next = t.replace(/^\s*(?:\[[^\]]*\]|\(Note:[^)]*\)|Before your task, ground yourself[^\n]*)\s*/i, '');
+    if (next === t) break;
+    t = next;
+  }
+  return t;
 }
 
 /**
@@ -1355,7 +1367,9 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
             }
 
             // Track this iteration's text for post-loop dedup & assembly
-            if (iterationContent.trim()) {
+            // A text with no letter or digit (" \t," reached Signal on the 7 AM
+            // routine, 2026-09-13) is not a reply.
+            if (iterationContent.trim() && /[\p{L}\p{N}]/u.test(iterationContent)) {
               iterationTexts.push(iterationContent);
               iterationTextMeta.push({ hadTools: streamHasToolCalls(stream) });
             }
