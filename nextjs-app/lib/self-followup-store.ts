@@ -38,6 +38,18 @@ export interface QueueEntry {
   // 'room' = re-enter a group room (room_id) via the group-chat orchestrator.
   target?: 'signal' | 'room';
   room_id?: string;
+  // A routine (2026-09-12): the scheduler re-queues the next occurrence when
+  // this fires. `series_id` ties the copies together; `requeued_as` on a fired
+  // copy names the pending one that replaced it.
+  repeat?: {
+    rule: 'daily' | 'weekdays' | 'weekly' | 'monthly';
+    time: string;
+    day?: 'sun' | 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat';
+    day_of_month?: number;
+    tz: string;
+  };
+  series_id?: string;
+  requeued_as?: string;
 }
 
 export function safeChoomId(choomId: string): string {

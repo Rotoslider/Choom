@@ -1,6 +1,6 @@
 ---
 name: self-scheduling
-description: Lets a Choom queue its OWN future followup. The Choom writes a short prompt to itself; the bridge fires it as a one-shot heartbeat at the scheduled time. Use to self-trigger proactive check-ins, reminders to revisit an unfinished thread, or to wake up after an expected interval.
+description: Lets a Choom queue its OWN future followup — one-shot, or a routine (daily / weekdays / weekly / monthly) that re-queues itself. The Choom writes a short prompt to itself; the bridge fires it as a heartbeat at the scheduled time. Use to self-trigger proactive check-ins, standing rituals (evening reflection, Friday plans), reminders to revisit an unfinished thread, or to wake up after an expected interval.
 version: 1.0.0
 author: system
 tools:
@@ -20,7 +20,14 @@ dependencies: []
 ## When NOT to Use
 - You just want to respond now. This is not a "delay my reply" tool.
 - To schedule a user-facing reminder. Use `create_reminder` — that's Donny-facing. `schedule_self_followup` is YOU talking to future-you.
-- To replace the existing heartbeat cadence. This is for specific one-off followups, not recurring ticks.
+- To replace the existing heartbeat cadence. A routine is a standing ritual at a wall-clock time, not a polling tick.
+
+## Routines (recurring wake-ups)
+- Pass `repeat: "daily" | "weekdays" | "weekly" | "monthly"` and the wall-clock time in `at`. Weekly needs `day` ("fri"); monthly needs `day` as 1-28.
+- **Schedule a routine ONCE.** It re-queues itself after every fire. Never schedule next week's copy by hand, never cancel-and-re-add it each time it fires, and never keep a ladder of one-shots for the same ritual. `list_self_followups` marks routines with ↻.
+- If you call with the same rule/time/day again, you get the existing routine back (`already_scheduled: true`) — nothing is duplicated.
+- To change a routine's prompt: cancel it, then schedule the new one.
+- Room re-entries can be routines too: `schedule_room_followup` takes the same `repeat`/`day`.
 
 ## Parameters
 - `at` (preferred): the wall-clock time you want it to fire, in **Donny's local (Mountain) time** — just say the time, no math. Accepts "2026-06-26 2:05pm", "June 26 at 14:05", "tomorrow 9am", or a bare "2:05pm" (next time it's that o'clock today/tomorrow). The current local time is at the top of your context, so you can read off the date.
@@ -28,6 +35,7 @@ dependencies: []
 - Provide **either** `at` **or** `delay_minutes` (plus `prompt`). If you give neither, the call is rejected.
 - `prompt` (required): what to tell future-you when the followup fires. Write it as a message TO yourself, third-person is fine. Example: "Ask Donny how the house work went yesterday — he mentioned finishing around 6pm and was worried about the heat."
 - `reason` (optional): one-line log note for the Doctor. Example: "checking on yesterday's house project".
+- `repeat` (optional): "daily", "weekdays", "weekly" or "monthly" — makes this a routine (see above). `day`: weekday for weekly, day-of-month for monthly.
 
 ## TIME (CRITICAL)
 - All scheduling is **Donny's local time (Mountain Time)**, NOT UTC. The current time at the top of your context is already in his local timezone — work from that.

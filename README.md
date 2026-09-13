@@ -974,7 +974,7 @@ skill-name/
 | Skill | Tools | Description |
 |-------|-------|-------------|
 | `choom-delegation` | 3 | Multi-agent collaboration: delegate tasks to other Chooms, list team, retrieve results |
-| `self-scheduling` | 3 | A Choom queues its own future tick. `schedule_self_followup` / `list_self_followups` / `cancel_self_followup`. Fires as a one-shot heartbeat. Up to 100 concurrent pending per Choom (slot frees when a followup fires or is cancelled), delay clamped to [5 min, 30 days]. |
+| `self-scheduling` | 4 | A Choom queues its own future tick. `schedule_self_followup` / `schedule_room_followup` / `list_self_followups` / `cancel_self_followup`. Fires as a heartbeat — one-shot, or a routine (`repeat: daily/weekdays/weekly/monthly`) that re-queues itself. Up to 100 concurrent pending per Choom (slot frees when a followup fires or is cancelled), delay clamped to [15 min, 30 days]. |
 | `memory-management` | 9 | Semantic memory (ChromaDB): store, search, update, delete, stats |
 | `image-generation` | 1 | Stable Diffusion Forge: checkpoint switching, LoRA, self-portrait mode |
 | `web-searching` | 1 | Brave / SerpAPI / SearXNG (cascading fallback) |
@@ -1112,13 +1112,16 @@ Two top-level shared folders live alongside each Choom's `selfies_{name}/` home 
 
 ### Self-Scheduling
 
-Chooms can queue their own future ticks via the `self-scheduling` skill. A queued followup fires as a one-shot heartbeat at the scheduled time, giving the Choom a fresh turn to act.
+Chooms can queue their own future ticks via the `self-scheduling` skill. A queued followup fires as a heartbeat at the scheduled time, giving the Choom a fresh turn to act — as a one-shot, or as a **routine** that re-queues itself.
 
-- `schedule_self_followup(delay_minutes, prompt, reason?)` — clamped to [5 min, 30 days], up to 100 concurrent pending per Choom (hard cap on un-fired entries; slot frees when a followup fires or is cancelled), prompt ≤1000 chars
-- `list_self_followups()` — read-only query of pending entries
-- `cancel_self_followup(id)` — free a slot or discard a stale plan
+- `schedule_self_followup(at | delay_minutes, prompt, reason?, repeat?, day?)` — `at` is a wall-clock time in the owner's zone; `delay_minutes` is clamped to [15 min, 30 days]; up to 100 concurrent pending per Choom (hard cap on un-fired entries; slot frees when a followup fires or is cancelled), prompt ≤1000 chars
+- `schedule_room_followup(...)` — the same, but the wake-up re-enters a group room (also takes `repeat`/`day`)
+- `list_self_followups()` — one line per pending entry; routines first, marked `↻` with their rule and next fire
+- `cancel_self_followup(id | "all")` — free a slot, discard a stale plan, or end a routine
 
-The queue is a file-based JSONL at `data/self_followups/{choomId}.jsonl`. The Signal bridge scheduler polls it every 60s and fires due entries through the existing custom-heartbeat delivery path. Stripped from the tool list during delegation, so a delegated Choom cannot queue zombie ticks detached from its orchestrator.
+**Routines (2026-09-12).** `repeat: "daily" | "weekdays" | "weekly" | "monthly"` (weekly takes `day: "fri"`, monthly `day: 1-28`) turns the entry into a routine. A routine is exactly **one** pending file carrying a `repeat` rule and a `series_id`; the moment the bridge claims it (before firing, so a failed run cannot end the series) it writes a fresh pending copy for the next occurrence (`requeued_as` / `requeued_from` link the copies) and tells her in the wake-up preamble that the next one is already queued. Scheduling the same rule/time/day again returns the existing routine (`already_scheduled: true`) instead of a duplicate; cancelling the pending copy ends the series. Times are wall-clock in `America/Denver`, so a 6 PM routine stays at 6 PM across the DST change (`lib/self-followup-recurrence.ts`, mirrored by `_sf_next_occurrence` in `scheduler.py`; both have unit tests — `npx jest self-followup-recurrence` and `venv/bin/python -m unittest test_self_followup_recurrence` in `services/signal-bridge`). The handler also accepts the parameter names models tend to improvise (`routine`, `every`, `day_of_week`, "every friday"). Why: before routines, one evening wake-up spent 16–26 tool calls scheduling, cancelling and re-listing next week's copies of her own rituals (~300k prompt tokens per wake) and held ~30 pending one-shots. A Choom with 8+ pending one-shots and no routine gets a one-line note on her next wake that routines exist, so she can collapse a ladder into one entry herself; nothing is converted for her.
+
+The queue is one JSON file per entry under `data/self_followups/{choomId}/{pending,fired,cancelled,error}/`. The Signal bridge scheduler polls it every 60s and fires due entries through the existing custom-heartbeat delivery path. Stripped from the tool list during delegation, so a delegated Choom cannot queue zombie ticks detached from its orchestrator.
 
 **Local-time framing.** All scheduling is in Donny's local time (`America/Denver`). The tool response includes `trigger_at_local` ("Sat, Apr 25, 5:08 AM MDT") alongside the ISO `trigger_at` so the LLM can sanity-check that "morning"/"midday"/"evening" framing in its prompt actually matches the wall clock when the followup fires. The SKILL.md walks the LLM through the conversion explicitly.
 

@@ -24,6 +24,15 @@ export const tools: ToolDefinition[] = [
           type: 'string',
           description: 'One short line describing why this followup was queued. Shown in the Doctor report. Optional.',
         },
+        repeat: {
+          type: 'string',
+          description: 'Make this a ROUTINE that re-queues itself after every fire: "daily", "weekdays", "weekly" or "monthly". With repeat, `at` is just the wall-clock time (e.g. "6:00pm"); for weekly give `day`. Schedule a routine ONCE — never re-schedule next week\'s copy by hand.',
+          enum: ['daily', 'weekdays', 'weekly', 'monthly'],
+        },
+        day: {
+          type: 'string',
+          description: 'For repeat="weekly": the weekday, e.g. "fri". For "monthly": the day of month as a number string 1-28.',
+        },
       },
       required: ['prompt'],
     },
@@ -55,13 +64,22 @@ export const tools: ToolDefinition[] = [
           type: 'string',
           description: 'One short line on why (for the Doctor report). Optional.',
         },
+        repeat: {
+          type: 'string',
+          description: 'Make this a ROUTINE room re-entry: "daily", "weekdays", "weekly" or "monthly". With repeat, `at` is just the time; for weekly give `day`.',
+          enum: ['daily', 'weekdays', 'weekly', 'monthly'],
+        },
+        day: {
+          type: 'string',
+          description: 'For repeat="weekly": the weekday, e.g. "sat". For "monthly": day of month 1-28.',
+        },
       },
       required: ['prompt'],
     },
   },
   {
     name: 'list_self_followups',
-    description: 'List your currently pending self-followups (not yet fired). Shows id, trigger time, and the prompt preview.',
+    description: 'List your currently pending self-followups (not yet fired), routines first (marked ↻ with their rule). Shows id, trigger time, and the prompt preview. A routine appears ONCE — its next fire re-queues itself.',
     parameters: {
       type: 'object',
       properties: {},

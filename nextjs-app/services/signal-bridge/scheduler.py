@@ -1688,6 +1688,98 @@ Be practical. Only work on things that can actually be accomplished with the too
     )
     _SF_CLEANUP_TTL_DAYS = 30
 
+    # ── Routines (2026-09-12) ─────────────────────────────────────────────
+    # Mirror of nextjs-app/lib/self-followup-recurrence.ts. A pending entry with
+    # a `repeat` rule is re-queued as a NEW pending file for its next occurrence
+    # the moment it is claimed, so a routine lives on as exactly one pending
+    # entry. Cancelling that entry (Node side) ends the series.
+    _SF_WEEKDAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"]
+
+    @staticmethod
+    def _sf_next_occurrence(repeat: dict, after: datetime) -> Optional[datetime]:
+        import calendar as _cal
+        try:
+            rule = str(repeat.get("rule") or "").lower()
+            hh, mm = [int(x) for x in str(repeat.get("time") or "").split(":")[:2]]
+            tz = ZoneInfo(str(repeat.get("tz") or "America/Denver"))
+        except Exception:
+            return None
+        if rule not in ("daily", "weekdays", "weekly", "monthly"):
+            return None
+        local_after = after.astimezone(tz)
+
+        def at(y: int, m: int, d: int) -> datetime:
+            return datetime(y, m, d, hh, mm, tzinfo=tz)
+
+        if rule == "monthly":
+            dom = max(1, min(28, int(repeat.get("day_of_month") or local_after.day)))
+            y, m = local_after.year, local_after.month
+            for _ in range(14):
+                c = at(y, m, dom)
+                if c > after:
+                    return c
+                m += 1
+                if m > 12:
+                    m, y = 1, y + 1
+            return at(y, m, dom)
+
+        want_day = str(repeat.get("day") or "").lower()[:3]
+        if rule == "weekly" and want_day not in ScheduledTaskManager._SF_WEEKDAYS:
+            want_day = ScheduledTaskManager._SF_WEEKDAYS[(local_after.weekday() + 1) % 7]
+        day = local_after.date()
+        for _ in range(16):
+            c = at(day.year, day.month, day.day)
+            wd = ScheduledTaskManager._SF_WEEKDAYS[(c.weekday() + 1) % 7]  # python: mon=0 → our sun=0 index
+            ok = (rule == "daily") or (rule == "weekdays" and wd not in ("sat", "sun")) or (rule == "weekly" and wd == want_day)
+            if ok and c > after:
+                return c
+            day = day + timedelta(days=1)
+        return at(day.year, day.month, day.day)
+
+    def _sf_requeue_routine(self, choom_root: str, entry: dict, now: datetime) -> Optional[str]:
+        """Write the next occurrence of a routine as a fresh pending file.
+        Returns the new id, or None (not a routine / could not compute)."""
+        import json
+        import uuid
+        repeat = entry.get("repeat")
+        if not isinstance(repeat, dict):
+            return None
+        # "after" is the later of now and the fired trigger, so a routine that
+        # fired late (bridge down) still lands on the next real occurrence.
+        try:
+            fired_trigger = datetime.fromisoformat(str(entry.get("trigger_at")).replace("Z", "+00:00"))
+            if fired_trigger.tzinfo is None:
+                fired_trigger = fired_trigger.replace(tzinfo=timezone.utc)
+        except Exception:
+            fired_trigger = now
+        nxt = self._sf_next_occurrence(repeat, max(now, fired_trigger))
+        if nxt is None:
+            logger.error(f"self_followup routine {entry.get('id')}: bad repeat rule {repeat!r} — series ends")
+            return None
+        new_id = f"sf_{uuid.uuid4().hex[:8]}"
+        new_entry = {
+            "id": new_id,
+            "choom_id": entry.get("choom_id"),
+            "choom_name": entry.get("choom_name"),
+            "prompt": entry.get("prompt"),
+            "reason": entry.get("reason", ""),
+            "trigger_at": nxt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "created_at": now.isoformat().replace("+00:00", "Z"),
+            "consumed": False,
+            "status": "pending",
+            "repeat": repeat,
+            "series_id": entry.get("series_id") or f"series_{uuid.uuid4().hex[:8]}",
+            "requeued_from": entry.get("id"),
+        }
+        if entry.get("target") == "room":
+            new_entry["target"] = "room"
+            new_entry["room_id"] = entry.get("room_id")
+        pending_dir = os.path.join(choom_root, "pending")
+        os.makedirs(pending_dir, exist_ok=True)
+        self._sf_atomic_write_json(os.path.join(pending_dir, f"{new_id}.json"), new_entry)
+        logger.info(f"self_followup routine {entry.get('id')} → re-queued as {new_id} for {new_entry['trigger_at']} ({repeat.get('rule')} {repeat.get('time')} {repeat.get('day') or repeat.get('day_of_month') or ''})")
+        return new_id
+
     def _sf_atomic_write_json(self, target: str, obj: dict) -> None:
         import json
         os.makedirs(os.path.dirname(target), exist_ok=True)
@@ -1829,6 +1921,19 @@ Be practical. Only work on things that can actually be accomplished with the too
                 except FileNotFoundError:
                     continue  # cancelled or already claimed
 
+                # A routine re-queues its next occurrence right after the claim,
+                # BEFORE firing: a crash or model failure mid-fire must not end
+                # the series, and her own list_self_followups during the fired
+                # turn already shows the next one (so she does not re-add it).
+                requeued_as = None
+                if isinstance(entry.get("repeat"), dict):
+                    try:
+                        requeued_as = self._sf_requeue_routine(choom_root, entry, now)
+                    except Exception as rq_err:
+                        logger.error(f"self_followup routine {entry.get('id')}: re-queue failed: {rq_err}")
+                    if requeued_as:
+                        entry["requeued_as"] = requeued_as
+
                 choom_name = entry.get("choom_name") or "unknown"
                 prompt = entry.get("prompt") or ""
                 task_id = f"self_followup_{entry.get('id', 'unknown')}"
@@ -1879,6 +1984,44 @@ Be practical. Only work on things that can actually be accomplished with the too
                     "check_inbox (what your sisters or Donny left for you), "
                     "and workspace_list_files if relevant to your task."
                 )
+
+                # Routines (2026-09-12): tell her what just happened to HER
+                # schedule so she does not spend the wake re-planning it. A
+                # routine that fired was already re-queued; a ladder of
+                # one-shots that looks like a ritual can become one routine.
+                try:
+                    if requeued_as:
+                        rep = entry.get("repeat") or {}
+                        awareness_parts.append(
+                            f"[This wake-up is one of your routines ({rep.get('rule')} at {rep.get('time')}"
+                            f"{' on ' + str(rep.get('day')) if rep.get('day') else ''}). "
+                            f"Its next occurrence is ALREADY queued as {requeued_as} — do not schedule it again "
+                            "and do not cancel/re-add it. Just do the task.]"
+                        )
+                    else:
+                        pend_dir = os.path.join(choom_root, "pending")
+                        pend = [f for f in os.listdir(pend_dir) if f.endswith(".json")] if os.path.isdir(pend_dir) else []
+                        if len(pend) >= 8:
+                            has_routine = False
+                            for pf in pend[:100]:
+                                try:
+                                    with open(os.path.join(pend_dir, pf), encoding="utf-8") as fh:
+                                        if isinstance(json.load(fh).get("repeat"), dict):
+                                            has_routine = True
+                                            break
+                                except Exception:
+                                    continue
+                            if not has_routine:
+                                awareness_parts.append(
+                                    f"[Scheduling note: you have {len(pend)} pending one-shot wake-ups. If some of them are "
+                                    "the same ritual on repeat (morning presence, midday check-in, evening reflection…), "
+                                    "schedule_self_followup now takes repeat=\"daily\"/\"weekdays\"/\"weekly\"/\"monthly\": ONE "
+                                    "routine re-queues itself forever, so you can replace a ladder of copies with one entry "
+                                    "and cancel the copies. Do this once, in one go, only if it is genuinely the same ritual — "
+                                    "not as a task on every wake-up.]"
+                                )
+                except Exception:
+                    pass
 
                 awareness = "\n".join(awareness_parts) + "\n\n"
                 prompt = awareness + prompt

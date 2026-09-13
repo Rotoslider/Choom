@@ -5,6 +5,7 @@ import * as path from 'path';
 import { randomUUID } from 'crypto';
 import prisma from '@/lib/db';
 import { parseLocalDateTime } from '@/lib/local-time-parse';
+import { parseRule, parseWeekday, nextOccurrence, describeRepeat, seriesKey, type Repeat } from '@/lib/self-followup-recurrence';
 import {
   QUEUE_ROOT,
   type Bucket,
@@ -188,7 +189,30 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
 
     const trig = this.resolveTrigger(toolCall.arguments);
     if ('error' in trig) return this.error(toolCall, trig.error);
-    const { triggerAt, note: clampNote } = trig;
+    let { triggerAt } = trig;
+    const { note: clampNote } = trig;
+
+    // Routine room re-entry? One entry, re-queued by the scheduler after every fire.
+    const rep = this.resolveRepeat(toolCall.arguments, triggerAt);
+    if (rep && 'error' in rep) return this.error(toolCall, rep.error);
+    let roomRepeat: Repeat | undefined;
+    if (rep) {
+      roomRepeat = rep.repeat;
+      triggerAt = rep.firstAt;
+      const key = seriesKey(roomRepeat, 'room', resolved.id);
+      const existing = listEntries(ctx.choomId, 'pending').find(e => e.repeat && seriesKey(e.repeat, e.target === 'room' ? 'room' : 'signal', e.room_id) === key);
+      if (existing) {
+        return this.success(toolCall, {
+          success: true,
+          already_scheduled: true,
+          id: existing.id,
+          room: resolved.title,
+          routine: describeRepeat(roomRepeat),
+          next_fire_local: fmtLocal(new Date(existing.trigger_at)),
+          message: `You already return to "${resolved.title}" ${describeRepeat(roomRepeat)} (${existing.id}, next ${fmtLocal(new Date(existing.trigger_at))}). Nothing to add — it re-queues itself after every fire.`,
+        });
+      }
+    }
 
     const pendingCount = listEntries(ctx.choomId, 'pending').length;
     if (pendingCount >= MAX_PENDING_PER_CHOOM) {
@@ -207,20 +231,66 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
       status: 'pending',
       target: 'room',
       room_id: resolved.id,
+      ...(roomRepeat ? { repeat: roomRepeat, series_id: `series_${randomUUID().slice(0, 8)}` } : {}),
     };
     atomicWriteJson(entryPath(ctx.choomId, 'pending', entry.id), entry);
 
     const triggerLocal = fmtLocal(triggerAt);
-    console.log(`   ⏰ ROOM followup queued for ${choomName}: ${entry.id} → room "${resolved.title}" at ${entry.trigger_at} (${triggerLocal})${clampNote}`);
+    console.log(`   ⏰ ROOM followup queued for ${choomName}: ${entry.id} → room "${resolved.title}" at ${entry.trigger_at} (${triggerLocal})${roomRepeat ? ` ↻ ${describeRepeat(roomRepeat)}` : ''}${clampNote}`);
     return this.success(toolCall, {
       success: true,
       id: entry.id,
+      ...(roomRepeat ? { routine: describeRepeat(roomRepeat), note: 'This is a routine: it re-queues itself after every fire.' } : {}),
       room: resolved.title,
       trigger_at: entry.trigger_at,
       trigger_at_local: triggerLocal,
       delay_minutes: trig.effectiveMinutes,
       message: `Queued a room re-entry ${entry.id} for "${resolved.title}" at ${triggerLocal}${clampNote}. When it fires you'll re-enter that room (seeing the latest conversation) and your opening line will be your prompt — your sisters there can react.`,
     });
+  }
+
+  /**
+   * A routine: the rule from `repeat`/`day`, the clock time from the resolved
+   * `at`. Returns null when no repeat was asked for, an error string when the
+   * ask is malformed, else the Repeat plus its FIRST occurrence (strictly in
+   * the future, at least MIN_DELAY_MIN out).
+   */
+  private resolveRepeat(args: Record<string, unknown>, triggerAt: Date): { repeat: Repeat; firstAt: Date } | { error: string } | null {
+    // Models improvise parameter names (DeepSeek's first try, 2026-09-12:
+    // {routine:"weekly", time:"18:00", day_of_week:"friday"}); accept the
+    // obvious aliases rather than making her cancel and redo.
+    const rawRepeat = args.repeat ?? args.routine ?? args.recurrence ?? args.recurring ?? args.every ?? args.frequency ?? args.interval;
+    const rawDay = args.day ?? args.day_of_week ?? args.weekday ?? args.day_of_month ?? args.dayOfWeek ?? args.dayOfMonth;
+    if (rawRepeat === undefined || rawRepeat === null || rawRepeat === '' || rawRepeat === false) return null;
+    let rule = parseRule(rawRepeat);
+    let dayFromRule: string | undefined;
+    if (!rule && typeof rawRepeat === 'string') {
+      // "every friday" / "fridays" / "friday" → weekly on that day
+      const m = rawRepeat.toLowerCase().match(/\b(sun|mon|tue|wed|thu|fri|sat)[a-z]*\b/);
+      if (m) { rule = 'weekly'; dayFromRule = m[1]; }
+    }
+    if (!rule) return { error: `repeat must be one of daily, weekdays, weekly, monthly (got "${String(rawRepeat)}").` };
+    const args2 = { ...args, day: rawDay ?? dayFromRule };
+    const parts = new Intl.DateTimeFormat('en-US', { timeZone: USER_TZ, hour12: false, hour: '2-digit', minute: '2-digit', weekday: 'short', day: 'numeric' })
+      .formatToParts(triggerAt).reduce<Record<string, string>>((acc, p) => { acc[p.type] = p.value; return acc; }, {});
+    const time = `${String(Number(parts.hour) % 24).padStart(2, '0')}:${parts.minute}`;
+    const repeat: Repeat = { rule, time, tz: USER_TZ };
+    if (rule === 'weekly') {
+      const day = parseWeekday(args2.day) ?? parseWeekday(parts.weekday);
+      if (!day) return { error: 'repeat="weekly" needs a weekday in `day` (e.g. "fri").' };
+      repeat.day = day;
+    } else if (rule === 'monthly') {
+      const dom = Number(args2.day ?? parts.day);
+      if (!Number.isFinite(dom) || dom < 1 || dom > 28) return { error: 'repeat="monthly" needs `day` as a day of month 1-28.' };
+      repeat.day_of_month = dom;
+    }
+    const minStart = new Date(Date.now() + MIN_DELAY_MIN * 60 * 1000 - 60_000);
+    // If the requested first fire is itself a valid future occurrence, keep it;
+    // otherwise roll forward to the next one.
+    const firstAt = triggerAt.getTime() >= minStart.getTime() && nextOccurrence(repeat, new Date(triggerAt.getTime() - 60_000)).getTime() === triggerAt.getTime()
+      ? triggerAt
+      : nextOccurrence(repeat, minStart);
+    return { repeat, firstAt };
   }
 
   private async scheduleFollowup(toolCall: ToolCall, ctx: SkillHandlerContext): Promise<ToolResult> {
@@ -264,7 +334,29 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
 
     const resolved = this.resolveTrigger(toolCall.arguments);
     if ('error' in resolved) return this.error(toolCall, resolved.error);
-    const { triggerAt, note: clampNote } = resolved;
+    let { triggerAt } = resolved;
+    const { note: clampNote } = resolved;
+
+    // Routine? One entry, re-queued by the scheduler after every fire.
+    const rep = this.resolveRepeat(toolCall.arguments, triggerAt);
+    if (rep && 'error' in rep) return this.error(toolCall, rep.error);
+    let repeat: Repeat | undefined;
+    if (rep) {
+      repeat = rep.repeat;
+      triggerAt = rep.firstAt;
+      const key = seriesKey(repeat, 'signal');
+      const existing = listEntries(ctx.choomId, 'pending').find(e => e.repeat && seriesKey(e.repeat, e.target === 'room' ? 'room' : 'signal', e.room_id) === key);
+      if (existing) {
+        return this.success(toolCall, {
+          success: true,
+          already_scheduled: true,
+          id: existing.id,
+          routine: describeRepeat(repeat),
+          next_fire_local: fmtLocal(new Date(existing.trigger_at)),
+          message: `You already have a routine ${describeRepeat(repeat)} (${existing.id}, next ${fmtLocal(new Date(existing.trigger_at))}). Nothing to add — it re-queues itself after every fire. Cancel it first if you want to change its prompt.`,
+        });
+      }
+    }
 
     // Per-Choom cap: count files currently in pending/
     const pendingCount = listEntries(ctx.choomId, 'pending').length;
@@ -288,16 +380,18 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
       created_at: new Date().toISOString(),
       consumed: false,
       status: 'pending',
+      ...(repeat ? { repeat, series_id: `series_${randomUUID().slice(0, 8)}` } : {}),
     };
 
     atomicWriteJson(entryPath(ctx.choomId, 'pending', entry.id), entry);
 
     const triggerLocal = fmtLocal(triggerAt);
 
-    console.log(`   ⏰ Self-followup queued for ${choomName}: ${entry.id} at ${entry.trigger_at} (${triggerLocal}) — "${prompt.slice(0, 80)}"${clampNote}`);
+    console.log(`   ⏰ Self-followup queued for ${choomName}: ${entry.id} at ${entry.trigger_at} (${triggerLocal})${repeat ? ` ↻ ${describeRepeat(repeat)}` : ''} — "${prompt.slice(0, 80)}"${clampNote}`);
     return this.success(toolCall, {
       success: true,
       id: entry.id,
+      ...(repeat ? { routine: describeRepeat(repeat), note: 'This is a routine: it re-queues itself after every fire. Do not schedule the next occurrence by hand.' } : {}),
       trigger_at: entry.trigger_at,
       trigger_at_local: triggerLocal,
       delay_minutes: resolved.effectiveMinutes,
@@ -315,7 +409,9 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
     // The object-per-entry form cost ~400 chars each — 31 pending entries was a
     // 12k-char result on every grounding turn. A line carries what she needs to
     // decide (when, where, what) plus the id for cancel_self_followup.
-    const sorted = [...pending].sort((a, b) => a.trigger_at.localeCompare(b.trigger_at));
+    // Routines (2026-09-12) come first, marked ↻ with their rule, so she sees
+    // at a glance which wake-ups already repeat and never re-adds them.
+    const sorted = [...pending].sort((a, b) => (b.repeat ? 1 : 0) - (a.repeat ? 1 : 0) || a.trigger_at.localeCompare(b.trigger_at));
     const lines = sorted.map(e => {
       const when = new Date(e.trigger_at).toLocaleString('en-US', {
         weekday: 'short', month: 'short', day: 'numeric',
@@ -323,12 +419,15 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
       });
       const where = e.target === 'room' ? `room${e.room_id ? ' ' + e.room_id : ''}` : 'signal';
       const what = e.prompt.replace(/\s+/g, ' ').trim();
-      return `${e.id} | ${when} | ${where} | ${what.length > 90 ? what.slice(0, 89) + '…' : what}`;
+      const rep = e.repeat ? ` ↻ ${describeRepeat(e.repeat)} (next ${when})` : ` | ${when}`;
+      return `${e.id}${rep} | ${where} | ${what.length > 90 ? what.slice(0, 89) + '…' : what}`;
     });
+    const routineCount = pending.filter(e => e.repeat).length;
     return this.success(toolCall, {
       success: true,
       pending_count: pending.length,
-      format: 'id | when (Mountain time) | where | prompt',
+      routine_count: routineCount,
+      format: 'id | when (Mountain time) | where | prompt — entries marked ↻ are routines that re-queue themselves; do not schedule their next occurrence by hand',
       followups: lines,
     });
   }
