@@ -26,6 +26,11 @@ python3 scripts/dev-harness/choomrun.py --choom Genesis --model qwen/qwen3.8-27b
 - `--exposure skills|full` overrides tool exposure; `--context N` overrides the context window
   (only honoured for models with no user profile and no live LM Studio window);
   `--ha-exposed-only` limits Home Assistant to the Assist list for the run.
+  `--delegation Aloy` runs the turn as a DELEGATED WORKER task from Aloy (the
+  worker side only: isDelegation strips, the delegation RULES block, her own
+  tools) on whatever `--model` you pick — the real orchestrator path is a plain
+  Aloy turn that says "hand this to Genesis" (delegate_to_choom runs the worker
+  on the worker's own configured model).
 - Each run prints the tool calls with result sizes, the reply, and the trace summary
   (peak prompt tokens, iterations, nudges, fallback). `--out file.jsonl` appends the summary.
 

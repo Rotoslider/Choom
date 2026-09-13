@@ -66,6 +66,7 @@ def main():
     ap.add_argument('--chat-title', default='[Test] Phase 1')
     ap.add_argument('--fresh', action='store_true')
     ap.add_argument('--heartbeat', action='store_true')
+    ap.add_argument('--delegation', metavar='DELEGATOR', help='run this turn as a DELEGATED worker task from the named Choom (isDelegation + delegatorName), on --model')
     ap.add_argument('--grounding', action='store_true', help='heartbeat only: turn on the opt-in pre-built grounding block (A/B; measured worse 2026-09-12)')
     ap.add_argument('--max-iterations', type=int)
     ap.add_argument('--label', default='run')
@@ -91,6 +92,9 @@ def main():
     if a.ha_exposed_only: payload['settings'].setdefault('homeAssistant', {})['assistExposedOnly'] = True
     if a.fresh: payload['freshContext'] = True
     if a.heartbeat: payload['isHeartbeat'] = True
+    if a.delegation:
+        payload['isDelegation'] = True; payload['delegatorName'] = a.delegation
+        payload['message'] = f"[DELEGATED TASK from {a.delegation}]\n\n{a.message}\n\nRULES FOR THIS TASK:\n- Complete this task DIRECTLY using your own tools. Do NOT delegate to other Chooms.\n- Use the most specific tool available (e.g., get_weather for weather, not web_search).\n- Use as many tool calls as needed to fully complete the task, in as few rounds as you can (call independent tools together). Read all necessary files before making changes.\n- End with your findings in a brief, direct reply (under 300 words). This is a read-and-report task unless it asks for a file: do not write notes or files that were not asked for, and do not re-read what you just wrote."
     if a.grounding: payload['settings']['llm']['heartbeatGrounding'] = True
     if a.max_iterations: payload['maxIterationsOverride'] = a.max_iterations
 

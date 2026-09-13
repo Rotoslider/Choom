@@ -259,7 +259,13 @@ export default class ChoomDelegationHandler extends BaseSkillHandler {
       if (isContinuation) {
         delegationMessage = `[CONTINUATION — from ${(ctx.choom as Record<string, unknown>).name || 'Orchestrator'}]\n\nYour previous work was cut short. Continue where you left off.\n\n## Updated Instructions\n${fullTask}\n\nRULES:\n- You have the full conversation history above — do NOT re-read files you already read.\n- Pick up from where you stopped and complete the remaining work.\n- Use as many tool calls as needed.${projectContext}${checkpointInstruction}${fileHandoffInstruction}\n- End with a brief summary of ALL work done (previous + this continuation) and which files contain the full details.`;
       } else {
-        delegationMessage = `[DELEGATED TASK from ${(ctx.choom as Record<string, unknown>).name || 'Orchestrator'}]\n\n${fullTask}\n\nRULES FOR THIS TASK:\n- Complete this task DIRECTLY using your own tools. Do NOT delegate to other Chooms.\n- Use the most specific tool available (e.g., get_weather for weather, not web_search).\n- Use as many tool calls as needed to fully complete the task. Read all necessary files before making changes.${projectContext}${checkpointInstruction}${fileHandoffInstruction}\n- End with a brief summary of what you did, which files you created/updated, and key findings. Keep this summary under 300 words — the orchestrator will read the files for full details.`;
+        // The closing line used to mention "which files you created" even
+        // with no project folder, so a read-only check (house + weather) made
+        // the worker invent a notes file and read it back (2026-09-12).
+        const closing = workerProjectFolder
+          ? '- End with a brief summary of what you did, which files you created/updated, and key findings. Keep this summary under 300 words — the orchestrator will read the files for full details.'
+          : '- End with your findings in a brief, direct reply (under 300 words). This is a read-and-report task unless it asks for a file: do not write notes or files that were not asked for, and do not re-read what you just wrote.';
+        delegationMessage = `[DELEGATED TASK from ${(ctx.choom as Record<string, unknown>).name || 'Orchestrator'}]\n\n${fullTask}\n\nRULES FOR THIS TASK:\n- Complete this task DIRECTLY using your own tools. Do NOT delegate to other Chooms.\n- Use the most specific tool available (e.g., get_weather for weather, not web_search).\n- Use as many tool calls as needed to fully complete the task, in as few rounds as you can (call independent tools together). Read all necessary files before making changes.${projectContext}${checkpointInstruction}${fileHandoffInstruction}\n${closing}`;
       }
 
       console.log(`   🤝 ${isContinuation ? 'Continuing' : 'Delegating to'} "${targetChoom.name}" (${delegationId}): ${task.slice(0, 80)}...`);

@@ -204,6 +204,21 @@ describe('self-scheduling intent and deliberation guard (2026-09-12, Gemma 4 31B
     expect(looksLikeDeliberation("Good evening, my love. The weekend looks quiet — the user manual for the pump is in your inbox.")).toBe(false);
   });
 
+  test('the unfinished-steps heuristic never reads the delegation RULES block', () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { taskTextForHeuristics } = require('../lib/agentic-loop') as typeof import('../lib/agentic-loop');
+    const msg = "[DELEGATED TASK from Aloy]\n\nCheck the house status and tomorrow's weather, then report back in a few lines.\n\nRULES FOR THIS TASK:\n- Complete this task DIRECTLY using your own tools. Do NOT delegate to other Chooms.\n- Use as many tool calls as needed. Read all necessary files before making changes.\n- End with your findings. Do not write notes or files that were not asked for.";
+    const t = taskTextForHeuristics(msg);
+    expect(t).toBe("Check the house status and tomorrow's weather, then report back in a few lines.");
+    expect(/(?:update|write|append|save|modify).*(?:file|history|prompt|log)/i.test(t)).toBe(false);
+    expect(/(?:read|check|open|look at).*(?:file|history|prompt)/i.test(t)).toBe(false);
+    const cont = "[CONTINUATION — from Aloy]\n\nYour previous work was cut short. Continue where you left off.\n\n## Updated Instructions\n## Context from orchestrator\nprior findings\n\n## Your Task\nWrite the summary file.\n\nRULES:\n- You have the full conversation history above — do NOT re-read files you already read.";
+    expect(taskTextForHeuristics(cont)).toContain('Write the summary file.');
+    expect(taskTextForHeuristics(cont)).not.toContain('re-read files');
+    expect(taskTextForHeuristics('Please update the history file with today')).toBe('Please update the history file with today');
+    expect(routeContent).toContain('const msgLower = taskTextForHeuristics(message).toLowerCase();');
+  });
+
   test('ignored-tool_choice deliberation is dropped from the reply', () => {
     expect(routeContent).toContain("Ignored-tool_choice text reads as deliberation");
   });

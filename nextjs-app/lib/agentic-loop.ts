@@ -131,6 +131,21 @@ export function isSelfSchedulingAsk(msgLower: string): boolean {
   return /\b(?:set|schedule|make|create|queue|put in)\b[^.!?\n]{0,24}?\bfollow[\s-]?up\b|\bremind\s+yourself\b|\bself[\s-]?follow[\s-]?up\b|\bfollow[\s-]?up\s+with\s+yourself\b|\b(?:set|make)\s+(?:a\s+)?reminder\s+for\s+yourself\b|\b(?:come|pop|check|circle|head)\s+back\s+(?:in(?:to)?|to)\s+(?:the\s+)?(?:room|lounge|chat)\b|\b(?:set|schedule|arrange|wire|queue)\s+(?:that|this|it|one|something)\s+up\s+for\s+yourself\b|\bfor\s+yourself\s+so\s+(?:it|that)\s+(?:just\s+)?happens\b|\b(?:recurring|standing|routine|weekly|daily|nightly|regular)\s+(?:\w+\s+){0,2}(?:check[\s-]?ins?|wake[\s-]?ups?|reflections?|rituals?|routines?|touch[\s-]?bases?)\b|\bevery\s+(?:day|night|morning|evening|afternoon|week|weekday|weekend|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b[^.!?\n]{0,80}\b(?:check[\s-]?in|from you|reach out|ping me|message me|text me|wake up|check on me)\b|\b(?:check[\s-]?in|reach out|ping me|message me|text me|wake up)\b[^.!?\n]{0,80}\bevery\s+(?:day|night|morning|evening|afternoon|week|weekday|weekend|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(msgLower);
 }
 
+/**
+ * The part of a message the unfinished-steps heuristic may read. A delegated
+ * task carries a RULES block ("Read all necessary files before making
+ * changes", "which files you created") that is instructions ABOUT the task,
+ * not the task: it made the worker "owe" a file read and a file write on a
+ * read-and-report check, and the nudge sent her to rewrite her own growth
+ * journal and read it back (2026-09-12, twice).
+ */
+export function taskTextForHeuristics(message: string): string {
+  return message
+    .replace(/^\[(?:DELEGATED TASK|CONTINUATION)[^\]]*\]\s*/i, '')
+    .replace(/\n\s*RULES(?: FOR THIS TASK)?:\s*\n[\s\S]*$/i, '')
+    .replace(/\n## Context from orchestrator\n[\s\S]*?\n## Your Task\n/i, '\n');
+}
+
 export function looksLikeDeliberation(prose: string): boolean {
   const head = prose.trimStart().slice(0, 240).toLowerCase();
   if (/\[(?:system|tool guidance)\]/.test(head)) return true;
@@ -1554,7 +1569,9 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
 
                 // Check 2: Original task mentions steps that were never completed.
                 // Compare the user's instructions against tools actually called.
-                const msgLower = message.toLowerCase();
+                // (The delegation RULES boilerplate is stripped first — see
+                // taskTextForHeuristics.)
+                const msgLower = taskTextForHeuristics(message).toLowerCase();
                 const unfinishedSteps: string[] = [];
                 if (/(?:update|write|append|save|modify).*(?:file|history|prompt|log)/i.test(msgLower) &&
                     !calledToolNames.has('workspace_write_file')) {
