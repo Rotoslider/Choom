@@ -287,6 +287,11 @@ describe('list_self_followups one line per entry', () => {
 describe('wake-up turn guards (2026-09-12)', () => {
   const chatStream = fs.readFileSync(path.join(__dirname, '..', 'lib', 'chat-stream.ts'), 'utf-8');
 
+  test('the plan summary is a status line, never reply content', () => {
+    expect(chatStream).toContain("send({ type: 'status', content: planSummaryText });");
+    expect(chatStream).not.toContain('fullContent += `\\n\\n${planSummaryText}`');
+  });
+
   test('the planner never runs on a heartbeat or self follow-up', () => {
     // Its summary line is delivered to Signal and spoken otherwise.
     expect(chatStream).toContain('!isGroupTurn && !isHeartbeat && !noTools && isMultiStepRequest(message)');

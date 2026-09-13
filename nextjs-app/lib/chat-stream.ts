@@ -329,8 +329,12 @@ export async function runChatTurn(params: ChatTurnParams): Promise<void> {
                   });
                 }
 
-                fullContent += `\n\n${planSummaryText}`;
-                send({ type: 'content', content: `\n\n${planSummaryText}` });
+                // The plan summary is bookkeeping, not the Choom's reply. It stays in
+                // the transcript (assistant message above) so she can build on it, and
+                // goes to the client as a status line for the activity panel — not as
+                // content, which put "Plan "…": 0/1 steps completed, 1 skipped" at the
+                // top of replies delivered to Signal and read aloud (2026-09-12).
+                send({ type: 'status', content: planSummaryText });
 
                 console.log(`   📋 Plan complete: ${planResult.succeeded} succeeded, ${planResult.failed} failed`);
               } else {
