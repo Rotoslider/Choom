@@ -131,3 +131,68 @@ export function describeRepeat(repeat: Repeat): string {
 export function seriesKey(repeat: Repeat, target: 'signal' | 'room', roomId?: string): string {
   return [target, roomId || '', repeat.rule, repeat.time, repeat.day || '', repeat.day_of_month || ''].join('|');
 }
+
+/** Does `repeat` fire on the local calendar day that `at` falls on? */
+export function repeatCoversDay(repeat: Repeat, at: Date): boolean {
+  const lp = localParts(at, repeat.tz);
+  switch (repeat.rule) {
+    case 'daily': return true;
+    case 'weekdays': return lp.wd >= 1 && lp.wd <= 5;
+    case 'weekly': return WEEKDAYS[lp.wd] === repeat.day;
+    case 'monthly': return lp.d === (repeat.day_of_month ?? -1);
+  }
+}
+
+export interface PendingLike {
+  id: string;
+  trigger_at: string;
+  target?: 'signal' | 'room';
+  room_id?: string;
+  repeat?: Repeat;
+  prompt: string;
+}
+
+export const SLOT_WINDOW_MIN = 20;
+
+/**
+ * The pending entry that already covers a wanted wake-up, or null: a
+ * one-shot within SLOT_WINDOW_MIN of the same target, or a routine whose
+ * rule fires that day within the window of its time. This is the collision
+ * check she used to do by hand with list_self_followups on every wake
+ * (2026-09-12: two "Monday midday check-in" entries at the same minute, and
+ * six 7 AM one-shots left standing under a new daily 7 AM routine).
+ */
+export function findCoveringEntry(pending: PendingLike[], wantAt: Date, target: 'signal' | 'room', roomId?: string): PendingLike | null {
+  const win = SLOT_WINDOW_MIN * 60_000;
+  const wantMs = wantAt.getTime();
+  for (const e of pending) {
+    const eTarget = e.target === 'room' ? 'room' : 'signal';
+    if (eTarget !== target || (target === 'room' && (e.room_id || '') !== (roomId || ''))) continue;
+    if (e.repeat) {
+      if (!repeatCoversDay(e.repeat, wantAt)) continue;
+      const [hh, mm] = e.repeat.time.split(':').map(Number);
+      const lp = localParts(wantAt, e.repeat.tz);
+      const routineAt = zonedInstant(lp.y, lp.m, lp.d, hh, mm, e.repeat.tz).getTime();
+      if (Math.abs(routineAt - wantMs) <= win) return e;
+    } else if (Math.abs(new Date(e.trigger_at).getTime() - wantMs) <= win) {
+      return e;
+    }
+  }
+  return null;
+}
+
+/** One-shots that a routine makes redundant (same target, its rule fires that day within the window). */
+export function oneShotsCoveredByRoutine(pending: PendingLike[], repeat: Repeat, target: 'signal' | 'room', roomId?: string): PendingLike[] {
+  const win = SLOT_WINDOW_MIN * 60_000;
+  const [hh, mm] = repeat.time.split(':').map(Number);
+  return pending.filter(e => {
+    if (e.repeat) return false;
+    const eTarget = e.target === 'room' ? 'room' : 'signal';
+    if (eTarget !== target || (target === 'room' && (e.room_id || '') !== (roomId || ''))) return false;
+    const at = new Date(e.trigger_at);
+    if (!repeatCoversDay(repeat, at)) return false;
+    const lp = localParts(at, repeat.tz);
+    const routineAt = zonedInstant(lp.y, lp.m, lp.d, hh, mm, repeat.tz).getTime();
+    return Math.abs(routineAt - at.getTime()) <= win;
+  });
+}

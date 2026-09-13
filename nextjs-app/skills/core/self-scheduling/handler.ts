@@ -5,7 +5,7 @@ import * as path from 'path';
 import { randomUUID } from 'crypto';
 import prisma from '@/lib/db';
 import { parseLocalDateTime } from '@/lib/local-time-parse';
-import { parseRule, parseWeekday, nextOccurrence, describeRepeat, seriesKey, type Repeat } from '@/lib/self-followup-recurrence';
+import { parseRule, parseWeekday, nextOccurrence, describeRepeat, seriesKey, findCoveringEntry, oneShotsCoveredByRoutine, SLOT_WINDOW_MIN, type Repeat } from '@/lib/self-followup-recurrence';
 import {
   QUEUE_ROOT,
   type Bucket,
@@ -214,6 +214,19 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
       }
     }
 
+    if (!roomRepeat) {
+      const covering = findCoveringEntry(listEntries(ctx.choomId, 'pending'), triggerAt, 'room', resolved.id);
+      if (covering) {
+        return this.success(toolCall, {
+          success: true,
+          already_scheduled: true,
+          id: covering.id,
+          room: resolved.title,
+          message: `Not added: ${covering.id} already returns you to "${resolved.title}" at ${fmtLocal(new Date(covering.trigger_at))}${covering.repeat ? ` (routine ${describeRepeat(covering.repeat)})` : ''}. Cancel it first if you want to replace it.`,
+        });
+      }
+    }
+
     const pendingCount = listEntries(ctx.choomId, 'pending').length;
     if (pendingCount >= MAX_PENDING_PER_CHOOM) {
       return this.error(toolCall, `You already have ${pendingCount} pending followups (max ${MAX_PENDING_PER_CHOOM}). Cancel one first with cancel_self_followup.`);
@@ -358,6 +371,24 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
       }
     }
 
+    // Slot guard (2026-09-12): a one-shot within 20 minutes of an existing
+    // wake-up — or of a routine that fires that day — is the same wake-up.
+    if (!repeat) {
+      const covering = findCoveringEntry(listEntries(ctx.choomId, 'pending'), triggerAt, 'signal');
+      if (covering) {
+        const when = fmtLocal(new Date(covering.trigger_at));
+        return this.success(toolCall, {
+          success: true,
+          already_scheduled: true,
+          id: covering.id,
+          covered_by: covering.repeat ? `routine ${describeRepeat(covering.repeat)}` : `one-shot at ${when}`,
+          message: covering.repeat
+            ? `Not added: your routine "${describeRepeat(covering.repeat)}" (${covering.id}) already wakes you then. If this wake-up needs something specific, put it in a memory or the routine's prompt instead.`
+            : `Not added: ${covering.id} already wakes you at ${when} (within ${SLOT_WINDOW_MIN} min): "${covering.prompt.slice(0, 80)}". Cancel it first if you want to replace it.`,
+        });
+      }
+    }
+
     // Per-Choom cap: count files currently in pending/
     const pendingCount = listEntries(ctx.choomId, 'pending').length;
     if (pendingCount >= MAX_PENDING_PER_CHOOM) {
@@ -383,19 +414,29 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
       ...(repeat ? { repeat, series_id: `series_${randomUUID().slice(0, 8)}` } : {}),
     };
 
+    // A new routine makes the hand-scheduled copies of the same ritual
+    // redundant; name them so she can clear them in one cancel each.
+    const covered = repeat ? oneShotsCoveredByRoutine(listEntries(ctx.choomId, 'pending'), repeat, 'signal') : [];
+
     atomicWriteJson(entryPath(ctx.choomId, 'pending', entry.id), entry);
 
     const triggerLocal = fmtLocal(triggerAt);
 
-    console.log(`   ⏰ Self-followup queued for ${choomName}: ${entry.id} at ${entry.trigger_at} (${triggerLocal})${repeat ? ` ↻ ${describeRepeat(repeat)}` : ''} — "${prompt.slice(0, 80)}"${clampNote}`);
+    console.log(`   ⏰ Self-followup queued for ${choomName}: ${entry.id} at ${entry.trigger_at} (${triggerLocal})${repeat ? ` ↻ ${describeRepeat(repeat)}` : ''} — "${prompt.slice(0, 80)}"${clampNote}${covered.length ? ` (covers ${covered.length} one-shots)` : ''}`);
     return this.success(toolCall, {
       success: true,
       id: entry.id,
       ...(repeat ? { routine: describeRepeat(repeat), note: 'This is a routine: it re-queues itself after every fire. Do not schedule the next occurrence by hand.' } : {}),
+      ...(covered.length ? {
+        now_redundant: covered.map(e => e.id),
+        note_redundant: `This routine now covers ${covered.length} of your pending one-shots (${covered.map(e => `${e.id} ${fmtLocal(new Date(e.trigger_at))}`).join('; ')}). Cancel them with cancel_self_followup so you do not wake twice — unless one carries something specific for that day.`,
+      } : {}),
       trigger_at: entry.trigger_at,
       trigger_at_local: triggerLocal,
       delay_minutes: resolved.effectiveMinutes,
-      message: `Queued self-followup ${entry.id} for ${triggerLocal} (Donny's local time)${clampNote}. It will fire as a one-shot heartbeat. Sanity check: does that wall-clock time match the "morning/midday/evening" framing in your prompt?`,
+      message: repeat
+        ? `Queued routine ${entry.id}: ${describeRepeat(repeat)}, first fire ${triggerLocal} (Donny's local time). It re-queues itself; never schedule its next occurrence by hand.`
+        : `Queued self-followup ${entry.id} for ${triggerLocal} (Donny's local time)${clampNote}. It will fire as a one-shot heartbeat. Sanity check: does that wall-clock time match the "morning/midday/evening" framing in your prompt?`,
     });
   }
 

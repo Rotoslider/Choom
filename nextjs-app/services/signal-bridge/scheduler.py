@@ -2027,6 +2027,12 @@ Be practical. Only work on things that can actually be accomplished with the too
                                 )
                 except Exception:
                     pass
+                # Her 9:08 PM delivery ended with a "*Self-Scheduling Update:*"
+                # footer, read aloud on Signal (2026-09-12).
+                awareness_parts.append(
+                    "[Scheduling is housekeeping: whatever you queue or cancel this wake-up, do not report it "
+                    "in your message to Donny — no 'self-scheduling update' footer. He hears every word.]"
+                )
 
                 awareness = "\n".join(awareness_parts) + "\n\n"
                 prompt = awareness + prompt
