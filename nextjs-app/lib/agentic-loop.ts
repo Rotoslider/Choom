@@ -120,10 +120,26 @@ export interface LoopOutcome {
  * channel reads like a reply. Deliberately narrow: only the opening matters,
  * and a quoted system marker is decisive.
  */
+/**
+ * "Set that up for yourself", "every Friday at 6pm, a check-in from you",
+ * "a standing evening reflection" — asks for HER OWN future wake-up. Checked
+ * before the calendar arm: "what's coming up over the weekend" inside such an
+ * ask matched get_calendar_events, and the single-tool guidance ("do NOT use
+ * other tools") then contradicted the request (Gemma 4 31B, 2026-09-12).
+ */
+export function isSelfSchedulingAsk(msgLower: string): boolean {
+  return /\b(?:set|schedule|make|create|queue|put in)\b[^.!?\n]{0,24}?\bfollow[\s-]?up\b|\bremind\s+yourself\b|\bself[\s-]?follow[\s-]?up\b|\bfollow[\s-]?up\s+with\s+yourself\b|\b(?:set|make)\s+(?:a\s+)?reminder\s+for\s+yourself\b|\b(?:come|pop|check|circle|head)\s+back\s+(?:in(?:to)?|to)\s+(?:the\s+)?(?:room|lounge|chat)\b|\b(?:set|schedule|arrange|wire|queue)\s+(?:that|this|it|one|something)\s+up\s+for\s+yourself\b|\bfor\s+yourself\s+so\s+(?:it|that)\s+(?:just\s+)?happens\b|\b(?:recurring|standing|routine|weekly|daily|nightly|regular)\s+(?:\w+\s+){0,2}(?:check[\s-]?ins?|wake[\s-]?ups?|reflections?|rituals?|routines?|touch[\s-]?bases?)\b|\bevery\s+(?:day|night|morning|evening|afternoon|week|weekday|weekend|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b[^.!?\n]{0,80}\b(?:check[\s-]?in|from you|reach out|ping me|message me|text me|wake up|check on me)\b|\b(?:check[\s-]?in|reach out|ping me|message me|text me|wake up)\b[^.!?\n]{0,80}\bevery\s+(?:day|night|morning|evening|afternoon|week|weekday|weekend|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(msgLower);
+}
+
 export function looksLikeDeliberation(prose: string): boolean {
   const head = prose.trimStart().slice(0, 240).toLowerCase();
   if (/\[(?:system|tool guidance)\]/.test(head)) return true;
-  return /^(?:the user (?:wants|asks|asked|is asking|said|has)|okay,? |ok,? |alright,? |hmm|wait,? |first,? |so,? the user|let me (?:think|see|figure|start by|check what|break)|i need to (?:figure|think|check what|understand|determine|call|use|start)|i should (?:probably |first )?(?:call|use|check|start|figure)|looking at (?:the|this) (?:request|prompt|task|instructions)|my task is|the task is)/.test(head);
+  // A reply never quotes the guidance block back ("the '[Tool guidance]'
+  // block says…"); only thinking does (Gemma 4 31B, 2026-09-12).
+  if (/["'“‘]?\[tool guidance\]["'”’]?\s+(?:block|message|note|says|said|line)/i.test(prose)) return true;
+  // "The user (Donny) wants…" / "The user, Donny, wants…" — the parenthetical
+  // let a full chain-of-thought through as her reply (2026-09-12).
+  return /^(?:the user(?:\s*\([^)]{0,40}\)|,\s*[a-z]+,)?\s+(?:wants|asks|asked|is asking|said|has|needs|requested)|okay,? |ok,? |alright,? |hmm|wait,? |first,? |so,? the user|let me (?:think|see|figure|start by|check what|break)|i need to (?:figure|think|check what|understand|determine|call|use|start)|i should (?:probably |first )?(?:call|use|check|start|figure)|looking at (?:the|this) (?:request|prompt|task|instructions)|my task is|the task is)/.test(head);
 }
 
 /**
@@ -285,7 +301,7 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
           // system message steering the LLM to the correct tool. This prevents the LLM
           // from calling get_calendar_events when the user says "remind me" etc.
           let intentToolHint = '';
-          if (/\b(?:set|schedule|make|create|queue|put in)\b[^.!?\n]{0,24}?\bfollow[\s-]?up\b|\bremind\s+yourself\b|\bself[\s-]?follow[\s-]?up\b|\bfollow[\s-]?up\s+with\s+yourself\b|\b(?:set|make)\s+(?:a\s+)?reminder\s+for\s+yourself\b|\b(?:come|pop|check|circle|head)\s+back\s+(?:in(?:to)?|to)\s+(?:the\s+)?(?:room|lounge|chat)\b/i.test(msgLower)) {
+          if (isSelfSchedulingAsk(msgLower)) {
             // In a room → return-to-room tool; in 1:1 → private self-followup.
             intentToolHint = isGroupTurn ? 'schedule_room_followup' : 'schedule_self_followup';
           } else if (/\b(?:remind me(?! (?:what|who|when|where|how|why))|set (?:a )?reminder)\b/i.test(msgLower)) {
@@ -1688,6 +1704,14 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
               if (toolChoiceWasRequired && nudgeCount < 2 && activeTools.length > 0) {
                 nudgeCount++;
                 traceBuilder.recordNudge('forced_tool_choice_ignored');
+                // Chain-of-thought written as content ("The user (Donny)
+                // wants… I will use schedule_self_followup") is context for
+                // the retry, not part of the reply: Gemma's 2,400 chars of it
+                // became the head of her answer (2026-09-12).
+                if (looksLikeDeliberation(iterationContent) && iterationTexts.length && iterationTexts[iterationTexts.length - 1] === iterationContent) {
+                  iterationTexts.pop();
+                  console.log(`   🧠 ${choomTag} Ignored-tool_choice text reads as deliberation (${iterationContent.length} chars) — kept for the retry, dropped from the reply`);
+                }
                 const hint = intentToolHint ? ` Use the "${intentToolHint}" tool.` : '';
                 // C-32's measurement, relearned the hard way on 07-28 (C-44):
                 // re-forcing across all 132 tools in long context still lets

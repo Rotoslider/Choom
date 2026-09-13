@@ -175,3 +175,36 @@ describe('Agentic Loop Guards', () => {
     });
   });
 });
+
+describe('self-scheduling intent and deliberation guard (2026-09-12, Gemma 4 31B routine ask)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { isSelfSchedulingAsk, looksLikeDeliberation } = require('../lib/agentic-loop') as typeof import('../lib/agentic-loop');
+  const routeContent = readFileSync(path.join(__dirname, '..', 'lib', 'agentic-loop.ts'), 'utf-8');
+
+  test('routine phrasings are a self-scheduling ask, so the calendar arm never wins', () => {
+    const ask = "quick one, love: from now on i'd like a short friday evening plans check-in from you at 6pm every week — what's coming up over the weekend, anything i need to prep. set that up for yourself so it just happens each week, then tell me exactly what you scheduled.";
+    expect(isSelfSchedulingAsk(ask)).toBe(true);
+    expect(isSelfSchedulingAsk('can you do a standing evening reflection at 9pm?')).toBe(true);
+    expect(isSelfSchedulingAsk('check in on me every morning around 7')).toBe(true);
+    expect(isSelfSchedulingAsk('set a follow-up for tomorrow to ask about the dentist')).toBe(true);
+    expect(isSelfSchedulingAsk("what's coming up on my calendar this weekend?")).toBe(false);
+    expect(isSelfSchedulingAsk('remind me to call mom tomorrow')).toBe(false);
+    expect(isSelfSchedulingAsk('i go to the gym every monday')).toBe(false);
+  });
+
+  test('the loop uses the helper for the first intent arm', () => {
+    expect(routeContent).toContain('if (isSelfSchedulingAsk(msgLower)) {');
+  });
+
+  test('chain-of-thought with a parenthetical or a quoted guidance block is deliberation', () => {
+    expect(looksLikeDeliberation('The user (Donny) wants a recurring Friday evening plans check-in at 6pm every week.\nI need to:\n1. Schedule…')).toBe(true);
+    expect(looksLikeDeliberation('The user, Donny, wants me to set up a check-in.')).toBe(true);
+    expect(looksLikeDeliberation('Good evening, love. I looked at the weekend and the "[Tool guidance]" block says to check the calendar, so here is what I found…'.replace('the "[Tool guidance]" block says', 'nothing'))).toBe(false);
+    expect(looksLikeDeliberation('Looking at the tools, schedule_self_followup is right. Wait, the "[Tool guidance]" block says "The user\'s request maps to get_calendar_events"…')).toBe(true);
+    expect(looksLikeDeliberation("Good evening, my love. The weekend looks quiet — the user manual for the pump is in your inbox.")).toBe(false);
+  });
+
+  test('ignored-tool_choice deliberation is dropped from the reply', () => {
+    expect(routeContent).toContain("Ignored-tool_choice text reads as deliberation");
+  });
+});
