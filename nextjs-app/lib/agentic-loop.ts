@@ -187,6 +187,34 @@ export function dropNarrationPreambles(texts: string[], meta: Array<{ hadTools: 
   return { kept, dropped };
 }
 
+/**
+ * On a delivered turn (wake-up, cron, delegation) send_notification is
+ * suppressed because the reply text IS the delivery. But she puts the real
+ * message INTO the tool's `message` and keeps only her narration as text —
+ * "Let me write the journal, drop a memory, and send him a gentle
+ * check-in" was what reached Signal at 1:07 PM on 2026-09-14 while the
+ * check-in itself sat in a suppressed tool call. The message argument is
+ * her message: return it when it is not already in the reply.
+ */
+export function suppressedNotificationText(
+  toolCalls: Array<{ id: string; name: string; arguments: Record<string, unknown> }>,
+  results: Array<{ toolCallId: string; name: string; result: unknown }>,
+  priorTexts: string[],
+): string | null {
+  for (const r of results) {
+    if (r.name !== 'send_notification') continue;
+    const res = r.result as { suppressed?: boolean } | null;
+    if (!res || res.suppressed !== true) continue;
+    const call = toolCalls.find(c => c.id === r.toolCallId);
+    const msg = typeof call?.arguments?.message === 'string' ? call.arguments.message.trim() : '';
+    if (!msg) continue;
+    const probe = msg.replace(/\s+/g, ' ').slice(0, 80);
+    const already = priorTexts.some(t => t.replace(/\s+/g, ' ').includes(probe)) || isNearVerbatimRepeat(msg, priorTexts);
+    if (!already) return msg;
+  }
+  return null;
+}
+
 export function looksLikeDeliberation(prose: string): boolean {
   const head = prose.trimStart().slice(0, 240).toLowerCase();
   if (/\[(?:system|tool guidance)\]/.test(head)) return true;
@@ -2564,6 +2592,18 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                 });
                 activeTools = [];
                 console.log(`   🛑 Reflection exhausted (${reflectionNudgesUsed} nudges used, ${failedCallCache.size} failures) — stripped tools`);
+              }
+            }
+
+            // A suppressed send_notification carries her actual message: make it
+            // part of the reply (see suppressedNotificationText).
+            if (suppressNotifications) {
+              const delivered = suppressedNotificationText(toolCalls, iterationResults, iterationTexts);
+              if (delivered) {
+                iterationTexts.push(delivered);
+                iterationTextMeta.push({ hadTools: false });
+                send({ type: 'content', content: (iterationTexts.length > 1 ? '\n\n' : '') + delivered });
+                console.log(`   📨 ${choomTag} send_notification suppressed — its message (${delivered.length} chars) added to the reply`);
               }
             }
 

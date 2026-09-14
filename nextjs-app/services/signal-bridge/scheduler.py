@@ -1600,6 +1600,10 @@ Be practical. Only work on things that can actually be accomplished with the too
                     r'\n+(?:The )?[Nn]otification (?:has been |was )?sent[\s\S]{0,200}$',
                     r'\n+I(?:\'ve| have)? (?:just )?sent you [\s\S]{0,200}$',
                     r'\n+(?:Message|Heartbeat) (?:has been |was )?(?:delivered|sent)[\s\S]{0,200}$',
+                    # "Check-in sent, and I refreshed my memory notes — house is
+                    # steady … while Donny recovers" (a third-person housekeeping
+                    # paragraph after the real message, 2026-09-14).
+                    r'\n+(?:Check-in|Note|Update|Reply|Text|Goodnight|Greeting) (?:has been |was |is )?(?:sent|delivered|queued)\b[\s\S]{0,400}$',
                 ]
                 for pat in trailing_patterns:
                     display_content = re.sub(pat, '', display_content, flags=re.IGNORECASE)

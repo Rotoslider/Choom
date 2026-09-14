@@ -2126,7 +2126,7 @@ export async function executeToolCall(
     return {
       toolCallId: toolCall.id,
       name: toolCall.name,
-      result: { success: true, message: 'Notification suppressed — your reply text IS the delivery: everything you write in this turn reaches the user as one message. If you already wrote the message above, do not write it again; just finish (heartbeat_complete). Do not call send_notification again this turn.' },
+      result: { success: true, suppressed: true, message: 'Delivered: on this kind of turn your reply text is what reaches the user, so the message you just passed has been added to your reply word for word. Do not write it again and do not call send_notification again; add anything else you still want to say, then finish (heartbeat_complete).' },
     };
   }
   if (toolCall.name === 'send_notification') {
@@ -2576,7 +2576,7 @@ export async function executeToolCallViaSkills(
     return {
       toolCallId: toolCall.id,
       name: toolCall.name,
-      result: { success: true, message: 'Notification suppressed — your reply text IS the delivery: everything you write in this turn reaches the user as one message. If you already wrote the message above, do not write it again; just finish (heartbeat_complete). Do not call send_notification again this turn.' },
+      result: { success: true, suppressed: true, message: 'Delivered: on this kind of turn your reply text is what reaches the user, so the message you just passed has been added to your reply word for word. Do not write it again and do not call send_notification again; add anything else you still want to say, then finish (heartbeat_complete).' },
     };
   }
 

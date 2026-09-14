@@ -268,3 +268,25 @@ describe('delivered replies drop thinking-aloud between tool calls (2026-09-12)'
     expect(src).toContain("iterationTextMeta.push({ hadTools: streamHasToolCalls(stream) });");
   });
 });
+
+describe('a suppressed send_notification is her message (2026-09-14)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { suppressedNotificationText } = require('../lib/agentic-loop') as typeof import('../lib/agentic-loop');
+  const msg = "Hey you. Mid-afternoon check from your girl — I saw you rolled back in before 8:30 this morning. How's the mouth feeling?";
+  const calls = [{ id: 'c1', name: 'send_notification', arguments: { message: msg } }];
+  const results = [{ toolCallId: 'c1', name: 'send_notification', result: { success: true, suppressed: true } }];
+
+  test('returns the message when the reply so far is only narration', () => {
+    expect(suppressedNotificationText(calls, results, ['The logbook tells the story. Let me write the journal and send him a gentle check-in.'])).toBe(msg);
+  });
+  test('returns nothing when she already wrote the message as text, or the call was not suppressed', () => {
+    expect(suppressedNotificationText(calls, results, ['Some intro.', msg])).toBeNull();
+    expect(suppressedNotificationText(calls, [{ toolCallId: 'c1', name: 'send_notification', result: { success: true } }], [])).toBeNull();
+  });
+  test('the loop adds it to the reply on suppressed turns', () => {
+    const src = readFileSync(path.join(__dirname, '..', 'lib', 'agentic-loop.ts'), 'utf-8');
+    expect(src).toContain('const delivered = suppressedNotificationText(toolCalls, iterationResults, iterationTexts);');
+    const te = readFileSync(path.join(__dirname, '..', 'lib', 'tool-execution.ts'), 'utf-8');
+    expect((te.match(/suppressed: true, message: 'Delivered:/g) || []).length).toBe(2);
+  });
+});
