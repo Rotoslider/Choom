@@ -218,6 +218,17 @@ if [ "$WITH_TTS" = true ]; then
     render com.choom.tts-bridge.plist.template com.choom.tts-bridge.plist
     reload com.choom.tts-bridge
     echo -e "${YELLOW}  Point TTS_ENDPOINT at http://localhost:8004 to cut over from the old host.${NC}"
+
+    # Home Assistant's Assist pipeline speaks Wyoming, not the bridge's HTTP API.
+    if [ -x "$PROJECT_PATH/nextjs-app/services/wyoming-tts/venv/bin/python" ]; then
+      echo -e "\n${GREEN}Installing com.choom.wyoming-tts (Wyoming on :10200 for Home Assistant)...${NC}"
+      render com.choom.wyoming-tts.plist.template com.choom.wyoming-tts.plist
+      reload com.choom.wyoming-tts
+      echo -e "${YELLOW}  In Home Assistant, add a Wyoming Protocol entry for this Mac's IP, port 10200.${NC}"
+    else
+      echo -e "\n${YELLOW}Skipping com.choom.wyoming-tts: build its venv first:${NC}"
+      echo -e "${YELLOW}  cd $PROJECT_PATH/nextjs-app/services/wyoming-tts && python3.12 -m venv venv && ./venv/bin/pip install -r requirements.txt${NC}"
+    fi
   fi
 fi
 

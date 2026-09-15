@@ -230,6 +230,26 @@ as long as `refresh_token` is present.
 
 ---
 
+## 5b. Voice for Home Assistant: Whisper and Chatterbox on the Mac
+
+Home Assistant's Assist pipeline ("Summer") gets both halves of its voice from
+this Mac, over the Wyoming protocol:
+
+| Pipeline entry | What it is | Where | Port |
+|---|---|---|---|
+| `stt.whisper_cpp` | `wyoming_mlx_whisper` (launchd `com.wyoming_mlx_whisper`, outside this repo) | Mac | 7891 |
+| `tts.chatterbox` | `services/wyoming-tts` — a Wyoming front end for the TTS bridge on :8004, so HA and Choom share the same cloned voices (`summer`, `sophie`, `aloy`, …) | Mac | 10200 |
+
+Before 2026-09-15 `tts.chatterbox` was a Wyoming chatterbox server on the NUC
+(192.168.1.23:10200). The Mac service uses the same port, so an HA entry only
+changes host. To (re)create it from the API rather than the UI: delete the old
+Wyoming entry, then add one with host = this Mac's LAN IP, port 10200; HA reads
+the voice list from the service and the entity comes back as `tts.chatterbox`,
+which the pipeline references by id. Build: `cd nextjs-app/services/wyoming-tts
+&& python3.12 -m venv venv && ./venv/bin/pip install -r requirements.txt`, then
+`./install-launchd.sh` picks it up; `servicectl.sh restart wyoming-tts` works
+like the other services. Log: `nextjs-app/data/logs/wyoming-tts.log`.
+
 ## 6. Running the services
 
 Install the launchd agents (the counterpart of `install-services.sh`):

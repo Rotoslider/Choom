@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Wyoming front end for the Choom TTS bridge. Home Assistant's Assist pipeline
+  speaks the Wyoming protocol; the bridge on :8004 speaks HTTP. This serves
+  Wyoming on :10200 (the port the NUC's old chatterbox server used) and turns
+  each Synthesize into one bridge request, so HA and Choom share the voices.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.choom.wyoming-tts</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__PROJECT_PATH__/nextjs-app/services/wyoming-tts/venv/bin/python</string>
+    <string>server.py</string>
+    <string>--uri</string>
+    <string>tcp://0.0.0.0:10200</string>
+    <string>--bridge</string>
+    <string>http://127.0.0.1:8004</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>__PROJECT_PATH__/nextjs-app/services/wyoming-tts</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>__HOME__</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>StandardOutPath</key>
+  <string>__PROJECT_PATH__/nextjs-app/data/logs/wyoming-tts.log</string>
+  <key>StandardErrorPath</key>
+  <string>__PROJECT_PATH__/nextjs-app/data/logs/wyoming-tts.log</string>
+</dict>
+</plist>
