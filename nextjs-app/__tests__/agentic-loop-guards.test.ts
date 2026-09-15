@@ -290,3 +290,13 @@ describe('a suppressed send_notification is her message (2026-09-14)', () => {
     expect((te.match(/suppressed: true, message: 'Delivered:/g) || []).length).toBe(2);
   });
 });
+
+describe('intent-narrowed force keeps companion tools (2026-09-15, invented track id)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { INTENT_COMPANION_TOOLS } = require('../lib/agentic-loop') as typeof import('../lib/agentic-loop');
+  test('music_play rides with music_search and music_players', () => {
+    expect(INTENT_COMPANION_TOOLS.music_play).toEqual(['music_search', 'music_players']);
+    const src = readFileSync(path.join(__dirname, '..', 'lib', 'agentic-loop.ts'), 'utf-8');
+    expect(src).toContain("activeTools.filter(t => t.name === forcedSingle || companions.includes(t.name))");
+  });
+});

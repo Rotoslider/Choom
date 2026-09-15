@@ -104,3 +104,13 @@ describe('generate_image keeps its craft docs on the wire (2026-09-13)', () => {
     expect(out.parameters.properties.negative_prompt.description).toBeUndefined();
   });
 });
+
+describe('music_play keeps the "never invent a uri" rule on the wire (2026-09-15)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { tools: musicTools } = require('../skills/core/music-assistant/tools') as { tools: ToolDefinition[] };
+  test('media docs are kept in full', () => {
+    const play = musicTools.find(t => t.name === 'music_play')!;
+    const out = slimToolDefinition(play) as Slimmed;
+    expect(out.parameters.properties.media.description).toContain('Never invent a uri');
+  });
+});

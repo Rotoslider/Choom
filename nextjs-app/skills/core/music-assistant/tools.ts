@@ -31,7 +31,7 @@ export const tools: ToolDefinition[] = [
       properties: {
         media: {
           type: 'string',
-          description: 'Music to play — either a URI from music_search results (e.g. "library://track/123") or a search query (e.g. "Tarja Turunen", "chill jazz playlist"). URIs are preferred for precision.',
+          description: 'A NAME to search ("Anne Bloom", "chill jazz playlist") or a uri copied from music_search THIS turn. Never invent a uri — a made-up id is a hard error.',
         },
         player: {
           type: 'string',

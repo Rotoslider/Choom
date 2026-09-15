@@ -217,7 +217,18 @@ export default class MusicAssistantHandler extends BaseSkillHandler {
     let mediaUri = media;
     let resolvedName = media;
 
-    if (!media.includes('://')) {
+    if (media.includes('://')) {
+      // A URI she did not get from music_search this turn is a guess:
+      // "library://track/53768857" (no such item) made Music Assistant answer
+      // 500 "Internal server error" with nothing to act on (2026-09-15).
+      // Validate first so the reply says what to do instead.
+      try {
+        const item = await maCommand('music/item_by_uri', { uri: media }) as Record<string, unknown> | null;
+        if (item && typeof item.name === 'string') resolvedName = item.name;
+      } catch {
+        return this.error(toolCall, `Nothing exists at "${media}" — that id is not in the library. Never guess a URI: pass the artist, album or track NAME as media (e.g. "Anne Bloom") and it will be found, or call music_search first and use a uri from its results.`);
+      }
+    } else {
       const searchResult = await maCommand('music/search', {
         search_query: media,
         media_types: ['artist', 'album', 'track', 'playlist', 'radio'],
@@ -252,13 +263,27 @@ export default class MusicAssistantHandler extends BaseSkillHandler {
       option: enqueueMap[enqueue] || 'play',
     });
 
+    // A 200 from play_media means "queued", not "playing". Look once.
+    let state = 'unknown';
+    if ((enqueueMap[enqueue] || 'play') === 'play') {
+      await new Promise(r => setTimeout(r, 1500));
+      try {
+        const q = await maCommand('player_queues/get', { queue_id: player.queue_id }) as Record<string, unknown> | null;
+        state = String(q?.state ?? 'unknown');
+      } catch { /* leave unknown */ }
+    }
+    const started = state === 'playing' || (enqueueMap[enqueue] || 'play') !== 'play';
+
     return this.success(toolCall, {
       success: true,
       playing: resolvedName,
       uri: mediaUri,
       player: player.name,
       enqueue,
-      message: `Now playing "${resolvedName}" on ${player.name}.`,
+      player_state: state,
+      message: started
+        ? `Now playing "${resolvedName}" on ${player.name}.`
+        : `Queued "${resolvedName}" on ${player.name}, but the speaker reports state "${state}" — it may not have started. Tell the user honestly; music_control(action="play") can retry.`,
     });
   }
 

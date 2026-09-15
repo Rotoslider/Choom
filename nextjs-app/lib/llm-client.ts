@@ -332,6 +332,9 @@ export class LLMClient {
  */
 const KEEP_FULL_PARAM_DOCS: Record<string, ReadonlySet<string>> = {
   generate_image: new Set(['prompt', 'references']),
+  // "Never invent a uri" has to survive: a guessed library://track id is a
+  // bare 500 from Music Assistant (2026-09-15).
+  music_play: new Set(['media']),
 };
 
 export function slimToolDefinition(t: ToolDefinition): Record<string, unknown> {

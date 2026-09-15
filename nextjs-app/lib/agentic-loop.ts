@@ -215,6 +215,11 @@ export function suppressedNotificationText(
   return null;
 }
 
+/** Tools that stay exposed beside an intent-narrowed forced tool (see the iterationTools build). */
+export const INTENT_COMPANION_TOOLS: Record<string, string[]> = {
+  music_play: ['music_search', 'music_players'],
+};
+
 export function looksLikeDeliberation(prose: string): boolean {
   const head = prose.trimStart().slice(0, 240).toLowerCase();
   if (/\[(?:system|tool guidance)\]/.test(head)) return true;
@@ -735,7 +740,12 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
             // C-32-measured 100% mechanism. Later iterations restore all tools.
             const intentForceActive = allowForce && !!intentForcedTool && activeTools.some(t => t.name === intentForcedTool);
             const forcedSingle = groupForceActive ? groupForcedTool : phantomForceActive ? phantomForcedTool : intentForceActive ? intentForcedTool : null;
-            const iterationTools = forcedSingle ? activeTools.filter(t => t.name === forcedSingle) : activeTools;
+            // An intent-narrowed force keeps the tool's natural partner in
+            // reach: narrowing "play some Anne Bloom" to music_play ALONE left
+            // no way to look anything up, and she invented a library track id
+            // that Music Assistant answered with a bare 500 (2026-09-15).
+            const companions: string[] = intentForceActive && forcedSingle && forcedSingle === intentForcedTool ? (INTENT_COMPANION_TOOLS[forcedSingle] ?? []) : [];
+            const iterationTools = forcedSingle ? activeTools.filter(t => t.name === forcedSingle || companions.includes(t.name)) : activeTools;
             const toolChoiceOverride = (allowForce || forcedSingle) ? 'required' as const : undefined;
             const toolChoiceWasRequired = allowForce || !!forcedSingle;
             if (phantomForceActive) {
@@ -743,7 +753,7 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
             } else if (groupForceActive) {
               console.log(`   ⚡ ${choomTag} Group forced single-tool retry → tools=[${groupForcedTool}] tool_choice='required'`);
             } else if (intentForceActive) {
-              console.log(`   🎯 ${choomTag} Intent-narrowed force → tools=[${intentForcedTool}] tool_choice='required'`);
+              console.log(`   🎯 ${choomTag} Intent-narrowed force → tools=[${[intentForcedTool, ...companions].join(', ')}] tool_choice='required'`);
             } else if (forceToolCall) {
               if (allowForce) console.log(`   ⚡ Using tool_choice='required' to force tool invocation`);
             }
