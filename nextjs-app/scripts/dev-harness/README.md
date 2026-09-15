@@ -82,3 +82,11 @@ cross-session digest and her recent-images context.
 - Follow-ups the sisters queued during a test: move the JSON from
   `data/self_followups/<choomId>/pending/` to `cancelled/` with `status: "cancelled"`.
 - Letters left in a test: `choom_commons/for_<name>/` (and its `.seen.json`).
+
+## Home Assistant websocket probe
+
+`node scripts/dev-harness/ha_ws.mjs '[{"type":"assist_pipeline/pipeline/list"}]'` runs any
+websocket commands against the Home Assistant in `bridge-config.json` and prints the
+results as JSON. Used 2026-09-15 to read the Assist pipeline debug runs
+(`assist_pipeline/pipeline_debug/list` / `get`), the entity registry, and the Assist
+exposure list when the voice assistant "played" music that never started.
