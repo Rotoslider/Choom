@@ -250,6 +250,14 @@ which the pipeline references by id. Build: `cd nextjs-app/services/wyoming-tts
 `./install-launchd.sh` picks it up; `servicectl.sh restart wyoming-tts` works
 like the other services. Log: `nextjs-app/data/logs/wyoming-tts.log`.
 
+## 5c. Speech-to-text for Choom on the Mac
+
+Signal voice notes are transcribed through `stt.endpoint` in `bridge-config.json`,
+an OpenAI-style `POST /v1/audio/transcriptions`. Since 2026-09-16 that is the
+Mac's own Rapid-MLX server (`http://localhost:8890`, the same process that
+renders TTS), not the NUC's whisper server on :5000. Measured on the same
+clip: identical transcript, 1.0 s on the Mac vs 0.4 s on the NUC.
+
 ## 6. Running the services
 
 Install the launchd agents (the counterpart of `install-services.sh`):

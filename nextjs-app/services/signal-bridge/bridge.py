@@ -28,8 +28,13 @@ from choom_client import get_choom_client, get_tts_client, get_stt_client
 from scheduler import get_scheduler
 from google_client import get_google_client
 
-# Configure logging — stream + rotating file so the GUI log viewer has a stable target
-_log_handlers = [logging.StreamHandler()]
+# Configure logging — stream + rotating file so the GUI log viewer has a stable target.
+# The rotating file (LOG_FILE, 5 MB x 3) is the record; the stream goes to
+# launchd's stdout file, which nothing rotates — it reached 80 MB (2026-09-16).
+# Keep only warnings and errors on the stream.
+_stream_handler = logging.StreamHandler()
+_stream_handler.setLevel(logging.WARNING)
+_log_handlers = [_stream_handler]
 try:
     from logging.handlers import RotatingFileHandler
     os.makedirs(os.path.dirname(config.LOG_FILE), exist_ok=True)

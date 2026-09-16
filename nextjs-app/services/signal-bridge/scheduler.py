@@ -2724,10 +2724,11 @@ Be practical. Only work on things that can actually be accomplished with the too
             database_snapshots[name] = destination
             logger.info("Local database snapshot created: %s", destination)
 
-        # Rotate: keep 14 days
+        # Rotate: keep 5 days (each snapshot carries the ~700 MB image database;
+        # 14 of them were 4.7 GB, 2026-09-16)
         backups_root = app_root / "data" / "backups" / "daily"
         snapshots = sorted([d for d in backups_root.iterdir() if d.is_dir()], reverse=True)
-        for old in snapshots[14:]:
+        for old in snapshots[5:]:
             shutil.rmtree(str(old), ignore_errors=True)
 
         logger.info(f"Local snapshot created: {snapshot_dir}")
