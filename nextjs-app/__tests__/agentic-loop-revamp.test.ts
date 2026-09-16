@@ -622,7 +622,13 @@ describe('13. Fallback Chain Preserves Conversation State', () => {
       routeContent.indexOf('Fallback succeeded — switch llmClient') + 1000
     );
     expect(fallbackBlock).not.toContain('currentMessages = []');
-    expect(fallbackBlock).not.toContain('currentMessages.length = 0');
+    // The one legitimate replacement (2026-09-16): a LOCAL fallback that was
+    // given a trimmed transcript adopts it, in place, so the array identity
+    // the loop holds is unchanged and later iterations see the same history
+    // the model just answered. Anything else resetting the array is a bug.
+    const resets = fallbackBlock.split('currentMessages.length = 0').length - 1;
+    expect(resets).toBe(1);
+    expect(fallbackBlock).toContain('if (fbMessages !== currentMessages) {\n                      currentMessages.length = 0;\n                      currentMessages.push(...fbMessages);');
   });
 
   test('fallbackAttempt tracks cascade position for multi-hop', () => {

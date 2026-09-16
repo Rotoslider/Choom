@@ -28,6 +28,7 @@ import { readLlmStream, newStreamState, streamHasToolCalls, type StreamState } f
 import { unexposedToolMentions } from '@/lib/tool-exposure';
 import { detectClaimedTool, detectZeroToolClaim, detectUncalledToolClaim, findFabricatedImageRefs } from '@/lib/phantom-claim';
 import { isNearVerbatimRepeat, stripRepeatedParagraphs, stripInternalRepeats } from '@/lib/repetition-guard';
+import { trimForLocalFallback, LOCAL_FALLBACK_PROMPT_TOKENS } from '@/lib/fallback-trim';
 import {
   tryRepairJSON, extractMistralToolCalls, extractBracketToolCalls,
   parseXmlToolCalls, tryRescueWriteFile, tryRescueContentTool, extractToolCallFromText,
@@ -929,7 +930,13 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                   // same model just burns its full budget twice before any
                   // escalation. Retry transient failures (empty bodies etc.);
                   // escalate stalls.
-                  if (fb.sameModelRetry && /LLM response timeout|LLM connection timeout/.test(errMsg)) {
+                  // …except a cloud PREFILL timeout ("connected but no content"):
+                  // OpenRouter went quiet for 90 s once and the turn escalated
+                  // straight to a five-minute local prefill (2026-09-16). One
+                  // retry there is cheap; a mid-stream stall or a dead
+                  // connection still escalates.
+                  const prefillTimeout = /connected but no content/.test(errMsg);
+                  if (fb.sameModelRetry && /LLM response timeout|LLM connection timeout/.test(errMsg) && !prefillTimeout) {
                     console.log(`   ⏭️  ${choomTag} Skipping same-model retry (${fb.label}) — primary already consumed its full timeout budget; escalating`);
                     continue;
                   }
@@ -957,8 +964,23 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                     // usingCloudProvider.
                     const fbIsLocal = !fb.providerId || isLocalEndpoint(fbSettings.endpoint);
                     const fbTimeoutMs = fbIsLocal ? timeoutMs : Math.max(60000, Math.floor(timeoutMs * 0.75));
+                    // A local fallback gets a transcript it can prefill in time
+                    // (see lib/fallback-trim.ts); if it succeeds, the trimmed
+                    // transcript is the conversation from here on.
+                    let fbMessages = currentMessages;
+                    if (fbIsLocal && !fb.sameModelRetry) {
+                      const est = compactionService.estimatePromptTokens(currentMessages, iterationTools);
+                      if (est > LOCAL_FALLBACK_PROMPT_TOKENS) {
+                        const toolTok = compactionService.estimatePromptTokens([], iterationTools);
+                        const trimmed = trimForLocalFallback(currentMessages, Math.max(4000, LOCAL_FALLBACK_PROMPT_TOKENS - toolTok), m => compactionService.estimatePromptTokens([m], []));
+                        if (trimmed.dropped > 0) {
+                          fbMessages = trimmed.messages;
+                          console.log(`   ✂️  ${choomTag} Local fallback: trimmed ${trimmed.dropped} older messages (~${trimmed.tokensBefore.toLocaleString()} → ~${trimmed.tokensAfter.toLocaleString()} tokens) so ${fb.label} can prefill in time`);
+                        }
+                      }
+                    }
                     await readLlmStream(fbStream, {
-                      client: fbClient, messages: currentMessages, tools: iterationTools, toolChoice: toolChoiceOverride,
+                      client: fbClient, messages: fbMessages, tools: iterationTools, toolChoice: toolChoiceOverride,
                       enableThinking: fbSettings.enableThinking,
                       tier: classifyEndpoint(fbSettings.endpoint, !fbIsLocal), timeoutMs: fbTimeoutMs,
                       send, bufferForDedup, choomTag, attemptLabel: 'Fallback ',
@@ -987,6 +1009,10 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                     // iteration's reply.
                     stream = fbStream;
                     iterationContent = fbStream.content;
+                    if (fbMessages !== currentMessages) {
+                      currentMessages.length = 0;
+                      currentMessages.push(...fbMessages);
+                    }
                     llmClient = fbClient;
                     llmSettings.model = fbSettings.model;
                     llmSettings.endpoint = fbSettings.endpoint;

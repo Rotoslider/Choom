@@ -1,5 +1,18 @@
 import type { LLMSettings, ToolDefinition, ToolCall } from './types';
 import { ensureEndpoint, openRouterAttributionHeaders } from './utils';
+import { Agent, fetch as undiciFetch } from 'undici';
+
+// LLM requests go through undici with NO body/headers timeout. Node's global
+// fetch defaults to a 300 s body timeout, which "terminated" a healthy Gemma
+// 4 31B prefill of a 58k-token prompt at exactly 300 s (2026-09-16) — before
+// the stream reader's own 345 s prefill window. The reader owns the timing.
+const llmDispatcher = new Agent({ bodyTimeout: 0, headersTimeout: 0 });
+export type FetchLike = (url: string, init: Record<string, unknown>) => Promise<Response>;
+const defaultLlmFetch: FetchLike = (url, init) =>
+  undiciFetch(url, { ...init, dispatcher: llmDispatcher } as never) as unknown as Promise<Response>;
+let llmFetch: FetchLike = defaultLlmFetch;
+/** Tests replace the transport; pass null to restore the default. */
+export function setLlmFetch(f: FetchLike | null): void { llmFetch = f ?? defaultLlmFetch; }
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -167,7 +180,7 @@ export class LLMClient {
     if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
     Object.assign(headers, openRouterAttributionHeaders(this.endpoint));
 
-    const response = await fetch(url, {
+    const response = await llmFetch(url, {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
@@ -257,7 +270,7 @@ export class LLMClient {
     if (this.apiKey) chatHeaders['Authorization'] = `Bearer ${this.apiKey}`;
     Object.assign(chatHeaders, openRouterAttributionHeaders(this.endpoint));
 
-    const response = await fetch(url, {
+    const response = await llmFetch(url, {
       method: 'POST',
       headers: chatHeaders,
       body: JSON.stringify(body),

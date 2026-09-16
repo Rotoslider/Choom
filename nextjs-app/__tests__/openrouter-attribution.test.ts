@@ -12,6 +12,8 @@
  * client carries the full attribution trio, and non-OpenRouter endpoints get
  * none of it.
  */
+import { setLlmFetch, type FetchLike } from '../lib/llm-client';
+let lastFetch: unknown;
 import { LLMClient } from '../lib/llm-client';
 import { AnthropicClient } from '../lib/anthropic-client';
 import { openRouterAttributionHeaders, OPENROUTER_APP_URL } from '../lib/utils';
@@ -79,7 +81,7 @@ const anthropicChatJson = {
 };
 
 const capturedRequest = () => {
-  const call = (global.fetch as jest.Mock).mock.calls[0];
+  const call = (lastFetch as jest.Mock).mock.calls[0];
   return { url: call[0] as string, init: call[1] as { headers: Record<string, string> } };
 };
 
@@ -111,7 +113,7 @@ describe('openRouterAttributionHeaders', () => {
 
 describe('OpenRouter attribution on the wire', () => {
   test('LLMClient.streamChat sends Attribution + bearer auth to OpenRouter', async () => {
-    global.fetch = jest.fn().mockResolvedValue(fakeStreamResponse(llmStreamLines)) as unknown as typeof fetch;
+    setLlmFetch((lastFetch = jest.fn().mockResolvedValue(fakeStreamResponse(llmStreamLines))) as unknown as FetchLike);
     const client = new LLMClient(makeSettings(OPENROUTER_EP), 'sk-or-v1-test');
     await consume(client.streamChat([{ role: 'user', content: 'hi' }]));
     const { url, init } = capturedRequest();
@@ -125,7 +127,7 @@ describe('OpenRouter attribution on the wire', () => {
   });
 
   test('LLMClient.chat attributes HTTP + bearer auth to OpenRouter', async () => {
-    global.fetch = jest.fn().mockResolvedValue(fakeJsonResponse(chatJson)) as unknown as typeof fetch;
+    setLlmFetch((lastFetch = jest.fn().mockResolvedValue(fakeJsonResponse(chatJson))) as unknown as FetchLike);
     const client = new LLMClient(makeSettings(OPENROUTER_EP), 'sk-or-v1-test');
     await client.chat([{ role: 'user', content: 'hi' }]);
     const { init } = capturedRequest();
@@ -138,7 +140,7 @@ describe('OpenRouter attribution on the wire', () => {
   });
 
   test('AnthropicClient.streamChat attributes headers on the Anthropic-compatible path', async () => {
-    global.fetch = jest.fn().mockResolvedValue(fakeStreamResponse(anthropicStreamLines)) as unknown as typeof fetch;
+    global.fetch = (lastFetch = jest.fn().mockResolvedValue(fakeStreamResponse(anthropicStreamLines))) as unknown as typeof fetch;
     const client = new AnthropicClient(makeSettings(OPENROUTER_EP), 'sk-or-v1-test', OPENROUTER_EP);
     await consume(client.streamChat([{ role: 'user', content: 'hi' }]));
     const { init } = capturedRequest();
@@ -151,7 +153,7 @@ describe('OpenRouter attribution on the wire', () => {
   });
 
   test('AnthropicClient.chat attributes headers on non-streaming calls', async () => {
-    global.fetch = jest.fn().mockResolvedValue(fakeJsonResponse(anthropicChatJson)) as unknown as typeof fetch;
+    global.fetch = (lastFetch = jest.fn().mockResolvedValue(fakeJsonResponse(anthropicChatJson))) as unknown as typeof fetch;
     const client = new AnthropicClient(makeSettings(OPENROUTER_EP), 'sk-or-v1-test', OPENROUTER_EP);
     await client.chat([{ role: 'user', content: 'hi' }]);
     const { init } = capturedRequest();
@@ -164,7 +166,7 @@ describe('OpenRouter attribution on the wire', () => {
   });
 
   test('local LLM endpoints never receive attribution headers', async () => {
-    global.fetch = jest.fn().mockResolvedValue(fakeJsonResponse(chatJson)) as unknown as typeof fetch;
+    setLlmFetch((lastFetch = jest.fn().mockResolvedValue(fakeJsonResponse(chatJson))) as unknown as FetchLike);
     const client = new LLMClient(makeSettings(LMSTUDIO_EP), 'sk-local');
     await client.chat([{ role: 'user', content: 'hi' }]);
     const { init } = capturedRequest();
