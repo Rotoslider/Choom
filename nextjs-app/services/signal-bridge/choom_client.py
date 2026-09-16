@@ -959,25 +959,43 @@ class STTClient:
         Returns:
             Transcribed text or None on failure
         """
+        wav_tmp = None
         try:
+            # Signal voice notes are Ogg/Opus; Rapid-MLX on the Mac decodes WAV
+            # only (the NUC's whisper server used ffmpeg itself). Transcode
+            # here unless the file already is WAV (2026-09-16).
+            send_path = audio_path
             with open(audio_path, 'rb') as f:
-                files = {'file': (os.path.basename(audio_path), f, 'audio/ogg')}
+                head = f.read(12)
+            if not (head[:4] == b'RIFF' and head[8:12] == b'WAVE'):
+                import subprocess, tempfile, shutil
+                ffmpeg = shutil.which('ffmpeg') or next((p for p in ('/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/usr/bin/ffmpeg') if os.path.exists(p)), 'ffmpeg')
+                fd, wav_tmp = tempfile.mkstemp(suffix='.wav'); os.close(fd)
+                subprocess.run([ffmpeg, '-y', '-loglevel', 'error', '-i', audio_path, '-ar', '16000', '-ac', '1', wav_tmp],
+                               check=True, timeout=60, capture_output=True)
+                send_path = wav_tmp
+            with open(send_path, 'rb') as f:
+                files = {'file': ('audio.wav', f, 'audio/wav')}
                 response = requests.post(
                     f"{self.endpoint}/v1/audio/transcriptions",
                     files=files,
-                    timeout=60
+                    timeout=120
                 )
 
             if response.status_code == 200:
                 data = response.json()
                 return data.get('text', '')
 
-            logger.error(f"STT failed: {response.status_code}")
+            logger.error(f"STT failed: {response.status_code} {response.text[:200]}")
             return None
 
         except Exception as e:
             logger.error(f"STT error: {e}")
             return None
+        finally:
+            if wav_tmp:
+                try: os.remove(wav_tmp)
+                except OSError: pass
 
 
 # Singleton instances

@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { toWav } from '@/lib/audio-transcode';
 
 export const dynamic = 'force-dynamic';
+const DEFAULT_STT = 'http://localhost:8890'; // the Mac's Rapid-MLX (/v1/audio/transcriptions)
 
 export async function POST(request: NextRequest) {
   try {
@@ -15,15 +17,21 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Use local whisper-fastapi server (OpenAI-compatible endpoint)
-    const sttEndpoint = endpoint ?? process.env.STT_ENDPOINT ?? 'http://localhost:5000';
+    // OpenAI-compatible transcription endpoint (Rapid-MLX on the Mac by default)
+    const sttEndpoint = endpoint ?? process.env.STT_ENDPOINT ?? DEFAULT_STT;
 
-    // Convert audio to buffer
-    const audioBuffer = await audioFile.arrayBuffer();
+    // The browser records WebM/Opus; the server decodes WAV. Transcode here.
+    const raw = Buffer.from(await audioFile.arrayBuffer());
+    let wav: Buffer;
+    try {
+      wav = await toWav(raw);
+    } catch (err) {
+      console.error('🎤 STT transcode failed:', err instanceof Error ? err.message : err);
+      return NextResponse.json({ success: false, error: 'Could not convert the recording to WAV', details: String(err) }, { status: 500 });
+    }
 
-    // Send to Whisper FastAPI server using OpenAI-compatible endpoint
     const sttFormData = new FormData();
-    sttFormData.append('file', new Blob([audioBuffer]), 'audio.webm');
+    sttFormData.append('file', new Blob([new Uint8Array(wav)], { type: 'audio/wav' }), 'audio.wav');
     sttFormData.append('response_format', 'json');
 
     console.log(`🎤 STT request to ${sttEndpoint}/v1/audio/transcriptions`);
@@ -40,7 +48,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({
           success: false,
           error: 'STT service not available',
-          hint: 'Please ensure whisper-fastapi is running on port 5000',
+          hint: 'Check the STT endpoint in Settings — the Mac default is Rapid-MLX on port 8890',
         });
       }
 
@@ -63,7 +71,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       success: false,
       error: 'STT service connection failed',
-      hint: 'Start whisper-fastapi server on port 5000',
+      hint: 'Check the STT endpoint in Settings — the Mac default is Rapid-MLX on port 8890',
       details: String(error),
     });
   }
@@ -73,11 +81,11 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const action = searchParams.get('action');
-    const endpoint = searchParams.get('endpoint') ?? 'http://localhost:5000';
+    const endpoint = searchParams.get('endpoint') ?? DEFAULT_STT;
 
     if (action === 'health') {
       try {
-        // Check if whisper-fastapi is responding
+        // Check if the transcription server is responding
         const response = await fetch(`${endpoint}/v1/audio/transcriptions`, {
           method: 'HEAD',
           signal: AbortSignal.timeout(5000),
