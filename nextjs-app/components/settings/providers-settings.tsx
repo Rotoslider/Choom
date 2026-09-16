@@ -19,29 +19,27 @@ const PRESETS: Record<string, Partial<LLMProviderConfig>> = {
     name: 'Anthropic',
     type: 'anthropic',
     endpoint: 'https://api.anthropic.com',
-    models: ['claude-sonnet-4-5-20250929', 'claude-haiku-4-5-20251001', 'claude-opus-4-6'],
+    models: ['claude-opus-5', 'claude-sonnet-5', 'claude-fable-5-1'],
   },
   openai: {
     name: 'OpenAI',
     type: 'openai',
     endpoint: 'https://api.openai.com/v1',
-    models: ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano', 'gpt-4o', 'o3-mini'],
+    models: ['gpt-5', 'gpt-5-mini'],
   },
   nvidia: {
     name: 'NVIDIA Build',
     type: 'openai',
     endpoint: 'https://integrate.api.nvidia.com/v1',
+    // Current families only (2026-09-16): DeepSeek V4+, Qwen 3.6+, Gemma 4,
+    // GLM 5+, Kimi K2.6+, MiniMax M2.7+. Use "Fetch Models" for the live catalog.
     models: [
-      'nvidia/llama-3.1-nemotron-ultra-253b-v1',
-      'mistralai/mistral-large-3-675b-instruct-2512',
-      'deepseek-ai/deepseek-v3.2',
-      'moonshotai/kimi-k2.5',
-      'moonshotai/kimi-k2-instruct',
-      'qwen/qwen3.5-397b-a17b',
-      'qwen/qwen3-next-80b-a3b-instruct',
-      'z-ai/glm5',
-      'meta/llama-3.1-405b-instruct',
-      'meta/llama-3.3-70b-instruct',
+      'deepseek-ai/deepseek-v4-flash',
+      'deepseek-ai/deepseek-v4-pro',
+      'google/gemma-4-31b-it',
+      'z-ai/glm-5.1',
+      'moonshotai/kimi-k2.6',
+      'minimaxai/minimax-m2.7',
     ],
   },
   openrouter: {
@@ -52,11 +50,8 @@ const PRESETS: Record<string, Partial<LLMProviderConfig>> = {
     // OpenRouter model IDs are namespaced (vendor/model). Edit freely or use
     // "Fetch Models" to pull the live catalog (its /models endpoint is public).
     models: [
-      'anthropic/claude-3.5-sonnet',
-      'openai/gpt-4o',
-      'google/gemini-2.0-flash-001',
-      'meta-llama/llama-3.3-70b-instruct',
-      'deepseek/deepseek-chat',
+      'deepseek/deepseek-v4-flash',
+      'deepseek/deepseek-v4-pro',
     ],
   },
   lmstudio: {

@@ -51,9 +51,11 @@ describe('findLLMProfile', () => {
   });
 
   test('normalization never cross-matches distinct models', () => {
-    // kimi-k2-instruct normalizes to kimi-k2 — must not match kimi-k2.6
+    // kimi-k2-instruct normalizes to kimi-k2 — must not match kimi-k2.6.
+    // (Its own profile was retired with the pre-2026 models on 2026-09-16,
+    // so the right answer is now "no profile", never the newer sibling.)
     const p = findLLMProfile('moonshotai/kimi-k2-instruct');
-    expect(p!.modelId).toBe('moonshotai/kimi-k2-instruct');
+    expect(p?.modelId).not.toBe('moonshotai/kimi-k2.6');
   });
 
   test('user profiles merge over built-ins through the normalized path', () => {
