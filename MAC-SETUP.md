@@ -258,6 +258,22 @@ Mac's own Rapid-MLX server (`http://localhost:8890`, the same process that
 renders TTS), not the NUC's whisper server on :5000. Measured on the same
 clip: identical transcript, 1.0 s on the Mac vs 0.4 s on the NUC.
 
+Rapid-MLX runs a Silero VAD pre-trim before Whisper so silence and room noise
+at the ends of a clip never reach the model (that is where Whisper invents lines
+and repeats sentences). The VAD model only exists in mlx-audio 0.4.4+, and
+rapid-mlx 0.13.x pinned mlx-audio below that — the guard silently fell back to
+raw transcription and voice notes went bad about one time in six (2026-09-17).
+Keep rapid-mlx at 0.14.2+ (mlx-audio 0.5.x). The tell is this line in
+`data/logs/rapid-mlx.log` on every transcription:
+
+```
+ERROR:root:Model type silero_vad not supported for vad.
+```
+
+Ten seconds of noise with no speech should come back as an empty transcript in
+well under a second. Pauses inside a voice note are untouched — the trim only
+cuts before the first and after the last detected speech.
+
 ## 6. Running the services
 
 Install the launchd agents (the counterpart of `install-services.sh`):
