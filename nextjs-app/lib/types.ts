@@ -559,7 +559,10 @@ export interface ChatResponse {
 }
 
 export interface StreamingChatChunk {
-  type: 'content' | 'retract_partial' | 'status' | 'tool_call' | 'tool_result' | 'image_generated' | 'agent_iteration' | 'file_created' | 'compaction' | 'plan_created' | 'plan_step_update' | 'plan_completed' | 'done' | 'error';
+  // 'thinking': the model's reasoning (reasoning_content / <think> blocks),
+  // display-only — shown in its own box, never accumulated into the reply,
+  // never persisted, never spoken by TTS.
+  type: 'content' | 'thinking' | 'retract_partial' | 'status' | 'tool_call' | 'tool_result' | 'image_generated' | 'agent_iteration' | 'file_created' | 'compaction' | 'plan_created' | 'plan_step_update' | 'plan_completed' | 'done' | 'error';
   content?: string;
   length?: number; // retract_partial: chars to remove from end of accumulated content
   toolCall?: ToolCall;

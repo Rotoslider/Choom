@@ -35,7 +35,7 @@ export function MessageList({ messages, isLoading = false, streamingImage, agent
   const userScrolledUp = useRef(false);
   const isProgrammaticScroll = useRef(false);
   const lastMessageCount = useRef(messages.length);
-  const { isStreaming, streamingContent, currentChoom, streamRecovery } = useAppStore();
+  const { isStreaming, streamingContent, streamingThinking, thinkingByMessage, currentChoom, streamRecovery } = useAppStore();
 
   // Helper: scroll to bottom without triggering the "user scrolled up" detection
   const scrollToBottom = useCallback((behavior: ScrollBehavior = 'instant') => {
@@ -116,6 +116,7 @@ export function MessageList({ messages, isLoading = false, streamingImage, agent
               message={message}
               isStreaming={isLastAssistant}
               streamingContent={isLastAssistant ? streamingContent : undefined}
+              thinking={isLastAssistant ? streamingThinking : thinkingByMessage[message.id]}
               choomName={currentChoom?.name}
             />
           );

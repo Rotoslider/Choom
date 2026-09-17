@@ -165,6 +165,11 @@ interface AppState {
   // Streaming state
   streamingContent: string;
   isStreaming: boolean;
+  // The model's reasoning for the turn in flight, and — after the turn — kept
+  // per message id so the box stays on screen until reload. Display only:
+  // never part of a message, never persisted, never spoken.
+  streamingThinking: string;
+  thinkingByMessage: Record<string, string>;
   /**
    * Set while a dropped response stream is being recovered (lib/stream-recovery).
    * Without this the recovery is invisible — it only wrote to the Activity Log,
@@ -247,6 +252,9 @@ interface AppState {
   setStreamingContent: (content: string) => void;
   appendStreamingContent: (content: string) => void;
   clearStreamingContent: () => void;
+  appendStreamingThinking: (text: string) => void;
+  clearStreamingThinking: () => void;
+  setThinkingForMessage: (messageId: string, text: string) => void;
   setIsStreaming: (streaming: boolean) => void;
   setStreamRecovery: (state: { status: 'recovering' | 'failed' } | null) => void;
 
@@ -434,6 +442,8 @@ export const useAppStore = create<AppState>()(
 
       streamingContent: '',
       isStreaming: false,
+      streamingThinking: '',
+      thinkingByMessage: {},
       streamRecovery: null,
 
       ttsQueue: [],
@@ -678,6 +688,11 @@ export const useAppStore = create<AppState>()(
       appendStreamingContent: (content) =>
         set((state) => ({ streamingContent: state.streamingContent + content })),
       clearStreamingContent: () => set({ streamingContent: '' }),
+      appendStreamingThinking: (text) =>
+        set((state) => ({ streamingThinking: state.streamingThinking + text })),
+      clearStreamingThinking: () => set({ streamingThinking: '' }),
+      setThinkingForMessage: (messageId, text) =>
+        set((state) => ({ thinkingByMessage: { ...state.thinkingByMessage, [messageId]: text } })),
       setIsStreaming: (streaming) => set({ isStreaming: streaming }),
       setStreamRecovery: (state) => set({ streamRecovery: state }),
 

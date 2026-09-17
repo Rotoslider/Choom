@@ -229,7 +229,35 @@ export function looksLikeDeliberation(prose: string): boolean {
   if (/["'“‘]?\[tool guidance\]["'”’]?\s+(?:block|message|note|says|said|line)/i.test(prose)) return true;
   // "The user (Donny) wants…" / "The user, Donny, wants…" — the parenthetical
   // let a full chain-of-thought through as her reply (2026-09-12).
-  return /^(?:the user(?:\s*\([^)]{0,40}\)|,\s*[a-z]+,)?\s+(?:wants|asks|asked|is asking|said|has|needs|requested)|okay,? |ok,? |alright,? |hmm|wait,? |first,? |so,? the user|let me (?:think|see|figure|start by|check what|break)|i need to (?:figure|think|check what|understand|determine|call|use|start)|i should (?:probably |first )?(?:call|use|check|start|figure)|looking at (?:the|this) (?:request|prompt|task|instructions)|my task is|the task is)/.test(head);
+  // Group-room chains of thought open by sizing up the room rather than the
+  // user: "Let me parse what's happening right now:", "Let me look at what's
+  // happening right now.", "The conversation has settled into a calm waiting
+  // period" (Aloy and Genesis, 2026-09-17) — none of which the user-centred
+  // openers above matched, so 9–17k chars of thinking became the reply.
+  return /^(?:the user(?:\s*\([^)]{0,40}\)|,\s*[a-z]+,)?\s+(?:wants|asks|asked|is asking|said|has|needs|requested)|(?:the user|donny)(?:'s|’s) (?:message|latest|last|request|ask|question)|okay,? |ok,? |alright,? |hmm|wait,? |first,? |so,? the user|let me (?:think|see|figure|start by|check what|break|parse|analy[sz]e|assess|process|review|recap|take stock|go through|work through|unpack|look at (?:what|the|this))|i need to (?:figure|think|check what|understand|determine|call|use|start)|i should (?:probably |first )?(?:call|use|check|start|figure)|looking at (?:the|this) (?:request|prompt|task|instructions|conversation|situation)|my task is|the task is|the (?:conversation|thread|discussion) (?:has|is|so far)|what(?:'s|’s| is) happening (?:right now|here|in the room)|(?:current|the) (?:state|situation) of the (?:conversation|room|thread|chat)|(?:analy[sz]ing|parsing) (?:the|this|what)|i(?:'m|’m| am) being asked)/.test(head);
+}
+
+/**
+ * Reasoning-channel prose that is definitely not a reply. Applied whenever a
+ * turn produced nothing on the content channel and no tool call, but did
+ * stream reasoning_content — both for the primary model and for fallbacks.
+ */
+export const REASONING_REPLY_MAX_CHARS = 4000;
+export function isReasoningDeliberation(
+  stream: Pick<StreamState, 'reasoningProse' | 'finishReason'>,
+  replyInReasoning: boolean | undefined,
+): boolean {
+  // Hit max_tokens with nothing said on the content channel: the model was
+  // still thinking when the budget ran out. In group rooms Qwen 3.8 and the
+  // OpenRouter stealth model burned their whole 4096-token budget this way and
+  // the entire chain of thought (11–17k chars) was salvaged as the reply and
+  // read aloud by TTS (2026-09-17). No reply is that long; whatever the head
+  // looks like, this is deliberation — the caller bumps the budget and nudges.
+  if (stream.finishReason === 'length') return true;
+  // qwen3.6 routes its actual reply through reasoning_content, so short,
+  // completed prose there is the reply.
+  if (replyInReasoning === true) return false;
+  return stream.reasoningProse.length > REASONING_REPLY_MAX_CHARS || looksLikeDeliberation(stream.reasoningProse);
 }
 
 /**
@@ -823,8 +851,12 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
               // (2026-09-12). Only models flagged replyInReasoning get salvaged
               // unconditionally; otherwise prose that reads as deliberation is
               // answered with a nudge to act, once per request.
-              const deliberation = reasoningOnly && llmSettings.replyInReasoning !== true
-                && looksLikeDeliberation(stream.reasoningProse);
+              const deliberation = reasoningOnly && isReasoningDeliberation(stream, llmSettings.replyInReasoning);
+              if (deliberation) {
+                // Let the user SEE the thinking (own box, never spoken) — it just
+                // must not become the reply.
+                send({ type: 'thinking', content: stream.reasoningProse.trim() });
+              }
               if (reasoningOnly && !deliberation) {
                 iterationContent = stream.reasoningProse.trim();
                 if (!bufferForDedup) {
@@ -993,6 +1025,14 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                     // catch below moves on to the next one. Without this an
                     // empty retry counted as success and the turn ended silently.
                     if (!fbStream.content.trim() && !streamHasToolCalls(fbStream)) {
+                      // Same rule as the primary: thinking on reasoning_content is
+                      // not a reply. Gemma 4 (a common local fallback) thinks there
+                      // even with thinking off, and this branch used to salvage it
+                      // unconditionally — a leak the primary path had already fixed.
+                      if (fbStream.reasoningProse.trim() && isReasoningDeliberation(fbStream, fbSettings.replyInReasoning)) {
+                        send({ type: 'thinking', content: fbStream.reasoningProse.trim() });
+                        throw new Error(`Reasoning-only response from fallback model (${fbStream.reasoningProse.length} chars of thinking, finish=${fbStream.finishReason}, no reply)`);
+                      }
                       if (fbStream.reasoningProse.trim()) {
                         fbStream.content = fbStream.reasoningProse.trim();
                         if (!bufferForDedup) {

@@ -20,6 +20,7 @@ import { RoomTTSQueue } from '@/lib/room-tts-queue';
 import { broadcastMute } from '@/lib/audio-registry';
 import { cn, isSentenceEnd, formatDayTime } from '@/lib/utils';
 import type { Choom } from '@/lib/types';
+import { ThinkingBox } from '@/components/chat/thinking-box';
 
 interface Participant {
   id: string;
@@ -45,6 +46,8 @@ interface RoomMessage {
   content: string;
   imageUrl: string | null;
   createdAt: string;
+  /** Reasoning shown in its own box; display only, never spoken or saved. */
+  thinking?: string;
 }
 
 // Strip a leading "Name:" / "[Name]:" label the model sometimes parrots at the
@@ -104,6 +107,10 @@ export default function RoomsPage() {
   // Per-speaker live state during a turn
   const [activeSpeaker, setActiveSpeaker] = useState<{ name: string; choomId: string; status: string } | null>(null);
   const [streamingText, setStreamingText] = useState('');
+  // The active speaker's reasoning (speaker_thinking). Never touches the TTS
+  // buffers below — only the thinking box renders it.
+  const [streamingThinking, setStreamingThinking] = useState('');
+  const thinkingRef = useRef('');
   const [passNotes, setPassNotes] = useState<string[]>([]);
 
   const ttsRef = useRef<RoomTTSQueue | null>(null);
@@ -307,6 +314,8 @@ export default function RoomsPage() {
               if (data.retry) ttsRef.current?.stop();
               setActiveSpeaker({ name: data.speakerName as string, choomId: data.speakerChoomId as string, status: data.retry ? 'rephrasing…' : 'thinking…' });
               setStreamingText('');
+              thinkingRef.current = '';
+              setStreamingThinking('');
               ttsBufRef.current = '';
               ttsSpokenRef.current.clear();
               streamRawRef.current = '';
@@ -342,6 +351,11 @@ export default function RoomsPage() {
               }
               break;
             }
+            case 'speaker_thinking':
+              // Display only — deliberately not appended to ttsBufRef.
+              thinkingRef.current += (data.content as string) || '';
+              setStreamingThinking(thinkingRef.current);
+              break;
             case 'speaker_tool_call':
               setActiveSpeaker(s => s ? { ...s, status: `using ${data.name as string}…` } : s);
               break;
@@ -361,10 +375,13 @@ export default function RoomsPage() {
                 authorChoomId: data.speakerChoomId as string, authorName: data.speakerName as string,
                 content: data.content as string, imageUrl: (data.imageUrl as string) || null,
                 createdAt: new Date().toISOString(),
+                thinking: thinkingRef.current.trim() || undefined,
               };
               setMessages(prev => [...prev, doneMsg]);
               lastTimestampRef.current = doneMsg.createdAt;
               setStreamingText('');
+              thinkingRef.current = '';
+              setStreamingThinking('');
               setActiveSpeaker(null);
               break;
             }
@@ -372,6 +389,8 @@ export default function RoomsPage() {
               setPassNotes(prev => [...prev, data.speakerName as string]);
               setActiveSpeaker(null);
               setStreamingText('');
+              thinkingRef.current = '';
+              setStreamingThinking('');
               ttsBufRef.current = '';
               break;
             case 'speaker_error':
@@ -767,6 +786,7 @@ export default function RoomsPage() {
                           <Loader2 className="h-3 w-3 animate-spin" /> {activeSpeaker.status}
                         </span>
                       </p>
+                      {streamingThinking && <ThinkingBox text={streamingThinking} live />}
                       {streamingText && <p className="text-sm whitespace-pre-wrap">{streamingText}</p>}
                     </div>
                   </div>
@@ -844,6 +864,7 @@ function RoomBubble({ msg, chooms }: { msg: RoomMessage; chooms: Choom[] }) {
             <TtsPlayButton src={`/api/tts/message/${msg.id}?kind=group`} className="ml-1.5" />
           )}
         </p>
+        {!isUser && msg.thinking && <ThinkingBox text={msg.thinking} />}
         <div className={cn(
           'rounded-2xl px-4 py-2 inline-block max-w-full',
           isUser ? 'bg-primary/15' : 'bg-muted/50'

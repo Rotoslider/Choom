@@ -155,8 +155,14 @@ export async function readLlmStream(st: StreamState, opts: ReadLlmStreamOptions)
   // object, so a late-finishing stream can at worst touch its own dead state.)
   const abort = new AbortController();
 
+  // Display-only reasoning channel. Goes to the client's thinking box (and a
+  // room's speaker_thinking), never into st.content — so it can't reach the
+  // DB, Signal, or TTS. Sent even when the reply is buffered for dedup.
+  const sendThinking = (text: string) => {
+    if (text) send({ type: 'thinking', content: text });
+  };
   // Think-block filter: strips <think>...</think> from reasoning models
-  const thinkFilter = createThinkFilter();
+  const thinkFilter = createThinkFilter(sendThinking);
   // Tool-call XML filter: strips <tool_call>...</tool_call> emitted as text
   // by local models and captures them for parsing into real tool calls
   const toolCallXmlFilter = createToolCallXmlFilter();
@@ -241,6 +247,10 @@ export async function readLlmStream(st: StreamState, opts: ReadLlmStreamOptions)
         }
         choice.delta.content = deltaAny.reasoning_content;
         chunkIsReasoningOnly = true;
+      } else if (typeof deltaAny.reasoning_content === 'string' && deltaAny.reasoning_content.length > 0) {
+        // Thinking is on (or unset): reasoning_content is chain-of-thought.
+        // Show it, live, in the thinking box; it is never part of the reply.
+        sendThinking(deltaAny.reasoning_content);
       }
 
       const hasContent = !!(choice.delta.content || choice.delta.tool_calls ||

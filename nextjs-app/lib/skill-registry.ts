@@ -14,9 +14,17 @@ import { pathToFileURL } from 'url';
 // CJS contexts (jest/ts-jest) cannot even PARSE `import.meta`, so it is only
 // referenced through eval — ESM/Turbopack evaluates it, jest falls back to
 // __filename. Bare `require` is unavailable under the Turbopack ESM build.
+// Turbopack rewrites __filename to a virtual "/ROOT/lib/…" path, so a
+// require anchored there walks /ROOT → / and never finds node_modules
+// ("Cannot find module 'esbuild'" for every custom skill, 2026-09-16).
+// Anchor on the app root instead — absolute skill-file paths resolve the same
+// from either base, and node_modules is found from process.cwd().
+const appRootAnchor = path.join(process.cwd(), 'package.json');
 const nodeRequire = createRequire(
-  (typeof __filename !== 'undefined' && __filename)
-  || pathToFileURL(eval('import.meta.url') as string).href,
+  fs.existsSync(appRootAnchor)
+    ? appRootAnchor
+    : (typeof __filename !== 'undefined' && __filename)
+      || pathToFileURL(eval('import.meta.url') as string).href,
 );
 
 // ============================================================================

@@ -530,6 +530,11 @@ export async function runSpeakerTurn(opts: {
               // Forward streaming tokens tagged with the speaker.
               send({ type: 'speaker_content', speakerChoomId: choomId, speakerName, content: data.content || '' });
               break;
+            case 'thinking':
+              // Display-only: never added to `content`, so it can't reach the
+              // room transcript, Signal, or TTS.
+              send({ type: 'speaker_thinking', speakerChoomId: choomId, speakerName, content: data.content || '' });
+              break;
             case 'tool_call':
               result.toolCalls.push({ name: data.toolCall?.name || 'unknown' });
               send({ type: 'speaker_tool_call', speakerChoomId: choomId, speakerName, name: data.toolCall?.name });

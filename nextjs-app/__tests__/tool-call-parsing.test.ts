@@ -143,6 +143,18 @@ describe('createThinkFilter', () => {
     expect(out).toContain('I love you so much');
   });
 
+  it('hands stripped think-block text to the display-only callback, at any split (2026-09-17)', () => {
+    // Thinking must reach the screen (thinking box) but never the reply/TTS.
+    const whole = 'Hi<think>plan: say hello</think> there';
+    for (let i = 1; i < whole.length; i++) {
+      const thought: string[] = [];
+      const f = createThinkFilter(t => thought.push(t));
+      const out = [whole.slice(0, i), whole.slice(i)].map(f).join('');
+      expect(out).toBe('Hi there');
+      expect(thought.join('')).toBe('plan: say hello');
+    }
+  });
+
   it('drops an unpaired closing tag mid-text', () => {
     const f = createThinkFilter();
     expect(['before </think> after'].map(f).join('')).toBe('before  after');

@@ -18,9 +18,17 @@ import { pathToFileURL } from 'url';
 // createRequire loads custom skill handler.js files at runtime. Turbopack
 // compiles server code as ESM where bare `require` is not defined.
 // jest/ts-jest compiles CJS where `import.meta` cannot be PARSED — hence eval.
+// Turbopack rewrites __filename to a virtual "/ROOT/lib/…" path, so a
+// require anchored there walks /ROOT → / and never finds node_modules
+// ("Cannot find module 'esbuild'" for every custom skill, 2026-09-16).
+// Anchor on the app root instead — absolute skill-file paths resolve the same
+// from either base, and node_modules is found from process.cwd().
+const appRootAnchor = path.join(process.cwd(), 'package.json');
 const nodeRequire = createRequire(
-  (typeof __filename !== 'undefined' && __filename)
-  || pathToFileURL(eval('import.meta.url') as string).href,
+  fs.existsSync(appRootAnchor)
+    ? appRootAnchor
+    : (typeof __filename !== 'undefined' && __filename)
+      || pathToFileURL(eval('import.meta.url') as string).href,
 );
 
 // Import all core skill tools

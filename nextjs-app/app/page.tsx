@@ -35,6 +35,9 @@ export default function Home() {
     setStreamRecovery,
     setStreamingContent,
     clearStreamingContent,
+    appendStreamingThinking,
+    clearStreamingThinking,
+    setThinkingForMessage,
     updateServiceHealth,
     applyServerSettings,
     chooms,
@@ -612,6 +615,7 @@ export default function Home() {
     // Start streaming
     setIsStreaming(true);
     clearStreamingContent();
+    clearStreamingThinking();
     setAgentProgress(null);
     setPlanProgress(null);
     // Stop any current TTS playback when sending a new message
@@ -660,6 +664,9 @@ export default function Home() {
       const decoder = new TextDecoder();
       let buffer = '';
       let fullContent = '';
+      // Reasoning shown in the thinking box. Kept apart from fullContent so it
+      // is never logged as the reply, saved, or handed to TTS.
+      let fullThinking = '';
 
       while (true) {
         const { done, value } = await reader.read();
@@ -692,6 +699,13 @@ export default function Home() {
                   if (settings.tts.autoPlay && !ui.isMuted) {
                     ttsRef.current?.onToken(data.content);
                   }
+                }
+                break;
+              case 'thinking':
+                // Display only — never fed to ttsRef.
+                if (data.content) {
+                  fullThinking += data.content;
+                  appendStreamingThinking(data.content);
                 }
                 break;
               case 'retract_partial':
@@ -790,6 +804,11 @@ export default function Home() {
                   if (msgRes.ok) {
                     const messagesData = await msgRes.json();
                     setMessages(messagesData);
+                    // Keep the thinking box on the saved message (until reload).
+                    if (fullThinking.trim() && Array.isArray(messagesData)) {
+                      const lastAssistant = [...messagesData].reverse().find((m: { role?: string }) => m.role === 'assistant');
+                      if (lastAssistant?.id) setThinkingForMessage(lastAssistant.id, fullThinking);
+                    }
                   }
                 }
                 // Now safe to clear streaming state - DB messages are loaded
@@ -869,6 +888,7 @@ export default function Home() {
     } finally {
       setIsStreaming(false);
       clearStreamingContent();
+      clearStreamingThinking();
       setStreamingImage(null);
       abortControllerRef.current = null;
     }
@@ -883,10 +903,11 @@ export default function Home() {
     ttsRef.current?.stop();
     setIsStreaming(false);
     clearStreamingContent();
+    clearStreamingThinking();
     setStreamingImage(null);
     setAgentProgress(null);
     setPlanProgress(null);
-  }, [setIsStreaming, clearStreamingContent]);
+  }, [setIsStreaming, clearStreamingContent, clearStreamingThinking]);
 
   // Handle regenerating the last response
   const handleRegenerate = useCallback(async () => {

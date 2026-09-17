@@ -7,6 +7,7 @@ import { oneDark } from 'react-syntax-highlighter/dist/cjs/styles/prism';
 import { cn } from '@/lib/utils';
 import { formatDayTime } from '@/lib/utils';
 import { User, Bot, Wrench } from 'lucide-react';
+import { ThinkingBox } from './thinking-box';
 import { FileReference } from './file-reference';
 import { TtsPlayButton } from './tts-play-button';
 import type { Message, ToolResult } from '@/lib/types';
@@ -15,6 +16,8 @@ interface MessageBubbleProps {
   message: Message;
   isStreaming?: boolean;
   streamingContent?: string;
+  /** Reasoning for this message (display only, never spoken). */
+  thinking?: string;
   choomName?: string;
 }
 
@@ -296,6 +299,7 @@ export function MessageBubble({
   message,
   isStreaming = false,
   streamingContent,
+  thinking,
   choomName,
 }: MessageBubbleProps) {
   const isUser = message.role === 'user';
@@ -367,6 +371,7 @@ export function MessageBubble({
           isUser ? 'items-end' : 'items-start'
         )}
       >
+        {!isUser && thinking && <ThinkingBox text={thinking} live={isStreaming} />}
         <div
           className={cn(
             'px-4 py-2.5 shadow-sm',

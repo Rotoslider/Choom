@@ -95,7 +95,7 @@ export function tryRepairJSON(raw: string | undefined): Record<string, unknown> 
  * chunk; it returns only the visible (non-thinking) portion. Maintains state
  * across calls so tags that span chunk boundaries are handled correctly.
  */
-export function createThinkFilter(): (text: string) => string {
+export function createThinkFilter(onThinking?: (text: string) => void): (text: string) => string {
   let inThinkBlock = false;
   // Tag fragment held across chunk boundaries. Without this, a '</think>'
   // split across chunks while inside a block never matches, the filter stays
@@ -127,13 +127,17 @@ export function createThinkFilter(): (text: string) => string {
       if (inThinkBlock) {
         const closeIdx = text.indexOf(CLOSE, pos);
         if (closeIdx !== -1) {
+          if (onThinking && closeIdx > pos) onThinking(text.slice(pos, closeIdx));
           inThinkBlock = false;
           pos = closeIdx + CLOSE.length;
         } else {
-          // Rest is inside the think block — discard, but hold a trailing
-          // partial '</think>' so a close tag split across chunks still
-          // terminates the block on the next call.
-          carry = text.slice(text.length - partialTagSuffix(text.slice(pos)));
+          // Rest is inside the think block — discard (handing it to the
+          // display-only thinking channel), but hold a trailing partial
+          // '</think>' so a close tag split across chunks still terminates
+          // the block on the next call.
+          const held = partialTagSuffix(text.slice(pos));
+          carry = text.slice(text.length - held);
+          if (onThinking && text.length - held > pos) onThinking(text.slice(pos, text.length - held));
           return result;
         }
       } else {

@@ -204,6 +204,35 @@ describe('self-scheduling intent and deliberation guard (2026-09-12, Gemma 4 31B
     expect(looksLikeDeliberation("Good evening, my love. The weekend looks quiet — the user manual for the pump is in your inbox.")).toBe(false);
   });
 
+  test('group-room chains of thought that size up the room are deliberation (2026-09-17 leak)', () => {
+    // Real heads of the 9–17k-char "replies" Aloy and Genesis produced in a room.
+    expect(looksLikeDeliberation("Let me parse what's happening right now:\n\nDonny's message:\n\n1. Side panels are clear plastic")).toBe(true);
+    expect(looksLikeDeliberation("Let me look at what's happening right now. Eve and Genesis have seen the two concept images")).toBe(true);
+    expect(looksLikeDeliberation("The conversation has settled into a calm waiting period — the printer is running (3 hours)")).toBe(true);
+    expect(looksLikeDeliberation("Donny's message is asking about the side panels. I should respond warmly.")).toBe(true);
+    // Ordinary room replies still pass.
+    expect(looksLikeDeliberation("Clear side panels sound perfect, Donny. The vents front and back will move plenty of air.")).toBe(false);
+    expect(looksLikeDeliberation("Eve, the wind being already in the desert before you named it is exactly the point.")).toBe(false);
+  });
+
+  test('a reasoning-only turn cut off by max_tokens is never a reply, whatever it reads like', () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { isReasoningDeliberation, REASONING_REPLY_MAX_CHARS } = require('../lib/agentic-loop') as typeof import('../lib/agentic-loop');
+    const warm = 'Clear side panels sound perfect, Donny. ';
+    // finish=length → deliberation even for a replyInReasoning model and a friendly head.
+    expect(isReasoningDeliberation({ reasoningProse: warm.repeat(300), finishReason: 'length' }, true)).toBe(true);
+    expect(isReasoningDeliberation({ reasoningProse: warm, finishReason: 'length' }, undefined)).toBe(true);
+    // Completed short prose is a reply.
+    expect(isReasoningDeliberation({ reasoningProse: warm, finishReason: 'stop' }, undefined)).toBe(false);
+    expect(isReasoningDeliberation({ reasoningProse: warm, finishReason: 'stop' }, true)).toBe(false);
+    // Oversized completed prose is thinking unless the model is flagged replyInReasoning.
+    const huge = warm.repeat(Math.ceil(REASONING_REPLY_MAX_CHARS / warm.length) + 1);
+    expect(isReasoningDeliberation({ reasoningProse: huge, finishReason: 'stop' }, undefined)).toBe(true);
+    expect(isReasoningDeliberation({ reasoningProse: huge, finishReason: 'stop' }, true)).toBe(false);
+    // Deliberation heads are still caught at any length.
+    expect(isReasoningDeliberation({ reasoningProse: "Let me parse what's happening right now: Donny wants clear panels.", finishReason: 'stop' }, undefined)).toBe(true);
+  });
+
   test('the unfinished-steps heuristic never reads the delegation RULES block', () => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { taskTextForHeuristics } = require('../lib/agentic-loop') as typeof import('../lib/agentic-loop');
