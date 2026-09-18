@@ -104,6 +104,32 @@ def resolve_signal_room(default_id, list_rooms, get_room):
     return pick, f'(Your Signal room {why}; using "{pick.get("title") or pick["id"]}" instead.)'
 
 
+def image_context_note(image_paths):
+    """The 1:1 image note the Choom acts on (one line per saved attachment)."""
+    return "\n".join(
+        f'[User attached image: {p}] Please analyze this image using the analyze_image tool with image_path="{p}".'
+        for p in image_paths
+    )
+
+
+def parse_direct_message(message_text, image_paths):
+    """Split a 1:1 Signal message into (choom_name, text the Choom receives).
+
+    The Choom name is read from the owner's ORIGINAL caption, and only then is
+    the "[User attached image …]" note attached. Prepending the note first
+    (the pre-2026-09-18 order) put it in the leading position the name parser
+    reads, so "Aloy, look at this" + a photo parsed as no name and fell through
+    to the last-used Choom (the "Aloy's photo went to Genesis" bug). The group
+    path had the same bug fixed earlier for the "group:" prefix; this is the
+    1:1 counterpart.
+    """
+    choom_name, cleaned = MessageParser.extract_choom_name(message_text or "")
+    if image_paths:
+        note = image_context_note(image_paths)
+        cleaned = f"{note}\n\n{cleaned}" if cleaned else note
+    return choom_name, cleaned
+
+
 class SignalBridge:
     """Main bridge service connecting Signal to Chooms"""
 
@@ -259,24 +285,18 @@ class SignalBridge:
                     self._process_group_message(source, group_text)
                 return
 
-            # Handle image attachments for a 1:1 chat (not voice notes, not group)
+            # Save image attachments for a 1:1 chat (not voice notes, not group).
+            # The "[User attached image …]" note is attached AFTER the Choom name is
+            # parsed from the caption (see parse_direct_message) — prepending it
+            # here hid "Aloy, …" from the name parser and the photo went to the
+            # last-used Choom instead.
+            image_paths = []
             if not is_voice and attachments:
                 image_paths = self._handle_image_attachments(attachments)
                 if image_paths:
-                    # Prepend image context so the LLM uses analyze_image tool
-                    image_instructions = []
-                    for img_path in image_paths:
-                        image_instructions.append(
-                            f"[User attached image: {img_path}] Please analyze this image using the analyze_image tool with image_path=\"{img_path}\"."
-                        )
-                    image_context = "\n".join(image_instructions)
-                    if message_text:
-                        message_text = f"{image_context}\n\n{message_text}"
-                    else:
-                        message_text = image_context
-                    logger.info(f"Added {len(image_paths)} image attachment(s) to message context")
+                    logger.info(f"Saved {len(image_paths)} image attachment(s) for the 1:1 message")
 
-            if not message_text:
+            if not message_text and not image_paths:
                 logger.debug("Empty message, skipping")
                 return
 
@@ -301,8 +321,13 @@ class SignalBridge:
                 self._send_response(source, braindump_response, None)
                 return
 
-            # Extract Choom name from message first (to get the cleaned message)
-            choom_name, cleaned_message = MessageParser.extract_choom_name(message_text)
+            # Extract Choom name from the caption first, THEN attach the image note
+            # to the cleaned message. message_text carries the note too so the
+            # task-command checks below see the same text they always did.
+            choom_name, cleaned_message = parse_direct_message(message_text, image_paths)
+            if image_paths:
+                note = image_context_note(image_paths)
+                message_text = f"{note}\n\n{message_text}" if message_text else note
             logger.info(f"Parsed message - choom_name: {choom_name}, cleaned: '{cleaned_message[:100] if cleaned_message else ''}'")
 
             # Check for task commands - use cleaned_message to handle "Genesis, remind me..."
