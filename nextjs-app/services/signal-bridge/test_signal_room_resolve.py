@@ -3,7 +3,7 @@ answer with a bare 404 when the configured room was deleted.
 Run: venv/bin/python -m unittest test_signal_room_resolve -v"""
 import unittest
 import requests
-from bridge import resolve_signal_room
+from bridge import resolve_signal_room, parse_group_prefix
 
 
 def http_error(status):
@@ -45,3 +45,22 @@ class Resolve(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GroupPrefixTests(unittest.TestCase):
+    """'group' followed by a space routes to the room, not only 'group:' (2026-09-17)."""
+
+    def test_accepts_colon_comma_dash_and_plain_space(self):
+        self.assertEqual(parse_group_prefix("group: hi girls"), "hi girls")
+        self.assertEqual(parse_group_prefix("Group, hi girls"), "hi girls")
+        self.assertEqual(parse_group_prefix("room - hi girls"), "hi girls")
+        self.assertEqual(parse_group_prefix("Group the storm is moving away"), "the storm is moving away")
+        self.assertEqual(parse_group_prefix("  ROOM:hello"), "hello")
+
+    def test_ordinary_messages_are_not_group(self):
+        self.assertIsNone(parse_group_prefix("grouping the parts by size"))
+        self.assertIsNone(parse_group_prefix("rooms are cold tonight"))
+        self.assertIsNone(parse_group_prefix("Aloy, what's the weather"))
+        self.assertIsNone(parse_group_prefix("group"))
+        self.assertIsNone(parse_group_prefix(""))
+        self.assertIsNone(parse_group_prefix(None))

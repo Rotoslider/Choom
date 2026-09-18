@@ -3,7 +3,7 @@
  * It travels on its own 'thinking' stream event — display only (2026-09-17).
  */
 import { readLlmStream, newStreamState } from '../lib/llm-stream-reader';
-import type { ChatCompletionChunk } from '../lib/types';
+import type { ChatCompletionChunk } from '../lib/llm-client';
 
 type Delta = { content?: string; reasoning_content?: string };
 function fakeClient(deltas: Delta[]) {

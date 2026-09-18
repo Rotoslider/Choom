@@ -52,6 +52,24 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+# A Signal message for the shared room starts with "group" or "room" — as
+# "group: …", "group, …", "group - …" or just "group …" (2026-09-17: the owner
+# wrote "Group the storm is moving away…" and it went to the last 1:1 chat
+# because only ":" and "," were accepted). The word must stand alone ("grouping"
+# and "rooms" don't count) and something must follow it.
+GROUP_PREFIX_RE = re.compile(r'^\s*(?:group|room)\b(?:\s*[:,\-–—]\s*|\s+)(.*)$', re.IGNORECASE | re.DOTALL)
+
+
+def parse_group_prefix(message_text):
+    """Return the text after a leading group/room prefix, or None if there is none."""
+    if not message_text:
+        return None
+    m = GROUP_PREFIX_RE.match(message_text)
+    if not m:
+        return None
+    return m.group(1).strip()
+
+
 def resolve_signal_room(default_id, list_rooms, get_room):
     """Pick the room a "group:" Signal message goes to.
 
@@ -222,10 +240,8 @@ class SignalBridge:
             # stops matching — the message then silently falls through to the last 1:1
             # chat (the "image + Group: went to Eve" bug). Detect group FIRST, and
             # route any attached image INTO the room instead of a 1:1.
-            group_match = re.match(r'^\s*(?:group|room)\s*[:,]\s*(.*)$', message_text,
-                                   re.IGNORECASE | re.DOTALL) if message_text else None
-            if group_match:
-                group_text = group_match.group(1).strip()
+            group_text = parse_group_prefix(message_text)
+            if group_text is not None:
                 if not is_voice and attachments:
                     image_paths = self._handle_image_attachments(attachments)
                     for img_path in image_paths:
@@ -514,7 +530,7 @@ class SignalBridge:
             f"• Just type a message — talks to {default_choom}.\n"
             "• Start with a name to reach a specific one, e.g. \"Eve, ...\" or \"Genesis: ...\".\n"
             f"   (Your Chooms: {names})\n"
-            "• \"group: ...\" or \"room: ...\" — talk to the whole group room.\n"
+            "• \"group ...\" or \"room ...\" — talk to the whole group room.\n"
             "• \"remind me to ... at 3pm\" — set a reminder.\n"
             "• \"what's on my calendar\" / \"add event ...\" — calendar.\n"
             "• \"add milk to groceries\" — add to a list.\n"

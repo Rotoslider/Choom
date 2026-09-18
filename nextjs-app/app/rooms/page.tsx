@@ -479,11 +479,31 @@ export default function RoomsPage() {
   }, []);
 
   const handleSetSignalRoom = useCallback(async (id: string) => {
-    await fetch('/api/bridge-config', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+    // The server refuses config writes from off-site connections (LAN https,
+    // ngrok) with 412 until the user confirms. This used to ignore the
+    // response and flip the button anyway, so the room LOOKED set until the
+    // next visit while Signal "group" messages kept going to a 1:1 chat
+    // (2026-09-17).
+    const post = (confirmRemote: boolean) => fetch('/api/bridge-config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(confirmRemote ? { 'x-confirm-remote-write': 'yes' } : {}) },
       body: JSON.stringify({ defaultGroupRoomId: id }),
     });
-    setSignalRoomId(id);
+    try {
+      let res = await post(false);
+      if (res.status === 412) {
+        if (!window.confirm("You're connected off-site. Make this the room that Signal \"group\" messages go to?")) return;
+        res = await post(true);
+      }
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        alert(`Could not set the Signal room: ${body.message || body.error || res.status}`);
+        return;
+      }
+      setSignalRoomId(id);
+    } catch (e) {
+      alert(`Could not set the Signal room: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }, []);
 
   const startRenameRoom = useCallback((id: string, current: string) => {
@@ -715,8 +735,8 @@ export default function RoomsPage() {
                 className="gap-2"
                 onClick={() => handleSetSignalRoom(currentRoom.id)}
                 title={signalRoomId === currentRoom.id
-                  ? 'This room receives "group:" messages from Signal'
-                  : 'Make this the room that Signal "group:" messages go to'}
+                  ? 'This room receives Signal messages that start with "group" or "room"'
+                  : 'Make this the room that Signal messages starting with "group" or "room" go to'}
               >
                 <Smartphone className="h-4 w-4" />
                 {signalRoomId === currentRoom.id ? 'Signal room' : 'Set as Signal room'}
