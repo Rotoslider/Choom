@@ -943,6 +943,52 @@ class TTSClient:
             return None
 
 
+_STT_MAX_PHRASE_WORDS = 12
+_STT_MIN_REPEATS = 3
+
+
+def _stt_norm_word(w: str) -> str:
+    return re.sub(r"[^\w']", "", w.lower())
+
+
+def collapse_repetitions(text: str) -> tuple[str, int, Optional[str]]:
+    """Collapse a Whisper decoder loop: any 1-12 word phrase repeated back-to-back
+    3+ times becomes one copy. Mirrors nextjs-app/lib/stt-repetition-guard.ts —
+    Rapid-MLX decodes at a single temperature with no fallback, so a loop in one
+    30 s window runs to the end of the clip (mic transcript, 2026-09-20).
+    Returns (text, copies_removed, looped_phrase)."""
+    words = [w for w in (text or "").split() if w]
+    if len(words) < _STT_MIN_REPEATS:
+        return text, 0, None
+    norm = [_stt_norm_word(w) for w in words]
+    out: list[str] = []
+    removed = 0
+    phrase: Optional[str] = None
+    i = 0
+    while i < len(words):
+        collapsed = False
+        n = 1
+        while n <= _STT_MAX_PHRASE_WORDS and i + n * _STT_MIN_REPEATS <= len(words):
+            copies = 1
+            while i + (copies + 1) * n <= len(words) and norm[i:i + n] == norm[i + copies * n:i + (copies + 1) * n]:
+                copies += 1
+            if copies >= _STT_MIN_REPEATS and any(norm[i:i + n]):
+                out.extend(words[i:i + n])
+                removed += copies - 1
+                if phrase is None:
+                    phrase = " ".join(words[i:i + n])
+                i += copies * n
+                collapsed = True
+                break
+            n += 1
+        if not collapsed:
+            out.append(words[i])
+            i += 1
+    if removed == 0:
+        return text, 0, None
+    return " ".join(out).strip(), removed, phrase
+
+
 class STTClient:
     """Client for Speech-to-Text service"""
 
@@ -984,7 +1030,10 @@ class STTClient:
 
             if response.status_code == 200:
                 data = response.json()
-                return data.get('text', '')
+                text, removed, phrase = collapse_repetitions(data.get('text', '') or '')
+                if removed:
+                    logger.warning(f"STT repetition loop collapsed: {phrase!r} x{removed + 1} -> 1 (audio after the loop began was not transcribed)")
+                return text
 
             logger.error(f"STT failed: {response.status_code} {response.text[:200]}")
             return None

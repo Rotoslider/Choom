@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { toWav } from '@/lib/audio-transcode';
+import { collapseRepetitions } from '@/lib/stt-repetition-guard';
+import { chunkWavAtSilences } from '@/lib/audio-chunk';
 
 export const dynamic = 'force-dynamic';
 const DEFAULT_STT = 'http://localhost:8890'; // the Mac's Rapid-MLX (/v1/audio/transcriptions)
@@ -30,41 +32,65 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, error: 'Could not convert the recording to WAV', details: String(err) }, { status: 500 });
     }
 
-    const sttFormData = new FormData();
-    sttFormData.append('file', new Blob([new Uint8Array(wav)], { type: 'audio/wav' }), 'audio.wav');
-    sttFormData.append('response_format', 'json');
-
+    // Long recordings go up in ≤28 s pieces cut at silences. Rapid-MLX feeds
+    // each 30 s Whisper window the previous window's text and decodes at one
+    // temperature with no fallback, so a loop in one window runs to the end
+    // of the recording (99 s mic clip → "Access all of the... " ×110,
+    // 2026-09-20). Independent pieces cannot inherit a loop.
+    const { chunks, seconds, cuts } = await chunkWavAtSilences(wav);
+    if (chunks.length > 1) {
+      console.log(`🎤 STT ${seconds.toFixed(1)}s recording → ${chunks.length} chunks at ${cuts.map(c => c.toFixed(1) + 's').join(', ')}`);
+    }
     console.log(`🎤 STT request to ${sttEndpoint}/v1/audio/transcriptions`);
 
-    const response = await fetch(`${sttEndpoint}/v1/audio/transcriptions`, {
-      method: 'POST',
-      body: sttFormData,
-    });
+    const texts: string[] = [];
+    const collapsed: Array<{ phrase?: string; copies_removed: number }> = [];
+    for (const [i, chunk] of chunks.entries()) {
+      const sttFormData = new FormData();
+      sttFormData.append('file', new Blob([new Uint8Array(chunk)], { type: 'audio/wav' }), 'audio.wav');
+      sttFormData.append('response_format', 'json');
 
-    console.log(`🎤 STT response status: ${response.status}`);
+      const response = await fetch(`${sttEndpoint}/v1/audio/transcriptions`, {
+        method: 'POST',
+        body: sttFormData,
+      });
 
-    if (!response.ok) {
-      if (response.status === 404 || response.status === 502) {
-        return NextResponse.json({
-          success: false,
-          error: 'STT service not available',
-          hint: 'Check the STT endpoint in Settings — the Mac default is Rapid-MLX on port 8890',
-        });
+      console.log(`🎤 STT response status: ${response.status}${chunks.length > 1 ? ` (chunk ${i + 1}/${chunks.length})` : ''}`);
+
+      if (!response.ok) {
+        if (response.status === 404 || response.status === 502) {
+          return NextResponse.json({
+            success: false,
+            error: 'STT service not available',
+            hint: 'Check the STT endpoint in Settings — the Mac default is Rapid-MLX on port 8890',
+          });
+        }
+
+        const errorText = await response.text().catch(() => 'Unknown error');
+        return NextResponse.json(
+          { success: false, error: `STT error: ${response.status}`, details: errorText },
+          { status: response.status }
+        );
       }
 
-      const errorText = await response.text().catch(() => 'Unknown error');
-      return NextResponse.json(
-        { success: false, error: `STT error: ${response.status}`, details: errorText },
-        { status: response.status }
-      );
+      const data = await response.json();
+      // Whatever loop still happens is bounded to this chunk; collapse it.
+      const guarded = collapseRepetitions(String(data?.text ?? ''));
+      if (guarded.removed > 0) {
+        console.warn(`🎤 STT repetition loop collapsed${chunks.length > 1 ? ` in chunk ${i + 1}` : ''}: "${guarded.phrase}" ×${guarded.removed + 1} → 1 (speech after the loop began in that stretch was not transcribed)`);
+        collapsed.push({ phrase: guarded.phrase, copies_removed: guarded.removed });
+      }
+      if (guarded.text.trim()) texts.push(guarded.text.trim());
     }
 
-    const data = await response.json();
-    console.log(`🎤 STT transcription: "${data?.text?.slice(0, 100)}${data?.text?.length > 100 ? '...' : ''}"`);
+    const text = texts.join(' ');
+    console.log(`🎤 STT transcription: "${text.slice(0, 100)}${text.length > 100 ? '...' : ''}"`);
 
     return NextResponse.json({
       success: true,
-      text: data?.text ?? '',
+      text,
+      ...(chunks.length > 1 && { chunks: chunks.length }),
+      ...(collapsed.length > 0 && { repetition_collapsed: collapsed }),
     });
   } catch (error) {
     console.error('🎤 STT error:', error);

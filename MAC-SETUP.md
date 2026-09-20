@@ -274,6 +274,23 @@ Ten seconds of noise with no speech should come back as an empty transcript in
 well under a second. Pauses inside a voice note are untouched — the trim only
 cuts before the first and after the last detected speech.
 
+The VAD trim does not stop the other Whisper failure: the decoder locking onto
+a phrase and repeating it to the end of the recording (2026-09-20, a 99 s mic
+clip: a good paragraph, then "Access all of the... " ×110). Rapid-MLX decodes
+Whisper at a single temperature on purpose (0.14.2 and 0.14.3, `vllm_mlx/audio/
+stt.py`), which disables mlx-audio's compression-ratio fallback, and it leaves
+`condition_on_previous_text` on, so once one 30 s window loops every later
+window inherits the loop. Upstream will not change that, so the app handles it:
+
+- `app/api/stt/route.ts` splits mic recordings longer than 28 s at silences
+  (`lib/audio-chunk.ts`, ffmpeg `silencedetect`) and transcribes each piece as
+  its own request — a loop can no longer cross into the next stretch.
+- `lib/stt-repetition-guard.ts` (mic) and `collapse_repetitions` in
+  `services/signal-bridge/choom_client.py` (Signal voice notes) collapse any
+  phrase repeated 3+ times back-to-back to one copy and log
+  `STT repetition loop collapsed`. If that line shows up, the speech after the
+  loop began in that stretch was lost — say so rather than guessing.
+
 ## 6. Running the services
 
 Install the launchd agents (the counterpart of `install-services.sh`):
