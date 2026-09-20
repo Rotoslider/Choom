@@ -10,6 +10,10 @@ function resolveLocation(rawLocation: string | undefined): string | undefined {
     : undefined;
 }
 
+function hasDefaultLocation(settings: WeatherSettings | undefined): boolean {
+  return Boolean(settings && ((settings.latitude && settings.longitude) || settings.location));
+}
+
 const TOOL_NAMES = new Set(['get_weather', 'get_weather_forecast']);
 
 export default class WeatherForecastingHandler extends BaseSkillHandler {
@@ -33,10 +37,22 @@ export default class WeatherForecastingHandler extends BaseSkillHandler {
       const rawLocation = toolCall.arguments.location as string | undefined;
       const location = resolveLocation(rawLocation);
       const weatherService = new WeatherService(ctx.weatherSettings);
-      const weather = await weatherService.getWeather(location);
+      let weather;
+      let note: string | undefined;
+      try {
+        weather = await weatherService.getWeather(location);
+      } catch (e) {
+        // "Chiricahua Mountains, AZ" is home, but OpenWeather has no such
+        // place (404, doctor 2026-09-19). When the user asked about HERE in
+        // words the geocoder can't parse, the configured default is the
+        // right answer — return it and say so instead of failing the turn.
+        if (!location || !hasDefaultLocation(ctx.weatherSettings) || !/\b404\b/.test(e instanceof Error ? e.message : String(e))) throw e;
+        weather = await weatherService.getWeather(undefined);
+        note = `"${location}" is not a place OpenWeather recognizes, so this is the weather for the configured home location instead. If you meant somewhere else, pass "City,ST,US" or latitude/longitude.`;
+      }
       const formatted = weatherService.formatWeatherForPrompt(weather);
 
-      return this.success(toolCall, { success: true, weather, formatted });
+      return this.success(toolCall, { success: true, weather, formatted, ...(note && { note }) });
     } catch (weatherError) {
       return this.error(toolCall, `Weather fetch failed: ${weatherError instanceof Error ? weatherError.message : 'Unknown error'}`);
     }

@@ -44,6 +44,36 @@ async function maCommand(command: string, args: Record<string, unknown> = {}): P
   return data;
 }
 
+/** First non-empty string among the given argument names (schema name first, then the synonyms models actually send). */
+export function firstString(args: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const k of keys) {
+    const v = args[k];
+    if (typeof v === 'string' && v.trim()) return v.trim();
+    if (typeof v === 'number') return String(v);
+  }
+  return undefined;
+}
+
+export const CONTROL_ACTIONS = new Set(['play', 'pause', 'stop', 'next', 'previous', 'volume_set', 'volume_up', 'volume_down', 'shuffle', 'repeat']);
+
+/** Map the verbs a model reaches for ("resume", "skip", "louder") onto the schema's action enum. */
+export function normalizeControlAction(raw: string | undefined): string | undefined {
+  const a = (raw || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (!a) return undefined;
+  if (CONTROL_ACTIONS.has(a)) return a;
+  const synonyms: Record<string, string> = {
+    resume: 'play', unpause: 'play', start: 'play', continue: 'play',
+    skip: 'next', skip_next: 'next', next_track: 'next', forward: 'next',
+    prev: 'previous', back: 'previous', previous_track: 'previous', skip_previous: 'previous', rewind: 'previous',
+    volume: 'volume_set', set_volume: 'volume_set', volume_level: 'volume_set',
+    louder: 'volume_up', up: 'volume_up', increase_volume: 'volume_up', volume_increase: 'volume_up', turn_up: 'volume_up',
+    quieter: 'volume_down', down: 'volume_down', decrease_volume: 'volume_down', volume_decrease: 'volume_down', turn_down: 'volume_down', lower: 'volume_down',
+    shuffle_on: 'shuffle', toggle_shuffle: 'shuffle',
+    repeat_on: 'repeat', toggle_repeat: 'repeat', loop: 'repeat',
+  };
+  return synonyms[a] ?? a;
+}
+
 function playerResult(p: Record<string, unknown>) {
   return { player_id: p.player_id as string, name: (p.display_name || p.name) as string, queue_id: p.player_id as string };
 }
@@ -163,7 +193,7 @@ export default class MusicAssistantHandler extends BaseSkillHandler {
       total_results: totalResults,
       results,
       message: totalResults > 0
-        ? `Found ${totalResults} results for "${query}". Use the URI with music_play to play.`
+        ? `Found ${totalResults} results for "${query}". To play one, call music_play(media="<uri from these results>") — the parameter is named media.`
         : `No results found for "${query}".`,
     });
   }
@@ -204,13 +234,21 @@ export default class MusicAssistantHandler extends BaseSkillHandler {
       total_results: totalResults,
       results,
       message: totalResults > 0
-        ? `Found ${totalResults} items in the library. Use the URI with music_play to play.`
+        ? `Found ${totalResults} items in the library. To play one, call music_play(media="<uri from these results>") — the parameter is named media.`
         : 'Library is empty or no items found for the requested types.',
     });
   }
 
   private async play(toolCall: ToolCall): Promise<ToolResult> {
-    const media = toolCall.arguments.media as string;
+    // The schema says `media`, but DeepSeek V4 Flash sent {uri: "library://track/90108"}
+    // twice in a row (Aloy, 2026-09-20) and got "Cannot read properties of
+    // undefined (reading 'includes')" back — a crash, not an error she could act
+    // on. Take the obvious synonyms, and if nothing usable arrived say exactly
+    // what to pass.
+    const media = firstString(toolCall.arguments, ['media', 'uri', 'query', 'name', 'track', 'song', 'search', 'item', 'media_id', 'media_uri']);
+    if (!media) {
+      return this.error(toolCall, 'media is required — pass the artist, album, track or playlist NAME (e.g. media="Anne Bloom") or a uri copied from music_search results (media="library://track/123"). The parameter is named media, not uri or query.');
+    }
     const enqueue = (toolCall.arguments.enqueue as string) || 'play';
     const player = await resolvePlayer(toolCall.arguments.player as string | undefined);
 
@@ -288,8 +326,21 @@ export default class MusicAssistantHandler extends BaseSkillHandler {
   }
 
   private async control(toolCall: ToolCall): Promise<ToolResult> {
-    const action = toolCall.arguments.action as string;
-    const value = toolCall.arguments.value as number | undefined;
+    // Same story as play(): {command: "play"} arrived instead of {action: "play"}
+    // and the reply was 'Unknown action "undefined"'. Accept the synonyms and
+    // the everyday verbs, and validate BEFORE the player lookup so a bad call
+    // costs no round-trip.
+    const rawAction = firstString(toolCall.arguments, ['action', 'command', 'cmd', 'operation', 'op']);
+    const action = normalizeControlAction(rawAction);
+    const rawValue = toolCall.arguments.value ?? toolCall.arguments.volume ?? toolCall.arguments.level;
+    const value = rawValue === undefined || rawValue === null || rawValue === '' ? undefined : Number(rawValue);
+    const validActions = 'play, pause, stop, next, previous, volume_set, volume_up, volume_down, shuffle, repeat';
+    if (!action) {
+      return this.error(toolCall, `action is required. Call music_control(action="<one of: ${validActions}>") — the parameter is named action, not command.`);
+    }
+    if (!CONTROL_ACTIONS.has(action)) {
+      return this.error(toolCall, `Unknown action "${rawAction}". Use: ${validActions}`);
+    }
     const player = await resolvePlayer(toolCall.arguments.player as string | undefined);
 
     const cmdMap: Record<string, { cmd: string; args?: Record<string, unknown> }> = {
@@ -307,7 +358,7 @@ export default class MusicAssistantHandler extends BaseSkillHandler {
 
     const entry = cmdMap[action];
     if (!entry) {
-      return this.error(toolCall, `Unknown action "${action}". Use: ${Object.keys(cmdMap).join(', ')}`);
+      return this.error(toolCall, `Unknown action "${action}". Use: ${validActions}`);
     }
 
     const isQueueCmd = entry.cmd.startsWith('player_queues/');

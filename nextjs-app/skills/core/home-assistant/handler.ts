@@ -71,6 +71,7 @@ async function resolveEntity(
   ha: HomeAssistantService,
   ref: string,
   domain?: string,
+  tieBreak?: (tied: HAEntity[]) => HAEntity | null,
 ): Promise<{ entityId: string; resolvedFrom?: string } | { candidates: HAEntity[]; domain: string }> {
   const refTrim = (ref || '').trim();
   const dom = domain || (refTrim.includes('.') ? refTrim.split('.')[0] : undefined);
@@ -80,9 +81,41 @@ async function resolveEntity(
   if (!entities.length) return { candidates: [], domain: dom || '' };
   const scored = scoreEntities(refTrim, entities);
   const top = scored[0];
-  const topCount = scored.filter(s => s.score === top.score).length;
-  if (top.score > 0 && topCount === 1) return { entityId: top.e.entity_id, resolvedFrom: refTrim };
+  const tied = scored.filter(s => s.score === top.score).map(s => s.e);
+  if (top.score > 0 && tied.length === 1) return { entityId: top.e.entity_id, resolvedFrom: refTrim };
+  if (top.score > 0 && tieBreak) {
+    const pick = tieBreak(tied);
+    if (pick) return { entityId: pick.entity_id, resolvedFrom: refTrim };
+  }
   return { candidates: top.score > 0 ? scored.map(s => s.e) : entities, domain: dom || '' };
+}
+
+/**
+ * Camera tie-break. One physical camera shows up in HA as several camera.*
+ * entities — "Tower Camera Live Feed", "Tower Camera camera snapshot",
+ * "Garage Camera snapshots clear" — so "tower" scores a dead heat between
+ * them and the conservative resolver refused it: 8–16 "No camera matches
+ * \"tower\"" errors per day in the nightly doctor (2026-09-15 → 09-19), every
+ * one of them a wasted iteration on a name the tool description promised
+ * would work. When every tied candidate is the SAME camera (identical name
+ * once the stream-flavour words are stripped), prefer the live feed.
+ * Different cameras still tie → still hand back the list.
+ */
+const CAMERA_FLAVOUR_WORDS = /\b(camera|cam|live|feed|stream|snapshot|snapshots|clear|fluent|main|sub|hd|sd|high|low)\b/g;
+export function pickCameraAmongTies(tied: HAEntity[]): HAEntity | null {
+  if (tied.length < 2) return tied[0] ?? null;
+  const stem = (e: HAEntity) => {
+    const raw = String(e.attributes?.friendly_name || e.entity_id.replace(/^camera\./, ''));
+    return raw.toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(CAMERA_FLAVOUR_WORDS, ' ').replace(/\s+/g, ' ').trim();
+  };
+  const stems = new Set(tied.map(stem));
+  if (stems.size !== 1) return null;
+  const preference = [/live_feed|live/i, /main|clear|hd|high/i, /./];
+  for (const re of preference) {
+    const hit = tied.find(e => re.test(e.entity_id) || re.test(String(e.attributes?.friendly_name || '')));
+    if (hit) return hit;
+  }
+  return tied[0];
 }
 
 /**
@@ -599,8 +632,13 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
         }
 
         case 'ha_get_history': {
-          const entityId = args.entity_id as string;
-          if (!entityId) return this.error(toolCall, 'entity_id is required');
+          const histRef = String(args.entity_id ?? args.entity ?? args.name ?? '').trim();
+          if (!histRef) return this.error(toolCall, 'entity_id is required — the entity to chart, e.g. entity_id="sensor.outdoor_temperature" or a loose name like "outdoor temperature". Call ha_get_home_status to see what exists.');
+          const histResolved = await resolveEntity(ha, histRef);
+          if (!('entityId' in histResolved)) {
+            return this.error(toolCall, `Entity "${histRef}" doesn't exist — don't guess ids.${histResolved.candidates.length ? ` Real ${histResolved.domain ? `${histResolved.domain} ` : ''}entities on THIS system: ${entityListText(histResolved.candidates)}. Use one of these exact ids.` : ' Call ha_get_home_status to discover them.'}`);
+          }
+          const entityId = histResolved.entityId;
 
           const hours = Math.min(Math.max(Number(args.hours) || 24, 1), 168);
           const summary = await ha.getHistory(entityId, hours);
@@ -628,8 +666,17 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
         }
 
         case 'ha_get_logbook': {
-          const entityId = args.entity_id as string;
-          if (!entityId) return this.error(toolCall, 'entity_id is required');
+          // "entity_id is required" was a blank wall in the doctor report
+          // (2026-09-19): it named the parameter and nothing else. Say what
+          // goes in it, take the synonyms, and resolve loose names the way
+          // ha_get_state does so "front door" works without a second call.
+          const logRef = String(args.entity_id ?? args.entity ?? args.name ?? '').trim();
+          if (!logRef) return this.error(toolCall, 'entity_id is required — the entity whose activity you want, e.g. entity_id="binary_sensor.front_door" or a loose name like "front door". Call ha_get_home_status to see what exists.');
+          const logResolved = await resolveEntity(ha, logRef);
+          if (!('entityId' in logResolved)) {
+            return this.error(toolCall, `Entity "${logRef}" doesn't exist — don't guess ids.${logResolved.candidates.length ? ` Real ${logResolved.domain ? `${logResolved.domain} ` : ''}entities on THIS system: ${entityListText(logResolved.candidates)}. Use one of these exact ids.` : ' Call ha_get_home_status to discover them.'}`);
+          }
+          const entityId = logResolved.entityId;
 
           const hours = Math.min(Math.max(Number(args.hours) || 24, 1), 168);
           const entries = await ha.getLogbook(entityId, hours);
@@ -725,7 +772,7 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
           // Resolve a loose camera reference ("garage", "front cam") against the
           // camera domain (only a handful of cameras), so she doesn't need the
           // exact id. Vague/no match → return just the camera list to pick from.
-          const camResolved = await resolveEntity(ha, camRef, 'camera');
+          const camResolved = await resolveEntity(ha, camRef, 'camera', pickCameraAmongTies);
           if (!('entityId' in camResolved)) {
             return this.error(
               toolCall,

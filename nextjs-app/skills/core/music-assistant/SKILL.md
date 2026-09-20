@@ -26,6 +26,8 @@ Use these tools when the user wants to play music, control playback, or check wh
 
 **Never invent a speaker name.** Omit `player` to use the default; call `music_players` first if the user named a specific one.
 
+**Parameter names matter.** `music_play` takes `media` (not `uri`/`query`); `music_control` takes `action` (not `command`). A uri from `music_search` goes in `media`: `music_play(media="library://track/123")`.
+
 ### Level 2 — Usage Patterns
 
 **Play music by name (auto-search):**

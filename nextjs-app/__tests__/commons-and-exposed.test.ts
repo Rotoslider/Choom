@@ -77,6 +77,20 @@ describe('sister-mail tools', () => {
     expect(readInbox('Genesis', { root }).newCount).toBe(1);
     expect(readInbox('Genesis', { root }).newCount).toBe(0);
   });
+
+  test('a letter whose mtime is ahead of the wall clock is still marked seen (APFS sub-ms race)', () => {
+    ensureCommonsLayout(['Genesis'], root);
+    const f = path.join(root, inboxPath('Genesis'), '2026-09-12_note.md');
+    fs.writeFileSync(f, 'hello');
+    const ahead = new Date(Date.now() + 5);
+    fs.utimesSync(f, ahead, ahead);
+    expect(readInbox('Genesis', { root }).newCount).toBe(1);
+    expect(readInbox('Genesis', { root }).newCount).toBe(0);
+    // A later edit is new again.
+    const later = new Date(Date.now() + 2000);
+    fs.utimesSync(f, later, later);
+    expect(readInbox('Genesis', { root }).newCount).toBe(1);
+  });
 });
 
 describe('Home Assistant: only entities exposed to Assist', () => {

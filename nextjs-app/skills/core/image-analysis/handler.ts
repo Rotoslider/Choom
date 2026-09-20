@@ -96,6 +96,22 @@ export default class ImageAnalysisHandler extends BaseSkillHandler {
         console.log(`   👁️  Vision profile applied: "${visionProfile.label || visionProfile.modelId}" (maxDim=${visionMaxDimension}, maxSize=${visionMaxSizeBytes ? Math.round(visionMaxSizeBytes / 1024 / 1024) + 'MB' : 'default'})`);
       }
 
+      // Models reach for path / file_path / image / url instead of the schema
+      // names, and the vision service then answered "One of imagePath,
+      // imageUrl, or imageBase64 is required" — a blank wall that names
+      // internal fields the model can't pass (doctor, 2026-09-15). Fold the
+      // synonyms in first.
+      const a = toolCall.arguments;
+      for (const k of ['path', 'file_path', 'filepath', 'image', 'file', 'workspace_path', 'imagePath']) {
+        if (!a.image_path && typeof a[k] === 'string' && (a[k] as string).trim()) { a.image_path = (a[k] as string).trim(); break; }
+      }
+      for (const k of ['url', 'imageUrl', 'href']) {
+        if (!a.image_url && typeof a[k] === 'string' && (a[k] as string).trim()) { a.image_url = (a[k] as string).trim(); break; }
+      }
+      if (!a.image_path && !a.image_url && !a.image_base64 && !a.image_id) {
+        return this.error(toolCall, 'analyze_image needs an image: pass image_path="<workspace file such as selfies_genesis/images/x.png>", image_url="https://…", or image_id="<id from generate_image>". None of those was given.');
+      }
+
       // If image_id is provided, look up the generated image from the database
       let imageBase64 = toolCall.arguments.image_base64 as string | undefined;
       // A small model put a workspace path in image_id ("selfies_genesis/…jpg")

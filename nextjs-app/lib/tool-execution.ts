@@ -9,6 +9,7 @@
  * knows about streaming or the loop itself.
  */
 import prisma from '@/lib/db';
+import { repairMissingRequiredArg } from './tool-arg-repair';
 import { MemoryClient, executeMemoryTool } from '@/lib/memory-client';
 import { ImageGenClient, buildPromptWithLoras } from '@/lib/image-gen-client';
 import { WeatherService } from '@/lib/weather-service';
@@ -2629,6 +2630,20 @@ export async function executeToolCallViaSkills(
     if (changed) {
       console.log(`   🔄 Normalized param names for ${toolCall.name}: ${Object.keys(toolCall.arguments).join(', ')} → ${Object.keys(normalized).join(', ')}`);
       toolCall.arguments = normalized;
+    }
+  }
+
+  // Wrong-name repair: one required param missing + one unknown key supplied →
+  // that key IS the required param under a name the model made up (uri→media,
+  // command→action). Narrow on purpose; see lib/tool-arg-repair.ts.
+  if (toolDef?.parameters) {
+    const { args: repairedArgs, renamed } = repairMissingRequiredArg(
+      toolCall.arguments,
+      toolDef.parameters as { properties?: Record<string, unknown>; required?: string[] },
+    );
+    if (renamed) {
+      console.log(`   🔄 ${toolCall.name}: moved unknown param "${renamed.from}" → required "${renamed.to}"`);
+      toolCall.arguments = repairedArgs;
     }
   }
 

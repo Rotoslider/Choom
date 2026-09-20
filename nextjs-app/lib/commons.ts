@@ -129,8 +129,13 @@ export function readInbox(name: string, opts: { includeSeen?: boolean; peek?: bo
     .sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt));
   const newCount = entries.filter(i => !i.seen).length;
   if (!opts.peek) {
-    const now = new Date().toISOString();
-    for (const i of entries) seen[i.name] = now;
+    // Record the mtime we just listed, not the wall clock. On APFS a file's
+    // mtime carries sub-millisecond precision and lands up to ~1ms AHEAD of
+    // Date.now() on the same tick (measured 2026-09-20: 98% of writes), so a
+    // "seen at now" marker could be older than the file and the letter came
+    // back as new on the next read. Seen-at-this-version is also the right
+    // meaning: a later edit still shows as new.
+    for (const i of entries) seen[i.name] = i.modifiedAt;
     try { fs.writeFileSync(path.join(dir, SEEN_FILE), JSON.stringify(seen, null, 2), 'utf-8'); } catch { /* read-only: fine */ }
   }
   return { items: entries, newCount, path: rel };

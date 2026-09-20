@@ -31,7 +31,7 @@ export const tools: ToolDefinition[] = [
       properties: {
         media: {
           type: 'string',
-          description: 'A NAME to search ("Anne Bloom", "chill jazz playlist") or a uri copied from music_search THIS turn. Never invent a uri — a made-up id is a hard error.',
+          description: 'REQUIRED, and it is named media (not uri, query or track). A NAME to search ("Anne Bloom", "chill jazz playlist") or a uri copied from music_search THIS turn. Never invent a uri — a made-up id is a hard error.',
         },
         player: {
           type: 'string',
@@ -54,7 +54,7 @@ export const tools: ToolDefinition[] = [
       properties: {
         action: {
           type: 'string',
-          description: 'Playback action to perform.',
+          description: 'REQUIRED, and it is named action (not command). Playback action to perform.',
           enum: ['play', 'pause', 'stop', 'next', 'previous', 'volume_set', 'volume_up', 'volume_down', 'shuffle', 'repeat'],
         },
         player: {

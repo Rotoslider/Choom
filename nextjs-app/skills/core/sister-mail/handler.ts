@@ -45,10 +45,10 @@ export default class SisterMailHandler extends BaseSkillHandler {
 
       case 'leave_for_sister': {
         const sisterRaw = String(toolCall.arguments.sister ?? toolCall.arguments.to ?? '').trim();
-        const message = String(toolCall.arguments.message ?? toolCall.arguments.content ?? '').trim();
+        const message = String(toolCall.arguments.message ?? toolCall.arguments.content ?? toolCall.arguments.text ?? toolCall.arguments.body ?? toolCall.arguments.note ?? toolCall.arguments.letter ?? '').trim();
         const title = typeof toolCall.arguments.title === 'string' ? toolCall.arguments.title.trim() : undefined;
         if (!sisterRaw) return this.error(toolCall, `sister is required. Your sisters: ${chooms.map(c => c.name).filter(n => n !== me).join(', ')}`);
-        if (!message) return this.error(toolCall, 'message is required — the letter or note itself.');
+        if (!message) return this.error(toolCall, `message is required — the letter or note itself. Retry as leave_for_sister(sister="${sisterRaw}", message="<what you want her to read>"); the text goes in message, not in title.`);
         const sister = chooms.find(c => choomSlug(c.name) === choomSlug(sisterRaw));
         if (!sister) return this.error(toolCall, `No Choom named "${sisterRaw}". Your sisters: ${chooms.map(c => c.name).filter(n => n !== me).join(', ')}`);
         if (sister.name === me) return this.error(toolCall, 'That is your own inbox. Leave things for a sister, or keep your own notes in your selfies folder.');
