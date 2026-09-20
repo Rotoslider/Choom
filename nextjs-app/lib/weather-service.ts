@@ -6,6 +6,88 @@ const weatherCache: Map<string, { data: WeatherData; expiresAt: number }> = new 
 // Cache for forecast data
 const forecastCache: Map<string, { data: ForecastData; expiresAt: number }> = new Map();
 
+/**
+ * Weather Underground (weather.com) — optional. Live readings from a personal
+ * weather station and the site's own 5-day forecast for a lat/lon. Needs
+ * WUNDERGROUND_API_KEY (a PWS owner's key from wunderground.com/member/api-keys).
+ * Without it, named places still work on OpenWeather coordinates alone.
+ */
+export const WUNDERGROUND_API_KEY = process.env.WUNDERGROUND_API_KEY || '';
+
+export interface PwsObservation {
+  stationId: string;
+  observedAt: string;
+  neighborhood?: string;
+  temperature: number;
+  feelsLike: number;
+  dewPoint: number;
+  humidity: number;
+  windSpeed: number;
+  windGust: number;
+  windDirection: string;
+  pressure: number;
+  precipRate: number;
+  precipTotal: number;
+  uv: number;
+  elevationFt?: number;
+}
+
+export interface DailyOutlook {
+  day: string;
+  high: number | null;
+  low: number;
+  narrative: string;
+  precipChance: number;
+}
+
+const compass = (deg: number) => ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'][Math.round(deg / 22.5) % 16];
+
+/** Parse api.weather.com/v2/pws/observations/current into our shape (imperial or metric block). */
+export function parsePwsObservation(json: unknown, metric: boolean): PwsObservation | null {
+  const obs = (json as { observations?: Array<Record<string, unknown>> })?.observations?.[0];
+  if (!obs) return null;
+  const u = (metric ? obs.metric : obs.imperial) as Record<string, number> | undefined;
+  if (!u) return null;
+  return {
+    stationId: String(obs.stationID || ''),
+    observedAt: String(obs.obsTimeLocal || obs.obsTimeUtc || ''),
+    neighborhood: obs.neighborhood ? String(obs.neighborhood) : undefined,
+    temperature: u.temp,
+    feelsLike: u.heatIndex ?? u.windChill ?? u.temp,
+    dewPoint: u.dewpt,
+    humidity: Number(obs.humidity ?? 0),
+    windSpeed: u.windSpeed ?? 0,
+    windGust: u.windGust ?? 0,
+    windDirection: compass(Number(obs.winddir ?? 0)),
+    pressure: u.pressure,
+    precipRate: u.precipRate ?? 0,
+    precipTotal: u.precipTotal ?? 0,
+    uv: Number(obs.uv ?? 0),
+    elevationFt: typeof u.elev === 'number' ? u.elev : undefined,
+  };
+}
+
+/** Parse api.weather.com/v3/wx/forecast/daily/5day into per-day outlook lines. */
+export function parseWuDailyForecast(json: unknown, days: number): DailyOutlook[] {
+  const d = json as Record<string, unknown[]>;
+  if (!d || !Array.isArray(d.dayOfWeek)) return [];
+  const out: DailyOutlook[] = [];
+  for (let i = 0; i < Math.min(days, d.dayOfWeek.length); i++) {
+    const high = d.calendarDayTemperatureMax?.[i] ?? d.temperatureMax?.[i];
+    const low = d.calendarDayTemperatureMin?.[i] ?? d.temperatureMin?.[i];
+    const dayPart = (d.daypart as Array<Record<string, unknown[]>> | undefined)?.[0];
+    const pop = dayPart ? Math.max(Number(dayPart.precipChance?.[2 * i] ?? 0), Number(dayPart.precipChance?.[2 * i + 1] ?? 0)) : 0;
+    out.push({
+      day: String(d.dayOfWeek[i]),
+      high: typeof high === 'number' ? high : null,
+      low: Number(low),
+      narrative: String(d.narrative?.[i] ?? ''),
+      precipChance: pop,
+    });
+  }
+  return out;
+}
+
 // Two-letter US state codes. OpenWeather's `q=` geocoder needs "City,ST,US" —
 // it does NOT accept "City, ST", which is exactly how people (and the config
 // file) write it.
@@ -204,6 +286,156 @@ export class WeatherService {
       sunset: '',
       updatedAt: new Date().toISOString(),
     };
+  }
+
+  /**
+   * Current conditions for a named place: OpenWeather at the exact lat/lon
+   * (elevation-aware — reads within a degree of the mountain station), and
+   * when a Weather Underground key + station id are configured, the live
+   * station reading REPLACES the modelled numbers (measured beats modelled).
+   */
+  async getWeatherAt(place: { name: string; lat: number; lon: number; pwsStationId?: string }): Promise<WeatherData & { station?: PwsObservation; source: string }> {
+    const metric = this.settings.units === 'metric';
+    const cacheKey = `at:${place.lat},${place.lon}:${place.pwsStationId || ''}-${this.settings.units}`;
+    const cached = weatherCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) return cached.data as WeatherData & { source: string };
+
+    if (!this.settings.apiKey) throw new Error('OpenWeatherMap API key not configured');
+    const units = metric ? 'metric' : 'imperial';
+    const url = `https://api.openweathermap.org/data/2.5/weather?lat=${place.lat}&lon=${place.lon}&units=${units}&appid=${this.settings.apiKey}`;
+    const response = await fetchWithRetry(url);
+    if (!response.ok) throw new Error(weatherErrorMessage(response.status, place.name));
+    const data = await response.json();
+
+    let result: WeatherData & { station?: PwsObservation; source: string } = {
+      location: place.name,
+      temperature: data.main.temp,
+      feelsLike: data.main.feels_like,
+      humidity: data.main.humidity,
+      description: data.weather?.[0]?.description || 'Unknown',
+      icon: data.weather?.[0]?.icon || '',
+      windSpeed: data.wind?.speed || 0,
+      windDirection: this.degreesToCompass(data.wind?.deg || 0),
+      visibility: (data.visibility || 0) / 1000,
+      pressure: data.main.pressure,
+      sunrise: new Date(data.sys.sunrise * 1000).toLocaleTimeString(),
+      sunset: new Date(data.sys.sunset * 1000).toLocaleTimeString(),
+      updatedAt: new Date().toISOString(),
+      source: 'OpenWeather model at the exact coordinates',
+    };
+
+    if (place.pwsStationId && WUNDERGROUND_API_KEY) {
+      try {
+        const r = await fetch(`https://api.weather.com/v2/pws/observations/current?stationId=${encodeURIComponent(place.pwsStationId)}&format=json&units=${metric ? 'm' : 'e'}&apiKey=${WUNDERGROUND_API_KEY}`, { signal: AbortSignal.timeout(10000) });
+        const station = r.ok ? parsePwsObservation(await r.json(), metric) : null;
+        if (station) {
+          result = {
+            ...result,
+            temperature: station.temperature,
+            feelsLike: station.feelsLike,
+            humidity: station.humidity,
+            windSpeed: station.windSpeed,
+            windDirection: station.windDirection,
+            station,
+            source: `Weather Underground station ${station.stationId} (live reading ${station.observedAt}); sky/visibility from OpenWeather`,
+          };
+        }
+      } catch (e) {
+        console.warn(`   🌡️  PWS ${place.pwsStationId} unavailable: ${e instanceof Error ? e.message : e}`);
+      }
+    }
+
+    weatherCache.set(cacheKey, { data: result, expiresAt: Date.now() + Math.min(this.settings.cacheMinutes, 10) * 60 * 1000 });
+    return result;
+  }
+
+  /**
+   * Forecast for a named place: OpenWeather's 3-hourly forecast at the lat/lon
+   * (the same entries/format as getForecast), plus Weather Underground's daily
+   * outlook for the same point when a key is configured — that is the forecast
+   * wunderground.com shows for the station page.
+   */
+  async getForecastAt(place: { name: string; lat: number; lon: number }, days: number = 5): Promise<ForecastData & { outlook?: DailyOutlook[]; source: string }> {
+    const cacheKey = `forecast:at:${place.lat},${place.lon}-${this.settings.units}-${days}`;
+    const cached = forecastCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) return cached.data as ForecastData & { source: string };
+
+    if (!this.settings.apiKey) throw new Error('OpenWeatherMap API key not configured');
+    const metric = this.settings.units === 'metric';
+    const units = metric ? 'metric' : 'imperial';
+    const url = `https://api.openweathermap.org/data/2.5/forecast?lat=${place.lat}&lon=${place.lon}&units=${units}&appid=${this.settings.apiKey}`;
+    const response = await fetchWithRetry(url);
+    if (!response.ok) throw new Error(weatherErrorMessage(response.status, place.name, 'Forecast'));
+    const data = await response.json();
+    const entries = this.parseOwmForecastEntries(data, days);
+
+    let outlook: DailyOutlook[] | undefined;
+    let source = 'OpenWeather model at the exact coordinates';
+    if (WUNDERGROUND_API_KEY) {
+      try {
+        const r = await fetch(`https://api.weather.com/v3/wx/forecast/daily/5day?geocode=${place.lat},${place.lon}&format=json&units=${metric ? 'm' : 'e'}&language=en-US&apiKey=${WUNDERGROUND_API_KEY}`, { signal: AbortSignal.timeout(10000) });
+        if (r.ok) {
+          outlook = parseWuDailyForecast(await r.json(), days);
+          if (outlook.length) source = 'Weather Underground daily outlook for the exact coordinates, with OpenWeather 3-hourly detail';
+        }
+      } catch (e) {
+        console.warn(`   🌡️  WU forecast unavailable: ${e instanceof Error ? e.message : e}`);
+      }
+    }
+
+    const result = { location: place.name, entries, updatedAt: new Date().toISOString(), ...(outlook?.length && { outlook }), source };
+    forecastCache.set(cacheKey, { data: result, expiresAt: Date.now() + this.settings.cacheMinutes * 60 * 1000 });
+    return result;
+  }
+
+  private parseOwmForecastEntries(data: { list?: unknown[] }, days: number): ForecastEntry[] {
+    const maxEntries = days * 8;
+    return ((data.list || []) as Array<Record<string, unknown>>).slice(0, maxEntries).map((item) => {
+      const main = item.main as Record<string, number>;
+      const weather = (item.weather as Array<Record<string, string>>)?.[0] || {};
+      const wind = item.wind as Record<string, number>;
+      const rain = item.rain as Record<string, number> | undefined;
+      const snow = item.snow as Record<string, number> | undefined;
+      return {
+        datetime: item.dt_txt as string,
+        temperature: main.temp,
+        feelsLike: main.feels_like,
+        humidity: main.humidity,
+        description: weather.description || 'Unknown',
+        icon: weather.icon || '',
+        pop: (item.pop as number) || 0,
+        windSpeed: wind?.speed || 0,
+        windDirection: this.degreesToCompass(wind?.deg || 0),
+        rain: rain?.['3h'],
+        snow: snow?.['3h'],
+      };
+    });
+  }
+
+  /** Text block for a station reading — the numbers a camper actually wants (gusts, rain rate, dew point). */
+  formatStationForPrompt(w: WeatherData & { station?: PwsObservation; source: string }): string {
+    const tempUnit = this.settings.units === 'metric' ? '°C' : '°F';
+    const speedUnit = this.settings.units === 'metric' ? 'km/h' : 'mph';
+    const lines = [this.formatWeatherForPrompt(w)];
+    if (w.station) {
+      const s = w.station;
+      lines.push(`- Station ${s.stationId}${s.elevationFt ? ` at ${Math.round(s.elevationFt).toLocaleString()} ft` : ''}, read ${s.observedAt}: dew point ${s.dewPoint}${tempUnit}, gusts ${s.windGust} ${speedUnit}, rain ${s.precipRate}/hr (${s.precipTotal} today), UV ${s.uv}`);
+    }
+    lines.push(`- Source: ${w.source}`);
+    return lines.join('\n');
+  }
+
+  formatOutlookForPrompt(f: ForecastData & { outlook?: DailyOutlook[]; source: string }): string {
+    const tempUnit = this.settings.units === 'metric' ? '°C' : '°F';
+    const lines = [this.formatForecastForPrompt(f)];
+    if (f.outlook?.length) {
+      lines.push(`\n\nDaily outlook for ${f.location} (Weather Underground):`);
+      for (const d of f.outlook) {
+        lines.push(`\n${d.day}: ${d.high !== null ? `High ${d.high}${tempUnit} / ` : ''}Low ${d.low}${tempUnit}${d.precipChance ? `, ${d.precipChance}% chance of precipitation` : ''}${d.narrative ? ` — ${d.narrative}` : ''}`);
+      }
+    }
+    lines.push(`\n- Source: ${f.source}`);
+    return lines.join('');
   }
 
   private degreesToCompass(degrees: number): string {

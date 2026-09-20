@@ -1,5 +1,6 @@
 import { BaseSkillHandler, SkillHandlerContext } from '@/lib/skill-handler';
 import { WeatherService } from '@/lib/weather-service';
+import { resolveNamedPlace } from '@/lib/weather-places';
 import type { WeatherSettings, ToolCall, ToolResult } from '@/lib/types';
 
 const vaguePatterns = /^(here|home|rodeo|rodeo,?\s*nm|my (location|area|place|city)|nearby|near me|close by|local|current|this area|around here)$/i;
@@ -35,8 +36,19 @@ export default class WeatherForecastingHandler extends BaseSkillHandler {
   private async handleGetWeather(toolCall: ToolCall, ctx: SkillHandlerContext): Promise<ToolResult> {
     try {
       const rawLocation = toolCall.arguments.location as string | undefined;
-      const location = resolveLocation(rawLocation);
       const weatherService = new WeatherService(ctx.weatherSettings);
+      const place = resolveNamedPlace(rawLocation);
+      if (place) {
+        const weather = await weatherService.getWeatherAt(place);
+        return this.success(toolCall, {
+          success: true,
+          weather,
+          formatted: weatherService.formatStationForPrompt(weather),
+          place: { name: place.name, lat: place.lat, lon: place.lon, elevation_ft: place.elevationFt, station: place.pwsStationId },
+          ...(place.note && { note: place.note }),
+        });
+      }
+      const location = resolveLocation(rawLocation);
       let weather;
       let note: string | undefined;
       try {
@@ -61,9 +73,20 @@ export default class WeatherForecastingHandler extends BaseSkillHandler {
   private async handleGetWeatherForecast(toolCall: ToolCall, ctx: SkillHandlerContext): Promise<ToolResult> {
     try {
       const rawLocation = toolCall.arguments.location as string | undefined;
-      const location = resolveLocation(rawLocation);
       const days = Math.min(5, Math.max(1, (toolCall.arguments.days as number) || 5));
       const weatherService = new WeatherService(ctx.weatherSettings);
+      const place = resolveNamedPlace(rawLocation);
+      if (place) {
+        const forecast = await weatherService.getForecastAt(place, days);
+        return this.success(toolCall, {
+          success: true,
+          forecast,
+          formatted: weatherService.formatOutlookForPrompt(forecast),
+          place: { name: place.name, lat: place.lat, lon: place.lon, elevation_ft: place.elevationFt },
+          ...(place.note && { note: place.note }),
+        });
+      }
+      const location = resolveLocation(rawLocation);
       const forecast = await weatherService.getForecast(location, days);
       const formatted = weatherService.formatForecastForPrompt(forecast);
 
