@@ -86,8 +86,13 @@ describe('self-scheduling handler routines', () => {
 
     const weekly = await h.execute(call('schedule_self_followup', { at: '6pm', prompt: 'Friday plans', repeat: 'weekly', day: 'fri' }), ctx);
     expect(parse(weekly).routine).toBe('every Fri at 6:00 PM');
-    const oneShot = await h.execute(call('schedule_self_followup', { delay_minutes: 60, prompt: 'check the build' }), ctx);
+    // A fixed time well away from the 6:00 PM routines. This used to be
+    // delay_minutes: 60, which between 4:40 and 5:20 PM local lands inside the
+    // routine's ±SLOT_WINDOW_MIN and is (correctly) reported as already
+    // covered — the test then failed only at that hour (seen 2026-09-20 16:46).
+    const oneShot = await h.execute(call('schedule_self_followup', { at: 'tomorrow 11:00am', prompt: 'check the build' }), ctx);
     expect(parse(oneShot).routine).toBeUndefined();
+    expect(parse(oneShot).already_scheduled).toBeUndefined();
 
     const list = parse(await h.execute(call('list_self_followups', {}), ctx));
     expect(list.pending_count).toBe(3);
