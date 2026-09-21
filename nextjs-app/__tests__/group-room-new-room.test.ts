@@ -23,6 +23,15 @@ jest.mock('undici', () => ({
   })),
 }));
 
+// The handler creates the new room's shared folder under WORKSPACE_ROOT. Point
+// that at a temp dir — the first run of this test left two empty
+// choom_commons/rooms/family-time-* folders in the REAL workspace (2026-09-21).
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+const scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'room-test-'));
+jest.mock('@/lib/config', () => ({ ...jest.requireActual('@/lib/config'), get WORKSPACE_ROOT() { return scratchRoot; } }));
+
 import { prisma, teardown } from './helpers/scratch-db';
 import GroupChatHandler from '@/skills/core/group-chat/handler';
 
@@ -39,7 +48,7 @@ beforeAll(async () => {
     participants: { create: [{ choomId: genesis.id, order: 0, active: true }, { choomId: aloy.id, order: 1, active: true }, { choomId: eve.id, order: 2, active: true }] } } });
   oldRoomId = old.id;
 });
-afterAll(teardown);
+afterAll(async () => { await teardown(); fs.rmSync(scratchRoot, { recursive: true, force: true }); });
 
 describe('talk_with_sisters new_room', () => {
   test('without new_room, the same-sisters room is reused and the result says so', async () => {
@@ -70,6 +79,8 @@ describe('talk_with_sisters new_room', () => {
     expect(fresh.participants.filter(p => p.active).map(p => p.choomId).sort()).toEqual([aloy.id, eve.id, genesis.id].sort());
     const old = rooms.find(x => x.id === oldRoomId)!;
     expect(old.title).toBe('Sisters: Eve & Genesis & Aloy');
+    // The folder went to the scratch workspace, not the real one.
+    expect(fs.existsSync(path.join(scratchRoot, String(fresh.projectFolder)))).toBe(true);
   });
 
   test('a second new_room with the same name is refused and points at room=', async () => {
