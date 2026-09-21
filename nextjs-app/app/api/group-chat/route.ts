@@ -41,7 +41,13 @@ const lastRunAt = new Map<string, number>();     // roomId -> finishedAt (ms)
 // bare 409. The owner now asks the running loop to stop between speakers and
 // waits briefly for the lock; only if the run does not yield does 409 remain.
 const preemptRequested = new Set<string>();
-const PREEMPT_WAIT_MS = 25 * 1000;
+// The loop can only yield BETWEEN speakers, and one speaker turn on the local
+// 27B model runs 60–120 s (plus TTS). 25 s never covered a turn: the owner's
+// message from the /rooms page got a 409 after 25 s while Aloy was mid-sentence
+// (2026-09-21 12:48). Wait long enough for the current speaker to finish.
+const PREEMPT_WAIT_MS = 150 * 1000;
+// Who is speaking in a running room — so a 409 (and GET status) can say so.
+const runningSpeakers = new Map<string, string>();
 const PREEMPT_POLL_MS = 500;
 const RUN_LOCK_STALE_MS = 15 * 60 * 1000; // auto-release a crashed/abandoned run
 // A Choom-initiated run (heartbeat / self-wakeup) within this window of the last
@@ -126,6 +132,24 @@ function activationLabel(source: string | undefined | null, continueRun: boolean
   }
 }
 
+/**
+ * Room run status — is a conversation running in this room right now, and who
+ * is speaking. The /rooms page polls this after a 409 so the owner's message
+ * can be sent automatically the moment the room is free.
+ */
+export async function GET(request: NextRequest) {
+  const roomId = request.nextUrl.searchParams.get('roomId') || '';
+  if (!roomId) {
+    return new Response(JSON.stringify({ error: 'roomId is required' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+  }
+  const since = runningRooms.get(roomId);
+  const running = !!since && Date.now() - since < RUN_LOCK_STALE_MS;
+  return new Response(
+    JSON.stringify({ running, speaker: running ? runningSpeakers.get(roomId) || null : null, running_for_s: running ? Math.round((Date.now() - since!) / 1000) : 0 }),
+    { headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } },
+  );
+}
+
 export async function POST(request: NextRequest) {
   const encoder = new TextEncoder();
   let body: Record<string, unknown>;
@@ -202,8 +226,16 @@ export async function POST(request: NextRequest) {
     runningSince = runningRooms.get(roomId);
   }
   if (runningSince && nowMs - runningSince < RUN_LOCK_STALE_MS) {
+    const speaker = runningSpeakers.get(roomId);
     return new Response(
-      JSON.stringify({ busy: true, error: 'A conversation is already in progress in this room.' }),
+      JSON.stringify({
+        busy: true,
+        speaker: speaker || null,
+        running_for_s: Math.round((nowMs - runningSince) / 1000),
+        error: speaker
+          ? `${speaker} is mid-turn in this room — a conversation is still running. It will take your message as soon as she finishes.`
+          : 'A conversation is already in progress in this room. It will take your message as soon as the current speaker finishes.',
+      }),
       { status: 409, headers: { 'Content-Type': 'application/json' } },
     );
   }
@@ -229,6 +261,7 @@ export async function POST(request: NextRequest) {
     if (lockReleased) return;
     lockReleased = true;
     runningRooms.delete(roomId);
+    runningSpeakers.delete(roomId);
     lastRunAt.set(roomId, Date.now());
   };
 
@@ -348,6 +381,7 @@ export async function POST(request: NextRequest) {
             speakerIdx++;
             lastRound = round;
             currentSpeakerName = p.choom.name;
+            runningSpeakers.set(roomId, p.choom.name);
             if (cancelled) break;
             if (preemptRequested.has(roomId)) {
               console.log(`   ✋ Room ${roomId}: yielding to the owner's message before ${p.choom.name} speaks`);

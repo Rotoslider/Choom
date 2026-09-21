@@ -90,6 +90,17 @@ export default function RoomsPage() {
   const [running, setRunning] = useState(false);
   const [speaking, setSpeaking] = useState(false);
   const runningRef = useRef(false);
+  // A message the room could not take yet (409: a Choom-started run holds the
+  // room). Kept here and re-sent automatically when GET /api/group-chat says the
+  // room is free, so the owner's words are never silently dropped (2026-09-21).
+  const [notice, setNotice] = useState<{ kind: 'busy' | 'error'; text: string } | null>(null);
+  const pendingRef = useRef<Record<string, unknown> | null>(null);
+  const pendingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const consumeStreamRef = useRef<((reqBody: Record<string, unknown>) => Promise<void>) | null>(null);
+  const cancelPending = useCallback(() => {
+    pendingRef.current = null;
+    if (pendingTimerRef.current) { clearTimeout(pendingTimerRef.current); pendingTimerRef.current = null; }
+  }, []);
 
   const [chooms, setChooms] = useState<Choom[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
@@ -292,7 +303,45 @@ export default function RoomsPage() {
         body: JSON.stringify({ roomId: currentRoomId, settings: settingsPayload(), ...reqBody }),
         signal: abortRef.current.signal,
       });
-      if (!res.ok || !res.body) throw new Error('Group chat request failed');
+      if (res.status === 409) {
+        // Room is mid-conversation. Say who is speaking, keep the message, and
+        // retry every few seconds until the room is free (up to 10 minutes).
+        let info: { error?: string; speaker?: string | null } = {};
+        try { info = await res.json(); } catch { /* generic text below */ }
+        const who = info.speaker ? `${info.speaker} is speaking` : 'a conversation is running';
+        setNotice({ kind: 'busy', text: `Room is busy — ${who}. Your message is queued and will be sent the moment the room is free.` });
+        pendingRef.current = reqBody;
+        const deadline = Date.now() + 10 * 60 * 1000;
+        const roomForRetry = currentRoomId;
+        const poll = async () => {
+          if (pendingRef.current !== reqBody) return; // cancelled or superseded
+          if (Date.now() > deadline) {
+            pendingRef.current = null;
+            setNotice({ kind: 'error', text: 'The room stayed busy for 10 minutes, so your message was not sent. Send it again when things quiet down.' });
+            return;
+          }
+          try {
+            const st = await fetch(`/api/group-chat?roomId=${encodeURIComponent(roomForRetry || '')}`, { cache: 'no-store' });
+            const j = await st.json() as { running?: boolean; speaker?: string | null };
+            if (!j.running) {
+              pendingRef.current = null;
+              setNotice(null);
+              await consumeStreamRef.current?.(reqBody);
+              return;
+            }
+            if (j.speaker) setNotice({ kind: 'busy', text: `Room is busy — ${j.speaker} is speaking. Your message is queued and will be sent the moment the room is free.` });
+          } catch { /* transient; keep polling */ }
+          pendingTimerRef.current = setTimeout(poll, 4000);
+        };
+        pendingTimerRef.current = setTimeout(poll, 4000);
+        return;
+      }
+      if (!res.ok || !res.body) {
+        let detail = '';
+        try { detail = ((await res.json()) as { error?: string }).error || ''; } catch { /* no body */ }
+        setNotice({ kind: 'error', text: `Couldn't send to the room (${res.status})${detail ? `: ${detail}` : ''}.` });
+        throw new Error(`Group chat request failed: ${res.status} ${detail}`);
+      }
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -430,9 +479,13 @@ export default function RoomsPage() {
       if (currentRoomId) loadMessages(currentRoomId);
     }
   }, [currentRoomId, settingsPayload, loadMessages]);
+  useEffect(() => { consumeStreamRef.current = consumeStream; }, [consumeStream]);
 
   const handleSend = useCallback(async (text: string, attachment?: ImageAttachment) => {
     if (!currentRoomId || (!text.trim() && !attachment)) return;
+    // A new message supersedes anything still waiting for the room.
+    cancelPending();
+    setNotice(null);
     // Jump in: interrupt any running sequence, then start fresh with this message.
     if (runningRef.current) {
       abortRef.current?.abort();
@@ -454,7 +507,7 @@ export default function RoomsPage() {
       authorName: 'You', content: text.trim(), imageUrl: null, createdAt: new Date().toISOString(),
     }]);
     await consumeStream({ message: messageContent });
-  }, [currentRoomId, consumeStream]);
+  }, [currentRoomId, consumeStream, cancelPending]);
 
   const handleKeepGoing = useCallback(async () => {
     if (!currentRoomId || runningRef.current) return;
@@ -467,7 +520,9 @@ export default function RoomsPage() {
     ttsRef.current?.stop();
     runningRef.current = false;
     setRunning(false);
-  }, []);
+    cancelPending();
+    setNotice(null);
+  }, [cancelPending]);
 
   const handleSetAutoRounds = useCallback(async (roomId: string, value: number) => {
     const v = Math.max(0, Math.min(50, value));
@@ -830,6 +885,19 @@ export default function RoomsPage() {
               </div>
             </ScrollArea>
 
+            {notice && (
+              <div className={cn(
+                'mx-3 mb-2 flex items-start gap-2 rounded-md border px-3 py-2 text-sm',
+                notice.kind === 'busy' ? 'border-amber-500/40 bg-amber-500/10' : 'border-destructive/40 bg-destructive/10',
+              )}>
+                {notice.kind === 'busy' && <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin" />}
+                <span className="flex-1">{notice.text}</span>
+                <button type="button" aria-label="Dismiss" className="opacity-70 hover:opacity-100"
+                  onClick={() => { cancelPending(); setNotice(null); }}>
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            )}
             <InputArea
               onSend={handleSend}
               onStop={handleStop}
