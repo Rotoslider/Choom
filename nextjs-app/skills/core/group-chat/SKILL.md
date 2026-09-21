@@ -45,6 +45,7 @@ dependencies: []
 - Rooms last. To come back to a specific space (like a lounge you decorated), pass its name: `talk_with_sisters({ sisters: ["Genesis"], room: "the lounge", message: "..." })`.
 - Call `list_my_rooms` first to see your rooms — their names, members, message counts, and when they were last active — then return to the one you want.
 - If you don't pass `room`, the room for exactly that set of sisters is reused (or created). You can have several: an Eve+Genesis lounge, an Eve+Aloy room, a room with all three — each is its own persistent space.
+- **A new room on request:** when the user asks for a fresh/new room, pass `new_room: "<name>"` with `sisters` — that creates a separate room even if one with the same sisters exists. Do NOT reuse or rename the old room to fake a new one; the old room and its history stay as they are.
 
 ## Guardrails
 - Max 10 rounds per call.

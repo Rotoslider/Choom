@@ -23,7 +23,11 @@ export const tools: ToolDefinition[] = [
         },
         room: {
           type: 'string',
-          description: 'Optional: the name of an EXISTING room to use (e.g. "the Tune Lounge"). Use this to return to a space you built before, to JOIN a room you\'re not in yet, or to add a sister to it. Any room name works — it does NOT have to be one you\'re already in. Call list_my_rooms to see every room. If omitted, reuses/creates the room for exactly this set of sisters.',
+          description: 'Optional: the name of an EXISTING room to use (e.g. "the Tune Lounge"). Use this to return to a space you built before, to JOIN a room you\'re not in yet, or to add a sister to it. Any room name works — it does NOT have to be one you\'re already in. Call list_my_rooms to see every room. If omitted, the room for exactly this set of sisters is REUSED when one exists (created only if none does) — to start a fresh room on purpose, use new_room instead.',
+        },
+        new_room: {
+          type: 'string',
+          description: 'Name for a BRAND-NEW room, e.g. "Family Time". Use this when the user asks for a new/fresh room — even if a room with these same sisters already exists, a separate new one is created with you + `sisters` and your message opens it. Never rename or reuse the old room to get a "new" one. Cannot be combined with `room`.',
         },
       },
       required: ['message'],

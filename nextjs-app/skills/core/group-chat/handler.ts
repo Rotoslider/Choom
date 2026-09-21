@@ -292,6 +292,15 @@ export default class GroupChatHandler extends BaseSkillHandler {
 
     const rounds = Math.max(1, Math.min(MAX_ROUNDS, typeof args.rounds === 'number' ? args.rounds : 3));
     const roomQuery = typeof args.room === 'string' ? args.room.trim() : '';
+    // new_room: the user asked for a FRESH room. Before this existed (2026-09-21)
+    // Aloy was told twice to start a new room for Eve and Genesis; the only path
+    // was "drop room to start a fresh one", which reuses the existing room for
+    // that exact set of sisters — so she landed in the 456-message room, believed
+    // it was new, and renamed it. Creating a room must be sayable.
+    const newRoomName = typeof args.new_room === 'string' ? args.new_room.trim().slice(0, 80) : '';
+    if (newRoomName && roomQuery) {
+      return this.error(toolCall, 'Pass either "room" (an existing room to use) or "new_room" (a name for a brand-new one), not both.');
+    }
 
     // A named room already has members, so `sisters` is optional there. Without
     // one, we have no idea who to talk to.
@@ -330,7 +339,7 @@ export default class GroupChatHandler extends BaseSkillHandler {
       room = this.matchRoom(existingRooms, roomQuery);
       if (!room) {
         const names = existingRooms.map(r => `"${this.roomLabel(r)}"`).join(', ') || '(none exist yet)';
-        return this.error(toolCall, `Couldn't find a room named "${roomQuery}". Rooms that exist: ${names}. Call list_my_rooms to see them, or drop the "room" parameter to start a fresh one with the sisters you named.`);
+        return this.error(toolCall, `Couldn't find a room named "${roomQuery}". Rooms that exist: ${names}. Call list_my_rooms to see them. To CREATE a brand-new room with that name, call again with new_room: "${roomQuery}" (and sisters) instead of room — dropping "room" would reuse the existing room for those sisters, not make a new one.`);
       }
       // JOIN: add yourself if you're not already an active member.
       joinedSelf = await this.addParticipant(room, caller.id);
@@ -366,15 +375,24 @@ export default class GroupChatHandler extends BaseSkillHandler {
     const wantKey = [...participantIds].sort().join(',');
 
     // No named room → reuse the room with EXACTLY this participant set, or create one.
-    if (!room) {
+    // new_room skips the reuse on purpose: a fresh room even when one exists.
+    if (!room && !newRoomName) {
       room = existingRooms.find(r => {
         const ids = r.participants.filter(p => p.active).map(p => p.choomId).sort().join(',');
         return ids === wantKey;
       }) || null;
     }
+    if (newRoomName) {
+      const clash = this.matchRoom(existingRooms, newRoomName);
+      if (clash && this.roomLabel(clash).toLowerCase() === newRoomName.toLowerCase()) {
+        return this.error(toolCall, `A room named "${this.roomLabel(clash)}" already exists (${clash.participants.filter(p => p.active).length} members). To talk there, pass room: "${this.roomLabel(clash)}"; to make another new one, pick a different new_room name.`);
+      }
+    }
 
+    let createdFresh = false;
     if (!room) {
-      const title = `Sisters: ${[caller.name, ...sisters.map(s => s.name)].join(' & ')}`;
+      const title = newRoomName || `Sisters: ${[caller.name, ...sisters.map(s => s.name)].join(' & ')}`;
+      createdFresh = true;
       const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32);
       const created = await prisma.groupRoom.create({
         data: {
@@ -472,9 +490,13 @@ export default class GroupChatHandler extends BaseSkillHandler {
     const joinedNote = joinedSelf ? ` You JOINED this room in the process — you're a member now, it shows up in list_my_rooms, and you can see its full backlog.` : '';
     const ownerName = getOwnerIdentity().name;
     const sisterList = sisters.map(s => s.name).join(', ');
+    const createdNote = createdFresh
+      ? ` This was a BRAND-NEW room, "${room.title}", created just now — the old rooms are untouched and keep their names and history.`
+      : newRoomName ? '' : ` (Existing room reused — no new room was created. If a NEW room was wanted, call again with new_room: "<name>".)`;
     return this.success(toolCall, {
       room_id: room.id,
       room_title: room.title,
+      created_new_room: createdFresh,
       sisters: sisters.map(s => s.name),
       added: addedNames,
       joined: joinedSelf,
@@ -485,7 +507,7 @@ export default class GroupChatHandler extends BaseSkillHandler {
       // it). This result returns you to your private 1:1 chat — so the note has
       // to stop the model from "continuing" the group chat here, which reads as
       // talking to siblings who can't hear it.
-      note: `The group conversation in "${room.title}" with ${sisterList} is FINISHED and saved — they already heard and responded to everything said there (${speakers} replies).${joinedNote}${addedNote}${notFoundNote} You are now back in your PRIVATE 1:1 chat with ${ownerName}; ${sisterList} are NOT here and cannot see what you write now. Do NOT keep talking to them or continue the discussion in this chat. If ${ownerName} asked you to run this, give him a short, natural recap of how it went; otherwise just carry on with ${ownerName}. To say more to your sisters, call talk_with_sisters again — don't type it as a chat message.`,
+      note: `The group conversation in "${room.title}" with ${sisterList} is FINISHED and saved — they already heard and responded to everything said there (${speakers} replies).${createdNote}${joinedNote}${addedNote}${notFoundNote} You are now back in your PRIVATE 1:1 chat with ${ownerName}; ${sisterList} are NOT here and cannot see what you write now. Do NOT keep talking to them or continue the discussion in this chat. If ${ownerName} asked you to run this, give him a short, natural recap of how it went; otherwise just carry on with ${ownerName}. To say more to your sisters, call talk_with_sisters again — don't type it as a chat message.`,
     });
   }
 }
