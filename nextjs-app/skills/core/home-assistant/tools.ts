@@ -159,7 +159,7 @@ export const tools: ToolDefinition[] = [
         },
         save_path: {
           type: 'string',
-          description: 'Optional workspace-relative path, must end in .jpg. Defaults to selfies_{choom}/{entity}_{YYYY-MM-DD_HH-mm}.jpg. Valid destinations: selfies_{slug}/ (personal, default) or choom_commons/ (shared with other Chooms). NEVER use sibling_journal/ — that folder is text-only and append-only; snapshots there cannot be deleted later. If omitted or misrouted, the tool will place it in your personal selfies folder.',
+          description: 'Optional workspace-relative path, must end in .jpg. Defaults to selfies_{choom}/camera/{entity}_{YYYY-MM-DD_HH-mm}.jpg — leave it unset for routine checks. Snapshots in the default camera/ folder are kept 72h and never go in your gallery. Only set a path to keep a frame longer: selfies_{slug}/ (personal) or choom_commons/ (shared with other Chooms). NEVER use sibling_journal/ — that folder is text-only and append-only; snapshots there cannot be deleted later. If omitted or misrouted, the tool will place it in your personal camera folder.',
         },
         settle_seconds: {
           type: 'number',

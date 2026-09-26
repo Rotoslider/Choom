@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
+import { galleryImageWhere } from '@/lib/captured-images';
 
 // GET /api/images - Get images for a choom
 export async function GET(request: NextRequest) {
@@ -15,7 +16,8 @@ export async function GET(request: NextRequest) {
     }
 
     const images = await prisma.generatedImage.findMany({
-      where: { choomId },
+      // Camera/printer snapshots stay out of the gallery (lib/captured-images.ts)
+      where: { choomId, ...galleryImageWhere },
       orderBy: { createdAt: 'desc' },
       select: {
         id: true,

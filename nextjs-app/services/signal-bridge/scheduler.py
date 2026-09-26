@@ -2900,7 +2900,10 @@ Be practical. Only work on things that can actually be accomplished with the too
                 choom_slug = selfie_dir.name
                 new_files = []
 
+                camera_dir = selfie_dir / "camera"  # 72h security snapshots — not worth backing up
                 for f in selfie_dir.rglob("*"):
+                    if camera_dir in f.parents:
+                        continue
                     if f.is_file() and f.stat().st_mtime > cutoff:
                         new_files.append(f)
 

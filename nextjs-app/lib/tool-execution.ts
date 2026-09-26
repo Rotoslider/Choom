@@ -9,6 +9,7 @@
  * knows about streaming or the loop itself.
  */
 import prisma from '@/lib/db';
+import { galleryImageWhere, pruneExpiredCaptures } from '@/lib/captured-images';
 import { repairMissingRequiredArg } from './tool-arg-repair';
 import { MemoryClient, executeMemoryTool } from '@/lib/memory-client';
 import { ImageGenClient, buildPromptWithLoras } from '@/lib/image-gen-client';
@@ -498,10 +499,12 @@ export async function executeToolCall(
         },
       });
 
-      // Enforce per-Choom image limit (keep last 50)
+      // Enforce per-Choom image limit (keep last 50). Camera/printer snapshots
+      // don't count — they expire on their own (lib/captured-images.ts).
       const MAX_IMAGES_PER_CHOOM = 50;
+      await pruneExpiredCaptures(choomId);
       const allImages = await prisma.generatedImage.findMany({
-        where: { choomId },
+        where: { choomId, ...galleryImageWhere },
         orderBy: { createdAt: 'desc' },
         select: { id: true },
       });

@@ -2,6 +2,7 @@ import { BaseSkillHandler, SkillHandlerContext } from '@/lib/skill-handler';
 import { ImageGenClient, buildPromptWithLoras } from '@/lib/image-gen-client';
 import { WorkspaceService } from '@/lib/workspace-service';
 import prisma from '@/lib/db';
+import { galleryImageWhere, pruneExpiredCaptures } from '@/lib/captured-images';
 import { computeImageDimensions, HIRES_FIX_DEFAULTS, imageAutonomy } from '@/lib/types';
 import type { ImageSize, ImageAspect, ImageGenSettings, ToolCall, ToolResult } from '@/lib/types';
 import { REFERENCE_IMAGE_DEFAULT_MAX_DIM, WORKSPACE_ROOT, WORKSPACE_ALLOWED_EXTENSIONS, WORKSPACE_IMAGE_EXTENSIONS } from '@/lib/config';
@@ -452,10 +453,12 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
         },
       });
 
-      // Enforce per-Choom image limit (keep last 50)
+      // Enforce per-Choom image limit (keep last 50). Camera/printer snapshots
+      // don't count — they expire on their own (lib/captured-images.ts).
       const MAX_IMAGES_PER_CHOOM = 50;
+      await pruneExpiredCaptures(choomId);
       const allImages = await prisma.generatedImage.findMany({
-        where: { choomId },
+        where: { choomId, ...galleryImageWhere },
         orderBy: { createdAt: 'desc' },
         select: { id: true },
       });

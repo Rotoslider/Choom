@@ -21,6 +21,7 @@ import { BaseSkillHandler, type SkillHandlerContext } from '@/lib/skill-handler'
 import { WorkspaceService } from '@/lib/workspace-service';
 import { WORKSPACE_ROOT } from '@/lib/config';
 import prisma from '@/lib/db';
+import { pruneExpiredCaptures } from '@/lib/captured-images';
 import type { ToolCall, ToolResult } from '@/lib/types';
 
 const TOOL_NAMES = new Set(['printer_status', 'printer_job_history', 'printer_files', 'printer_camera_snapshot']);
@@ -347,6 +348,7 @@ export default class PrinterMonitorHandler extends BaseSkillHandler {
     if (sessionFileCount) sessionFileCount.created++;
     ctx.send?.({ type: 'file_created', path: savePath });
 
+    await pruneExpiredCaptures(ctx.choomId);
     let imageId: string | undefined;
     try {
       const dataUrl = `data:image/jpeg;base64,${buf.toString('base64')}`;

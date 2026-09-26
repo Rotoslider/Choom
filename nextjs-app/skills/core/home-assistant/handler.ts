@@ -4,6 +4,7 @@ import { HomeAssistantService, type HomeAssistantSettings, type HAEntity } from 
 import { WorkspaceService } from '@/lib/workspace-service';
 import { WORKSPACE_ROOT } from '@/lib/config';
 import prisma from '@/lib/db';
+import { cameraSnapshotFolder, pruneExpiredCaptures, CAPTURE_RETENTION_HOURS } from '@/lib/captured-images';
 import type { ToolCall, ToolResult } from '@/lib/types';
 
 const TOOL_NAMES = new Set([
@@ -828,13 +829,15 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
           const arrayBuf = await resp.arrayBuffer();
           const imageBuffer = Buffer.from(arrayBuf);
 
-          // Default save path: selfies_{slug}/{entityName}_{YYYY-MM-DD_HH-mm}.jpg
+          // Default save path: selfies_{slug}/camera/{entityName}_{YYYY-MM-DD_HH-mm}.jpg
+          // — kept CAPTURE_RETENTION_HOURS, skipped by the selfie backup.
           const choomName = ((ctx.choom as Record<string, unknown>)?.name as string) || 'unassigned';
           const choomSlug = choomName.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'unassigned';
           const entityName = entityId.split('.').pop() || 'camera';
           // Local time, not UTC: a file named …_20-23 was read back as "8:23" (2026-09-13).
           const stamp = localFileStamp();
-          const defaultPath = `selfies_${choomSlug}/${entityName}_${stamp}.jpg`;
+          const defaultPath = `${cameraSnapshotFolder(choomSlug)}/${entityName}_${stamp}.jpg`;
+          await pruneExpiredCaptures(ctx.choomId, choomSlug);
 
           let savePath = args.save_path as string | undefined;
           if (!savePath) {
@@ -907,7 +910,7 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
               presets: presetInfo.options,
               move_to_preset: `ha_call_service(domain="select", service="select_option", entity_id="${presetInfo.entity_id}", service_data={"option":"<one of presets>"})`,
             }),
-            message: `Saved snapshot from ${entityId} to ${savePath}${savedImageId ? ' and displayed in chat' : ''}.${presetInfo && presetInfo.options.length ? ` This camera's PTZ presets: ${presetInfo.options.join(', ')} — move it with the move_to_preset call, then snapshot again.` : ''} IMPORTANT: this snapshot shows whatever the camera was pointing at when you called this tool — it is NOT associated with any PTZ preset unless you successfully called select.select_option on the preset selector entity BEFORE this snapshot and that call succeeded. Do NOT claim the image shows a specific preset view unless you verified the preset change succeeded. For analysis use analyze_image(image_path="${savePath}"). To text it to the user use send_notification(file_paths=["${savePath}"]).`,
+            message: `Saved snapshot from ${entityId} to ${savePath}${savedImageId ? ' and displayed in chat' : ''}.${presetInfo && presetInfo.options.length ? ` This camera's PTZ presets: ${presetInfo.options.join(', ')} — move it with the move_to_preset call, then snapshot again.` : ''} IMPORTANT: this snapshot shows whatever the camera was pointing at when you called this tool — it is NOT associated with any PTZ preset unless you successfully called select.select_option on the preset selector entity BEFORE this snapshot and that call succeeded. Do NOT claim the image shows a specific preset view unless you verified the preset change succeeded. Snapshots are kept ${CAPTURE_RETENTION_HOURS}h and do not go in your gallery — if something in this frame matters longer, write what you saw to a note. For analysis use analyze_image(image_path="${savePath}"). To text it to the user use send_notification(file_paths=["${savePath}"]).`,
           });
         }
 
