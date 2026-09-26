@@ -68,7 +68,11 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({ models, loadedAvailable: loadedSet !== null });
   } catch (error) {
-    console.error('Failed to fetch LLM models:', error);
+    // One line, not a stack: an unreachable LM Studio (NUC asleep/restarting)
+    // is routine — only the settings/edit-panel model dropdowns call this.
+    const cause = (error as { cause?: { code?: string } })?.cause?.code;
+    const reason = cause || (error instanceof Error ? (error.name === 'AbortError' ? 'timed out' : error.message) : String(error));
+    console.warn(`⚠️ LLM server unreachable at ${endpoint} (model list for settings UI): ${reason}`);
     return NextResponse.json({ error: 'Service unavailable', models: [] }, { status: 503 });
   }
 }
