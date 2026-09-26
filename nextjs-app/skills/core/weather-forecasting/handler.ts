@@ -1,5 +1,5 @@
 import { BaseSkillHandler, SkillHandlerContext } from '@/lib/skill-handler';
-import { WeatherService } from '@/lib/weather-service';
+import { WeatherService, looksLikePwsStationId, WUNDERGROUND_API_KEY } from '@/lib/weather-service';
 import { resolveNamedPlace } from '@/lib/weather-places';
 import type { WeatherSettings, ToolCall, ToolResult } from '@/lib/types';
 
@@ -13,6 +13,23 @@ function resolveLocation(rawLocation: string | undefined): string | undefined {
 
 function hasDefaultLocation(settings: WeatherSettings | undefined): boolean {
   return Boolean(settings && ((settings.latitude && settings.longitude) || settings.location));
+}
+
+// A named place ("camp"), a bare Weather Underground station id, or — when no
+// location / "here" / "home" was given — the "home" named place if one exists
+// (the user's own station). null → plain OpenWeather by city/default.
+async function resolvePlace(rawLocation: string | undefined, service: WeatherService) {
+  const named = resolveNamedPlace(rawLocation);
+  if (named) return named;
+  if (looksLikePwsStationId(rawLocation)) {
+    const station = await service.lookupStation(rawLocation!);
+    if (station) return station;
+    throw new Error(WUNDERGROUND_API_KEY
+      ? `Weather Underground station "${rawLocation!.trim()}" not found or not reporting right now. Check the id, or ask for a town name instead.`
+      : 'Weather Underground station ids need WUNDERGROUND_API_KEY, which is not set. Ask for a town name instead.');
+  }
+  if (!resolveLocation(rawLocation)) return resolveNamedPlace('home');
+  return null;
 }
 
 const TOOL_NAMES = new Set(['get_weather', 'get_weather_forecast']);
@@ -37,7 +54,7 @@ export default class WeatherForecastingHandler extends BaseSkillHandler {
     try {
       const rawLocation = toolCall.arguments.location as string | undefined;
       const weatherService = new WeatherService(ctx.weatherSettings);
-      const place = resolveNamedPlace(rawLocation);
+      const place = await resolvePlace(rawLocation, weatherService);
       if (place) {
         const weather = await weatherService.getWeatherAt(place);
         return this.success(toolCall, {
@@ -75,7 +92,7 @@ export default class WeatherForecastingHandler extends BaseSkillHandler {
       const rawLocation = toolCall.arguments.location as string | undefined;
       const days = Math.min(5, Math.max(1, (toolCall.arguments.days as number) || 5));
       const weatherService = new WeatherService(ctx.weatherSettings);
-      const place = resolveNamedPlace(rawLocation);
+      const place = await resolvePlace(rawLocation, weatherService);
       if (place) {
         const forecast = await weatherService.getForecastAt(place, days);
         return this.success(toolCall, {

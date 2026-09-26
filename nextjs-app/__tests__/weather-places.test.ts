@@ -4,7 +4,7 @@
  * floor. Plus the Weather Underground parsers on captured payloads.
  */
 import { resolveNamedPlace, DEFAULT_PLACES } from '../lib/weather-places';
-import { parsePwsObservation, parseWuDailyForecast } from '../lib/weather-service';
+import { parsePwsObservation, parseWuDailyForecast, looksLikePwsStationId } from '../lib/weather-service';
 
 describe('resolveNamedPlace', () => {
   const rustler = DEFAULT_PLACES[0];
@@ -15,9 +15,16 @@ describe('resolveNamedPlace', () => {
     expect(resolveNamedPlace(q, DEFAULT_PLACES)).toBe(rustler);
   });
 
-  it.each(['Denver, CO', 'Portal, AZ', 'Rodeo, NM', 'Campbell, CA', 'campground bakersfield', '', undefined])(
+  it.each(['Denver, CO', 'Portal, AZ', 'Campbell, CA', 'campground bakersfield', '', undefined])(
     'leaves %p alone', (q) => {
       expect(resolveNamedPlace(q as string | undefined, DEFAULT_PLACES)).toBeNull();
+    });
+
+  // The user's own station (KNMRODEO33) is "home".
+  const home = DEFAULT_PLACES.find(p => p.pwsStationId === 'KNMRODEO33')!;
+  it.each(['home', 'Rodeo, NM', 'weather at the house', 'my weather station', 'the homestead'])(
+    'resolves %p to the home station', (q) => {
+      expect(resolveNamedPlace(q, DEFAULT_PLACES)).toBe(home);
     });
 });
 
@@ -62,4 +69,9 @@ describe('parseWuDailyForecast', () => {
     expect(parseWuDailyForecast({}, 5)).toEqual([]);
     expect(parseWuDailyForecast(null, 5)).toEqual([]);
   });
+});
+
+describe('looksLikePwsStationId', () => {
+  it.each(['KNMRODEO33', 'KAZSANSI50', 'knmrodeo32', ' KAZPORTA9 '])('accepts %p', (s) => expect(looksLikePwsStationId(s)).toBe(true));
+  it.each(['Denver', 'Rodeo, NM', 'camp', 'I10', 'Denver 80202', '', undefined])('rejects %p', (s) => expect(looksLikePwsStationId(s)).toBe(false));
 });

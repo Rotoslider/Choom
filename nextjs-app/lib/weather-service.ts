@@ -30,6 +30,8 @@ export interface PwsObservation {
   precipTotal: number;
   uv: number;
   elevationFt?: number;
+  lat?: number;
+  lon?: number;
 }
 
 export interface DailyOutlook {
@@ -64,7 +66,14 @@ export function parsePwsObservation(json: unknown, metric: boolean): PwsObservat
     precipTotal: u.precipTotal ?? 0,
     uv: Number(obs.uv ?? 0),
     elevationFt: typeof u.elev === 'number' ? u.elev : undefined,
+    lat: typeof obs.lat === 'number' ? obs.lat : undefined,
+    lon: typeof obs.lon === 'number' ? obs.lon : undefined,
   };
+}
+
+/** A Weather Underground PWS id such as KNMRODEO33 or KAZSANSI50 (letters then a number, no spaces). */
+export function looksLikePwsStationId(s: string | undefined): boolean {
+  return !!s && /^[A-Za-z]{5,}\d{1,4}$/.test(s.trim());
 }
 
 /** Parse api.weather.com/v3/wx/forecast/daily/5day into per-day outlook lines. */
@@ -286,6 +295,24 @@ export class WeatherService {
       sunset: '',
       updatedAt: new Date().toISOString(),
     };
+  }
+
+  /**
+   * Turn a bare PWS id (any public Weather Underground station) into a place
+   * the *At methods can use — the station's own reading carries its lat/lon.
+   * Null when there is no key or the station doesn't exist / isn't reporting.
+   */
+  async lookupStation(stationId: string): Promise<{ name: string; lat: number; lon: number; elevationFt?: number; pwsStationId: string; note?: string } | null> {
+    if (!WUNDERGROUND_API_KEY) return null;
+    const id = stationId.trim().toUpperCase();
+    try {
+      const r = await fetch(`https://api.weather.com/v2/pws/observations/current?stationId=${encodeURIComponent(id)}&format=json&units=e&apiKey=${WUNDERGROUND_API_KEY}`, { signal: AbortSignal.timeout(10000) });
+      const obs = r.ok && r.status !== 204 ? parsePwsObservation(await r.json(), false) : null;
+      if (!obs || obs.lat === undefined || obs.lon === undefined) return null;
+      return { name: `${obs.neighborhood || id} (station ${id})`, lat: obs.lat, lon: obs.lon, elevationFt: obs.elevationFt, pwsStationId: id };
+    } catch {
+      return null;
+    }
   }
 
   /**

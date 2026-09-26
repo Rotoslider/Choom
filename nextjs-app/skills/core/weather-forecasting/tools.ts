@@ -10,7 +10,7 @@ export const tools: ToolDefinition[] = [
       properties: {
         location: {
           type: 'string',
-          description: 'City name (e.g. "Denver, CO"), or a named place: "camp" / "Chiricahua Mountains" / "Rustler Park" resolve to the mountain camp at ~8,900 ft (a different climate from home — never substitute Portal or Rodeo for it). Omit for user\'s home location.',
+          description: 'City name (e.g. "Denver, CO"), or a named place: "camp" / "Chiricahua Mountains" / "Rustler Park" resolve to the mountain camp at ~8,900 ft (a different climate from home — never substitute Portal or Rodeo for it). A Weather Underground station id (e.g. "KNMRODEO32") reads that station. Omit for user\'s home — that is the user\'s own weather station.',
         },
       },
     },
@@ -24,7 +24,7 @@ export const tools: ToolDefinition[] = [
       properties: {
         location: {
           type: 'string',
-          description: 'City name (e.g. "Denver, CO"), or a named place: "camp" / "Chiricahua Mountains" / "Rustler Park" resolve to the mountain camp at ~8,900 ft (a different climate from home — never substitute Portal or Rodeo for it). Omit for user\'s home location.',
+          description: 'City name (e.g. "Denver, CO"), or a named place: "camp" / "Chiricahua Mountains" / "Rustler Park" resolve to the mountain camp at ~8,900 ft (a different climate from home — never substitute Portal or Rodeo for it). A Weather Underground station id (e.g. "KNMRODEO32") reads that station. Omit for user\'s home — that is the user\'s own weather station.',
         },
         days: {
           type: 'number',

@@ -42,6 +42,17 @@ export const DEFAULT_PLACES: NamedPlace[] = [
     pwsStationId: 'KAZSANSI50',
     note: 'The camp in the Chiricahuas is ~2 miles from the Rustler Park station at about the same elevation (~8,900 ft), 4,000 ft above home in the valley. Do NOT use Portal, AZ or Rodeo, NM for camp weather — they are a mile lower and often 20°F warmer.',
   },
+  {
+    name: "Home, Rodeo, NM (Stone Desert station)",
+    aliases: [
+      'home', 'at home', 'the house', 'the homestead', 'homestead', 'our place', 'my place', 'backyard', 'the yard', 'rodeo', 'rodeo nm', 'rodeo new mexico', 'my station', 'our station', 'my weather station', 'the weather station', 'stonedesert', 'stone desert',
+    ],
+    lat: 31.979,
+    lon: -109.028,
+    elevationFt: 4035,
+    pwsStationId: 'KNMRODEO33',
+    note: "The user's own Ambient WS-5000 station (KNMRODEO33) at the house, 4,035 ft on the valley floor. The same readings are in Home Assistant as sensor.stonedesert_* (once exposed to Assist).",
+  },
 ];
 
 const PLACES_FILE = path.join(process.cwd(), 'data', 'weather-places.json');
