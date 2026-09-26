@@ -13,6 +13,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { useAppStore } from '@/lib/store';
+import { WeatherStationsSettings } from '@/components/settings/weather-stations-settings';
 import type { WeatherData } from '@/lib/types';
 
 export function WeatherSettings() {
@@ -98,7 +99,7 @@ export function WeatherSettings() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="openweathermap">OpenWeatherMap</SelectItem>
-                <SelectItem value="weatherapi">WeatherAPI</SelectItem>
+                <SelectItem value="weatherapi">WeatherAPI.com (no forecasts)</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -194,6 +195,9 @@ export function WeatherSettings() {
           </div>
         )}
       </div>
+
+      {/* Weather Underground stations (server-side: data/weather-places.json) */}
+      <WeatherStationsSettings />
 
       {/* Units */}
       <div className="space-y-4">

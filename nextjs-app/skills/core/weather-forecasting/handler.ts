@@ -1,6 +1,7 @@
 import { BaseSkillHandler, SkillHandlerContext } from '@/lib/skill-handler';
 import { WeatherService, looksLikePwsStationId, WUNDERGROUND_API_KEY } from '@/lib/weather-service';
-import { resolveNamedPlace } from '@/lib/weather-places';
+import { resolveNamedPlace, loadPlaces } from '@/lib/weather-places';
+import { fetchStationRoundup, formatRoundupForPrompt } from '@/lib/pws-roundup';
 import type { WeatherSettings, ToolCall, ToolResult } from '@/lib/types';
 
 const vaguePatterns = /^(here|home|rodeo|rodeo,?\s*nm|my (location|area|place|city)|nearby|near me|close by|local|current|this area|around here)$/i;
@@ -50,7 +51,27 @@ export default class WeatherForecastingHandler extends BaseSkillHandler {
     }
   }
 
+  // stations="local" → the user's watch list; otherwise comma-separated ids.
+  private async handleStationRoundup(toolCall: ToolCall, stationsArg: string): Promise<ToolResult> {
+    const wantLocal = /^\s*(local|watch(ed)?|my stations|watch ?list|area|valley|nearby)\s*$/i.test(stationsArg);
+    const places = loadPlaces();
+    const ids = wantLocal
+      ? places.filter(p => p.watch && p.pwsStationId).map(p => p.pwsStationId!)
+      : stationsArg.split(/[\s,;]+/).filter(Boolean);
+    if (ids.length === 0) {
+      return this.error(toolCall, wantLocal
+        ? 'No local stations are on the watch list yet — the user adds them in Settings → Weather → Weather Stations. Pass station ids instead, e.g. stations="KNMRODEO32".'
+        : 'stations needs "local" or one or more Weather Underground station ids (e.g. "KNMRODEO32, KAZSANSI41").');
+    }
+    const rows = await fetchStationRoundup(ids.slice(0, 15), places);
+    const title = wantLocal ? 'Local stations around home' : `Stations ${ids.slice(0, 15).join(', ')}`;
+    return this.success(toolCall, { success: true, stations: rows, formatted: formatRoundupForPrompt(rows, title) });
+  }
+
   private async handleGetWeather(toolCall: ToolCall, ctx: SkillHandlerContext): Promise<ToolResult> {
+    const stationsArg = toolCall.arguments.stations;
+    if (typeof stationsArg === 'string' && stationsArg.trim()) return this.handleStationRoundup(toolCall, stationsArg);
+    if (Array.isArray(stationsArg) && stationsArg.length) return this.handleStationRoundup(toolCall, stationsArg.join(','));
     try {
       const rawLocation = toolCall.arguments.location as string | undefined;
       const weatherService = new WeatherService(ctx.weatherSettings);

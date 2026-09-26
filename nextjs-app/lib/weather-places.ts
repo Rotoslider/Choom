@@ -25,6 +25,8 @@ export interface NamedPlace {
   pwsStationId?: string;
   /** One line of context for the model (distance from camp, what the numbers mean). */
   note?: string;
+  /** In the user's local watch list — included in get_weather(stations="local"). */
+  watch?: boolean;
 }
 
 export const DEFAULT_PLACES: NamedPlace[] = [
@@ -70,6 +72,26 @@ export function loadPlaces(): NamedPlace[] {
   } catch {
     return DEFAULT_PLACES;
   }
+}
+
+/** Replace the places file (Settings → Weather Stations). Validated; returns what was saved. */
+export function savePlaces(places: unknown[]): NamedPlace[] {
+  const clean = places.filter(isPlace).map(p => ({
+    name: p.name.trim(),
+    aliases: [...new Set(p.aliases.map(a => String(a).trim().toLowerCase()).filter(Boolean))],
+    lat: p.lat,
+    lon: p.lon,
+    ...(typeof p.elevationFt === 'number' && Number.isFinite(p.elevationFt) && { elevationFt: Math.round(p.elevationFt) }),
+    ...(p.pwsStationId?.trim() && { pwsStationId: p.pwsStationId.trim().toUpperCase() }),
+    ...(p.note?.trim() && { note: p.note.trim() }),
+    ...(p.watch && { watch: true }),
+  })).filter(p => p.name);
+  fs.mkdirSync(path.dirname(PLACES_FILE), { recursive: true });
+  const tmp = `${PLACES_FILE}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(clean, null, 2) + '\n');
+  fs.renameSync(tmp, PLACES_FILE);
+  cache = null;
+  return clean;
 }
 
 function isPlace(p: unknown): p is NamedPlace {
