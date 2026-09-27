@@ -18,11 +18,13 @@ Use these tools when the user wants to play music, control playback, or check wh
 
 ### Level 1 — Quick Reference
 
-- `music_play` — Play music by name or URI on a speaker
+- `music_play` — Play an artist, album, track, playlist or genre on a speaker
 - `music_control` — Pause, resume, skip, volume, shuffle, repeat
-- `music_search` — Find artists, albums, tracks, playlists, radio stations
+- `music_search` — Find artists, albums, tracks, playlists and genres by name; empty query = what's in the library
 - `music_now_playing` — What's currently playing
 - `music_players` — List available speakers
+
+**Search matches NAMES, not moods.** "soft acoustic morning music" finds nothing. To play by mood, pick a **genre** and pass it as media: `music_play(media="Folk")` plays an endless shuffled mix of it. `music_search(query="")` lists the library's genres (with track counts) and a random handful of artists.
 
 **Never invent a speaker name.** Omit `player` to use the default; call `music_players` first if the user named a specific one.
 
@@ -32,9 +34,17 @@ Use these tools when the user wants to play music, control playback, or check wh
 
 **Play music by name (auto-search):**
 ```
-music_play(media="Tarja Turunen")
-music_play(media="chill jazz")   # omit player — the default speaker is used
+music_play(media="Tarja Turunen")   # omit player — the default speaker is used
 ```
+
+**Pick music yourself (by mood, or "play something you like"):**
+```
+music_search(query="")              # genres with track counts + random artists
+music_play(media="Folk")            # a genre = endless shuffled mix, refills until stopped
+music_search(query="Jazz")          # which artists and albums are filed under Jazz
+music_play(media="<uri from that result>")   # one of them — copy the uri, never type one
+```
+Choose the genre closest to the mood, preferring one with plenty of tracks (a 5-track genre repeats itself fast): gentle or acoustic → Folk, New Age, Classical, Country; upbeat → Pop, Dance, Rock. One name per call — never string mood words together into a query.
 
 **Play specific URI from search results:**
 ```

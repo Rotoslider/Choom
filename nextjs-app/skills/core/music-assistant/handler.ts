@@ -131,6 +131,113 @@ async function resolvePlayer(nameOrId?: string): Promise<{ player_id: string; na
   throw new Error(`Player "${nameOrId}" not found. Available: ${names}. Omit the player parameter to use the default.`);
 }
 
+// Music Assistant search matches NAMES. Asked for "music of your choice",
+// Genesis (2026-09-27) sent music_search 400-500 char mood descriptions —
+// "soft acoustic folk mellow morning … rain sounds ocean waves" — got
+// "No results" every time, then built URIs out of the wrong artist ids and
+// gave up after 21 iterations. The library's genre index (MA 2.10) is the
+// handle for mood, so a genre name works anywhere a name does and plays as an
+// Endless Mix: a dynamic playlist that refills itself until stopped.
+
+export interface LibraryGenre {
+  id: string;
+  name: string;
+  uri: string;
+  tracks: number;
+  albums: number;
+  artists: number;
+}
+
+const GENRE_TTL_MS = 10 * 60_000;
+let genreCache: { at: number; genres: LibraryGenre[] } | null = null;
+
+/** Music genres with something in them, biggest first. Cached: the index changes on library scans, not per call. */
+async function libraryGenres(): Promise<LibraryGenre[]> {
+  if (genreCache && Date.now() - genreCache.at < GENRE_TTL_MS) return genreCache.genres;
+  const items = (await maCommand('music/genres/library_items', { limit: 500 }) as Array<Record<string, unknown>>) || [];
+  const ids = items.map(g => String(g.item_id));
+  const counts = ids.length
+    ? await maCommand('music/genres/media_counts', { genre_ids: ids }) as Record<string, Record<string, number>>
+    : {};
+  const genres = items
+    .map(g => {
+      const c = counts[String(g.item_id)] || {};
+      return { id: String(g.item_id), name: String(g.name), uri: String(g.uri), tracks: c.track || 0, albums: c.album || 0, artists: c.artist || 0 };
+    })
+    // Podcast and audiobook genres ("News", "True Crime") share the index but hold no music.
+    .filter(g => g.tracks + g.albums + g.artists > 0)
+    .sort((a, b) => b.tracks - a.tracks || b.albums - a.albums);
+  genreCache = { at: Date.now(), genres };
+  return genres;
+}
+
+/** Lowercase words only, so "R&b", "Hip-Hop" and "hip hop" compare equal. */
+const plainWords = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+
+// Words that dress a genre up without changing it: "folk music", "some jazz", "a rock playlist".
+const GENRE_FILLER = /\b(?:some|a|an|the|music|songs?|tunes|playlist|mix|radio|station|genre)\b/g;
+
+/** The library genre a phrase IS: "Folk", "some jazz", "rock music". */
+export function exactGenre(text: string, genres: LibraryGenre[]): LibraryGenre | undefined {
+  const core = plainWords(text).replace(GENRE_FILLER, ' ').replace(/\s+/g, ' ').trim();
+  if (!core) return undefined;
+  return genres.find(g => plainWords(g.name) === core);
+}
+
+/** The first library genre a description MENTIONS: "soft acoustic folk morning playlist" → Folk. */
+export function mentionedGenre(text: string, genres: LibraryGenre[]): LibraryGenre | undefined {
+  const hay = ` ${plainWords(text)} `;
+  let best: { genre: LibraryGenre; at: number } | undefined;
+  for (const genre of genres) {
+    const at = hay.indexOf(` ${plainWords(genre.name)} `);
+    if (at !== -1 && (!best || at < best.at)) best = { genre, at };
+  }
+  return best?.genre;
+}
+
+/** MA's own genre search, which knows the aliases: "americana" → Country, "easy listening" → Pop. */
+async function aliasGenre(text: string, genres: LibraryGenre[]): Promise<LibraryGenre | undefined> {
+  const data = await maCommand('music/search', { search_query: text, media_types: ['genre'], limit: 5 }) as Record<string, Array<Record<string, unknown>>>;
+  for (const hit of data?.genres ?? []) {
+    const genre = genres.find(g => g.uri === hit.uri);
+    if (genre) return genre;
+  }
+  return undefined;
+}
+
+/** Music Assistant's Endless Mix of a seed item: a dynamic playlist that keeps refilling. */
+export const endlessMix = (seedUri: string) => `radio_playlist://playlist/${seedUri}`;
+
+const count = (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`;
+
+/** "9183 tracks", or "7 albums" for a genre filed by album (Jazz). */
+const genreSize = (g: LibraryGenre) => (g.tracks ? count(g.tracks, 'track') : g.albums ? count(g.albums, 'album') : count(g.artists, 'artist'));
+
+/** "Rock (9183 tracks), Jazz (7 albums), …" — the menu a mood gets picked from. */
+export function genreMenu(genres: LibraryGenre[]): string {
+  return genres.map(g => `${g.name} (${genreSize(g)})`).join(', ');
+}
+
+/** A long query echoed back in full is just noise in the next prompt. */
+const clip = (s: string, n = 80) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
+
+const exampleGenre = (genres: LibraryGenre[]) => genres[0]?.name ?? 'Jazz';
+
+export function noMatchMessage(text: string, genres: LibraryGenre[]): string {
+  return `Nothing in the library is named "${clip(text)}". Music Assistant matches NAMES of artists, albums, tracks and playlists, not moods or descriptions, so search one name at a time. `
+    + `To play by mood, pass a genre as media, e.g. music_play(media="${exampleGenre(genres)}"): it plays an endless shuffled mix of that genre. `
+    + (genres.length ? `Genres in this library: ${genreMenu(genres)}.` : '');
+}
+
+type MediaItem = Record<string, unknown>;
+
+const itemSummary = (item: MediaItem) => ({
+  name: (item.name as string) || '?',
+  uri: (item.uri as string) || '',
+  ...(Array.isArray(item.artists) && item.artists.length ? { artist: (item.artists as Array<{ name: string }>).map(a => a.name).join(', ') } : {}),
+  ...(item.album ? { album: ((item.album as Record<string, string>)?.name) || '' } : {}),
+});
+
 export default class MusicAssistantHandler extends BaseSkillHandler {
   canHandle(toolName: string): boolean {
     return TOOL_NAMES.has(toolName);
@@ -154,74 +261,100 @@ export default class MusicAssistantHandler extends BaseSkillHandler {
   private async search(toolCall: ToolCall): Promise<ToolResult> {
     const query = ((toolCall.arguments.query as string) || '').trim();
     const rawTypes = toolCall.arguments.media_types;
-    const typesArr = Array.isArray(rawTypes) ? rawTypes.map(String) : ((rawTypes as string) || 'artist,album,track,playlist,radio').split(',');
-    const limit = (toolCall.arguments.limit as number) || 5;
+    const typesGiven = rawTypes !== undefined && rawTypes !== null && rawTypes !== '';
+    const typesArr = Array.isArray(rawTypes) ? rawTypes.map(String) : ((rawTypes as string) || '').split(',');
+    const limit = Number(toolCall.arguments.limit) || 0;
 
-    const VALID_TYPES = new Set(['artist', 'album', 'track', 'playlist', 'radio']);
-    const mediaTypes = typesArr.map(t => t.trim().toLowerCase()).filter(t => VALID_TYPES.has(t));
-    if (mediaTypes.length === 0) mediaTypes.push('artist', 'album', 'track', 'playlist', 'radio');
+    const VALID_TYPES = new Set(['artist', 'album', 'track', 'playlist', 'radio', 'genre']);
+    const mediaTypes = typesArr.map(t => t.trim().toLowerCase().replace(/s$/, '')).filter(t => VALID_TYPES.has(t));
 
-    // Empty query → browse library items instead of searching
+    // Empty query → what is in the library to choose from
     if (!query) {
-      return this.browseLibrary(toolCall, mediaTypes, limit);
+      return this.browseLibrary(toolCall, typesGiven && mediaTypes.length ? mediaTypes : null, limit || 15);
     }
+    if (mediaTypes.length === 0) mediaTypes.push(...VALID_TYPES);
 
-    const data = await maCommand('music/search', {
-      search_query: query,
-      media_types: mediaTypes,
-      limit,
-    }) as Record<string, Array<Record<string, unknown>>>;
+    const [data, genres] = await Promise.all([
+      maCommand('music/search', { search_query: query, media_types: mediaTypes, limit: limit || 5 }) as Promise<Record<string, Array<MediaItem>>>,
+      libraryGenres().catch(() => [] as LibraryGenre[]),
+    ]);
 
     const results: Record<string, Array<Record<string, string>>> = {};
     let totalResults = 0;
-
     for (const [type, items] of Object.entries(data)) {
       if (!Array.isArray(items) || items.length === 0) continue;
-      results[type] = items.map(item => ({
-        name: (item.name as string) || '?',
-        uri: (item.uri as string) || '',
-        id: String(item.item_id || ''),
-        ...(item.artists ? { artist: (item.artists as Array<{ name: string }>).map(a => a.name).join(', ') } : {}),
-        ...(item.album ? { album: ((item.album as Record<string, string>)?.name) || '' } : {}),
-      }));
-      totalResults += items.length;
+      // A genre match only counts when the library has music filed under it.
+      const kept = type === 'genres' ? items.filter(i => genres.some(g => g.uri === i.uri)) : items;
+      if (kept.length === 0) continue;
+      results[type] = kept.map(itemSummary);
+      totalResults += kept.length;
     }
 
+    // "Folk" is a genre as well as a word in album titles: show what the genre holds.
+    const genre = exactGenre(query, genres);
+    const genreContents = genre ? await this.genreContents(genre, limit || 10) : undefined;
+
+    const found = totalResults > 0 || genreContents;
     return this.success(toolCall, {
       success: true,
-      query,
+      query: clip(query),
       total_results: totalResults,
       results,
-      message: totalResults > 0
-        ? `Found ${totalResults} results for "${query}". To play one, call music_play(media="<uri from these results>") — the parameter is named media.`
-        : `No results found for "${query}".`,
+      ...(genreContents ? { genre: genreContents } : {}),
+      message: !found
+        ? noMatchMessage(query, genres)
+        : genre
+          ? `"${genre.name}" is a genre (${genreSize(genre)}). music_play(media="${genre.name}") plays an endless shuffled mix of it, or pick an artist or album from genre.artists / genre.albums and play its uri.`
+          : `Found ${totalResults} results for "${clip(query)}". To play one, call music_play(media="<uri from these results>") — the parameter is named media.`,
     });
   }
 
-  private async browseLibrary(toolCall: ToolCall, mediaTypes: string[], limit: number): Promise<ToolResult> {
+  /** A random handful of the artists and albums filed under a genre, for picking one. */
+  private async genreContents(genre: LibraryGenre, limit: number) {
+    const filter = { genre: [Number(genre.id)], order_by: 'random' };
+    const [artists, albums, tracks] = await Promise.all([
+      maCommand('music/artists/library_items', { ...filter, limit }) as Promise<MediaItem[]>,
+      maCommand('music/albums/library_items', { ...filter, limit }) as Promise<MediaItem[]>,
+      // Tracks are mapped far more often than artists (Folk: 65 tracks, 3 artists),
+      // so their artists fill out the list.
+      maCommand('music/tracks/library_items', { ...filter, limit: limit * 4 }) as Promise<MediaItem[]>,
+    ]);
+    const artistList = new Map<string, { name: string; uri: string }>();
+    for (const a of [...(artists || []), ...(tracks || []).flatMap(t => (t.artists as MediaItem[]) || [])]) {
+      if (artistList.size >= limit) break;
+      if (typeof a.uri === 'string' && !artistList.has(a.uri)) artistList.set(a.uri, { name: String(a.name), uri: a.uri });
+    }
+    return {
+      name: genre.name,
+      tracks: genre.tracks,
+      play: `music_play(media="${genre.name}")`,
+      artists: [...artistList.values()],
+      albums: (albums || []).map(itemSummary),
+    };
+  }
+
+  private async browseLibrary(toolCall: ToolCall, mediaTypes: string[] | null, limit: number): Promise<ToolResult> {
     const typeToCommand: Record<string, string> = {
       artist: 'music/artists/library_items',
       album: 'music/albums/library_items',
       track: 'music/tracks/library_items',
       playlist: 'music/playlists/library_items',
-      radio: 'music/radio/library_items',
+      radio: 'music/radios/library_items',
     };
 
+    // The old browse listed the first five of everything alphabetically —
+    // "1200 Micrograms", "2002", "2 Fabiola" — nothing to choose music by.
+    // Genres plus a random handful of artists are.
+    const genres = await libraryGenres().catch(() => [] as LibraryGenre[]);
     const results: Record<string, Array<Record<string, string>>> = {};
     let totalResults = 0;
-
-    for (const type of mediaTypes) {
+    for (const type of mediaTypes ?? ['artist', 'playlist']) {
       const cmd = typeToCommand[type];
       if (!cmd) continue;
       try {
-        const items = await maCommand(cmd, { limit, offset: 0 }) as Array<Record<string, unknown>>;
+        const items = await maCommand(cmd, { limit, offset: 0, order_by: 'random' }) as MediaItem[];
         if (!Array.isArray(items) || items.length === 0) continue;
-        results[type + 's'] = items.map(item => ({
-          name: (item.name as string) || '?',
-          uri: (item.uri as string) || '',
-          id: String(item.item_id || ''),
-          ...(item.artists ? { artist: (item.artists as Array<{ name: string }>).map(a => a.name).join(', ') } : {}),
-        }));
+        results[type + 's'] = items.map(itemSummary);
         totalResults += items.length;
       } catch {
         // Some types may not have library items — skip silently
@@ -231,12 +364,60 @@ export default class MusicAssistantHandler extends BaseSkillHandler {
     return this.success(toolCall, {
       success: true,
       query: '(browse library)',
+      genres: genreMenu(genres),
       total_results: totalResults,
       results,
-      message: totalResults > 0
-        ? `Found ${totalResults} items in the library. To play one, call music_play(media="<uri from these results>") — the parameter is named media.`
-        : 'Library is empty or no items found for the requested types.',
+      message: `A random sample of the library, with its genres. To play by mood, pass a genre as media: music_play(media="${exampleGenre(genres)}") plays an endless shuffled mix. `
+        + 'music_search(query="<genre>") shows the artists and albums in a genre; searching again gives a different sample. To play an artist or album, use its uri as media.',
     });
+  }
+
+  /**
+   * What a music_play media string means. In order: a uri; a genre name
+   * ("Folk", "some jazz"); an artist/album/track/playlist name; a description
+   * that mentions a genre ("soft acoustic folk morning") or one MA's genre
+   * aliases know ("americana"). Anything else is an error that lists the genres.
+   */
+  private async resolveMedia(media: string): Promise<{ uri: string; name: string; note?: string } | { error: string }> {
+    const genreMix = (g: LibraryGenre) => ({ uri: endlessMix(g.uri), name: `${g.name} mix` });
+
+    if (media.includes('://')) {
+      // A URI she did not get from music_search this turn is a guess:
+      // "library://track/53768857" (no such item) made Music Assistant answer
+      // 500 "Internal server error" with nothing to act on (2026-09-15).
+      // Validate first so the reply says what to do instead.
+      let item: MediaItem | null;
+      try {
+        item = await maCommand('music/item_by_uri', { uri: media }) as MediaItem | null;
+      } catch {
+        return { error: `Nothing exists at "${clip(media)}" — that id is not in the library. Never guess a URI: pass the artist, album or track NAME as media (e.g. "Anne Bloom") or a genre (e.g. "Folk"), or call music_search first and use a uri from its results.` };
+      }
+      const name = typeof item?.name === 'string' ? item.name : media;
+      // A genre uri from music_search plays the way a genre name does.
+      if (item?.media_type === 'genre') return { uri: endlessMix(media), name: `${name} mix` };
+      return { uri: media, name };
+    }
+
+    const genres = await libraryGenres().catch(() => [] as LibraryGenre[]);
+    const exact = exactGenre(media, genres);
+    if (exact) return genreMix(exact);
+
+    const searchResult = await maCommand('music/search', {
+      search_query: media,
+      media_types: ['artist', 'album', 'track', 'playlist', 'radio'],
+      limit: 1,
+    }) as Record<string, Array<MediaItem>>;
+    for (const items of Object.values(searchResult)) {
+      if (Array.isArray(items) && items.length > 0) {
+        return { uri: items[0].uri as string, name: (items[0].name as string) || media };
+      }
+    }
+
+    const mentioned = mentionedGenre(media, genres) ?? await aliasGenre(media, genres).catch(() => undefined);
+    if (mentioned) {
+      return { ...genreMix(mentioned), note: `Nothing in the library is named "${clip(media)}", so this is the ${mentioned.name} genre instead: an endless shuffled mix. Next time pass the genre directly: media="${mentioned.name}".` };
+    }
+    return { error: noMatchMessage(media, genres) };
   }
 
   private async play(toolCall: ToolCall): Promise<ToolResult> {
@@ -245,47 +426,15 @@ export default class MusicAssistantHandler extends BaseSkillHandler {
     // undefined (reading 'includes')" back — a crash, not an error she could act
     // on. Take the obvious synonyms, and if nothing usable arrived say exactly
     // what to pass.
-    const media = firstString(toolCall.arguments, ['media', 'uri', 'query', 'name', 'track', 'song', 'search', 'item', 'media_id', 'media_uri']);
+    const media = firstString(toolCall.arguments, ['media', 'uri', 'query', 'name', 'track', 'song', 'search', 'item', 'media_id', 'media_uri', 'genre']);
     if (!media) {
-      return this.error(toolCall, 'media is required — pass the artist, album, track or playlist NAME (e.g. media="Anne Bloom") or a uri copied from music_search results (media="library://track/123"). The parameter is named media, not uri or query.');
+      return this.error(toolCall, 'media is required — pass the artist, album, track or playlist NAME (e.g. media="Anne Bloom"), a genre (media="Folk"), or a uri copied from music_search results (media="library://track/123"). The parameter is named media, not uri or query.');
     }
     const enqueue = (toolCall.arguments.enqueue as string) || 'play';
     const player = await resolvePlayer(toolCall.arguments.player as string | undefined);
 
-    let mediaUri = media;
-    let resolvedName = media;
-
-    if (media.includes('://')) {
-      // A URI she did not get from music_search this turn is a guess:
-      // "library://track/53768857" (no such item) made Music Assistant answer
-      // 500 "Internal server error" with nothing to act on (2026-09-15).
-      // Validate first so the reply says what to do instead.
-      try {
-        const item = await maCommand('music/item_by_uri', { uri: media }) as Record<string, unknown> | null;
-        if (item && typeof item.name === 'string') resolvedName = item.name;
-      } catch {
-        return this.error(toolCall, `Nothing exists at "${media}" — that id is not in the library. Never guess a URI: pass the artist, album or track NAME as media (e.g. "Anne Bloom") and it will be found, or call music_search first and use a uri from its results.`);
-      }
-    } else {
-      const searchResult = await maCommand('music/search', {
-        search_query: media,
-        media_types: ['artist', 'album', 'track', 'playlist', 'radio'],
-        limit: 1,
-      }) as Record<string, Array<Record<string, unknown>>>;
-
-      let found: Record<string, unknown> | null = null;
-      for (const items of Object.values(searchResult)) {
-        if (Array.isArray(items) && items.length > 0) {
-          found = items[0];
-          break;
-        }
-      }
-      if (!found) {
-        return this.error(toolCall, `No music found for "${media}". Try a more specific search.`);
-      }
-      mediaUri = found.uri as string;
-      resolvedName = (found.name as string) || media;
-    }
+    const target = await this.resolveMedia(media);
+    if ('error' in target) return this.error(toolCall, target.error);
 
     const enqueueMap: Record<string, string> = {
       play: 'play',
@@ -297,7 +446,7 @@ export default class MusicAssistantHandler extends BaseSkillHandler {
 
     await maCommand('player_queues/play_media', {
       queue_id: player.queue_id,
-      media: [mediaUri],
+      media: [target.uri],
       option: enqueueMap[enqueue] || 'play',
     });
 
@@ -314,14 +463,15 @@ export default class MusicAssistantHandler extends BaseSkillHandler {
 
     return this.success(toolCall, {
       success: true,
-      playing: resolvedName,
-      uri: mediaUri,
+      playing: target.name,
+      uri: target.uri,
       player: player.name,
       enqueue,
       player_state: state,
-      message: started
-        ? `Now playing "${resolvedName}" on ${player.name}.`
-        : `Queued "${resolvedName}" on ${player.name}, but the speaker reports state "${state}" — it may not have started. Tell the user honestly; music_control(action="play") can retry.`,
+      message: (started
+        ? `Now playing "${target.name}" on ${player.name}.`
+        : `Queued "${target.name}" on ${player.name}, but the speaker reports state "${state}" — it may not have started. Tell the user honestly; music_control(action="play") can retry.`)
+        + (target.note ? ` ${target.note}` : ''),
     });
   }
 

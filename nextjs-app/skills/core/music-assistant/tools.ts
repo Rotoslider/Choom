@@ -3,17 +3,17 @@ import type { ToolDefinition } from '@/lib/types';
 export const tools: ToolDefinition[] = [
   {
     name: 'music_search',
-    description: 'Search for music in the library. If query is empty, browses library items. Returns matching artists, albums, tracks, playlists, and radio stations with URIs for playback.',
+    description: 'Search the music library by NAME: artist, album, track, playlist or genre. It does not understand moods or descriptions. An empty query lists the genres and a random sample of artists.',
     parameters: {
       type: 'object',
       properties: {
         query: {
           type: 'string',
-          description: 'Search query — artist name, song title, album name, etc. Leave empty to browse the library.',
+          description: 'ONE name, e.g. "Bon Jovi", or a genre like "Folk". Empty lists the genres.',
         },
         media_types: {
           type: 'string',
-          description: 'Comma-separated types: artist,album,track,playlist,radio. Only these 5 values are valid. Default: all types.',
+          description: 'Comma-separated types: artist,album,track,playlist,radio,genre. Only these 6 values are valid. Default: all types.',
         },
         limit: {
           type: 'number',
@@ -25,13 +25,13 @@ export const tools: ToolDefinition[] = [
   },
   {
     name: 'music_play',
-    description: 'Play music on a speaker. Accepts a URI from search results, or a search query to auto-resolve. Can play artists, albums, tracks, playlists, or radio stations.',
+    description: 'Play music on a speaker. media is a name (artist, album, track, playlist), a uri from music_search, or a genre ("Folk", "Jazz"): a genre plays an endless shuffled mix, the way to play by mood.',
     parameters: {
       type: 'object',
       properties: {
         media: {
           type: 'string',
-          description: 'REQUIRED, and it is named media (not uri, query or track). A NAME to search ("Anne Bloom", "chill jazz playlist") or a uri copied from music_search THIS turn. Never invent a uri — a made-up id is a hard error.',
+          description: 'REQUIRED, and it is named media (not uri, query or track). ONE name: an artist, album, track or playlist ("Anne Bloom"), or a GENRE from the library ("Folk", "Jazz"), which plays an endless shuffled mix and is how to play by mood; music_search with an empty query lists the genres. Or a uri copied from music_search THIS turn. Never invent a uri — a made-up id is a hard error.',
         },
         player: {
           type: 'string',
