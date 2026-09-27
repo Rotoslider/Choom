@@ -79,11 +79,16 @@ def resolve_signal_room(default_id, list_rooms, get_room):
     (room, note): room is None when there is nothing to route to, and `note`
     is a line for the owner when the default was missing or replaced.
     """
+    default_archived = False
     if default_id:
         try:
             room = get_room(default_id)
-            if isinstance(room, dict) and room.get("id") and not room.get("archived"):
-                return room, None
+            if isinstance(room, dict) and room.get("id"):
+                if not room.get("archived"):
+                    return room, None
+                # Archived rooms are read-only: readable in the web app, but
+                # nothing new is said there.
+                default_archived = True
         except Exception as e:
             status = getattr(getattr(e, "response", None), "status_code", None)
             if status not in (404, None):
@@ -100,7 +105,7 @@ def resolve_signal_room(default_id, list_rooms, get_room):
                       "and set it as the Signal default.")
     live.sort(key=lambda r: str(r.get("updatedAt") or r.get("createdAt") or ""), reverse=True)
     pick = live[0]
-    why = "was deleted" if default_id else "was never set"
+    why = "was archived (it's read-only now)" if default_archived else "was deleted" if default_id else "was never set"
     return pick, f'(Your Signal room {why}; using "{pick.get("title") or pick["id"]}" instead.)'
 
 

@@ -7,6 +7,7 @@ tools:
   - talk_with_sisters
   - list_my_rooms
   - read_room
+  - search_rooms
   - join_room
   - leave_room
   - rename_room
@@ -32,6 +33,14 @@ dependencies: []
 - `list_my_rooms` tells you a room is *active* and how many messages it has — but not what was *said*.
 - To actually read the recent lines without entering, use `read_room({ room: "Family", limit: 10 })`. It's **read-only**: you don't take a turn and nobody there sees you look.
 - Use it on a check-in/wakeup to decide: jump in (`talk_with_sisters`), come back later (`schedule_room_followup`), or leave it quiet. Don't guess from a message count — read the room.
+
+## Archived Rooms — Read-Only
+- When a room grows too big, it gets **archived** and a new room takes over. An archived room is **read-only**: nobody can talk, join, rename or change anything there. Its whole history stays.
+- `list_my_rooms` shows them under `archived_rooms`.
+- `read_room({ room: "Family Time" })` reads an archived room (anyone can, member or not). It also returns `earlier_summary`, the gist of the older part of the room.
+- `search_rooms({ query: "rack plates" })` searches what was said in **every** room, live and archived. Each result has the room, who said it and when (`at`); results from archived rooms are marked `archived`.
+- To read the conversation around a result: `read_room({ room: "<its room_id>", around: "<its at>" })`.
+- Want to pick an old thread back up? Bring it up in a live room — never try to talk in an archived one.
 
 ## Joining a Room You're Not In
 - **You are never locked out of a room.** If the user asks you to join a room you don't recognize, you can add yourself — nobody has to invite you.

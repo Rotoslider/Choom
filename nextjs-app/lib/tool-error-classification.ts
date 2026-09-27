@@ -88,9 +88,10 @@ export const STALE_REF_ERROR = new RegExp(
   'i',
 );
 
-/** Permission-policy blocks — argument-specific and recoverable. */
+/** Permission-policy blocks — argument-specific and recoverable. An archived
+ *  (read-only) group room is one: the Choom can still read and search it. */
 export const PERMISSION_BLOCK =
-  /^Blocked: (?:cannot (?:write into|delete from) another Choom|sibling_journal\/ is archived|[^/]+\/ is a shared folder|remote SSH is disabled|direct SSH shell commands are disabled)/i;
+  /^Blocked: (?:cannot (?:write into|delete from) another Choom|sibling_journal\/ is archived|"[^"\n]*" is archived|[^/]+\/ is a shared folder|remote SSH is disabled|direct SSH shell commands are disabled)/i;
 
 /**
  * Fine-grained classes below only refine the LABEL recorded in traces (what

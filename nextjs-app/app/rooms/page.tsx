@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, Plus, Users, Trash2, Loader2, Smartphone, Square, Minus, Play, Download, Archive, X, MoreVertical, Pencil, ScrollText, Menu, Crown } from 'lucide-react';
+import { ArrowLeft, Plus, Users, Trash2, Loader2, Smartphone, Square, Minus, Play, Download, Archive, ArchiveRestore, ChevronRight, X, MoreVertical, Pencil, ScrollText, Menu, Crown } from 'lucide-react';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
 import { LogPanel } from '@/components/logs/log-panel';
 import { useLogStore } from '@/lib/log-store';
@@ -34,6 +34,8 @@ interface Room {
   title: string | null;
   autoRounds: number;
   projectFolder: string | null;
+  /** Read-only: shown and readable (by the owner and the Chooms), but nobody talks in it. */
+  archived: boolean;
   participants: Participant[];
   updatedAt: string;
   _count?: { messages: number };
@@ -114,6 +116,8 @@ export default function RoomsPage() {
   // On phones the room list is an overlay (toggled via the header menu button);
   // on md+ it's a static column that's always visible.
   const [roomListOpen, setRoomListOpen] = useState(false);
+  // The "Archived" section of the room list starts folded.
+  const [showArchived, setShowArchived] = useState(false);
   const [signalRoomId, setSignalRoomId] = useState<string | null>(null);
   // Per-speaker live state during a turn
   const [activeSpeaker, setActiveSpeaker] = useState<{ name: string; choomId: string; status: string } | null>(null);
@@ -148,6 +152,8 @@ export default function RoomsPage() {
   useEffect(() => { choomsRef.current = chooms; }, [chooms]);
 
   const currentRoom = rooms.find(r => r.id === currentRoomId) || null;
+  const liveRooms = rooms.filter(r => !r.archived);
+  const archivedRooms = rooms.filter(r => r.archived);
 
   // Init TTS queue once settings are available
   useEffect(() => {
@@ -168,13 +174,14 @@ export default function RoomsPage() {
     (async () => {
       try {
         const [cRes, rRes, bRes] = await Promise.all([
-          fetch('/api/chooms'), fetch('/api/group-chats'), fetch('/api/bridge-config'),
+          fetch('/api/chooms'), fetch('/api/group-chats?archived=true'), fetch('/api/bridge-config'),
         ]);
         if (cRes.ok) setChooms(await cRes.json());
         if (rRes.ok) {
-          const rs = await rRes.json();
+          const rs: Room[] = await rRes.json();
           setRooms(rs);
-          if (rs.length && !currentRoomId) setCurrentRoomId(rs[0].id);
+          const firstLive = rs.find(r => !r.archived);
+          if (firstLive && !currentRoomId) setCurrentRoomId(firstLive.id);
         }
         if (bRes.ok) {
           const cfg = await bRes.json();
@@ -584,16 +591,29 @@ export default function RoomsPage() {
     if (currentRoomId === id) setCurrentRoomId(null);
   }, [currentRoomId]);
 
-  // Archive: hide the room from the list but KEEP its history on disk (unlike delete).
+  // Archive: the room becomes READ-ONLY (unlike delete). It moves to the
+  // Archived section, stays readable here, and the Chooms can still read and
+  // search it — nobody can talk in it until it is restored.
   const handleArchiveRoom = useCallback(async (id: string) => {
-    if (!confirm('Archive this room? It will be hidden from the list, but the conversation history is kept and you can restore it later.')) return;
-    await fetch(`/api/group-chats/${id}`, {
+    if (!confirm('Archive this room? It becomes read-only: the conversation stays here under Archived, and the Chooms can still read and search it, but nobody can talk in it until you restore it.')) return;
+    if (currentRoomId === id && runningRef.current) handleStop();
+    const res = await fetch(`/api/group-chats/${id}`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ archived: true }),
     });
-    setRooms(prev => prev.filter(r => r.id !== id));
-    if (currentRoomId === id) setCurrentRoomId(null);
-  }, [currentRoomId]);
+    if (!res.ok) { alert('Could not archive the room.'); return; }
+    setRooms(prev => prev.map(r => r.id === id ? { ...r, archived: true } : r));
+    if (currentRoomId === id) setShowArchived(true);
+  }, [currentRoomId, handleStop]);
+
+  const handleRestoreRoom = useCallback(async (id: string) => {
+    const res = await fetch(`/api/group-chats/${id}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ archived: false }),
+    });
+    if (!res.ok) { alert('Could not restore the room.'); return; }
+    setRooms(prev => prev.map(r => r.id === id ? { ...r, archived: false } : r));
+  }, []);
 
   // Remove a Choom from a room (owner action). The Choom's past messages stay in
   // the history and they can be invited back later. A room must keep ≥1 member.
@@ -634,6 +654,89 @@ export default function RoomsPage() {
     });
   }, [rooms]);
 
+  // One row of the room list. Archived rows are dimmed and offer Restore where
+  // live rows offer Archive.
+  const renderRoomRow = (room: Room) => {
+    const roomName = room.title || room.participants.map(p => p.choom.name).join(', ');
+    return (
+      <div
+        key={room.id}
+        className={cn(
+          // grid [1fr_auto]: the content column flexes/truncates, the kebab
+          // lives in the `auto` column so it can NEVER be pushed off-screen
+          // by a long room name (the bug from the 1:1 sidebar, relearned).
+          'group grid grid-cols-[1fr_auto] items-start gap-1 px-3 py-2 rounded-lg cursor-pointer hover:bg-muted/50',
+          currentRoomId === room.id && 'bg-primary/10 border border-primary/30'
+        )}
+        onClick={() => { if (editingRoomId !== room.id) { setCurrentRoomId(room.id); setRoomListOpen(false); } }}
+      >
+        <div className={cn('min-w-0 overflow-hidden', room.archived && 'opacity-70')}>
+          {/* Row 1: avatars (up to 6 on one line) */}
+          <div className="flex -space-x-2 mb-1">
+            {room.participants.slice(0, 6).map(p => (
+              <AvatarDisplay key={p.id} name={p.choom.name} avatarUrl={p.choom.avatarUrl} size="sm" />
+            ))}
+            {room.participants.length > 6 && (
+              <span className="flex items-center justify-center h-6 w-6 rounded-full bg-muted text-[10px] font-medium ring-2 ring-background">
+                +{room.participants.length - 6}
+              </span>
+            )}
+          </div>
+          {/* Row 2: room name (inline-editable) */}
+          {editingRoomId === room.id ? (
+            <Input
+              value={editRoomTitle}
+              onChange={(e) => setEditRoomTitle(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') saveRenameRoom(room.id);
+                if (e.key === 'Escape') setEditingRoomId(null);
+              }}
+              onBlur={() => saveRenameRoom(room.id)}
+              onClick={(e) => e.stopPropagation()}
+              className="h-6 text-sm px-1"
+              autoFocus
+            />
+          ) : (
+            <p className="text-sm font-medium truncate" title={roomName}>{roomName}</p>
+          )}
+          {/* Row 3: counts */}
+          <p className="text-xs text-muted-foreground truncate">
+            {room.participants.length} chooms
+            {room._count ? ` · ${room._count.messages} msgs` : ''}
+            {!room.archived && room._count && room._count.messages > 300 ? ' ⚠️' : ''}
+          </p>
+        </div>
+        {/* Room actions — kebab in the un-squeezable auto column. */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon" className="h-6 w-6 text-muted-foreground"
+              onClick={(e) => e.stopPropagation()} title="Room actions">
+              <MoreVertical className="h-4 w-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-40">
+            <DropdownMenuItem onClick={(e) => { e.stopPropagation(); startRenameRoom(room.id, roomName); }}>
+              <Pencil className="h-4 w-4 mr-2" /> Rename
+            </DropdownMenuItem>
+            {room.archived ? (
+              <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleRestoreRoom(room.id); }}>
+                <ArchiveRestore className="h-4 w-4 mr-2" /> Restore
+              </DropdownMenuItem>
+            ) : (
+              <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleArchiveRoom(room.id); }}>
+                <Archive className="h-4 w-4 mr-2" /> Archive
+              </DropdownMenuItem>
+            )}
+            <DropdownMenuSeparator />
+            <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={(e) => { e.stopPropagation(); handleDeleteRoom(room.id); }}>
+              <Trash2 className="h-4 w-4 mr-2" /> Delete
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    );
+  };
+
   return (
     <div className="flex h-screen bg-background">
       {/* Mobile backdrop for the room-list overlay */}
@@ -663,83 +766,27 @@ export default function RoomsPage() {
         </div>
         <ScrollArea className="flex-1">
           <div className="p-2 space-y-1">
-            {rooms.length === 0 && (
-              <p className="text-sm text-muted-foreground p-4 text-center">No rooms yet. Click + to create one.</p>
+            {liveRooms.length === 0 && (
+              <p className="text-sm text-muted-foreground p-4 text-center">
+                {archivedRooms.length ? 'No live rooms. Click + to create one.' : 'No rooms yet. Click + to create one.'}
+              </p>
             )}
-            {rooms.map(room => {
-              const roomName = room.title || room.participants.map(p => p.choom.name).join(', ');
-              return (
-              <div
-                key={room.id}
-                className={cn(
-                  // grid [1fr_auto]: the content column flexes/truncates, the kebab
-                  // lives in the `auto` column so it can NEVER be pushed off-screen
-                  // by a long room name (the bug from the 1:1 sidebar, relearned).
-                  'group grid grid-cols-[1fr_auto] items-start gap-1 px-3 py-2 rounded-lg cursor-pointer hover:bg-muted/50',
-                  currentRoomId === room.id && 'bg-primary/10 border border-primary/30'
-                )}
-                onClick={() => { if (editingRoomId !== room.id) { setCurrentRoomId(room.id); setRoomListOpen(false); } }}
-              >
-                <div className="min-w-0 overflow-hidden">
-                  {/* Row 1: avatars (up to 6 on one line) */}
-                  <div className="flex -space-x-2 mb-1">
-                    {room.participants.slice(0, 6).map(p => (
-                      <AvatarDisplay key={p.id} name={p.choom.name} avatarUrl={p.choom.avatarUrl} size="sm" />
-                    ))}
-                    {room.participants.length > 6 && (
-                      <span className="flex items-center justify-center h-6 w-6 rounded-full bg-muted text-[10px] font-medium ring-2 ring-background">
-                        +{room.participants.length - 6}
-                      </span>
-                    )}
-                  </div>
-                  {/* Row 2: room name (inline-editable) */}
-                  {editingRoomId === room.id ? (
-                    <Input
-                      value={editRoomTitle}
-                      onChange={(e) => setEditRoomTitle(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') saveRenameRoom(room.id);
-                        if (e.key === 'Escape') setEditingRoomId(null);
-                      }}
-                      onBlur={() => saveRenameRoom(room.id)}
-                      onClick={(e) => e.stopPropagation()}
-                      className="h-6 text-sm px-1"
-                      autoFocus
-                    />
-                  ) : (
-                    <p className="text-sm font-medium truncate" title={roomName}>{roomName}</p>
-                  )}
-                  {/* Row 3: counts */}
-                  <p className="text-xs text-muted-foreground truncate">
-                    {room.participants.length} chooms
-                    {room._count ? ` · ${room._count.messages} msgs` : ''}
-                    {room._count && room._count.messages > 300 ? ' ⚠️' : ''}
-                  </p>
-                </div>
-                {/* Room actions — kebab in the un-squeezable auto column. */}
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="ghost" size="icon" className="h-6 w-6 text-muted-foreground"
-                      onClick={(e) => e.stopPropagation()} title="Room actions">
-                      <MoreVertical className="h-4 w-4" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-40">
-                    <DropdownMenuItem onClick={(e) => { e.stopPropagation(); startRenameRoom(room.id, roomName); }}>
-                      <Pencil className="h-4 w-4 mr-2" /> Rename
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleArchiveRoom(room.id); }}>
-                      <Archive className="h-4 w-4 mr-2" /> Archive
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={(e) => { e.stopPropagation(); handleDeleteRoom(room.id); }}>
-                      <Trash2 className="h-4 w-4 mr-2" /> Delete
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
-              );
-            })}
+            {liveRooms.map(renderRoomRow)}
+            {archivedRooms.length > 0 && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setShowArchived(v => !v)}
+                  aria-expanded={showArchived}
+                  className="w-full flex items-center gap-1.5 px-3 pt-3 pb-1 text-xs font-medium text-muted-foreground hover:text-foreground"
+                  title="Archived rooms are read-only: readable here, and the Chooms can still read and search them"
+                >
+                  <ChevronRight className={cn('h-3 w-3 transition-transform', showArchived && 'rotate-90')} />
+                  <Archive className="h-3 w-3" /> Archived ({archivedRooms.length}) · read-only
+                </button>
+                {showArchived && archivedRooms.map(renderRoomRow)}
+              </>
+            )}
           </div>
         </ScrollArea>
       </aside>
@@ -760,10 +807,23 @@ export default function RoomsPage() {
               </div>
               <div className="flex-1">
                 <p className="font-semibold">{currentRoom.title || currentRoom.participants.filter(p => p.active).map(p => p.choom.name).join(', ')}</p>
-                <p className="text-xs text-muted-foreground">
-                  Turn order: {currentRoom.participants.filter(p => p.active).map(p => p.choom.name).join(' → ')}
-                </p>
+                {currentRoom.archived ? (
+                  <p className="text-xs text-muted-foreground flex items-center gap-1">
+                    <Archive className="h-3 w-3 shrink-0" /> Archived · read-only — the Chooms can still read and search it
+                  </p>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    Turn order: {currentRoom.participants.filter(p => p.active).map(p => p.choom.name).join(' → ')}
+                  </p>
+                )}
               </div>
+              {currentRoom.archived ? (
+                <Button variant="outline" size="sm" className="gap-2"
+                  onClick={() => handleRestoreRoom(currentRoom.id)}
+                  title="Restore this room so you and the Chooms can talk in it again">
+                  <ArchiveRestore className="h-4 w-4" /> Restore
+                </Button>
+              ) : (<>
               {/* Auto-rounds stepper — adjustable on the fly (applies to next turn) */}
               <div className="flex items-center gap-1 text-xs text-muted-foreground" title="How many extra rounds the Chooms talk among themselves before pausing for you (0–50). Applies to your next message or Keep going.">
                 <span className="hidden sm:inline">auto-rounds</span>
@@ -801,19 +861,22 @@ export default function RoomsPage() {
                 title="Manage members — remove a Choom from this room (they keep their history and can be invited back)">
                 <Users className="h-4 w-4" />
               </Button>
+              </>)}
               <Button variant={roomLogsOpen ? 'default' : 'ghost'} size="icon" className="h-8 w-8"
                 onClick={() => { if (currentRoomId) useLogStore.getState().loadLogs(undefined, currentRoomId); setRoomLogsOpen(v => !v); }}
                 title="Activity log — tool calls, TTS/STT and responses for this room">
                 <ScrollText className="h-4 w-4" />
               </Button>
-              <Button variant="ghost" size="icon" className="h-8 w-8"
-                onClick={() => handleArchiveRoom(currentRoom.id)}
-                title="Archive this room (hide it but keep the history)">
-                <Archive className="h-4 w-4" />
-              </Button>
+              {!currentRoom.archived && (
+                <Button variant="ghost" size="icon" className="h-8 w-8"
+                  onClick={() => handleArchiveRoom(currentRoom.id)}
+                  title="Archive this room — it becomes read-only but stays readable and searchable">
+                  <Archive className="h-4 w-4" />
+                </Button>
+              )}
             </div>
 
-            {managingMembers && (
+            {managingMembers && !currentRoom.archived && (
               <div className="px-6 py-2 border-b border-border bg-muted/30 flex flex-wrap items-center gap-2">
                 <span className="text-xs text-muted-foreground mr-1">Members — 👑 leader speaks first; click 👑 to promote, ✕ to remove:</span>
                 {currentRoom.participants.filter(p => p.active).map((p, idx) => {
@@ -898,14 +961,26 @@ export default function RoomsPage() {
                 </button>
               </div>
             )}
-            <InputArea
-              onSend={handleSend}
-              onStop={handleStop}
-              disabled={!currentRoomId}
-              placeholder={running
-                ? 'Jump in anytime — type to interrupt and take the floor…'
-                : 'Message the room… (@name to address one, otherwise everyone responds in turn)'}
-            />
+            {currentRoom.archived ? (
+              <div className="border-t border-border px-3 sm:px-6 py-3 flex flex-wrap items-center justify-center gap-3 text-sm text-muted-foreground">
+                <span className="flex items-center gap-2">
+                  <Archive className="h-4 w-4 shrink-0" />
+                  This room is archived, so it&apos;s read-only. The Chooms can still read and search it.
+                </span>
+                <Button variant="outline" size="sm" className="gap-2" onClick={() => handleRestoreRoom(currentRoom.id)}>
+                  <ArchiveRestore className="h-4 w-4" /> Restore to talk here
+                </Button>
+              </div>
+            ) : (
+              <InputArea
+                onSend={handleSend}
+                onStop={handleStop}
+                disabled={!currentRoomId}
+                placeholder={running
+                  ? 'Jump in anytime — type to interrupt and take the floor…'
+                  : 'Message the room… (@name to address one, otherwise everyone responds in turn)'}
+              />
+            )}
           </>
         ) : (
           <div className="flex-1 flex items-center justify-center text-muted-foreground p-6">

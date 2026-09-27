@@ -131,6 +131,10 @@ describe('fine-grained error classes (C-09)', () => {
     // permission_block keeps its recoverable-never-counts semantics
     expect(classifyToolError('workspace_delete_file',
       'Blocked: sibling_journal/ is archived').recoverable).toBe(true);
+    // …and so does an archived (read-only) group room
+    expect(classifyToolError('talk_with_sisters',
+      'Blocked: "Family Time" is archived — it\'s read-only now. You can still read it (read_room) and search it (search_rooms).'))
+      .toMatchObject({ recoverable: true, errorClass: 'permission_block' });
   });
 
   test('"Memory not found" is NOT mislabeled as an upstream 404', () => {

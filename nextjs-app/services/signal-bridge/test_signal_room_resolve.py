@@ -40,7 +40,9 @@ class Resolve(unittest.TestCase):
 
     def test_archived_default_is_replaced(self):
         room, note = resolve_signal_room("r1", list_rooms=lambda: [{"id": "r2", "title": "Live"}], get_room=lambda rid: {"id": rid, "archived": True})
-        self.assertEqual(room["id"], "r2"); self.assertIsNotNone(note)
+        self.assertEqual(room["id"], "r2")
+        # Says archived, not deleted — the room and its history are still there.
+        self.assertIn("was archived", note); self.assertNotIn("deleted", note); self.assertIn("Live", note)
 
 
 if __name__ == "__main__":

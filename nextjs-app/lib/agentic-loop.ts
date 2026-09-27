@@ -2045,7 +2045,7 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
               'search_contacts', 'get_contact',
               'search_youtube', 'get_video_details', 'get_channel_info', 'get_playlist_items',
               'list_self_followups',
-              'list_my_rooms', 'read_room',
+              'list_my_rooms', 'read_room', 'search_rooms',
             ]);
 
             const iterationResults: ToolResult[] = [];

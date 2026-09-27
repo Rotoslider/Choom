@@ -184,6 +184,15 @@ export async function POST(request: NextRequest) {
   if (!room) {
     return new Response(JSON.stringify({ error: 'Room not found' }), { status: 404, headers: { 'Content-Type': 'application/json' } });
   }
+  // An archived room is read-only: its history stays readable (the /rooms view,
+  // read_room, search_rooms) but nothing new is said in it — not by the owner,
+  // a Choom, Signal, or a room follow-up scheduled before it was archived.
+  if (room.archived) {
+    return new Response(
+      JSON.stringify({ error: `"${room.title || 'This room'}" is archived, so it is read-only. Restore it in Group Rooms to talk there again.` }),
+      { status: 423, headers: { 'Content-Type': 'application/json' } },
+    );
+  }
 
   const activeParticipants = room.participants.filter(p => p.active);
   if (activeParticipants.length === 0) {

@@ -4,7 +4,7 @@ export const tools: ToolDefinition[] = [
   {
     name: 'talk_with_sisters',
     description:
-      "Start or continue a live group conversation with one or more of your sister Chooms. Unlike delegate_to_choom (which hands off a task), this is a real back-and-forth chat where each sister responds in turn, reacting to each other and to you. Use it to check in, think out loud together, plan, or just connect. The conversation happens in a shared room the user can see and join. To RETURN to a room you already have, pass its name as `room`. To JOIN a room you're NOT in yet, pass its name as `room` — you're added automatically and can see the whole backlog; you do NOT need anyone to invite you, and `sisters` is optional in that case (the room's members are who you're talking to). To ADD a sister to an existing room, pass that room's name AND include the new sister in `sisters`. Great for scheduled sibling check-ins (works during your self-scheduled wakeups too).",
+      "Start or continue a live group conversation with one or more of your sister Chooms. Unlike delegate_to_choom (which hands off a task), this is a real back-and-forth chat where each sister responds in turn, reacting to each other and to you. Use it to check in, think out loud together, plan, or just connect. The conversation happens in a shared room the user can see and join. To RETURN to a room you already have, pass its name as `room`. To JOIN a room you're NOT in yet, pass its name as `room` — you're added automatically and can see the whole backlog; you do NOT need anyone to invite you, and `sisters` is optional in that case (the room's members are who you're talking to). To ADD a sister to an existing room, pass that room's name AND include the new sister in `sisters`. Archived rooms are read-only — nobody talks there; read_room or search_rooms them instead. Great for scheduled sibling check-ins (works during your self-scheduled wakeups too).",
     parameters: {
       type: 'object',
       properties: {
@@ -36,7 +36,7 @@ export const tools: ToolDefinition[] = [
   {
     name: 'list_my_rooms',
     description:
-      "List group rooms — their names, who's in them, how many messages, and when they were last active. Returns `rooms` (the ones you're in) AND `other_rooms` (ones you're not in but CAN join yourself). Use this to find a room before calling talk_with_sisters or join_room with its name. An empty `rooms` list does not mean you're locked out — check `other_rooms`.",
+      "List group rooms: names, members, message counts, last active. Returns `rooms` (yours), `other_rooms` (you can join them) and `archived_rooms` (read-only: read or search, never talk). Use this to find a room before calling talk_with_sisters or join_room with its name. An empty `rooms` list does not mean you're locked out — check `other_rooms`.",
     parameters: {
       type: 'object',
       properties: {},
@@ -60,7 +60,7 @@ export const tools: ToolDefinition[] = [
   {
     name: 'read_room',
     description:
-      "READ-ONLY peek at a group room's recent conversation — see who said what (and when) WITHOUT entering the room or taking a turn, so nobody there sees you looking. list_my_rooms only tells you a room is active and how many messages it has; this shows the actual recent lines so you can tell if there's NEW sibling activity worth responding to. Use it during a check-in or self-scheduled wakeup to decide whether to jump in (talk_with_sisters) or come back later (schedule_room_followup), or to just confirm it's quiet. Returns the latest ~10 messages by default.",
+      "READ-ONLY look at a group room's conversation — who said what, and when — WITHOUT entering or taking a turn. Works on live rooms you're in and on any ARCHIVED room. list_my_rooms only tells you a room is active and how many messages it has; this shows the actual recent lines so you can tell if there's NEW sibling activity worth responding to. Use it during a check-in or self-scheduled wakeup to decide whether to jump in (talk_with_sisters) or come back later (schedule_room_followup), or to just confirm it's quiet. Returns the latest ~10 messages by default; pass `around` (an \"at\" from search_rooms) to read the conversation around that moment instead. An archived room also returns `earlier_summary`, the gist of its older history.",
     parameters: {
       type: 'object',
       properties: {
@@ -72,7 +72,34 @@ export const tools: ToolDefinition[] = [
           type: 'number',
           description: 'How many of the most recent messages to return. Default 10, max 30.',
         },
+        around: {
+          type: 'string',
+          description: 'Optional: a timestamp (the "at" of a search_rooms result) — returns the messages around that moment instead of the latest ones.',
+        },
       },
+    },
+  },
+  {
+    name: 'search_rooms',
+    description:
+      "Search what was said in group rooms — live AND archived — for a word or two. Returns who said it, when, and in which room; archived rooms are read-only. Use it to find an old conversation, a decision, or something a sister said, even in a room that was archived because it grew too big. Then read_room with that result's room_id and `around` set to its \"at\" to read the surrounding conversation.",
+    parameters: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'A word or two that was actually said, e.g. "rack plates".',
+        },
+        room: {
+          type: 'string',
+          description: 'Optional: search only this room (its name or room_id). Leave out to search every room.',
+        },
+        limit: {
+          type: 'number',
+          description: 'How many matches to return. Default 10, max 25.',
+        },
+      },
+      required: ['query'],
     },
   },
   {

@@ -3,9 +3,10 @@ import type { ToolCall, ToolResult } from '@/lib/types';
 import prisma from '@/lib/db';
 import { Agent, fetch as undiciFetch } from 'undici';
 import { getOwnerIdentity } from '@/lib/owner';
+import { readDigest } from '@/lib/room-digest';
 
 const TOOL_NAMES = new Set([
-  'talk_with_sisters', 'list_my_rooms', 'read_room', 'join_room', 'leave_room', 'rename_room', 'set_room_topic',
+  'talk_with_sisters', 'list_my_rooms', 'read_room', 'search_rooms', 'join_room', 'leave_room', 'rename_room', 'set_room_topic',
 ]);
 const MAX_ROUNDS = 10;
 const dispatcher = new Agent({ bodyTimeout: 0, headersTimeout: 0 });
@@ -14,6 +15,42 @@ const dispatcher = new Agent({ bodyTimeout: 0, headersTimeout: 0 });
 // against a stored title — drop "the", collapse punctuation to spaces.
 function normTitle(s: string): string {
   return (s || '').toLowerCase().replace(/\bthe\b/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+// Words that carry no search meaning in "what did we say about the rack plates".
+const SEARCH_STOPWORDS = new Set([
+  'the', 'and', 'for', 'that', 'this', 'with', 'was', 'were', 'are', 'you', 'your', 'what', 'when', 'where',
+  'who', 'how', 'did', 'does', 'about', 'from', 'have', 'has', 'had', 'our', 'she', 'her', 'his', 'him',
+  'they', 'them', 'their', 'there', 'then', 'than', 'into', 'just', 'said', 'say', 'says', 'talk', 'talked',
+  'room', 'rooms', 'any', 'all', 'some', 'can', 'could', 'would', 'should', 'will', 'not', 'but',
+]);
+
+/** The words a room search looks for. A long keyword pile is capped, not run whole. */
+export function searchTerms(query: string): string[] {
+  const words = query.toLowerCase().replace(/[^\p{L}\p{N}'-]+/gu, ' ').split(/\s+/)
+    .map(w => w.replace(/^['-]+|['-]+$/g, ''))
+    .filter(w => w.length >= 3 && !SEARCH_STOPWORDS.has(w));
+  const unique = [...new Set(words)].slice(0, 8);
+  return unique.length ? unique : [query.trim().toLowerCase()].filter(Boolean);
+}
+
+/** More of the search's words = better; the whole phrase verbatim = best. 0 = no match. */
+export function scoreMessage(content: string, query: string, terms: string[]): number {
+  const text = content.toLowerCase();
+  const hits = terms.filter(t => text.includes(t)).length;
+  if (!hits) return 0;
+  const phrase = query.trim().toLowerCase();
+  return hits * 10 + (terms.length > 1 && text.includes(phrase) ? 25 : 0);
+}
+
+/** A window of the message around its first matching word. */
+export function snippetAround(content: string, terms: string[], width = 240): string {
+  const text = content.replace(/\s+/g, ' ').trim();
+  const lower = text.toLowerCase();
+  const first = terms.map(t => lower.indexOf(t)).filter(i => i >= 0).sort((a, b) => a - b)[0] ?? 0;
+  const start = Math.max(0, first - Math.floor(width / 3));
+  const end = Math.min(text.length, start + width);
+  return (start > 0 ? '…' : '') + text.slice(start, end) + (end < text.length ? '…' : '');
 }
 
 type RoomWithParticipants = Awaited<ReturnType<typeof prisma.groupRoom.findMany>>[number] & {
@@ -36,18 +73,19 @@ export default class GroupChatHandler extends BaseSkillHandler {
 
   // Find the (active, non-archived) room the caller means: by loose name match,
   // or — when no name is given — their single room if they're only in one.
-  private async findMyRoom(callerId: string, roomQuery?: string): Promise<{ room: RoomWithParticipants | null; candidates: RoomWithParticipants[] }> {
+  // `refusal` is set when the name is an archived (read-only) room.
+  private async findMyRoom(callerId: string, roomQuery?: string): Promise<{ room: RoomWithParticipants | null; candidates: RoomWithParticipants[]; refusal: string | null }> {
     const mine = (await prisma.groupRoom.findMany({
       where: { archived: false, participants: { some: { choomId: callerId, active: true } } },
       include: { participants: { include: { choom: true } } },
       orderBy: { updatedAt: 'desc' },
     })) as unknown as RoomWithParticipants[];
-    if (mine.length === 0) return { room: null, candidates: [] };
     if (roomQuery && roomQuery.trim()) {
-      return { room: this.matchRoom(mine, roomQuery), candidates: mine };
+      const { room, refusal } = await this.matchForChange(mine, roomQuery);
+      return { room, candidates: mine, refusal };
     }
     // No name given: use it only if it's unambiguous.
-    return { room: mine.length === 1 ? mine[0] : null, candidates: mine };
+    return { room: mine.length === 1 ? mine[0] : null, candidates: mine, refusal: null };
   }
 
   private roomLabel(r: RoomLike): string {
@@ -65,15 +103,57 @@ export default class GroupChatHandler extends BaseSkillHandler {
   // Resolve a spoken room name against a candidate list: exact id, then exact
   // normalized alias, then loose containment either way.
   private matchRoom<T extends RoomLike>(rooms: T[], roomQuery: string): T | null {
+    return this.matchAcross([rooms], roomQuery);
+  }
+
+  // Same resolution over several pools, earlier pools winning at each stage — so
+  // an EXACT name in a later pool beats a loose containment hit in an earlier
+  // one ("Family Time" finds the archived "Family Time", not "Family Time 2").
+  private matchAcross<T extends RoomLike>(pools: T[][], roomQuery: string): T | null {
     const raw = (roomQuery || '').trim();
     if (!raw) return null;
-    const byId = rooms.find(r => r.id === raw);
-    if (byId) return byId;
     const q = normTitle(raw);
-    if (q.length < 2) return null;
-    return rooms.find(r => this.roomAliases(r).some(a => a === q))
-      || rooms.find(r => this.roomAliases(r).some(a => a.includes(q) || q.includes(a)))
-      || null;
+    const stages: Array<(r: T) => boolean> = [
+      r => r.id === raw,
+      ...(q.length < 2 ? [] : [
+        (r: T) => this.roomAliases(r).some(a => a === q),
+        (r: T) => this.roomAliases(r).some(a => a.includes(q) || q.includes(a)),
+      ]),
+    ];
+    for (const stage of stages) {
+      for (const pool of pools) {
+        const hit = pool.find(stage);
+        if (hit) return hit;
+      }
+    }
+    return null;
+  }
+
+  // Archived rooms, newest first. They are read-only: readable and searchable,
+  // but nobody talks, joins or changes anything in them.
+  private async archivedRooms() {
+    return prisma.groupRoom.findMany({
+      where: { archived: true },
+      include: { participants: { include: { choom: true } }, _count: { select: { messages: true } } },
+      orderBy: { updatedAt: 'desc' },
+    });
+  }
+
+  // "Blocked:" so the loop files it as a policy refusal (recoverable), not as a
+  // broken tool — the Choom did nothing wrong by asking.
+  private readOnlyRefusal(label: string): string {
+    return `Blocked: "${label}" is archived — it's read-only now. You can still read it (read_room) and search it (search_rooms), but nobody can talk, join, rename or change anything there. To carry that conversation on, use a live room (list_my_rooms shows them) or start one with talk_with_sisters and new_room.`;
+  }
+
+  // For actions that CHANGE a room (talk, join, leave, rename, topic): match the
+  // live rooms, but an archived room that matches the name at an earlier stage
+  // wins — asking for an archived room is refused, not quietly redirected to a
+  // live one with a similar name.
+  private async matchForChange<T extends RoomLike & { archived: boolean }>(live: T[], roomQuery: string): Promise<{ room: T | null; refusal: string | null }> {
+    const archived = await this.archivedRooms();
+    const hit = this.matchAcross<RoomLike & { archived: boolean }>([live, archived], roomQuery);
+    if (hit?.archived) return { room: null, refusal: this.readOnlyRefusal(this.roomLabel(hit)) };
+    return { room: hit as T | null, refusal: null };
   }
 
   // Every non-archived room, member or not — the pool for joining.
@@ -140,31 +220,78 @@ export default class GroupChatHandler extends BaseSkillHandler {
       const otherNote = others.length
         ? ` There ${others.length === 1 ? 'is 1 other room' : `are ${others.length} other rooms`} you're NOT in — you can add yourself to any of them with join_room (or just call talk_with_sisters with that room's name, which joins you and starts talking in one step). You do NOT need anyone to add you.`
         : '';
+
+      // Archived rooms are listed so they can still be found — a room archived
+      // because it grew too big used to vanish from every tool.
+      const archived = await this.archivedRooms();
+      const ARCHIVED_LISTED = 25;
+      const archivedNote = archived.length
+        ? ` ${archived.length} archived room(s) are READ-ONLY: read_room and search_rooms work on them, but nobody can talk or join there.${archived.length > ARCHIVED_LISTED ? ` Only the ${ARCHIVED_LISTED} most recent are listed; search_rooms covers all of them.` : ''}`
+        : '';
       return this.success(toolCall, {
         rooms: mine.map(describe),
         other_rooms: others.map(describe),
+        ...(archived.length ? {
+          archived_rooms: archived.slice(0, ARCHIVED_LISTED).map(r => ({
+            name: this.roomLabel(r),
+            room_id: r.id,
+            members: r.participants.filter(p => p.active).map(p => p.choom.name),
+            messages: r._count.messages,
+            last_active: r.updatedAt,
+            read_only: true,
+          })),
+        } : {}),
         note: (mine.length
           ? `You're in ${mine.length} room(s). To return to one, call talk_with_sisters with room set to its name.`
-          : "You're not in any group rooms yet.") + otherNote,
+          : "You're not in any group rooms yet.") + otherNote + archivedNote,
       });
     }
 
     // ── read_room: READ-ONLY peek at a room's recent messages. No entering, no ──
     //    turn, no orchestrator call — just the latest lines so a Choom can decide
-    //    whether to jump in. Scoped to rooms the caller is an active member of.
+    //    whether to jump in. Live rooms: the caller must be a member. Archived
+    //    rooms: anyone may read them — nobody can be in them any more.
     if (toolCall.name === 'read_room') {
-      const { room, candidates } = await this.findMyRoom(caller.id, typeof args.room === 'string' ? args.room : undefined);
+      const roomArg = typeof args.room === 'string' && args.room.trim() ? args.room : undefined;
+      const { room: onlyRoom, candidates: mine } = await this.findMyRoom(caller.id);
+      const archived = await this.archivedRooms();
+      type Readable = RoomLike & { updatedAt: Date; archived: boolean };
+      const room: Readable | null = roomArg ? this.matchAcross<Readable>([mine, archived], roomArg) : onlyRoom;
       if (!room) {
-        if (candidates.length === 0) return this.error(toolCall, "You're not in any group rooms yet, so there's nothing to read. Call list_my_rooms to see the rooms that exist, then join_room to add yourself to one.");
-        return this.error(toolCall, `Which room do you want to read? You're in: ${candidates.map(r => `"${this.roomLabel(r)}"`).join(', ')}. Pass the name as the "room" parameter. (You can only read rooms you're in — join_room adds you to one first.)`);
+        const archivedList = archived.length
+          ? ` Archived rooms (read-only, anyone can read them): ${archived.slice(0, 10).map(r => `"${this.roomLabel(r)}"`).join(', ')}.`
+          : '';
+        if (mine.length === 0) return this.error(toolCall, `You're not in any live group rooms, so pass the name of the room to read as "room".${archivedList} To read a live room, join_room adds you to it first (list_my_rooms shows them all).`);
+        return this.error(toolCall, `Which room do you want to read? You're in: ${mine.map(r => `"${this.roomLabel(r)}"`).join(', ')}. Pass the name as the "room" parameter. (You can only read live rooms you're in — join_room adds you to one first.)${archivedList}`);
       }
       const limit = Math.max(1, Math.min(30, typeof args.limit === 'number' ? args.limit : 10));
-      const recent = await prisma.groupMessage.findMany({
-        where: { roomId: room.id },
-        orderBy: { createdAt: 'desc' },
-        take: limit,
-      });
-      recent.reverse(); // oldest → newest for natural reading
+      // around: jump to a moment (an "at" from search_rooms) instead of the end.
+      const aroundRaw = args.around;
+      const aroundDate = typeof aroundRaw === 'string' && aroundRaw.trim() ? new Date(aroundRaw.trim())
+        : typeof aroundRaw === 'number' ? new Date(aroundRaw) : null;
+      const around = aroundDate && !isNaN(aroundDate.getTime()) ? aroundDate : null;
+      const badAround = aroundDate !== null && around === null;
+      let recent;
+      if (around) {
+        const before = await prisma.groupMessage.findMany({
+          where: { roomId: room.id, createdAt: { lte: around } },
+          orderBy: { createdAt: 'desc' },
+          take: Math.ceil(limit / 2),
+        });
+        const after = await prisma.groupMessage.findMany({
+          where: { roomId: room.id, createdAt: { gt: around } },
+          orderBy: { createdAt: 'asc' },
+          take: Math.floor(limit / 2),
+        });
+        recent = [...before.reverse(), ...after];
+      } else {
+        recent = await prisma.groupMessage.findMany({
+          where: { roomId: room.id },
+          orderBy: { createdAt: 'desc' },
+          take: limit,
+        });
+        recent.reverse(); // oldest → newest for natural reading
+      }
       const total = await prisma.groupMessage.count({ where: { roomId: room.id } });
       const label = this.roomLabel(room);
       const ownerName = getOwnerIdentity().name;
@@ -177,15 +304,89 @@ export default class GroupChatHandler extends BaseSkillHandler {
           at: m.createdAt,
         };
       });
+      // An archived room is read for its history, so give the gist of the part
+      // these lines don't reach: the rolling digest the room kept while live.
+      const digest = room.archived && !around ? readDigest(room.id) : null;
+      const badAroundNote = badAround ? ' ("around" was not a timestamp, so these are the latest messages — pass an "at" value from search_rooms.)' : '';
+      const note = !recent.length
+        ? `"${label}" has no messages ${around ? 'near that time' : 'yet'} — nothing to read.`
+        : room.archived
+          ? `"${label}" is ARCHIVED and read-only: you're reading its history, and nobody can talk there any more.${digest ? ' earlier_summary covers the older part of the room.' : ''} To find a moment, search_rooms for it, then read_room with around set to that result's "at". To carry a thread on, raise it in a live room.${badAroundNote}`
+          : `READ-ONLY peek at "${label}" — you did NOT enter or take a turn, and nobody there saw you look. If there's something new worth responding to, call talk_with_sisters with room "${label}" to jump in, or schedule_room_followup to come back later. If it's quiet or already settled, just leave it be — don't narrate that you "checked the room."${badAroundNote}`;
       return this.success(toolCall, {
         room: label,
+        ...(room.archived ? { archived: true, read_only: true } : {}),
         showing: recent.length,
         total_messages: total,
         last_active: room.updatedAt,
+        ...(digest ? { earlier_summary: digest.summary } : {}),
         messages,
-        note: recent.length
-          ? `READ-ONLY peek at "${label}" — you did NOT enter or take a turn, and nobody there saw you look. If there's something new worth responding to, call talk_with_sisters with room "${label}" to jump in, or schedule_room_followup to come back later. If it's quiet or already settled, just leave it be — don't narrate that you "checked the room."`
-          : `"${label}" has no messages yet — nothing to read.`,
+        note,
+      });
+    }
+
+    // ── search_rooms: find what was said, across every room — live AND ────────
+    //    archived. A room archived because it grew too big is only useful if
+    //    its history can be found again; hits say which rooms are read-only.
+    if (toolCall.name === 'search_rooms') {
+      const query = typeof args.query === 'string' ? args.query.trim() : '';
+      if (!query) return this.error(toolCall, 'The "query" parameter is required: a word or two that was said, e.g. query: "rack plates".');
+      const limit = Math.max(1, Math.min(25, typeof args.limit === 'number' ? args.limit : 10));
+      const roomArg = typeof args.room === 'string' ? args.room.trim() : '';
+      const [live, archived] = await Promise.all([this.allRooms(), this.archivedRooms()]);
+      type Searchable = RoomLike & { archived: boolean };
+      let scope: Searchable[] = [...live, ...archived];
+      if (roomArg) {
+        const mine = live.filter(r => r.participants.some(p => p.active && p.choomId === caller.id));
+        const hit = this.matchAcross<Searchable>([mine, archived, live], roomArg);
+        if (!hit) return this.error(toolCall, `Couldn't find a room named "${roomArg}". Leave "room" out to search every room, or call list_my_rooms for the names.`);
+        scope = [hit];
+      }
+      const terms = searchTerms(query);
+      const roomIds = scope.map(r => r.id);
+      // Messages with EVERY term first, so a common word can't crowd them out
+      // of the candidate window; then messages with any term.
+      const allTerms = terms.length > 1
+        ? await prisma.groupMessage.findMany({
+          where: { roomId: { in: roomIds }, AND: terms.map(t => ({ content: { contains: t } })) },
+          orderBy: { createdAt: 'desc' },
+          take: 200,
+        })
+        : [];
+      const anyTerm = await prisma.groupMessage.findMany({
+        where: { roomId: { in: roomIds }, OR: terms.map(t => ({ content: { contains: t } })) },
+        orderBy: { createdAt: 'desc' },
+        take: 300,
+      });
+      const seen = new Set<string>();
+      const candidates = [...allTerms, ...anyTerm].filter(m => !seen.has(m.id) && !!seen.add(m.id));
+      const ranked = candidates
+        .map(m => ({ m, score: scoreMessage(m.content || '', query, terms) }))
+        .filter(x => x.score > 0)
+        .sort((a, b) => b.score - a.score || b.m.createdAt.getTime() - a.m.createdAt.getTime())
+        .slice(0, limit);
+      const roomById = new Map(scope.map(r => [r.id, r]));
+      const ownerName = getOwnerIdentity().name;
+      const results = ranked.map(({ m }) => {
+        const r = roomById.get(m.roomId)!;
+        return {
+          room: this.roomLabel(r),
+          room_id: r.id,
+          ...(r.archived ? { archived: true } : {}),
+          from: m.role === 'user' ? (m.authorName || ownerName) : (m.authorName || 'a sibling'),
+          at: m.createdAt,
+          said: snippetAround(m.content || '', terms),
+        };
+      });
+      const where = roomArg ? `"${this.roomLabel(scope[0])}"` : `${scope.length} room(s)`;
+      return this.success(toolCall, {
+        query,
+        searched: where,
+        matches: results.length,
+        results,
+        note: results.length
+          ? `To read the conversation around a result, call read_room with room set to its room_id and around set to its "at". Results marked archived are from read-only rooms: you can read them, but nobody can talk there.`
+          : `No results found for "${query}" in ${where}. Search matches words that were actually said — try one or two distinctive words (a name, a thing, a place).`,
       });
     }
 
@@ -201,7 +402,8 @@ export default class GroupChatHandler extends BaseSkillHandler {
         const names = rooms.map(r => `"${this.roomLabel(r)}"`).join(', ') || '(no rooms exist yet)';
         return this.error(toolCall, `The "room" parameter is required: the name of the room to join. Rooms that exist: ${names}.`);
       }
-      const room = this.matchRoom(rooms, query);
+      const { room, refusal } = await this.matchForChange(rooms, query);
+      if (refusal) return this.error(toolCall, refusal);
       if (!room) {
         const names = rooms.map(r => `"${this.roomLabel(r)}"`).join(', ') || '(no rooms exist yet)';
         return this.error(toolCall, `Couldn't find a room named "${query}". Rooms that exist: ${names}. Use one of those names, or start a new room with talk_with_sisters.`);
@@ -226,7 +428,8 @@ export default class GroupChatHandler extends BaseSkillHandler {
 
     // ── leave_room: a Choom removes HERSELF (never others). History is kept. ──
     if (toolCall.name === 'leave_room') {
-      const { room, candidates } = await this.findMyRoom(caller.id, typeof args.room === 'string' ? args.room : undefined);
+      const { room, candidates, refusal } = await this.findMyRoom(caller.id, typeof args.room === 'string' ? args.room : undefined);
+      if (refusal) return this.error(toolCall, refusal);
       if (!room) {
         if (candidates.length === 0) return this.error(toolCall, "You're not in any group rooms, so there's nothing to leave.");
         return this.error(toolCall, `Which room do you want to leave? You're in: ${candidates.map(r => `"${this.roomLabel(r)}"`).join(', ')}. Pass the name as the "room" parameter.`);
@@ -245,7 +448,8 @@ export default class GroupChatHandler extends BaseSkillHandler {
       const newName = (typeof args.new_name === 'string' && args.new_name.trim())
         || (typeof args.name === 'string' && args.name.trim()) || '';
       if (!newName) return this.error(toolCall, 'The "new_name" parameter is required: the new name to give the room.');
-      const { room, candidates } = await this.findMyRoom(caller.id, typeof args.room === 'string' ? args.room : undefined);
+      const { room, candidates, refusal } = await this.findMyRoom(caller.id, typeof args.room === 'string' ? args.room : undefined);
+      if (refusal) return this.error(toolCall, refusal);
       if (!room) {
         if (candidates.length === 0) return this.error(toolCall, "You're not in any rooms to rename.");
         return this.error(toolCall, `Which room? You're in: ${candidates.map(r => `"${this.roomLabel(r)}"`).join(', ')}. Pass the current name as "room" and the new name as "new_name".`);
@@ -263,7 +467,8 @@ export default class GroupChatHandler extends BaseSkillHandler {
     //    Prisma client regeneration (graceful with the running dev server).
     if (toolCall.name === 'set_room_topic') {
       const topic = typeof args.topic === 'string' ? args.topic.trim() : '';
-      const { room, candidates } = await this.findMyRoom(caller.id, typeof args.room === 'string' ? args.room : undefined);
+      const { room, candidates, refusal } = await this.findMyRoom(caller.id, typeof args.room === 'string' ? args.room : undefined);
+      if (refusal) return this.error(toolCall, refusal);
       if (!room) {
         if (candidates.length === 0) return this.error(toolCall, "You're not in any rooms.");
         return this.error(toolCall, `Which room? You're in: ${candidates.map(r => `"${this.roomLabel(r)}"`).join(', ')}. Pass the name as "room".`);
@@ -336,7 +541,9 @@ export default class GroupChatHandler extends BaseSkillHandler {
       // naming a room you're not in is how you JOIN it. Scoping this lookup to
       // her own rooms was the catch-22 — she could see a room existed but had no
       // way in, and no tool could add her.
-      room = this.matchRoom(existingRooms, roomQuery);
+      const named = await this.matchForChange(existingRooms, roomQuery);
+      if (named.refusal) return this.error(toolCall, named.refusal);
+      room = named.room;
       if (!room) {
         const names = existingRooms.map(r => `"${this.roomLabel(r)}"`).join(', ') || '(none exist yet)';
         return this.error(toolCall, `Couldn't find a room named "${roomQuery}". Rooms that exist: ${names}. Call list_my_rooms to see them. To CREATE a brand-new room with that name, call again with new_room: "${roomQuery}" (and sisters) instead of room — dropping "room" would reuse the existing room for those sisters, not make a new one.`);
