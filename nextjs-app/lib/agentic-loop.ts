@@ -1180,7 +1180,7 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
 
             // Synthetic error results for calls dropped below; read again after every
             // parser has run, so a turn whose ONLY call was dropped gets a retry.
-            let droppedForEmptyArgs: ToolResult[] = [];
+            const droppedForEmptyArgs: ToolResult[] = [];
             // Empty-args guard: some models (Gemma 4 26B observed) emit structured
             // tool_calls with an empty arguments string that parses to `{}`. Without
             // this check, the call proceeds into the handler with no params and fails
@@ -1192,11 +1192,10 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
             // params — legitimate no-arg tools (e.g., get_memory_stats) are preserved.
             // Dropped calls are converted into error results so the model sees the
             // failure on the next iteration and retries with the correct arguments.
-            if (toolCalls.length > 0) {
-              const emptyArgReplacements: ToolResult[] = [];
-              droppedForEmptyArgs = emptyArgReplacements;
-              const keptCalls: typeof toolCalls = [];
-              for (const tc of toolCalls) {
+            // Runs on the structured calls here and on text-parsed calls below.
+            const dropEmptyArgCalls = <T extends { id: string; name: string; arguments: Record<string, unknown> }>(calls: T[]): T[] => {
+              const keptCalls: T[] = [];
+              for (const tc of calls) {
                 const hasArgs = tc.arguments && Object.keys(tc.arguments).length > 0;
                 if (!hasArgs) {
                   const toolDef = activeTools.find(t => t.name === tc.name);
@@ -1204,43 +1203,43 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                   if (requiredParams && requiredParams.length > 0) {
                     const requiredList = requiredParams.join(', ');
                     console.warn(`   ⚠️  ${choomTag} ${tc.name} called with empty arguments but requires [${requiredList}] — converting to error for retry`);
-                    emptyArgReplacements.push({
+                    const r: ToolResult = {
                       toolCallId: tc.id,
                       name: tc.name,
                       result: null,
                       error: `${tc.name} was called without any arguments, but requires: ${requiredList}. Retry the call with all required parameters. Do not call ${tc.name} with an empty args object again — include the required fields explicitly.`,
+                    };
+                    droppedForEmptyArgs.push(r);
+                    // Push the synthetic error result so the model sees it on the next iteration
+                    allToolResults.push(r);
+                    send({ type: 'tool_call', toolCall: { id: r.toolCallId, name: r.name, arguments: {} } });
+                    send({ type: 'tool_result', toolResult: r });
+                    traceBuilder.recordToolCall({
+                      id: r.toolCallId,
+                      name: r.name,
+                      args: {},
+                      success: false,
+                      error: r.error,
+                      errorClass: 'param',
+                      iteration,
+                      parallel: false,
+                      blocked: true,
                     });
+                    // Count toward failure limits so repeated empty-args don't loop forever
+                    const emptyFails = (toolFailureCounts.get(r.name) || 0) + 1;
+                    toolFailureCounts.set(r.name, emptyFails);
+                    if (emptyFails >= failureCapFor(r.name)) {
+                      brokenTools.add(r.name);
+                      console.log(`   🚫 ${choomTag} ${r.name} blocked after ${emptyFails} empty-args failures`);
+                    }
                     continue;
                   }
                 }
                 keptCalls.push(tc);
               }
-              toolCalls = keptCalls;
-              // Push the synthetic error results so the model sees them on the next iteration
-              for (const r of emptyArgReplacements) {
-                allToolResults.push(r);
-                send({ type: 'tool_call', toolCall: { id: r.toolCallId, name: r.name, arguments: {} } });
-                send({ type: 'tool_result', toolResult: r });
-                traceBuilder.recordToolCall({
-                  id: r.toolCallId,
-                  name: r.name,
-                  args: {},
-                  success: false,
-                  error: r.error,
-                  errorClass: 'param',
-                  iteration,
-                  parallel: false,
-                  blocked: true,
-                });
-                // Count toward failure limits so repeated empty-args don't loop forever
-                const emptyFails = (toolFailureCounts.get(r.name) || 0) + 1;
-                toolFailureCounts.set(r.name, emptyFails);
-                if (emptyFails >= failureCapFor(r.name)) {
-                  brokenTools.add(r.name);
-                  console.log(`   🚫 ${choomTag} ${r.name} blocked after ${emptyFails} empty-args failures`);
-                }
-              }
-            }
+              return keptCalls;
+            };
+            toolCalls = dropEmptyArgCalls(toolCalls);
 
             // Parse any XML <tool_call> blocks captured during streaming.
             // These are tool calls emitted as text by local models instead of structured calls.
@@ -1250,7 +1249,7 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
               const validXmlCalls = xmlToolCalls.filter(
                 xtc => xtc.name && /^[a-zA-Z0-9_-]+$/.test(xtc.name),
               );
-              for (const xtc of validXmlCalls) {
+              for (const xtc of dropEmptyArgCalls(validXmlCalls)) {
                 console.log(`   🔧 ${choomTag} Parsed XML <tool_call>: ${xtc.name}(${JSON.stringify(xtc.arguments).slice(0, 80)})`);
                 toolCalls.push(xtc);
               }

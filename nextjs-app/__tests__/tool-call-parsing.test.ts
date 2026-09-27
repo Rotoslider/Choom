@@ -260,6 +260,20 @@ describe('parseXmlToolCalls', () => {
   it('ignores an unparseable block rather than throwing', () => {
     expect(() => parseXmlToolCalls(['<<<garbage>>>'])).not.toThrow();
   });
+
+  it('parses the <function=NAME> dialect with parameters', () => {
+    const calls = parseXmlToolCalls(['<function=music_play><parameter=media>Folk</parameter><parameter=limit>5</parameter></function>']);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].name).toBe('music_play');
+    expect(calls[0].arguments).toEqual({ media: 'Folk', limit: 5 });
+  });
+
+  it('keeps a <function=NAME> call that has no parameters (Genesis, 2026-09-27)', () => {
+    const calls = parseXmlToolCalls(['<function=music_players> </function>']);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].name).toBe('music_players');
+    expect(calls[0].arguments).toEqual({});
+  });
 });
 
 describe('createJsonToolCallFilter', () => {

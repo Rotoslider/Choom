@@ -821,10 +821,12 @@ export function parseXmlToolCalls(
       while ((pm = paramRegex.exec(xml)) !== null) {
         args[pm[1]] = coerce(pm[2].trim());
       }
-      if (Object.keys(args).length > 0) {
-        results.push({ id: `xmltc_${Date.now()}_${i}`, name, arguments: args });
-        continue;
-      }
+      // The <function=NAME> tag alone is unambiguous, so a call with no
+      // parameters still counts: "<function=music_players> </function>" was
+      // dropped as unparseable (Genesis, 2026-09-27). The caller decides
+      // whether an argument-less call is valid for that tool.
+      results.push({ id: `xmltc_${Date.now()}_${i}`, name, arguments: args });
+      continue;
     }
 
     // Format 3: arg_key/arg_value pairs — tool_name<arg_key>k</arg_key><arg_value>v</arg_value>...
