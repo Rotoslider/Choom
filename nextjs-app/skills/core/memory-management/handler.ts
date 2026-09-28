@@ -42,7 +42,10 @@ export function compactMemory(m: RawMemory): Record<string, unknown> {
     id: m.id,
     ...(m.title ? { title: m.title } : {}),
     type: m.memory_type,
-    date: ts ? ts.slice(0, 10) : undefined,
+    // Local date AND time: on Sep 23 "canvas still in transit" (1:46 PM) and
+    // "canvas on the wall" (5:16 PM) both read "2026-09-23", so she couldn't
+    // tell which was newer.
+    date: ts ? ts.slice(0, 16).replace('T', ' ') : undefined,
     importance: m.importance !== undefined ? Number(m.importance) : undefined,
     ...(Number.isFinite(score) ? { relevance: Math.round(score * 100) / 100 } : {}),
     excerpt: truncated ? content.slice(0, EXCERPT_CHARS - 1) + '…' : content,

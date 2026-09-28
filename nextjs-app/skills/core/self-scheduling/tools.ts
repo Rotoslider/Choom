@@ -18,7 +18,7 @@ export const tools: ToolDefinition[] = [
         },
         prompt: {
           type: 'string',
-          description: 'What to tell future-you when this fires. Be specific: what to check, why, any context the future tick will need.',
+          description: 'What to tell future-you when this fires: what to CHECK, and why. Write open questions, not facts — "has the canvas arrived?", not "the canvas is due Thursday" — because by the time it fires things may have changed, and future-you will check your memories rather than trust this note.',
         },
         reason: {
           type: 'string',

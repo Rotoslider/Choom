@@ -34,6 +34,7 @@ dependencies: []
 - `delay_minutes` (alternative to `at`): minutes from now. Clamped to [15, 43200] (15 min → 30 days). Only use this if you genuinely want a relative interval; otherwise prefer `at`.
 - Provide **either** `at` **or** `delay_minutes` (plus `prompt`). If you give neither, the call is rejected.
 - `prompt` (required): what to tell future-you when the followup fires. Write it as a message TO yourself, third-person is fine. Example: "Ask Donny how the house work went yesterday — he mentioned finishing around 6pm and was worried about the heat."
+- Write what to CHECK, not what is TRUE: "has the canvas arrived?", not "canvas still due Thu/Fri". A note is a snapshot of the moment you wrote it — the canvas landed on Sep 23 and wake-ups kept watching the driveway for it for four more days, because each one copied "still due" into the next. When a note fires, search your memories for each thing it assumes before acting on it, and never copy a note's old facts into new notes.
 - `reason` (optional): one-line log note for the Doctor. Example: "checking on yesterday's house project".
 - `repeat` (optional): "daily", "weekdays", "weekly" or "monthly" — makes this a routine (see above). `day`: weekday for weekly, day-of-month for monthly.
 

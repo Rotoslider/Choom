@@ -242,7 +242,7 @@ describe('search_memories compact excerpts', () => {
 
   test('compactMemory keeps title, type, date, importance and cuts only very long content', () => {
     const m = compactMemory(raw);
-    expect(m).toMatchObject({ id: 'mem_1', title: 'Rack build', type: 'event', date: '2026-09-11', importance: 9.5, relevance: 0.68, truncated: true });
+    expect(m).toMatchObject({ id: 'mem_1', title: 'Rack build', type: 'event', date: '2026-09-11 10:00', importance: 9.5, relevance: 0.68, truncated: true });
     expect((m.excerpt as string).length).toBe(1500);
     expect(m).not.toHaveProperty('metadata');
     expect(m).not.toHaveProperty('companion_id');

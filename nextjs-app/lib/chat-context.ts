@@ -14,6 +14,7 @@ import { WeatherService } from '@/lib/weather-service';
 import { HomeAssistantService, type HomeAssistantSettings } from '@/lib/homeassistant-service';
 import { getTimeContext, formatTimeContextForPrompt } from '@/lib/time-context';
 import { getOwnerIdentity } from '@/lib/owner';
+import { wakeNoteTask } from '@/lib/wake-note';
 import { WORKSPACE_ROOT } from '@/lib/config';
 import type { WeatherSettings } from '@/lib/types';
 import type { Choom } from '@prisma/client';
@@ -136,7 +137,11 @@ export async function buildChoomContext(params: ChoomContextParams): Promise<Cho
     // to long-term memory; only the explicit remember tool stores memories.
     let autoMemoriesInfo = '';
     try {
-      const memQuery = String(message).slice(0, 1500);
+      // A wake-up recalls on its NOTE, not the awareness block in front of it:
+      // the embedder reads only ~256 tokens, and on a wake-up those were all
+      // boilerplate ("waking up… ground yourself… schedule"), so every one
+      // recalled the same "how I self-schedule" memories (2026-09-28).
+      const memQuery = wakeNoteTask(String(message)).slice(0, 1500);
       const autoMemResult = await memoryClient.search(memQuery, 5, memoryCompanionId, { reinforce: false, timeoutMs: 6000 });
       if (autoMemResult.success && Array.isArray(autoMemResult.data) && autoMemResult.data.length > 0) {
         // Floor filters the server's top-1 fallback and other weak matches —

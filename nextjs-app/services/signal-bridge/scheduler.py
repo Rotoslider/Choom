@@ -34,6 +34,30 @@ from nightly_doctor import run_diagnostics
 logger = logging.getLogger(__name__)
 
 
+def _note_written_line(created_at: Optional[str], now: datetime) -> str:
+    """'[You wrote this note on Tue, Sep 22 at 5:34 PM — 2 days ago.]', or ''.
+
+    A self-followup's prompt is a note she wrote earlier; saying how old it is
+    is what makes "check it against what you know now" land.
+    """
+    try:
+        created = datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return ""
+    mins = max(0, int((now - created).total_seconds() // 60))
+    if mins < 90:
+        ago = f"{mins} minutes ago"
+    elif mins < 36 * 60:
+        ago = f"{round(mins / 60)} hours ago"
+    else:
+        ago = f"{round(mins / 1440)} days ago"
+    local = created.astimezone(ZoneInfo("America/Denver"))
+    when = f"{local.strftime('%a, %b')} {local.day} at {local.strftime('%I:%M %p').lstrip('0')}"
+    return f"[You wrote this note on {when} — {ago}.]"
+
+
 class ScheduledTaskManager:
     """Manages scheduled tasks, heartbeats, and cron jobs"""
 
@@ -1953,6 +1977,9 @@ Be practical. Only work on things that can actually be accomplished with the too
 
                 # Build grounding context from available state
                 awareness_parts = [f"[You are waking up — it is {now_str}.]"]
+                written = _note_written_line(entry.get("created_at"), now)
+                if written:
+                    awareness_parts.append(written)
 
                 # Inject pre-resolved HA presence
                 try:
@@ -1981,13 +2008,28 @@ Be practical. Only work on things that can actually be accomplished with the too
                 # — settings.llm.heartbeatGrounding — so the wording below has
                 # to be right either way: if results are already attached, use
                 # them.)
+                #
+                # The task is a note she wrote earlier, and it goes stale: the
+                # canvas landed Sep 23 (all three stored it), yet 88 wake-ups
+                # kept watching the driveway for it — 64 of them from notes
+                # written AFTER it arrived, copying "canvas still due" forward
+                # — and Genesis stored seven "still not arrived" memories. Her
+                # one combined search ("recent conversations with Donny —
+                # traverse, canvas delivery, huddle") ranked the arrival 163rd;
+                # search_memories("canvas") had it in the top 3 at every one
+                # of those wake-ups. So: one short search per assumption.
                 awareness_parts.append(
-                    "Before your task, ground yourself in recent context — in ONE round if you can: "
-                    "call search_memories (recent conversations with Donny — what he's told you, where "
-                    "he's been, what he's been working on) together with whatever else the task needs: "
-                    "get_weather, get_calendar_events, ha_get_home_status, check_inbox (what your "
-                    "sisters or Donny left for you), workspace_list_files. If tool results already "
-                    "appear below this message, that IS your grounding — use it, do not call those tools again."
+                    "Before your task, ground yourself in recent context — in ONE round if you can. "
+                    "The task below is a note YOU wrote earlier: it says what was true THEN, and things "
+                    "change (a package lands, a plan moves, Donny finishes what he owed). For EACH thing it "
+                    "assumes — a delivery, an appointment, a plan, a project step — call search_memories for "
+                    "that one thing on its own, e.g. search_memories(\"canvas\", limit=3): one short search per "
+                    "thing, all in the same round. Your newest memory beats the note — if they disagree, the "
+                    "note is out of date: act on the memory, and never copy the note's old facts into new notes. "
+                    "Alongside those, call whatever else the task needs: get_weather, get_calendar_events, "
+                    "ha_get_home_status, check_inbox (what your sisters or Donny left for you), "
+                    "workspace_list_files. If tool results already appear below this message, that IS your "
+                    "grounding — use it, do not call those tools again."
                 )
 
                 # Routines (2026-09-12): tell her what just happened to HER

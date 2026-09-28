@@ -28,6 +28,7 @@ import { readLlmStream, newStreamState, streamHasToolCalls, type StreamState } f
 import { unexposedToolMentions } from '@/lib/tool-exposure';
 import { detectClaimedTool, detectZeroToolClaim, detectUncalledToolClaim, findFabricatedImageRefs } from '@/lib/phantom-claim';
 import { isNearVerbatimRepeat, stripRepeatedParagraphs, stripInternalRepeats } from '@/lib/repetition-guard';
+import { wakeNoteTask } from '@/lib/wake-note';
 import { trimForLocalFallback, LOCAL_FALLBACK_PROMPT_TOKENS } from '@/lib/fallback-trim';
 import {
   tryRepairJSON, extractMistralToolCalls, extractBracketToolCalls,
@@ -157,8 +158,7 @@ export function taskTextForHeuristics(message: string): string {
   // sentence still reached the heuristic: 43 of 44 unfinished-steps nudges
   // on 2026-09-27/28 were a bogus "read file" on a wake-up. The scheduler
   // always closes the block with the housekeeping line, so cut through it.
-  const housekeeping = t.match(/\[Scheduling is housekeeping[^\]]*\]/i);
-  if (housekeeping?.index !== undefined) t = t.slice(housekeeping.index + housekeeping[0].length).replace(/^\s+/, '');
+  t = wakeNoteTask(t);
   for (;;) {
     const next = t.replace(/^\s*(?:\[[^\]]*\]|\(Note:[^)]*\)|Before your task, ground yourself[^\n]*)\s*/i, '');
     if (next === t) break;
