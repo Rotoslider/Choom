@@ -25,6 +25,10 @@ export interface RoomDigestMessage {
 
 export interface RoomDigestStore {
   throughId: string;      // id of the newest OLDER message the summary covers
+  // When that message was written. Speakers see different-sized windows, so
+  // one speaker's "older" can end before another's: a digest already through
+  // a message INSIDE this speaker's window covers everything older than it.
+  throughAt?: string;
   coveredCount: number;   // how many older messages the summary covers
   summary: string;
   updatedAt: string;
@@ -99,6 +103,16 @@ export async function ensureRoomDigest(
   if (stored && stored.throughId === newestOlder.id) {
     return { block: formatDigestBlock(stored.summary, stored.coveredCount), refreshed: false, coveredCount: stored.coveredCount };
   }
+  // The digest already runs past this speaker's window start (a bigger window
+  // than the speaker who refreshed it). Its throughId is not in `older`, and
+  // treating that as "covers nothing" re-summarized up to 80 messages it
+  // already had, on most turns: 56 of 71 room turns refreshed on 2026-09-28,
+  // up to 128 s each, and the count climbed to 535 in an 85-message room.
+  const at = (m: RoomDigestMessage) => new Date(m.createdAt).getTime();
+  if (stored?.throughAt && new Date(stored.throughAt).getTime() >= at(newestOlder)
+      && !older.some(m => m.id === stored.throughId)) {
+    return { block: formatDigestBlock(stored.summary, older.length), refreshed: false, coveredCount: older.length };
+  }
 
   // Messages the stored digest has not seen yet (everything after throughId),
   // bounded so a room that grew a lot while nobody spoke still summarizes.
@@ -130,7 +144,10 @@ export async function ensureRoomDigest(
   }
   const store: RoomDigestStore = {
     throughId: newestOlder.id,
-    coveredCount: (stored?.coveredCount || 0) + newer.length,
+    throughAt: new Date(newestOlder.createdAt).toISOString(),
+    // Everything older than this window — not a running sum, which counted
+    // re-summarized messages again.
+    coveredCount: older.length,
     summary,
     updatedAt: new Date().toISOString(),
   };

@@ -53,6 +53,28 @@ describe('ensureRoomDigest', () => {
     expect(readDigest('room1')?.coveredCount).toBe(4);
   });
 
+  test('a speaker with a bigger window does not re-summarize what the digest already covers (2026-09-28)', async () => {
+    const chat = jest.fn().mockResolvedValue({ content: 'summary' });
+    const all = Array.from({ length: 30 }, (_, i) => msg(i + 1));
+    // Speaker A sees the newest 10: older = m1..m20 → digest through m20.
+    await ensureRoomDigest('room1', all.slice(0, 20), { chat });
+    expect(chat).toHaveBeenCalledTimes(1);
+    // Speaker B sees the newest 14: older = m1..m16, and m20 is inside B's
+    // window. That used to read as "covers nothing" and re-summarize m1..m16.
+    const r = await ensureRoomDigest('room1', all.slice(0, 16), { chat });
+    expect(chat).toHaveBeenCalledTimes(1);
+    expect(r.refreshed).toBe(false);
+    expect(r.block).toContain('16 room messages before');
+    // Speaker A again after one new message: only m21 is new.
+    const r2 = await ensureRoomDigest('room1', all.slice(0, 21), { chat });
+    expect(r2.refreshed).toBe(true);
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect(chat.mock.calls[1][0][1].content).toContain('message number 21');
+    expect(chat.mock.calls[1][0][1].content).not.toContain('message number 16');
+    // The count is what exists, not a running sum of re-summaries.
+    expect(readDigest('room1')?.coveredCount).toBe(21);
+  });
+
   test('a summarizer failure falls back mechanically and still writes a digest', async () => {
     const chat = jest.fn().mockRejectedValue(new Error('model down'));
     const r = await ensureRoomDigest('room1', [msg(1), msg(2)], { chat });
