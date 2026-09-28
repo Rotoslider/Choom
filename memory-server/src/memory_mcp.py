@@ -25,6 +25,7 @@ import os
 import json
 import sqlite3
 import hashlib
+import re
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 import logging
@@ -108,6 +109,11 @@ REINFORCEMENT_ENABLED = True
 REINFORCEMENT_STEP = 0.1  # amount per retrieval
 REINFORCEMENT_WRITEBACK_STEP = 0.5  # write to DB when accumulated ≥ 0.5
 REINFORCEMENT_MAX = 10  # cap importance
+
+# Short topic lookups add up to this many newest exact-word matches (see
+# search_semantic). Words this common never make a topic.
+TOPIC_KEYWORD_NEWEST = 2
+_TOPIC_STOPWORDS = {"the", "and", "for", "has", "had", "did", "was", "are", "with", "about", "any", "his", "her", "our", "you"}
 # ---------------------------------------------
 
 
@@ -700,6 +706,31 @@ class RobustMemorySystem:
                         similarities[0],
                     )
 
+            # Short topic lookups ("canvas", "power module") also get the NEWEST
+            # memories that literally contain every query word. The embedding
+            # blurs a mixed-topic memory: Eve's "Rack milestone — … everything
+            # installed and powered, canvas on the wall" never reached her top
+            # 8 for "canvas" (her poetic "canvas" memories did), so a wake-up
+            # still out watching for the delivery couldn't find that it had
+            # arrived (2026-09-25). Measured on every stale canvas wake-up of
+            # all three Chooms: semantic top-3 plus the newest 2 exact matches
+            # found the arrival 73/73; semantic alone missed Eve's 2 of 2.
+            keyword_ids = set()
+            words = [w for w in re.findall(r"[a-z0-9']+", query.lower())
+                     if len(w) >= 3 and w not in _TOPIC_STOPWORDS]
+            if companion_id and 1 <= len(words) <= 3:
+                have = {mid for mid, _ in selected}
+                like = " AND ".join(["lower(title || ' ' || content) LIKE ?"] * len(words))
+                cursor = self.sqlite_conn.execute(
+                    f"SELECT id FROM memories WHERE companion_id = ? AND {like} "
+                    "ORDER BY timestamp DESC LIMIT ?",
+                    (companion_id, *[f"%{w}%" for w in words], TOPIC_KEYWORD_NEWEST + len(have)),
+                )
+                for (mid,) in cursor.fetchall():
+                    if mid not in have and len(keyword_ids) < TOPIC_KEYWORD_NEWEST:
+                        keyword_ids.add(mid)
+                        selected.append((mid, threshold))
+
             # Fetch selected rows and reinforce
             for i, (memory_id, relevance) in enumerate(selected):
                 if i < 3:
@@ -752,7 +783,8 @@ class RobustMemorySystem:
                     SearchResult(
                         record=record,
                         relevance_score=relevance,
-                        match_type="semantic" if relevance >= threshold else "semantic_fallback",
+                        match_type="keyword" if memory_id in keyword_ids
+                        else "semantic" if relevance >= threshold else "semantic_fallback",
                     )
                 )
 
