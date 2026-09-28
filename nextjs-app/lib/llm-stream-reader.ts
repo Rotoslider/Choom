@@ -21,6 +21,7 @@ import {
   createThinkFilter, createToolCallXmlFilter, createJsonToolCallFilter, createGemmaToolCallFilter,
 } from '@/lib/tool-call-parsing';
 import { computeStreamTimeouts, type EndpointTier } from '@/lib/stream-timeouts';
+import { stripRefrainLoop } from '@/lib/repetition-guard';
 import type { ToolDefinition } from '@/lib/types';
 
 export type ParsedToolCall = { id: string; name: string; arguments: Record<string, unknown> };
@@ -211,6 +212,16 @@ export async function readLlmStream(st: StreamState, opts: ReadLlmStreamOptions)
       }
       return false;
     };
+    // Template loops of short lines (refrain + a <button> whose URL changes
+    // each round) never repeat a 180-char block, so the probe above misses
+    // them — see stripRefrainLoop. Returns the prefix to keep, or null.
+    let lastRefrainScanLen = 0;
+    const detectRefrainLoop = (text: string): string | null => {
+      if (text.length - lastRefrainScanLen < 200) return null;
+      lastRefrainScanLen = text.length;
+      const kept = stripRefrainLoop(text);
+      return kept.length < text.length ? kept : null;
+    };
 
     for await (const chunk of opts.client.streamChat(opts.messages, opts.tools, abort.signal, opts.toolChoice, onConnected)) {
       if (st.abortedForRepetition) break;
@@ -297,6 +308,23 @@ export async function readLlmStream(st: StreamState, opts: ReadLlmStreamOptions)
                 abort.abort();
                 break;
               }
+              const refrainKept = detectRefrainLoop(wouldBe);
+              if (refrainKept !== null) {
+                console.warn(`   🔁 ${choomTag} ${label}Refrain loop detected mid-stream (8+ repeated lines). Aborting stream early to prevent TTS spam.`);
+                st.abortedForRepetition = true;
+                // The kept text is a prefix of wouldBe that ends at or before
+                // the loop's first line — far back in st.content, never
+                // inside this chunk — so this chunk is simply not emitted.
+                const beforeTrim = st.content.length;
+                if (refrainKept.length < beforeTrim) {
+                  st.content = refrainKept;
+                  if (!bufferForDedup) {
+                    send({ type: 'retract_partial', length: beforeTrim - refrainKept.length });
+                  }
+                }
+                abort.abort();
+                break;
+              }
               emit(visible);
             }
           }
@@ -313,9 +341,11 @@ export async function readLlmStream(st: StreamState, opts: ReadLlmStreamOptions)
       }
     }
 
-    // Flush any buffered partial tag that was never completed.
+    // Flush any buffered partial tag that was never completed — unless a
+    // repetition abort already cut st.content: a held-back tail is loop text
+    // from past the cut.
     for (const flushed of [toolCallXmlFilter.flush(), jsonToolCallFilter.flush(), gemmaToolCallFilter.flush()]) {
-      if (flushed) emit(flushed);
+      if (flushed && !st.abortedForRepetition) emit(flushed);
     }
     if (st.thinkTokensFiltered) {
       console.log(`   🧠 ${choomTag} ${label}Think tokens filtered from response`);

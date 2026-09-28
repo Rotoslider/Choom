@@ -95,8 +95,12 @@ const unitWordSet = (s: string) => new Set(normPara(s).split(' ').filter(w => w.
  * (0.5–0.7) are deliberately out of scope: lexical machinery can't collapse
  * paraphrase, and the C-58 loop-breaker now stops the nudge spiral that
  * produced them at the source.
+ *
+ * Template loops of SHORT lines are a different shape — see
+ * stripRefrainLoop, which runs first.
  */
 export function stripInternalRepeats(text: string): string {
+  text = stripRefrainLoop(text);
   if (!text || text.length < 300) return text;
   // Sentence-ish units, each keeping its trailing whitespace so surviving
   // units rejoin with original spacing. Headers / list items without
@@ -150,4 +154,63 @@ export function stripInternalRepeats(text: string): string {
     }
   }
   return out.join('').replace(/\n{3,}/g, '\n\n').replace(/^\n+|\n+$/g, '').replace(/\s+$/, '');
+}
+
+// Markup is stripped with its attributes before comparing lines: a looping
+// template's only varying part is often a URL inside a tag.
+const lineKey = (line: string) => normPara(line
+  .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+  .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+  .replace(/<\/?[a-zA-Z][^>]*>/g, ' ')
+  .replace(/https?:\/\/\S+/g, ' '));
+
+const REFRAIN_LOOP_MIN_DUPS = 8;
+const REFRAIN_LEAD_IN_MAX = 100;
+
+/**
+ * Collapse a degenerate TEMPLATE loop — a completion that cycles short
+ * lines instead of replaying a block. The 2026-09-28 incident (Eve,
+ * gemma-4-26b-a4b, heartbeat) wrote three real paragraphs, then ~10k chars
+ * of "*Always.*" / "*Forever.*" / "*I love you.*" refrains, each followed
+ * by an invented <button> whose Google-search URL changed every round, and
+ * Signal TTS read all of it (11.5 min). Nothing above saw it: no 180-char
+ * block ever repeats, and stripInternalRepeats' sentence splitter chops
+ * URL lines at every '.' and '?' into fragments under its 80-char floor.
+ *
+ * Mechanics: compare whole LINES after stripping markup and punctuation;
+ * lines inside code fences are ignored. Measured on all 2,276 stored
+ * assistant and room messages >= 300 chars: legit replies repeat at most
+ * 3 lines (sign-offs — "my love", "good morning my love"). The only three
+ * above that are all loops: this incident (61), a Genesis heartbeat
+ * re-deriving the same time 137 times, and a room reply re-listing her
+ * tools (24). 8 repeated lines confirms a loop with >2x margin. The text
+ * is cut at the first repeated line, then the loop's lead-in (short and
+ * markup-only lines above it) is popped back to the last line of real
+ * prose (>= 100 normalized chars). The result is always a prefix of the
+ * input, so a live stream can retract the rest.
+ */
+export function stripRefrainLoop(text: string): string {
+  if (!text || text.length < 300) return text;
+  const lines = text.split('\n');
+  const seen = new Set<string>();
+  let dups = 0;
+  let firstDup = -1;
+  let inFence = false;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^\s*```/.test(lines[i])) { inFence = !inFence; continue; }
+    if (inFence) continue;
+    const k = lineKey(lines[i]);
+    if (k.length < 2) continue;
+    if (seen.has(k)) {
+      if (firstDup < 0) firstDup = i;
+      if (++dups >= REFRAIN_LOOP_MIN_DUPS) break;
+    } else {
+      seen.add(k);
+    }
+  }
+  if (dups < REFRAIN_LOOP_MIN_DUPS) return text;
+  let end = firstDup;
+  while (end > 0 && lineKey(lines[end - 1]).length < REFRAIN_LEAD_IN_MAX) end--;
+  if (end === 0) end = firstDup;
+  return lines.slice(0, end).join('\n').replace(/\s+$/, '');
 }

@@ -1420,6 +1420,12 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
               continue;
             }
 
+            // Measured before the flush below strips it: a completion that
+            // repeated itself hit the token cap by looping, not mid-thought,
+            // so the truncated_output nudge must not ask it to continue.
+            const loopedCompletion = stream.abortedForRepetition
+              || stripInternalRepeats(iterationContent).length < iterationContent.length;
+
             // Flush or suppress buffered content. Exact match alone is not
             // enough: a replay with a junk suffix (leaked '</think>', an added
             // emoji line) defeats it, so the near-verbatim check backs it up,
@@ -1778,7 +1784,12 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                 // finish_reason=length on a TEXT-ONLY reply: the model was cut
                 // off mid-thought (trailing colon / half a list). The existing
                 // length-recovery above only handles dropped TOOL calls.
-                const truncatedByLength = stream.finishReason === 'length';
+                // Not when it LOOPED to the cap: "continue exactly where the
+                // text stopped" asked Eve for more loop (2026-09-28).
+                const truncatedByLength = stream.finishReason === 'length' && !loopedCompletion;
+                if (stream.finishReason === 'length' && loopedCompletion) {
+                  console.log(`   🧯 ${choomTag} Hit the output token limit while looping — keeping the de-looped reply, no continuation nudge`);
+                }
 
                 // C-58: a reply that ANSWERS an integrity nudge with an apology
                 // ends the turn. Re-nudging an apologizing model measured

@@ -70,9 +70,17 @@ describe('planningNext announces-pending-work detection', () => {
 
 describe('finish_reason=length continuation (source contract)', () => {
   test('text-only truncation triggers its own nudge branch', () => {
-    expect(src).toContain("const truncatedByLength = stream.finishReason === 'length';");
+    expect(src).toContain("const truncatedByLength = stream.finishReason === 'length' && !loopedCompletion;");
     expect(src).toContain('|| truncatedByLength) && nudgeCount < 3');
     expect(src).toContain("'reply cut off by output token limit (finish_reason=length)'");
     expect(src).toContain('cut off mid-sentence by the output token limit');
+  });
+
+  test('a completion that looped to the cap is never asked to continue (2026-09-28)', () => {
+    // Measured on the raw content, before the flush strips the loop out.
+    const gate = src.indexOf('const loopedCompletion = stream.abortedForRepetition');
+    expect(gate).toBeGreaterThan(-1);
+    expect(src).toContain('|| stripInternalRepeats(iterationContent).length < iterationContent.length;');
+    expect(gate).toBeLessThan(src.indexOf('if (bufferForDedup && iterationContent.trim()) {'));
   });
 });
