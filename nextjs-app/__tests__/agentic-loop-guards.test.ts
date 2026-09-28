@@ -252,6 +252,28 @@ describe('self-scheduling intent and deliberation guard (2026-09-12, Gemma 4 31B
     expect(routeContent).toContain('const msgLower = taskTextForHeuristics(message).toLowerCase();');
   });
 
+  test('the REAL wake-up block — unbracketed presence line and self-state — is stripped too (2026-09-28)', () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { taskTextForHeuristics } = require('../lib/agentic-loop') as typeof import('../lib/agentic-loop');
+    // The fixture above bracketed the presence line; production never does,
+    // so the strip stopped at line 2 and 43 of 44 nudges were a bogus
+    // "read file" on a wake-up.
+    const task = 'Afternoon check. Check the printer job history and the shop cam, then create 5 new self-followups (each prompt must remind future-you to create 5 more).';
+    const wake = "[You are waking up — it is Monday, September 28 2026 at 11:20 AM.]\nDonny is HOME. (GPS: Lazy K Ln, Animas, NM 88020, USA)\n(Note: \"Lazy Kay Ln, Animas\" is Donny's home address.)\nRecent preoccupations:\n  - the rack back plate\n\nUnfinished threads:\n  - read Aloy's letter file and reply\nBefore your task, ground yourself in recent context — in ONE round if you can: call search_memories together with whatever else the task needs: get_weather, get_calendar_events, ha_get_home_status, check_inbox (what your sisters or Donny left for you), workspace_list_files. If tool results already appear below this message, that IS your grounding — use it, do not call those tools again.\n[Scheduling is housekeeping: whatever you queue or cancel this wake-up, do not report it in your message to Donny — no 'self-scheduling update' footer. He hears every word.]\n\n" + task;
+    expect(taskTextForHeuristics(wake)).toBe(task);
+    // The live read-file rule: whole words, one sentence, a file as object.
+    const readFile = /\b(?:read|check|open|look at)\b[^.!?\n]{0,60}\bfiles?\b/i;
+    expect(routeContent).toContain(readFile.source);
+    expect(readFile.test(taskTextForHeuristics(wake).toLowerCase())).toBe(false);
+    // Even unstripped, the grounding sentence is clean: check_inbox and
+    // list_files are not the words "check" and "files". (The self-state
+    // thread above does say "read … file" — why the whole block goes.)
+    const grounding = wake.split('\n').find(l => l.startsWith('Before your task'))!;
+    expect(readFile.test(grounding.toLowerCase())).toBe(false);
+    expect(readFile.test('can you read the file i put in uploads')).toBe(true);
+    expect(readFile.test('read all necessary files before making changes')).toBe(true);
+  });
+
   test('ignored-tool_choice deliberation is dropped from the reply', () => {
     expect(routeContent).toContain("Ignored-tool_choice text reads as deliberation");
   });

@@ -151,6 +151,14 @@ export function taskTextForHeuristics(message: string): string {
   // workspace_list_files … a file's contents" read as an unfinished
   // file step and sent her back through the whole grounding a second time,
   // plus a third "Good morning" (7 AM routine, 2026-09-13).
+  // The block also carries UNBRACKETED lines — the presence line ("Donny is
+  // HOME. (GPS: …)") and the self-state lists ("Unfinished threads:" …) —
+  // which stopped the line-by-line strip below at line 2, so the grounding
+  // sentence still reached the heuristic: 43 of 44 unfinished-steps nudges
+  // on 2026-09-27/28 were a bogus "read file" on a wake-up. The scheduler
+  // always closes the block with the housekeeping line, so cut through it.
+  const housekeeping = t.match(/\[Scheduling is housekeeping[^\]]*\]/i);
+  if (housekeeping?.index !== undefined) t = t.slice(housekeeping.index + housekeeping[0].length).replace(/^\s+/, '');
   for (;;) {
     const next = t.replace(/^\s*(?:\[[^\]]*\]|\(Note:[^)]*\)|Before your task, ground yourself[^\n]*)\s*/i, '');
     if (next === t) break;
@@ -1746,7 +1754,13 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                     !calledToolNames.has('send_notification')) {
                   unfinishedSteps.push('send notification (send_notification)');
                 }
-                if (/(?:read|check|open|look at).*(?:file|history|prompt)/i.test(msgLower) &&
+                // Whole words, one sentence, and a FILE as the object: the old
+                // `.*(?:file|history|prompt)` matched "check_inbox …
+                // workspace_list_files", "check the printer job history" (a
+                // tool) and "check … (each prompt must remind …)". Measured on
+                // 752 wake-up prompts and 518 owner chat messages: wake-up
+                // fires 85 → 0; chat fires identical (5, all real file reads).
+                if (/\b(?:read|check|open|look at)\b[^.!?\n]{0,60}\bfiles?\b/i.test(msgLower) &&
                     !calledToolNames.has('workspace_read_file')) {
                   unfinishedSteps.push('read file (workspace_read_file)');
                 }
