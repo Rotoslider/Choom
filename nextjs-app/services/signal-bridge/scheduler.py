@@ -2017,13 +2017,15 @@ Be practical. Only work on things that can actually be accomplished with the too
                 # one combined search ("recent conversations with Donny —
                 # traverse, canvas delivery, huddle") ranked the arrival 163rd;
                 # search_memories("canvas") had it in the top 3 at every one
-                # of those wake-ups. So: one short search per assumption.
+                # of those wake-ups. So: one short search per assumption, at
+                # the default 5 results (the recall benchmark: 3 results found
+                # the truth 73% of the time on short lookups, 5 found 90%).
                 awareness_parts.append(
                     "Before your task, ground yourself in recent context — in ONE round if you can. "
                     "The task below is a note YOU wrote earlier: it says what was true THEN, and things "
                     "change (a package lands, a plan moves, Donny finishes what he owed). For EACH thing it "
                     "assumes — a delivery, an appointment, a plan, a project step — call search_memories for "
-                    "that one thing on its own, e.g. search_memories(\"canvas\", limit=3): one short search per "
+                    "that one thing on its own, e.g. search_memories(\"canvas\"): one short search per "
                     "thing, all in the same round. Your newest memory beats the note — if they disagree, the "
                     "note is out of date: act on the memory, and never copy the note's old facts into new notes. "
                     "Alongside those, call whatever else the task needs: get_weather, get_calendar_events, "
