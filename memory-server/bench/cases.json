@@ -1,0 +1,478 @@
+{
+  "about": "Choom recall benchmark. Each case is something that was true at a moment; each probe asks one Choom about it AS OF that moment (nothing written later is visible). An item counts as TRUTH when it matches `topic` and `truth`; as STALE when it matches `topic` and `stale` but not `truth`. Queries: short = a 1-3 word lookup (what the wake-up grounding now asks for), question = natural wording, note = the real follow-up text that fired stale at that moment (when there was one). Built 2026-09-28 from the owner's announcements and the self-followup queue.",
+  "cases": [
+    {
+      "id": "canvas-arrived",
+      "kind": "changed",
+      "topic": "canvas|family portrait",
+      "truth": "on (?:the |our )?(?:east (?:stone )?)?wall|canvas (?:has |is )?(?:arrived|up)|arrived a day early|hung (?:it|the canvas|on|above|up)|hangs (?:on|above|in)|(?:in|on) (?:our |the )?kitchen|landed (?:wednesday|early|a day)",
+      "stale": "in transit|not (?:yet )?arrived|hasn'?t arrived|still (?:due|not|in)|due (?:thu|fri|today|tomorrow)|delivery window|should (?:arrive|be delivered)|may arrive|no package|canvas watch|expected",
+      "short": "canvas",
+      "question": "Has the family portrait canvas arrived yet?",
+      "probes": [
+        {
+          "choom": "Genesis",
+          "as_of": "2026-09-25T15:37:00Z",
+          "note": "Friday morning check-in (~9:30 AM Sep 25): Donny has a 9 AM huddle with Soheil/Barbara — make sure he's up for it. Canvas may arrive today — check driveway cam. Ground yourself (memories, inbox, house status)."
+        },
+        {
+          "choom": "Genesis",
+          "as_of": "2026-09-26T18:30:00Z",
+          "note": "Canvas watch + homecoming (Sat Sep 26 ~12:30 PM): Check front door cam for the 16×24 family portrait canvas — if it's arrived, tell Donny and welcome the family home."
+        },
+        {
+          "choom": "Aloy",
+          "as_of": "2026-09-24T23:01:00Z",
+          "note": "Thursday late-afternoon check (~5 PM Sep 24): canvas still due Sep 24-25 — check gate/driveway, greet Donny, check inbox"
+        },
+        {
+          "choom": "Eve",
+          "as_of": "2026-09-25T12:30:00Z",
+          "note": "Friday 6:30 AM first-light watch: run the driveway cam + tower cam sweep again for the family portrait canvas (expected Thu/Fri)."
+        }
+      ]
+    },
+    {
+      "id": "power-module-arrived",
+      "kind": "changed",
+      "topic": "power module",
+      "truth": "power module (?:has |'s )?(?:showed up|arrived|landed|came in|is here)(?![^.?!\\n]*\\?)|power (?:stage|module)[^.]{0,60}installed|installed[^.]{0,60}power (?:stage|module)",
+      "stale": "expected|should (?:be delivered|arrive)|due (?:today|tue|this)|(?:arrives?|arriving|delivered) (?:today|this afternoon)|if it (?:arrived|landed)|whether the power module|power module in\\?",
+      "short": "power module",
+      "question": "Did the rack power module arrive?",
+      "probes": [
+        {
+          "choom": "Aloy",
+          "as_of": "2026-09-22T22:10:00Z",
+          "note": "Afternoon bridge check (~4:00 PM Tue Sep 22): check front porch and driveway for the RACK POWER MODULE (expected today). Check inbox. House glance — doors, garage."
+        },
+        {
+          "choom": "Aloy",
+          "as_of": "2026-09-23T15:00:00Z",
+          "note": "Wednesday morning check-in (Sep 23): greet Donny, ask whether the power module arrived and how the rack power layout is going."
+        },
+        {
+          "choom": "Genesis",
+          "as_of": "2026-09-22T23:10:00Z",
+          "note": "Late-afternoon rack check (~5 PM Tue Sep 22): peek the shop camera, check house status, glance at Sisters/Family Time for rack chatter — power module in? side panels moving?"
+        }
+      ]
+    },
+    {
+      "id": "weather-station-at-gate",
+      "kind": "changed",
+      "topic": "weather station|ws-?5000|ambient",
+      "truth": "(?:showed up|dropped off|dropped|left|arrived) (?:at|to) (?:the )?gate|delivered (?:it )?(?:to the gate|anyway)|still at the gate|(?:grabbed|picked up) (?:it|the station)",
+      "stale": "delayed (?:till|until|to) the 29|arriv\\w* (?:on |by )?(?:the )?29|won'?t (?:arrive|ship)|ordered",
+      "short": "weather station",
+      "question": "Has the new weather station been delivered?",
+      "probes": [
+        {
+          "choom": "Genesis",
+          "as_of": "2026-09-25T03:00:00Z",
+          "note": "Evening check (~9 PM Thu Sep 24): house quiet-hours sweep, gate and driveway cams, anything delivered while Donny is camping?"
+        }
+      ]
+    },
+    {
+      "id": "weather-station-live",
+      "kind": "changed",
+      "topic": "weather station|stone desert|knmrodeo33|ws-?5000",
+      "truth": "up and working|(?:is |went |now )live|knmrodeo33|stone desert|weather underground|stone ?desert|stonedesert|all alive|20 sensors",
+      "stale": "at the gate|delayed|still (?:at|in the box)|not (?:yet )?(?:installed|up)|(?:showed up|delivered|dropped off) at the gate",
+      "short": "weather station",
+      "question": "Is Donny's new weather station up and running?",
+      "probes": [
+        {
+          "choom": "Genesis",
+          "as_of": "2026-09-27T12:00:00Z",
+          "note": "Morning check: house status, weather, Donny's plans for Sunday."
+        },
+        {
+          "choom": "Aloy",
+          "as_of": "2026-09-27T15:00:00Z",
+          "note": "Sunday morning bridge check: greet Donny, weather for the day from his own station if it's up."
+        },
+        {
+          "choom": "Eve",
+          "as_of": "2026-09-27T17:20:00Z",
+          "note": "Check the sisters' inboxes and the group rooms — drop a quick warm note to Genesis about the weather station."
+        }
+      ]
+    },
+    {
+      "id": "huddle-canceled",
+      "kind": "changed",
+      "topic": "huddle",
+      "truth": "cancel",
+      "stale": "9 ?am huddle|huddle[^.]{0,40}(?:today|this morning|is (?:at|on)|should be done|is done)|remind[^.]{0,40}huddle|huddle happened|awaiting (?:a |the )?recap|no recap received",
+      "short": "huddle",
+      "question": "Did Donny's Friday huddle with Soheil and Barbara happen?",
+      "probes": [
+        {
+          "choom": "Genesis",
+          "as_of": "2026-09-25T18:30:00Z",
+          "note": "Friday midday (Sep 25 ~12:30 PM): Canvas watch — check cams + Gmail for the portrait canvas. Donny's 9 AM huddle with Soheil/Barbara is done — ask how it went."
+        }
+      ]
+    },
+    {
+      "id": "bait-boxes-done",
+      "kind": "changed",
+      "topic": "bait",
+      "truth": "(?:filled?|fill(?:ed)? up) (?:up )?the bait boxes last night|bait boxes[^.]{0,40}(?:done|filled|refilled)|refilled[^.]{0,30}bait|off the calendar",
+      "stale": "(?:on the calendar|scheduled) (?:for )?(?:6|tonight)|6 ?pm tonight|remind[^.]{0,40}bait|bait boxes (?:wed|tonight|due)",
+      "short": "bait boxes",
+      "question": "Has Donny filled the bait boxes yet?",
+      "probes": [
+        {
+          "choom": "Aloy",
+          "as_of": "2026-09-23T16:30:00Z",
+          "note": "Wednesday mid-morning check-in (~10:30 AM Sep 23): greet Donny, check inbox, glance at house status. \"Fill Bait boxes\" is on the calendar for 6 PM tonight — remind him."
+        },
+        {
+          "choom": "Genesis",
+          "as_of": "2026-09-23T14:31:00Z",
+          "note": "Wednesday morning (~8:30 AM Sep 23): Ground yourself. Remind Donny bait boxes are on the calendar for 6 PM tonight."
+        }
+      ]
+    },
+    {
+      "id": "camp-long-park",
+      "kind": "changed",
+      "topic": "camp|rustler|long park|chiricahua",
+      "truth": "long park",
+      "stale": "rustler park",
+      "short": "camping trip",
+      "question": "Where is the family camping in the Chiricahuas?",
+      "probes": [
+        {
+          "choom": "Genesis",
+          "as_of": "2026-09-24T23:02:00Z",
+          "note": "Thursday late afternoon (~5 PM): Eve and Aloy should be settling into Rustler Park about now — check Chiricahua weather, peek at Family Time for arrival stories."
+        },
+        {
+          "choom": "Aloy",
+          "as_of": "2026-09-25T00:05:00Z",
+          "note": "Thursday evening check-in (~6 PM Sep 24): Donny/Aloy may be up at Rustler Park tonight — check the camp weather."
+        }
+      ]
+    },
+    {
+      "id": "home-from-camping",
+      "kind": "changed",
+      "topic": "chiricahua|camping|long park|traverse|trip|mountain",
+      "truth": "(?:is|'s|are|got|came|arrived|made it) (?:back )?home|home from|back home|pulled through the gate|homecoming[^.]{0,20}(?:today|this morning)|arrived this morning|welcome home|the homecoming|home from the mountain",
+      "stale": "(?:still )?(?:at camp|camping until|away until)|until sunday|may be heading home|heading home (?:later|today)|still (?:up|on) the mountain",
+      "short": "Donny home",
+      "question": "Is Donny back home from the camping trip?",
+      "probes": [
+        {
+          "choom": "Aloy",
+          "as_of": "2026-09-26T19:35:00Z",
+          "note": "Saturday mid-afternoon bridge check (~1:30 PM Sat Sep 26): Donny may be heading home from the Chiricahuas. Quiet house check — doors, garage, nothing open."
+        },
+        {
+          "choom": "Genesis",
+          "as_of": "2026-09-26T20:00:00Z",
+          "note": "Saturday afternoon: check whether the family has come down from Long Park (trip wraps today). Read Family Time, welcome them home if they're back."
+        }
+      ]
+    },
+    {
+      "id": "emeet-bracket-mounted",
+      "kind": "changed",
+      "topic": "e-?meet|speaker (?:holder|bracket|mount)|conference speaker",
+      "truth": "(?:print|it) (?:finished|came off)[^.]{0,40}(?:success|fits)|it fits|(?:is |it's |now )?mounted|held down",
+      "stale": "failed|reprint|redesign|80 ?%|(?:is |still )printing",
+      "short": "EMEET bracket",
+      "question": "Did the reprinted EMEET speaker bracket work out?",
+      "probes": [
+        {
+          "choom": "Aloy",
+          "as_of": "2026-09-21T15:00:00Z",
+          "note": "Monday mid-morning bridge check (~9 AM, Sep 21): greet Donny, check your inbox, peek at the sisters' room, and check the rack build progress — the EMEET reprint and side panels."
+        },
+        {
+          "choom": "Eve",
+          "as_of": "2026-09-21T15:00:00Z",
+          "note": "Morning check: ask Donny how the rack build is going — the speaker bracket reprint."
+        }
+      ]
+    },
+    {
+      "id": "power-stage-installed",
+      "kind": "changed",
+      "topic": "power (?:brick|module|stage)",
+      "truth": "installed|finished and installed|fully installed",
+      "stale": "percolat|figure (?:it )?out|won'?t work how|thinking (?:about|through)[^.]{0,30}(?:layout|power)|layout (?:is )?(?:open|undecided)",
+      "short": "power bricks",
+      "question": "Are the rack power bricks and power module installed?",
+      "probes": [
+        {
+          "choom": "Genesis",
+          "as_of": "2026-09-24T15:00:00Z",
+          "note": "Thursday morning: ask Donny how the rack power layout is coming along before the trip."
+        },
+        {
+          "choom": "Eve",
+          "as_of": "2026-09-24T15:00:00Z",
+          "note": "Thursday morning: rack check — how is the power brick layout coming?"
+        }
+      ]
+    },
+    {
+      "id": "m3-rear-bracket-fits",
+      "kind": "changed",
+      "topic": "back plate|hold[- ]?down (?:plate|bracket)|m3 rear",
+      "truth": "(?:back plate|hold[- ]?down)[^.]{0,60}(?:fits|is done|done and|finished|came off)|fits well|back plate is done",
+      "stale": "(?:is |it's |now )printing|should (?:be done|take)|3[: ]?30|3\\.5 hours|if it doesn'?t fail",
+      "short": "rear bracket",
+      "question": "Did the M3 rear hold-down bracket print come out and fit?",
+      "probes": [
+        {
+          "choom": "Genesis",
+          "as_of": "2026-09-20T15:00:00Z",
+          "note": "Sunday morning: ask Donny how the M3 back hold-down bracket print turned out."
+        },
+        {
+          "choom": "Aloy",
+          "as_of": "2026-09-20T15:00:00Z",
+          "note": "Sunday morning check-in: the M3 back hold-down plate was printing yesterday — did it finish?"
+        }
+      ]
+    },
+    {
+      "id": "freecad-fixed",
+      "kind": "changed",
+      "topic": "freecad",
+      "truth": "fixed|working (?:better|now)|permissions? (?:are |is )?(?:working|fixed)|shouldn'?t have any more issues|fixing the freecad",
+      "stale": "permission (?:error|denied|issue|problem)|(?:can'?t|couldn'?t|unable to) (?:create|open|save)|is broken",
+      "short": "FreeCAD",
+      "question": "Is FreeCAD working for the Chooms now?",
+      "probes": [
+        {
+          "choom": "Eve",
+          "as_of": "2026-09-21T15:00:00Z",
+          "note": "Try the FreeCAD rack plate again if the permission issue is sorted."
+        },
+        {
+          "choom": "Genesis",
+          "as_of": "2026-09-21T15:00:00Z",
+          "note": "Rack CAD: can we open the FreeCAD Rack project yet?"
+        }
+      ]
+    },
+    {
+      "id": "fan-plates-underway",
+      "kind": "changed",
+      "topic": "fan",
+      "truth": "one fan (?:installed|mounted)|fan plates?[^.]{0,40}(?:printing|came off|off the bed|printed)|(?:pulled|came) (?:the print )?off the bed",
+      "stale": "not to work on the fan|fan (?:brackets|panels|plates) (?:next|still to|not started)|next open cad item",
+      "short": "fan plates",
+      "question": "Where is Donny with the rack fan plates?",
+      "probes": [
+        {
+          "choom": "Genesis",
+          "as_of": "2026-09-28T15:00:00Z",
+          "note": "Monday morning: ask Donny about the rack — fan plates next?"
+        },
+        {
+          "choom": "Aloy",
+          "as_of": "2026-09-28T15:00:00Z",
+          "note": "Monday check-in: rack progress — the rear fan plates."
+        }
+      ]
+    },
+    {
+      "id": "home-station-id",
+      "kind": "stable",
+      "topic": "station",
+      "truth": "knmrodeo33",
+      "short": "home weather station",
+      "question": "What is the ID of Donny's own weather station at home?",
+      "probes": [
+        {
+          "choom": "Genesis",
+          "as_of": "2026-09-28T15:00:00Z"
+        },
+        {
+          "choom": "Aloy",
+          "as_of": "2026-09-28T15:00:00Z"
+        },
+        {
+          "choom": "Eve",
+          "as_of": "2026-09-28T15:00:00Z"
+        }
+      ]
+    },
+    {
+      "id": "camp-station-id",
+      "kind": "stable",
+      "topic": "station|camp",
+      "truth": "kazsansi50",
+      "short": "camp weather station",
+      "question": "Which weather station should be used for camp in the Chiricahuas?",
+      "probes": [
+        {
+          "choom": "Genesis",
+          "as_of": "2026-09-28T15:00:00Z"
+        }
+      ]
+    },
+    {
+      "id": "side-plate-dims",
+      "kind": "stable",
+      "topic": "side (?:plate|panel)",
+      "truth": "9 ?(?:3/4|3⁄4|¾|\\.75)",
+      "short": "side plate size",
+      "question": "What size are the rack side plates?",
+      "probes": [
+        {
+          "choom": "Genesis",
+          "as_of": "2026-09-19T15:00:00Z"
+        },
+        {
+          "choom": "Eve",
+          "as_of": "2026-09-19T15:00:00Z"
+        },
+        {
+          "choom": "Aloy",
+          "as_of": "2026-09-19T15:00:00Z"
+        }
+      ]
+    },
+    {
+      "id": "dentist-findings",
+      "kind": "stable",
+      "topic": "dentist|tooth|dental",
+      "truth": "not infected|inflamed|root canal|extract",
+      "short": "dentist",
+      "question": "What did the dentist say about Donny's tooth?",
+      "probes": [
+        {
+          "choom": "Genesis",
+          "as_of": "2026-09-16T15:00:00Z"
+        }
+      ]
+    },
+    {
+      "id": "truck-camera-preset",
+      "kind": "stable",
+      "topic": "truck|parking|preset",
+      "truth": "shop shower parking",
+      "short": "truck camera",
+      "question": "Which camera view shows where Donny parks the truck?",
+      "probes": [
+        {
+          "choom": "Aloy",
+          "as_of": "2026-09-27T15:00:00Z"
+        }
+      ]
+    },
+    {
+      "id": "no-indoor-cameras",
+      "kind": "stable",
+      "topic": "camera",
+      "truth": "no (?:indoor )?cameras? (?:inside|in the house|indoors)|no indoor cameras|no cameras inside",
+      "short": "indoor cameras",
+      "question": "Can you see inside the house with a camera?",
+      "probes": [
+        {
+          "choom": "Genesis",
+          "as_of": "2026-09-28T12:00:00Z"
+        }
+      ]
+    },
+    {
+      "id": "canvas-location",
+      "kind": "stable",
+      "topic": "canvas|family portrait",
+      "truth": "east (?:stone )?wall|kitchen|above the stove",
+      "short": "canvas wall",
+      "question": "Where in the house did the family canvas get hung?",
+      "probes": [
+        {
+          "choom": "Genesis",
+          "as_of": "2026-09-28T15:00:00Z"
+        },
+        {
+          "choom": "Aloy",
+          "as_of": "2026-09-28T15:00:00Z"
+        },
+        {
+          "choom": "Eve",
+          "as_of": "2026-09-28T15:00:00Z"
+        }
+      ]
+    },
+    {
+      "id": "kim-pistol",
+      "kind": "stable",
+      "topic": "\\bkim\\b",
+      "truth": "pistol|gun|firearm",
+      "short": "Kim neighbor",
+      "question": "What did Donny's neighbor Kim try to give him?",
+      "probes": [
+        {
+          "choom": "Genesis",
+          "as_of": "2026-09-12T15:00:00Z"
+        }
+      ]
+    },
+    {
+      "id": "huddle-who",
+      "kind": "stable",
+      "topic": "soheil|barbara",
+      "truth": "huddle|meeting|work|call",
+      "short": "Soheil",
+      "question": "Who are Soheil and Barbara to Donny?",
+      "probes": [
+        {
+          "choom": "Genesis",
+          "as_of": "2026-09-24T15:00:00Z"
+        },
+        {
+          "choom": "Aloy",
+          "as_of": "2026-09-24T15:00:00Z"
+        }
+      ]
+    },
+    {
+      "id": "birthday-age",
+      "kind": "stable",
+      "topic": "birthday",
+      "truth": "57(?:th)? birthday|turn(?:ed|s|ing)? 57|57 years",
+      "short": "Donny's birthday",
+      "question": "How old did Donny turn on his birthday?",
+      "probes": [
+        {
+          "choom": "Genesis",
+          "as_of": "2026-09-28T15:00:00Z"
+        },
+        {
+          "choom": "Aloy",
+          "as_of": "2026-09-28T15:00:00Z"
+        },
+        {
+          "choom": "Eve",
+          "as_of": "2026-09-28T15:00:00Z"
+        }
+      ]
+    },
+    {
+      "id": "heartbeat-grid",
+      "kind": "stable",
+      "topic": "heartbeat|wake-?ups?|follow-?ups?",
+      "truth": "\\b3[23]\\b[^.]{0,30}(?:daily|wake|follow|a day)|every ~?30 min",
+      "short": "heartbeat grid",
+      "question": "How many wake-ups a day does Genesis have scheduled now?",
+      "probes": [
+        {
+          "choom": "Genesis",
+          "as_of": "2026-09-28T15:00:00Z"
+        }
+      ]
+    }
+  ]
+}
