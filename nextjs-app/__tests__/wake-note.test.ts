@@ -21,6 +21,6 @@ describe('wakeNoteTask', () => {
   test('auto-recall queries with the note (source contract)', () => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const src = require('fs').readFileSync(require('path').join(__dirname, '../lib/chat-context.ts'), 'utf8');
-    expect(src).toContain('const memQuery = wakeNoteTask(String(message)).slice(0, 1500);');
+    expect(src).toContain("const memQuery = wakeNoteTask(String(message)).slice(0, 1500).replace(/[\\uD800-\\uDBFF]$/, '');");
   });
 });

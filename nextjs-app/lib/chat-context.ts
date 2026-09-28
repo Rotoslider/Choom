@@ -141,7 +141,9 @@ export async function buildChoomContext(params: ChoomContextParams): Promise<Cho
       // the embedder reads only ~256 tokens, and on a wake-up those were all
       // boilerplate ("waking up… ground yourself… schedule"), so every one
       // recalled the same "how I self-schedule" memories (2026-09-28).
-      const memQuery = wakeNoteTask(String(message)).slice(0, 1500);
+      // Cut by UTF-16 length can split an emoji; the lone half failed the
+      // memory server's tokenizer and the whole recall (group turns, 09-28).
+      const memQuery = wakeNoteTask(String(message)).slice(0, 1500).replace(/[\uD800-\uDBFF]$/, '');
       const autoMemResult = await memoryClient.search(memQuery, 5, memoryCompanionId, { reinforce: false, timeoutMs: 6000 });
       if (autoMemResult.success && Array.isArray(autoMemResult.data) && autoMemResult.data.length > 0) {
         // Floor filters the server's top-1 fallback and other weak matches —

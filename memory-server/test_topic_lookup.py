@@ -58,6 +58,11 @@ class TopicLookup(unittest.TestCase):
         got = [t for t, _ in self.titles("canvas wall")]
         self.assertIn("Rack milestone — Sept 23 evening", got)
 
+    def test_half_an_emoji_does_not_fail_the_search(self):
+        # What JS "…🥰".slice(0, n) sends when the cut lands mid-emoji.
+        r = self.mem.search_semantic("canvas on the wall \ud83e", limit=3, companion_id=EVE, reinforce=False)
+        self.assertTrue(r.success, r.reason)
+
     def test_long_questions_stay_purely_semantic(self):
         got = self.titles("what happened with the family portrait canvas this week")
         self.assertTrue(all(mt != "keyword" for _, mt in got))

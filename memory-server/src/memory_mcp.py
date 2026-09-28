@@ -114,6 +114,17 @@ REINFORCEMENT_MAX = 10  # cap importance
 # search_semantic). Words this common never make a topic.
 TOPIC_KEYWORD_NEWEST = 2
 _TOPIC_STOPWORDS = {"the", "and", "for", "has", "had", "did", "was", "are", "with", "about", "any", "his", "her", "our", "you"}
+
+
+def _embeddable(text: str) -> str:
+    """Drop lone UTF-16 surrogates before embedding.
+
+    A client that cuts text by UTF-16 length (JS .slice) can split an emoji in
+    half; the half arrives as a lone surrogate and the tokenizer raises
+    "TextEncodeInput must be Union[...]", failing the whole search — Genesis's
+    group-turn auto-recall, three times on 2026-09-28.
+    """
+    return text.encode("utf-8", "ignore").decode("utf-8")
 # ---------------------------------------------
 
 
@@ -570,7 +581,7 @@ class RobustMemorySystem:
             # Generate embedding and store in ChromaDB
             # Combine title and content for better semantic search
             text_for_embedding = f"{title}\n{content}"
-            embedding = self.embedding_model.encode(text_for_embedding).tolist()
+            embedding = self.embedding_model.encode(_embeddable(text_for_embedding)).tolist()
 
             self.chroma_collection.add(
                 ids=[record.id],
@@ -644,7 +655,7 @@ class RobustMemorySystem:
             )
 
             # Generate query embedding
-            query_embedding = self.embedding_model.encode(query).tolist()
+            query_embedding = self.embedding_model.encode(_embeddable(query)).tolist()
 
             # Search ChromaDB, scoped to this companion's vectors
             query_kwargs = {
@@ -1055,7 +1066,7 @@ class RobustMemorySystem:
 
                 # Re-generate embedding
                 text_for_embedding = f"{updated_row['title']}\n{updated_row['content']}"
-                embedding = self.embedding_model.encode(text_for_embedding).tolist()
+                embedding = self.embedding_model.encode(_embeddable(text_for_embedding)).tolist()
 
                 # Update ChromaDB
                 self.chroma_collection.update(
@@ -1430,7 +1441,7 @@ class RobustMemorySystem:
             ids, embs, docs, metas = [], [], [], []
             for row in rows:
                 text = f"{row['title']}\n{row['content']}"
-                emb = self.embedding_model.encode(text).tolist()
+                emb = self.embedding_model.encode(_embeddable(text)).tolist()
                 ids.append(row["id"])
                 embs.append(emb)
                 docs.append(text)
