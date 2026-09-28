@@ -26,6 +26,7 @@ import config
 from paths import APP_ROOT, MEMORY_DATA_DIR, WORKSPACE_ROOT
 from signal_handler import get_signal_handler
 from choom_client import get_choom_client, get_tts_client
+from tts_text import strip_markup_for_tts
 from google_client import get_google_client
 from task_config import load_config as load_task_config, save_config as save_task_config, is_task_enabled, is_quiet_period, get_custom_heartbeats
 from nightly_doctor import run_diagnostics
@@ -305,12 +306,7 @@ class ScheduledTaskManager:
 
             # Generate audio if requested
             if include_audio and message:
-                # Strip markdown for TTS
-                import re
-                tts_text = re.sub(r'[*_~`#]+', '', message)
-                # Strip emojis
-                tts_text = re.sub(r'[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF\U0001F1E0-\U0001F1FF\U00002600-\U000026FF\U00002700-\U000027BF\U0000FE00-\U0000FE0F\U0001F900-\U0001F9FF\U0001FA00-\U0001FA6F\U0001FA70-\U0001FAFF\U0000200D\U000020E3\U000E0020-\U000E007F]+', '', tts_text)
-                tts_text = re.sub(r'\s+', ' ', tts_text).strip()
+                tts_text = strip_markup_for_tts(message)
 
                 audio_path = f"{config.TEMP_AUDIO_PATH}/scheduled_{datetime.now().strftime('%Y%m%d_%H%M%S')}.wav"
                 if self.tts.synthesize(tts_text, voice=voice_id, output_path=audio_path):

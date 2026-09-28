@@ -25,6 +25,7 @@ import requests
 import config
 from signal_handler import get_signal_handler, MessageParser
 from choom_client import get_choom_client, get_tts_client, get_stt_client
+from tts_text import strip_markup_for_tts
 from scheduler import get_scheduler
 from google_client import get_google_client
 
@@ -1294,22 +1295,7 @@ class SignalBridge:
                 # If everything was filtered, fall back to just the last paragraph
                 if not spoken_paragraphs and paragraphs:
                     spoken_paragraphs = [paragraphs[-1]]
-                tts_text = '\n\n'.join(spoken_paragraphs)
-
-                # Strip markdown IMAGE refs entirely — the alt text of a
-                # generated image is the full diffusion prompt (C-44). Must
-                # run before the link rule below, which would keep the alt.
-                tts_text = re.sub(r'!\[[^\]]*\]\([^)]*\)', '', tts_text)
-                # Strip markdown links for TTS (keep link text, remove URLs)
-                tts_text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', tts_text)
-                # Strip URLs that appear bare in text
-                tts_text = re.sub(r'https?://\S+', '', tts_text)
-                # Also strip other markdown
-                tts_text = re.sub(r'[*_~`#]+', '', tts_text)
-                # Strip emojis
-                tts_text = re.sub(r'[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF\U0001F1E0-\U0001F1FF\U00002600-\U000026FF\U00002700-\U000027BF\U0000FE00-\U0000FE0F\U0001F900-\U0001F9FF\U0001FA00-\U0001FA6F\U0001FA70-\U0001FAFF\U0000200D\U000020E3\U000E0020-\U000E007F]+', '', tts_text)
-                # Clean up extra whitespace
-                tts_text = re.sub(r'\s+', ' ', tts_text).strip()
+                tts_text = strip_markup_for_tts('\n\n'.join(spoken_paragraphs))
 
                 if tts_text:  # Only generate if there's actual text after stripping
                     audio_path = f"{config.TEMP_AUDIO_PATH}/response_{datetime.now().strftime('%Y%m%d_%H%M%S')}.wav"

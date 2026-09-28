@@ -679,6 +679,13 @@ class ChoomClient:
 
                         if event_type == 'content':
                             content += data.get('content', '')
+                        elif event_type == 'retract_partial':
+                            # The server cut a repetition loop out of text it had
+                            # already streamed — drop it here too, or Signal and
+                            # TTS still get the loop.
+                            n = int(data.get('length') or 0)
+                            if n > 0:
+                                content = content[:max(0, len(content) - n)]
                         elif event_type == 'tool_call':
                             tool_calls.append(data.get('toolCall', {}))
                             logger.info(f"Tool call: {data.get('toolCall', {}).get('name', 'unknown')}")
@@ -696,9 +703,14 @@ class ChoomClient:
                                 'prompt': img_prompt,
                             })
                         elif event_type == 'done':
-                            # Use done event's content as authoritative if we missed content events
+                            # The done event carries the reply as saved — deduped,
+                            # loop-stripped, narration preambles dropped from
+                            # wake-ups. The streamed text has none of that
+                            # cleanup, so the done copy wins whenever present,
+                            # shorter or not (2026-09-28: a "longer only" rule
+                            # delivered every dropped preamble to Signal).
                             done_content = data.get('content', '')
-                            if done_content and len(done_content) > len(content):
+                            if done_content and done_content != content:
                                 logger.info(f"Using done event content ({len(done_content)} chars) over accumulated ({len(content)} chars)")
                                 content = done_content
                             break
