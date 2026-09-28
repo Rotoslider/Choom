@@ -77,6 +77,9 @@ describe('talk_with_sisters new_room', () => {
     expect(rooms).toHaveLength(2);
     const fresh = rooms.find(x => x.id === res.room_id)!;
     expect(fresh.participants.filter(p => p.active).map(p => p.choomId).sort()).toEqual([aloy.id, eve.id, genesis.id].sort());
+    // A Choom-created room starts at 5 auto-rounds — by ~5 the sisters start
+    // spinning (owner, 2026-09-28); it used to be 10.
+    expect(fresh.autoRounds).toBe(5);
     const old = rooms.find(x => x.id === oldRoomId)!;
     expect(old.title).toBe('Sisters: Eve & Genesis & Aloy');
     // The folder went to the scratch workspace, not the real one.

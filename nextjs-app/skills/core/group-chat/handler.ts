@@ -9,6 +9,10 @@ const TOOL_NAMES = new Set([
   'talk_with_sisters', 'list_my_rooms', 'read_room', 'search_rooms', 'join_room', 'leave_room', 'rename_room', 'set_room_topic',
 ]);
 const MAX_ROUNDS = 10;
+// Auto-rounds a room gets when a Choom creates it. It was MAX_ROUNDS (10);
+// the owner finds the sisters start spinning by about round 5 (2026-09-28).
+// He can still raise it per room in /rooms.
+const NEW_ROOM_AUTO_ROUNDS = 5;
 const dispatcher = new Agent({ bodyTimeout: 0, headersTimeout: 0 });
 
 // Loose title normalization for matching a spoken room name ("the Tune Lounge")
@@ -604,7 +608,7 @@ export default class GroupChatHandler extends BaseSkillHandler {
       const created = await prisma.groupRoom.create({
         data: {
           title,
-          autoRounds: MAX_ROUNDS,
+          autoRounds: NEW_ROOM_AUTO_ROUNDS,
           participants: { create: participantIds.map((id, i) => ({ choomId: id, order: i, active: true })) },
         },
       });
