@@ -85,6 +85,8 @@ export interface ToolContext {
   // Room this turn is happening in (group turns only) — lets schedule_room_followup
   // know which room to return to.
   groupRoomId?: string;
+  // Group-room turn — search_memories never returns private chats on one.
+  isGroupTurn?: boolean;
 }
 
 // ============================================================================
@@ -2330,7 +2332,7 @@ You have access to the following tools:
 
 **Memory Tools:**
 - \`remember\` - Store new memories (facts, preferences, events). Use when the user shares something important.
-- \`search_memories\` - Search memories using natural language. Use when recalling past information.
+- \`search_memories\` - Search your memories and past conversations (private chats + rooms). Short topic lookups work best.
 - \`get_memory_stats\` - Get memory statistics. Use when asked about memory status.
 - \`get_recent_memories\` - Get recently stored memories.
 - \`search_by_type\` - Search by category (fact, preference, event, conversation, task).
@@ -2671,6 +2673,7 @@ export async function executeToolCallViaSkills(
     suppressNotifications: ctx.suppressNotifications,
     isHeartbeat: ctx.isHeartbeat,
     groupRoomId: ctx.groupRoomId,
+    isGroupTurn: ctx.isGroupTurn,
     skillDoc: skill.fullDoc,
     getReference: (fileName: string) => registry.getLevel3Reference(skill.metadata.name, fileName),
   };

@@ -162,6 +162,43 @@ class ConversationIndexTest(unittest.TestCase):
         self.assertEqual(top[0]["id"], "new")
 
 
+class CurrentConversationTest(ConversationIndexTest):
+    """Auto-recall must not hand back the lines already in the prompt."""
+
+    def test_skips_the_on_screen_part_of_this_chat_but_keeps_its_older_part(self):
+        # m1 (T0+100) is older than the on-screen window; add one inside it.
+        db = sqlite3.connect(self.app)
+        db.execute("INSERT INTO Message VALUES ('m8','c1','user','the canvas is on the wall, look',?)", (int((T0 + 500) * 1000),))
+        db.commit(); db.close()
+        self.ix.ingest_once()
+        got = {r["id"] for r in self.ix.search("canvas wall", "gen", k=20, exclude_thread="c1", exclude_since=T0 + 400)}
+        self.assertNotIn("m8", got)   # on screen
+        self.assertIn("m1", got)      # same chat, scrolled off
+        both = {r["id"] for r in self.ix.search("canvas wall", "gen", k=20)}
+        self.assertTrue({"m1", "m8"} <= both)
+
+    def test_room_threads_skip_the_same_way(self):
+        got = {r["id"] for r in self.ix.search("camp long park", "gen", k=20, exclude_thread="r1", exclude_since=T0 + 250)}
+        self.assertNotIn("g1", got)
+
+    def test_threads_are_filled_on_an_index_built_before_they_existed(self):
+        with self.ix._lock:
+            self.ix._db.execute("UPDATE chunks SET thread = NULL")
+            self.ix._db.commit()
+        self.assertGreater(self.ix._backfill_threads(), 0)
+        threads = dict(self.ix._db.execute("SELECT ref, thread FROM chunks").fetchall())
+        self.assertEqual(threads["m1"], "c1")
+        self.assertEqual(threads["m2"], "c2")
+        self.assertEqual(threads["g1"], "r1")
+        self.assertEqual(threads["mem1"], "comp-gen")
+        self.assertEqual(self.ix.reconcile()["updated"], 0)  # nothing re-embedded
+
+    def test_min_relevance_drops_weak_matches(self):
+        got = self.ix.search("canvas", "gen", k=20, min_relevance=1)
+        self.assertTrue(got)
+        self.assertTrue(all(r["relevance"] >= 1 for r in got))
+
+
 class Helpers(unittest.TestCase):
     def test_fts_query_is_quoted_words_only(self):
         self.assertEqual(fts_query('canvas" OR NEAR(x) -- the wall'), '"canvas" OR "or" OR "near" OR "wall"')

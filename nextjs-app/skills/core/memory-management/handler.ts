@@ -1,6 +1,7 @@
 import { BaseSkillHandler, SkillHandlerContext } from '@/lib/skill-handler';
 import { ToolCall, ToolResult } from '@/lib/types';
 import { executeMemoryTool } from '@/lib/memory-client';
+import { renderHit, type ConversationHit } from '@/lib/recall-format';
 
 const MEMORY_TOOLS = new Set([
   'remember',
@@ -62,6 +63,41 @@ export default class MemoryManagementHandler extends BaseSkillHandler {
     const args = { ...toolCall.arguments };
     const wantDetail = args.detail === true;
     if (toolCall.name === 'search_memories' && !args.limit) args.limit = DEFAULT_SEARCH_LIMIT;
+
+    // search_memories reads the conversation index: her memories plus her
+    // private chats with Donny and her rooms (archived ones too), reranked and
+    // tilted toward recent. On the recall benchmark a short lookup returned
+    // the current truth 88% of the time vs 67% for memory-only search, and a
+    // question 92% vs 40%. A room turn never sees private chats. If the index
+    // is off or down, the memory store below answers exactly as before.
+    if (toolCall.name === 'search_memories' && !wantDetail && typeof args.query === 'string' && args.query.trim()
+        && typeof ctx.memoryClient.searchConversations === 'function') {
+      const roomTurn = !!(ctx.isGroupTurn || ctx.groupRoomId);
+      try {
+        const conv = await ctx.memoryClient.searchConversations(args.query.trim(), ctx.choomId, {
+          companionId: ctx.memoryCompanionId,
+          roomTurn,
+          limit: Math.min(Math.max(Number(args.limit) || DEFAULT_SEARCH_LIMIT, 1), 20),
+          timeoutMs: 20000,
+        });
+        if (conv.success && Array.isArray(conv.data)) {
+          const selfName = String((ctx.choom as { name?: unknown })?.name || '');
+          const results = (conv.data as unknown as ConversationHit[]).map(h => renderHit(h, selfName, EXCERPT_CHARS));
+          return {
+            toolCallId: toolCall.id,
+            name: toolCall.name,
+            result: {
+              success: true,
+              count: results.length,
+              results,
+              note: `Best matches from your memories and ${roomTurn ? 'your rooms' : 'past conversations (private chats with Donny and your rooms)'}, each with who said it and when. When two disagree, the newer one usually wins — and weigh who said it.`,
+            },
+          };
+        }
+      } catch {
+        // index unreachable — the memory store answers below
+      }
+    }
 
     const memoryResult = await executeMemoryTool(
       ctx.memoryClient,

@@ -38,6 +38,8 @@ export interface SkillHandlerContext {
   isHeartbeat?: boolean;
   // Room this group turn is in (so schedule_room_followup knows the current room)
   groupRoomId?: string;
+  // A group-room turn: search_memories must never return private chats.
+  isGroupTurn?: boolean;
 
   // Skill-specific context (injected by registry)
   skillDoc: string;

@@ -23,11 +23,11 @@ export const tools: ToolDefinition[] = [
   },
   {
     name: 'search_memories',
-    description: 'Search memories using natural language queries. Use for general recall when the user asks about past conversations, facts, or preferences. Returns the best 5 by default with their full text; raise limit for more.',
+    description: 'Search your memories AND your past conversations — private chats with Donny and your group rooms, archived ones included — in one call. Each result says when, who said it and where ("Donny · private chat", "Eve · room Family Time", "your memory"). Short topic lookups work best: "canvas", "power module", "bait boxes". Returns the best 5 by default; raise limit for more. When results disagree, the newer one usually wins.',
     parameters: {
       type: 'object',
       properties: {
-        query: { type: 'string', description: 'Natural language search query' },
+        query: { type: 'string', description: 'What to look up — a short topic works best ("canvas"), a question works too' },
         limit: { type: 'number', description: 'Maximum results to return (default 5)' },
         detail: { type: 'boolean', description: 'true = raw memory records with tags and metadata (rarely needed)' },
       },

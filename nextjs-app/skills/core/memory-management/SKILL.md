@@ -21,12 +21,16 @@ dependencies: []
 ## When to Use
 - User asks to remember something → `remember`
 - User asks "do you remember..." → `search_memories`
+- Checking whether something is still true (a delivery, a plan, what Donny said) → `search_memories` with a short topic
 - User asks about memory stats → `get_memory_stats`
 - User asks about recent conversations → `get_recent_memories`
 - User asks for specific category → `search_by_type`
 - User mentions specific topics/tags → `search_by_tags`
 - User asks to correct stored info → `update_memory`
 - User explicitly asks to forget → `delete_memory`
+
+## search_memories searches conversations too
+`search_memories` covers your memories AND your past conversations: private chats with Donny and every group room you are or were in, archived rooms included. In a group room it searches your memories and rooms only — never private chats. Each result carries `when` and `from` (who said it, where). Look things up one topic at a time — `search_memories("canvas")`, not one search for everything — and when two results disagree, the newer one usually wins; weigh who said it (Donny telling you he did something beats a sister's retelling). `search_by_type`, `search_by_tags`, `search_by_date_range` and `get_recent_memories` still search memories only.
 
 ## Important
 - Each Choom has isolated memories via companion_id

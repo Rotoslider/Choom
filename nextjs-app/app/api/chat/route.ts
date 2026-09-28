@@ -405,12 +405,31 @@ export async function POST(request: NextRequest) {
     // Per-turn context blocks (time, weather, Home Assistant, recent images,
     // growth journal, auto-recalled memories, cross-session awareness) —
     // lib/chat-context.ts (C-22).
+    // Where THIS conversation's on-screen stretch starts, so auto-recall
+    // doesn't hand back lines already in the prompt: the oldest of the (up to
+    // 200) chat messages loaded as history, or the oldest message of the room
+    // transcript window. Wake-ups start empty and their chat isn't indexed.
+    let recallSkipSince: number | undefined;
+    try {
+      if (isGroupTurn && groupRoomId && groupMessages.length > 0) {
+        const windowStart = await prisma.groupMessage.findFirst({
+          where: { roomId: groupRoomId },
+          orderBy: { createdAt: 'desc' },
+          skip: groupMessages.length - 1,
+          select: { createdAt: true },
+        });
+        if (windowStart) recallSkipSince = windowStart.createdAt.getTime() / 1000;
+      } else if (!isGroupTurn && !freshContext && chat.messages.length > 0) {
+        recallSkipSince = new Date(chat.messages[0].createdAt).getTime() / 1000;
+      }
+    } catch { /* no skip — recall still works, may repeat a recent line */ }
+
     const {
       timeInfo, weatherInfo, homeAssistantInfo, recentImagesInfo,
       growthInfo, autoMemoriesInfo, crossSessionInfo,
     } = await buildChoomContext({
       choom, choomId, chatId, message, settings, weatherSettings,
-      memoryClient, memoryCompanionId, isGroupTurn, groupRoomId,
+      memoryClient, memoryCompanionId, isGroupTurn, groupRoomId, recallSkipSince,
     });
 
     // System prompt assembly (base directives + context blocks + choomDecides

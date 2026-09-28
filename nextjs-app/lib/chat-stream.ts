@@ -159,6 +159,7 @@ export async function runChatTurn(params: ChatTurnParams): Promise<void> {
           activeProjectFolder: detectedProject?.folder,
           isDelegation: !!isDelegation,
           groupRoomId,
+          isGroupTurn: !!isGroupTurn,
           delegatorSlug: typeof delegatorName === 'string' && delegatorName
             ? delegatorName.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
             : undefined,

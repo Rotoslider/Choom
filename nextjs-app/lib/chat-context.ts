@@ -15,6 +15,7 @@ import { HomeAssistantService, type HomeAssistantSettings } from '@/lib/homeassi
 import { getTimeContext, formatTimeContextForPrompt } from '@/lib/time-context';
 import { getOwnerIdentity } from '@/lib/owner';
 import { wakeNoteTask } from '@/lib/wake-note';
+import { renderHit, recallLine, type ConversationHit } from '@/lib/recall-format';
 import { WORKSPACE_ROOT } from '@/lib/config';
 import type { WeatherSettings } from '@/lib/types';
 import type { Choom } from '@prisma/client';
@@ -32,7 +33,18 @@ export interface ChoomContextParams {
   memoryCompanionId: string;
   isGroupTurn: boolean;
   groupRoomId: string | undefined;
+  // Epoch seconds: the oldest message of THIS chat / room already in the
+  // prompt. Auto-recall skips that stretch (it would hand back the lines just
+  // above the new message); older parts of the same conversation stay in.
+  recallSkipSince?: number;
 }
+
+// Auto-recall drops conversation-index hits the reranker scores below this
+// raw logit. -2 lost nothing on the recall benchmark (48 probes x 3 query
+// types) while trimming the weakest tail; small talk still matches small
+// talk, so this is a floor against nonsense, not a topicality gate.
+const AUTO_RECALL_MIN_RELEVANCE = -2;
+const AUTO_RECALL_EXCERPT = 500;
 
 export interface ChoomContext {
   timeInfo: string;
@@ -47,7 +59,7 @@ export interface ChoomContext {
 export async function buildChoomContext(params: ChoomContextParams): Promise<ChoomContext> {
   const {
     choom, choomId, chatId, message, settings, weatherSettings,
-    memoryClient, memoryCompanionId, isGroupTurn, groupRoomId,
+    memoryClient, memoryCompanionId, isGroupTurn, groupRoomId, recallSkipSince,
   } = params;
     // Build time context
     const timeContext = getTimeContext('America/Denver');
@@ -136,14 +148,43 @@ export async function buildChoomContext(params: ChoomContextParams): Promise<Cho
     // inflates importance or blocks decay. READ-ONLY: nothing is auto-written
     // to long-term memory; only the explicit remember tool stores memories.
     let autoMemoriesInfo = '';
+    // A wake-up recalls on its NOTE, not the awareness block in front of it:
+    // the embedder reads only ~256 tokens, and on a wake-up those were all
+    // boilerplate ("waking up… ground yourself… schedule"), so every one
+    // recalled the same "how I self-schedule" memories (2026-09-28).
+    // Cut by UTF-16 length can split an emoji; the lone half failed the
+    // memory server's tokenizer and the whole recall (group turns, 09-28).
+    const memQuery = wakeNoteTask(String(message)).slice(0, 1500).replace(/[\uD800-\uDBFF]$/, '');
+
+    // Conversation index first: her memories plus private chats and rooms
+    // (never private chats on a room turn), reranked, recent-tilted.
+    let recalled = false;
     try {
-      // A wake-up recalls on its NOTE, not the awareness block in front of it:
-      // the embedder reads only ~256 tokens, and on a wake-up those were all
-      // boilerplate ("waking up… ground yourself… schedule"), so every one
-      // recalled the same "how I self-schedule" memories (2026-09-28).
-      // Cut by UTF-16 length can split an emoji; the lone half failed the
-      // memory server's tokenizer and the whole recall (group turns, 09-28).
-      const memQuery = wakeNoteTask(String(message)).slice(0, 1500).replace(/[\uD800-\uDBFF]$/, '');
+      const conv = await memoryClient.searchConversations(memQuery, choomId, {
+        companionId: memoryCompanionId,
+        roomTurn: isGroupTurn,
+        limit: 5,
+        minRelevance: AUTO_RECALL_MIN_RELEVANCE,
+        excludeThread: isGroupTurn ? groupRoomId : chatId,
+        excludeSince: recallSkipSince,
+        timeoutMs: 8000,
+      });
+      if (conv.success && Array.isArray(conv.data)) {
+        recalled = true;
+        const lines = (conv.data as unknown as ConversationHit[])
+          .map(h => recallLine(renderHit(h, choom.name, AUTO_RECALL_EXCERPT)));
+        if (lines.length > 0) {
+          const scope = isGroupTurn ? 'your memories and your rooms' : 'your memories and earlier conversations — private chats with Donny and your rooms';
+          autoMemoriesInfo = `\n\n## RELEVANT MEMORIES AND PAST CONVERSATIONS (auto-recalled background)\nFrom ${scope}, auto-recalled for this message — background reference only. Each line says when and who; when two disagree, the newer one usually wins. For more, call search_memories; all your other tools work exactly as normal.\n${lines.join('\n')}`;
+          console.log(`   🧠 Auto-recalled ${lines.length} from memories + conversations for ${choom.name}`);
+        }
+      }
+    } catch (error) {
+      console.warn('   ⚠️  Conversation recall unavailable, using memory recall:', error instanceof Error ? error.message : error);
+    }
+
+    // Memory store fallback (index off or down) — exactly the old recall.
+    if (!recalled) try {
       const autoMemResult = await memoryClient.search(memQuery, 5, memoryCompanionId, { reinforce: false, timeoutMs: 6000 });
       if (autoMemResult.success && Array.isArray(autoMemResult.data) && autoMemResult.data.length > 0) {
         // Floor filters the server's top-1 fallback and other weak matches —

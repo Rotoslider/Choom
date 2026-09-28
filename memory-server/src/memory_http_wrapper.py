@@ -89,6 +89,11 @@ class ConversationSearchRequest(BaseModel):
     limit: int = Field(default=5, ge=1, le=20)
     # Epoch seconds: only items written before this (benchmarks).
     as_of: Optional[float] = None
+    # Skip this chat / room from this moment on (the part already in the prompt).
+    exclude_thread: Optional[str] = None
+    exclude_since: Optional[float] = None
+    # Drop results the reranker scores below this raw logit (auto-recall).
+    min_relevance: Optional[float] = None
 
 
 class MemoryResult(BaseModel):
@@ -368,6 +373,8 @@ def conversations_search(request: ConversationSearchRequest):
             request.query, request.choom_id, request.companion_id,
             room_turn=request.room_turn, as_of=request.as_of,
             sources=request.sources, k=request.limit,
+            exclude_thread=request.exclude_thread, exclude_since=request.exclude_since,
+            min_relevance=request.min_relevance,
         )
         return {"success": True, "data": data}
     except Exception as e:

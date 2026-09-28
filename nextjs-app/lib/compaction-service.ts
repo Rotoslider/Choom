@@ -687,9 +687,12 @@ export class CompactionService {
       if ((toolName === 'search_memories' || toolName === 'search_by_type' || toolName === 'search_by_tags')
           && parsed.results && Array.isArray(parsed.results)) {
         const memories = parsed.results.slice(0, 5).map((r: Record<string, unknown>) => {
+          // Conversation-index results carry when/from/excerpt (2026-09-28).
           const title = r.title || r.key || '';
-          const preview = r.content ? String(r.content).slice(0, 80) : '';
-          return title ? `  - ${title}${preview ? ': ' + preview : ''}` : preview;
+          const body = r.content ?? r.excerpt;
+          const preview = body ? String(body).slice(0, 80) : '';
+          const tag = r.when || r.from ? `[${[r.when, r.from].filter(Boolean).join(' · ')}] ` : '';
+          return title ? `  - ${tag}${title}${preview ? ': ' + preview : ''}` : (preview ? `  - ${tag}${preview}` : '');
         }).filter(Boolean);
         return memories.length > 0 ? `${parsed.results.length} memories:\n${memories.join('\n')}` : 'no results';
       }

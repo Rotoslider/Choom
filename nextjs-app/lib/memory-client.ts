@@ -81,6 +81,37 @@ export class MemoryClient {
     }, opts?.timeoutMs);
   }
 
+  // Memories + private chats + rooms (the memory server's conversation index:
+  // hybrid retrieval, reranked, recency-tilted). roomTurn=true never returns
+  // private chats. excludeThread/excludeSince skip the stretch of the current
+  // chat or room already in the prompt. A disabled index answers 503, which
+  // comes back as success:false — callers fall back to search().
+  async searchConversations(
+    query: string,
+    choomId: string,
+    opts: {
+      companionId?: string;
+      roomTurn?: boolean;
+      limit?: number;
+      excludeThread?: string;
+      excludeSince?: number;
+      minRelevance?: number;
+      timeoutMs?: number;
+    } = {}
+  ): Promise<MemoryServerResult> {
+    return this.request('/conversations/search', 'POST', {
+      query,
+      choom_id: choomId,
+      ...(opts.companionId ? { companion_id: opts.companionId } : {}),
+      room_turn: !!opts.roomTurn,
+      limit: opts.limit ?? 5,
+      ...(opts.excludeThread && opts.excludeSince !== undefined
+        ? { exclude_thread: opts.excludeThread, exclude_since: opts.excludeSince }
+        : {}),
+      ...(opts.minRelevance !== undefined ? { min_relevance: opts.minRelevance } : {}),
+    }, opts.timeoutMs);
+  }
+
   // Search by memory type
   async searchByType(
     memory_type: MemoryType,

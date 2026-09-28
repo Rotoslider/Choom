@@ -200,6 +200,12 @@ class ConversationIndex:
                 END;
                 CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT);
             """)
+            cols = {r[1] for r in self._db.execute("PRAGMA table_info(chunks)")}
+            if "thread" not in cols:
+                # The chat / room a chunk came from, so a turn can skip the part
+                # of its own conversation already in the prompt. Filled in for
+                # older rows by _backfill_threads (no re-embedding).
+                self._db.execute("ALTER TABLE chunks ADD COLUMN thread TEXT")
             self._db.commit()
 
     def _get_state(self, key: str, default: str = "") -> str:
@@ -215,7 +221,8 @@ class ConversationIndex:
     def _load_matrix(self):
         with self._lock:
             rows = self._db.execute(
-                "SELECT rid, source, owner, ts, vec FROM chunks WHERE vec IS NOT NULL ORDER BY rid").fetchall()
+                "SELECT rid, source, owner, ts, vec, COALESCE(thread, owner) FROM chunks WHERE vec IS NOT NULL ORDER BY rid").fetchall()
+            self._thr = np.array([r[5] for r in rows], dtype=object)
             self._rid = np.array([r[0] for r in rows], dtype=np.int64)
             self._src = np.array([r[1] for r in rows], dtype=object)
             self._own = np.array([r[2] for r in rows], dtype=object)
@@ -227,7 +234,7 @@ class ConversationIndex:
                 self._vec = np.zeros((0, self._dim or 1), dtype=np.float32)
 
     def _append_matrix(self, entries: List[tuple]):
-        """entries: (rid, source, owner, ts, vec)."""
+        """entries: (rid, source, owner, ts, vec, thread)."""
         if not entries:
             return
         with self._lock:
@@ -240,6 +247,7 @@ class ConversationIndex:
             self._src = np.concatenate([self._src, np.array([e[1] for e in entries], dtype=object)])
             self._own = np.concatenate([self._own, np.array([e[2] for e in entries], dtype=object)])
             self._ts = np.concatenate([self._ts, [e[3] for e in entries]])
+            self._thr = np.concatenate([self._thr, np.array([e[5] for e in entries], dtype=object)])
 
     def _drop_matrix(self, rids: Iterable[int]):
         drop = set(rids)
@@ -248,6 +256,7 @@ class ConversationIndex:
         with self._lock:
             keep = ~np.isin(self._rid, np.fromiter(drop, dtype=np.int64))
             self._rid, self._src, self._own, self._ts = self._rid[keep], self._src[keep], self._own[keep], self._ts[keep]
+            self._thr = self._thr[keep]
             self._vec = self._vec[keep]
 
     # ------------------------------------------------------------------ models
@@ -296,21 +305,21 @@ class ConversationIndex:
     @staticmethod
     def _chat_rows(db: sqlite3.Connection, since_ms: Optional[int] = None):
         """(ref, owner, speaker, ts, text) for private-chat messages."""
-        sql = """SELECT m.id, c.choomId, m.role, m.createdAt, m.content, c.title, ch.name
+        sql = """SELECT m.id, c.choomId, m.role, m.createdAt, m.content, c.title, ch.name, c.id
                  FROM Message m JOIN Chat c ON c.id = m.chatId JOIN Choom ch ON ch.id = c.choomId
                  WHERE m.role IN ('user', 'assistant')"""
         args: tuple = ()
         if since_ms is not None:
             sql += " AND m.createdAt >= ?"
             args = (since_ms,)
-        for ref, owner, role, ms, content, title, name in db.execute(sql, args):
+        for ref, owner, role, ms, content, title, name, chat_id in db.execute(sql, args):
             title = title or ""
             if title.startswith(_SKIP_CHAT_PREFIXES) or not (content or "").strip():
                 continue
             if content.startswith("[You are waking"):
                 continue
             speaker = "Donny" if role == "user" else name
-            yield ref, owner, speaker, ms / 1000.0, _IMG.sub("[photo] ", content), "private chat"
+            yield ref, owner, speaker, ms / 1000.0, _IMG.sub("[photo] ", content), "private chat", chat_id
 
     @staticmethod
     def _room_rows(db: sqlite3.Connection, since_ms: Optional[int] = None):
@@ -323,7 +332,7 @@ class ConversationIndex:
         for ref, room, author, ms, content, title in db.execute(sql, args):
             if not (content or "").strip():
                 continue
-            yield ref, room, author or "Donny", ms / 1000.0, _ROOM_IMG.sub("[photo]", content), f"room {title or 'Untitled room'}"
+            yield ref, room, author or "Donny", ms / 1000.0, _ROOM_IMG.sub("[photo]", content), f"room {title or 'Untitled room'}", room
 
     @staticmethod
     def _memory_rows(db: sqlite3.Connection, after_rowid: Optional[int] = None):
@@ -338,7 +347,7 @@ class ConversationIndex:
     # ------------------------------------------------------------------ writes
 
     def _upsert_many(self, rows: Iterable[tuple], batch: int = 64) -> int:
-        """(Re)index source rows (source, ref, owner, speaker, ts, body, where);
+        """(Re)index source rows (source, ref, owner, speaker, ts, body, where, thread);
         unchanged rows are skipped. Embeds in batches and commits per batch,
         so search works while a backfill runs. Returns rows written."""
         pending: List[tuple] = []
@@ -352,7 +361,7 @@ class ConversationIndex:
             vecs = self._embed(texts) if texts else np.zeros((0, 1), dtype=np.float32)
             at = 0
             with self._lock:
-                for source, ref, owner, speaker, ts, ref_hash, old, pieces in pending:
+                for source, ref, owner, speaker, ts, thread, ref_hash, old, pieces in pending:
                     if old:
                         self._db.executemany("DELETE FROM chunks WHERE rid = ?", [(r,) for r in old])
                         self._drop_matrix(old)
@@ -361,16 +370,16 @@ class ConversationIndex:
                         vec = vecs[at]
                         at += 1
                         cur = self._db.execute(
-                            "INSERT INTO chunks(id, source, owner, ref, speaker, ts, text, ref_hash, vec) VALUES (?,?,?,?,?,?,?,?,?)",
+                            "INSERT INTO chunks(id, source, owner, ref, speaker, ts, text, ref_hash, vec, thread) VALUES (?,?,?,?,?,?,?,?,?,?)",
                             (f"{source}:{ref}#{i}", source, owner, ref, speaker, ts, text, ref_hash,
-                             vec.astype(np.float32).tobytes()))
-                        added.append((cur.lastrowid, source, owner, ts, vec))
+                             vec.astype(np.float32).tobytes(), thread))
+                        added.append((cur.lastrowid, source, owner, ts, vec, thread))
                     self._append_matrix(added)
                 self._db.commit()
             written += len(pending)
             pending.clear()
 
-        for source, ref, owner, speaker, ts, body, where in rows:
+        for source, ref, owner, speaker, ts, body, where, thread in rows:
             ref_hash = _hash(f"{owner}\0{speaker}\0{ts}\0{body}")
             with self._lock:
                 old = self._db.execute("SELECT rid, ref_hash FROM chunks WHERE source = ? AND ref = ?",
@@ -380,7 +389,7 @@ class ConversationIndex:
             # Memories stay whole (the benchmark embedded them whole; median
             # 857 chars); conversation lines are chunked and labelled.
             pieces = [body.strip()] if source == "memory" else [f"[{where} · {speaker}] {p}" for p in chunk_text(body)]
-            pending.append((source, ref, owner, speaker, ts, ref_hash, [r for r, _ in old], pieces))
+            pending.append((source, ref, owner, speaker, ts, thread, ref_hash, [r for r, _ in old], pieces))
             if sum(len(p[-1]) for p in pending) >= batch:
                 flush()
         flush()
@@ -417,7 +426,7 @@ class ConversationIndex:
                 mark = int(self._get_state("memory_rowid", "0") or 0)
                 rows = list(self._memory_rows(mem, mark))
                 newest = max([mark] + [r[0] for r in rows])
-                counts["memory"] += self._upsert_many(("memory", *r[1:], "memory") for r in rows)
+                counts["memory"] += self._upsert_many(("memory", *r[1:], "memory", r[2]) for r in rows)
                 with self._lock:
                     self._set_state("memory_rowid", newest)
                     self._db.commit()
@@ -437,7 +446,7 @@ class ConversationIndex:
             with self._mem() as mem:
                 rows = list(self._memory_rows(mem))
                 live["memory"].update(r[1] for r in rows)
-                counts["updated"] += self._upsert_many(("memory", *r[1:], "memory") for r in rows)
+                counts["updated"] += self._upsert_many(("memory", *r[1:], "memory", r[2]) for r in rows)
         for kind, refs in live.items():
             with self._lock:
                 indexed = {r for (r,) in self._db.execute("SELECT DISTINCT ref FROM chunks WHERE source = ?", (kind,))}
@@ -447,6 +456,29 @@ class ConversationIndex:
         self.status["last_reconcile"] = datetime.now(timezone.utc).isoformat()
         return counts
 
+    def _backfill_threads(self) -> int:
+        """Fill `thread` on chunks indexed before it existed (no re-embedding)."""
+        with self._lock:
+            missing = self._db.execute("SELECT COUNT(*) FROM chunks WHERE thread IS NULL").fetchone()[0]
+            if not missing:
+                return 0
+            self._db.execute("UPDATE chunks SET thread = owner WHERE thread IS NULL AND source != 'chat'")
+            refs = [r for (r,) in self._db.execute("SELECT DISTINCT ref FROM chunks WHERE thread IS NULL AND source = 'chat'")]
+        if refs:
+            with self._app() as app:
+                chat_of = {}
+                for i in range(0, len(refs), 500):
+                    part = refs[i:i + 500]
+                    chat_of.update(app.execute(
+                        f"SELECT id, chatId FROM Message WHERE id IN ({','.join('?' * len(part))})", part).fetchall())
+            with self._lock:
+                self._db.executemany("UPDATE chunks SET thread = ? WHERE source = 'chat' AND ref = ?",
+                                     [(c, r) for r, c in chat_of.items()])
+        with self._lock:
+            self._db.commit()
+        self._load_matrix()
+        return missing
+
     def start(self):
         """Background ingest: a full reconcile first (that is the backfill), then tail."""
         if self._thread and self._thread.is_alive():
@@ -454,6 +486,13 @@ class ConversationIndex:
 
         def loop():
             last_reconcile = 0.0
+            warmed = False
+            try:
+                n = self._backfill_threads()
+                if n:
+                    logger.info("Conversation index: filled thread on %d older chunks", n)
+            except Exception:
+                logger.exception("Conversation index thread backfill failed")
             while not self._stop.is_set():
                 try:
                     if time.time() - last_reconcile >= RECONCILE_SECONDS:
@@ -466,6 +505,11 @@ class ConversationIndex:
                     c = self.ingest_once()
                     if any(c.values()):
                         logger.info("Conversation index ingest: %s", c)
+                    if not warmed:
+                        # Load the reranker now, not on the first search (that
+                        # search would otherwise pay ~10 s and time out).
+                        self._rerank("warm up", ["warm up"])
+                        warmed = True
                     self.status["state"] = "idle"
                     self.status["error"] = None
                 except Exception as e:  # never take the memory server down
@@ -515,8 +559,16 @@ class ConversationIndex:
         k: int = 5,
         pool: int = POOL,
         half_life_days: float = HALF_LIFE_DAYS,
+        exclude_thread: Optional[str] = None,
+        exclude_since: Optional[float] = None,
+        min_relevance: Optional[float] = None,
     ) -> List[dict]:
-        """Top k items this Choom may see. room_turn=True never returns private chats."""
+        """Top k items this Choom may see. room_turn=True never returns private chats.
+
+        exclude_thread/exclude_since: skip that chat or room from that moment on —
+        the stretch of the current conversation already in the prompt (auto-recall
+        would otherwise hand back the lines just above the new message).
+        min_relevance: drop results the reranker scores below this (raw logit)."""
         query = (query or "").strip()
         if not query:
             return []
@@ -552,6 +604,10 @@ class ConversationIndex:
         if rooms:
             mask |= (src == "room") & np.isin(own, rooms)
         mask &= ts < now
+        if exclude_thread and exclude_since is not None:
+            with self._lock:
+                thr = self._thr
+            mask &= ~((thr == exclude_thread) & (ts >= exclude_since))
         dense_rank: List[int] = []
         if mask.any():
             qv = self._embed([query])[0]
@@ -563,30 +619,34 @@ class ConversationIndex:
         bm25_rank: List[int] = []
         match = fts_query(query)
         if match:
+            skip_sql, skip_args = "", []
+            if exclude_thread and exclude_since is not None:
+                skip_sql = " AND NOT (COALESCE(c.thread, c.owner) = ? AND c.ts >= ?)"
+                skip_args = [exclude_thread, exclude_since]
             with self._lock:
                 bm25_rank = [r for (r,) in self._db.execute(
                     f"""SELECT c.rid FROM chunks_fts JOIN chunks c ON c.rid = chunks_fts.rowid
-                        WHERE chunks_fts MATCH ? AND {scope_sql} AND c.ts < ?
+                        WHERE chunks_fts MATCH ? AND {scope_sql} AND c.ts < ?{skip_sql}
                         ORDER BY bm25(chunks_fts) LIMIT ?""",
-                    (match, *args, now, pool)).fetchall()]
+                    (match, *args, now, *skip_args, pool)).fetchall()]
 
         fused = rrf(dense_rank, bm25_rank)[:pool]
         if not fused:
             return []
         with self._lock:
             rows = {r[0]: r for r in self._db.execute(
-                f"SELECT rid, source, owner, ref, speaker, ts, text FROM chunks WHERE rid IN ({','.join('?' * len(fused))})",
+                f"SELECT rid, source, owner, ref, speaker, ts, text, COALESCE(thread, owner) FROM chunks WHERE rid IN ({','.join('?' * len(fused))})",
                 fused).fetchall()}
         fused = [r for r in fused if r in rows]
         scores = self._rerank(query, [rows[r][6] for r in fused])
         age_days = np.array([(now - rows[r][5]) / 86400.0 for r in fused])
         final = scores + math.log(0.5) * age_days / half_life_days
-        order = np.argsort(-final)[:k]
+        order = [j for j in np.argsort(-final) if min_relevance is None or scores[j] >= min_relevance][:k]
         out = []
         for j in order:
             r = rows[fused[j]]
             out.append({
-                "id": r[3], "source": r[1], "speaker": r[4], "ts": r[5],
+                "id": r[3], "source": r[1], "speaker": r[4], "ts": r[5], "thread": r[7],
                 "when": datetime.fromtimestamp(r[5], LOCAL).strftime("%Y-%m-%d %H:%M"),
                 "text": r[6], "relevance": round(float(scores[j]), 3), "score": round(float(final[j]), 3),
             })
