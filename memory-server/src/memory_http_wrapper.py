@@ -18,6 +18,12 @@ from .memory_mcp import DATA_FOLDER, RobustMemorySystem
 # Initialize memory system
 memory_system: Optional[RobustMemorySystem] = None
 
+# Conversation index (memories + private chats + rooms, ForgeRAG-style
+# retrieval). Built and tailed in a background thread; CHOOM_CONVERSATION_INDEX=0
+# turns it off. Nothing depends on it yet — search_memories still uses the
+# memory store above.
+conversation_index = None
+
 
 # ============================================================================
 # Pydantic Models
@@ -73,6 +79,18 @@ class UpdateMemoryRequest(BaseModel):
     memory_type: Optional[str] = None
 
 
+class ConversationSearchRequest(BaseModel):
+    query: str
+    choom_id: str
+    companion_id: Optional[str] = None
+    # A group-room turn never sees private chats.
+    room_turn: bool = False
+    sources: Optional[List[str]] = None  # memory | chat | room
+    limit: int = Field(default=5, ge=1, le=20)
+    # Epoch seconds: only items written before this (benchmarks).
+    as_of: Optional[float] = None
+
+
 class MemoryResult(BaseModel):
     success: bool
     reason: Optional[str] = None
@@ -89,7 +107,19 @@ async def lifespan(app: FastAPI):
     global memory_system
     print(f"Initializing memory system from: {DATA_FOLDER}")
     memory_system = RobustMemorySystem(data_folder=DATA_FOLDER)
+    global conversation_index
+    if os.environ.get("CHOOM_CONVERSATION_INDEX", "1") != "0":
+        try:
+            from .conversation_index import ConversationIndex
+            conversation_index = ConversationIndex(DATA_FOLDER)
+            conversation_index.start()
+            print(f"Conversation index: {conversation_index.path} (ingesting in background)")
+        except Exception as e:  # the memory server must come up regardless
+            conversation_index = None
+            print(f"Conversation index disabled: {e}")
     yield
+    if conversation_index:
+        conversation_index.stop()
     if memory_system:
         memory_system.close()
         print("Memory system closed")
@@ -314,6 +344,34 @@ async def rebuild_vectors():
 
     result = memory_system.rebuild_vector_index()
     return result_to_dict(result)
+
+
+# ============================================================================
+# Conversation index
+# ============================================================================
+
+@app.get("/conversations/status")
+def conversations_status():
+    if not conversation_index:
+        return {"enabled": False}
+    return {"enabled": True, **conversation_index.stats()}
+
+
+# Plain `def`: the rerank takes ~0.5-0.8 s, so FastAPI runs this on a worker
+# thread instead of stalling every other memory request on the event loop.
+@app.post("/conversations/search")
+def conversations_search(request: ConversationSearchRequest):
+    if not conversation_index:
+        raise HTTPException(status_code=503, detail="Conversation index is disabled")
+    try:
+        data = conversation_index.search(
+            request.query, request.choom_id, request.companion_id,
+            room_turn=request.room_turn, as_of=request.as_of,
+            sources=request.sources, k=request.limit,
+        )
+        return {"success": True, "data": data}
+    except Exception as e:
+        return {"success": False, "reason": f"Conversation search failed: {e}"}
 
 
 # ============================================================================

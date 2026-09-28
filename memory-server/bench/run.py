@@ -264,12 +264,37 @@ SYSTEMS["rr-all-d7-b1-pool20"] = make_system(ALL, rerank=RR, time_mode="decay:7"
 SYSTEMS["bgebase-rr-all-d7-b1"] = make_system(ALL, model="bgebase", rerank=RR, time_mode="decay:7", donny_bonus=1)
 
 
+_index = None
+
+
+def index_system(ctx, q, cand, k):
+    """The production ConversationIndex (src/conversation_index.py), built from
+    the live databases into bench/.cache/index — what the server will run."""
+    global _index
+    if _index is None:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+        from conversation_index import ConversationIndex
+        t = time.time()
+        _index = ConversationIndex(CACHE, app_db=corpus.APP_DB, memory_db=corpus.MEMORY_DB)
+        c = _index.reconcile()
+        print(f"[index: reconcile {c} in {time.time() - t:.0f}s; {_index.stats()['chunks']}]", file=sys.stderr)
+    hits = _index.search(q, corpus.CHOOMS[ctx.choom]["choom_id"], corpus.CHOOMS[ctx.choom]["companion_id"],
+                         as_of=ctx.now, k=k)
+    # Score the chunk the index returned, not the message's first chunk.
+    by_text = {(it.id.split("#")[0], it.text): i for i, it in enumerate(ctx.items)}
+    by_id = {}
+    for i, it in enumerate(ctx.items):
+        by_id.setdefault(it.id.split("#")[0], i)
+    return [by_text.get((h["id"], h["text"]), by_id.get(h["id"])) for h in hits if h["id"] in by_id]
+
+
 def _bm25_mem(ctx, q, cand, k):
     idx = [i for i in cand if ctx.items[i].source == "memory"]
     return bm25_rank(ctx, q, idx, k)
 
 
 SYSTEMS["bm25-mem"] = _bm25_mem
+SYSTEMS["index"] = index_system
 
 
 # ---------------------------------------------------------------- run
@@ -301,6 +326,7 @@ def main():
         c.bm25 = BM25([it.text for it in c.items])
         c.rr_time = []
         c.rr_cache = {}
+        c.choom = choom
         ctxs[choom] = c
     for k, (n, secs) in timings.items():
         print(f"[{k}: {n} items in {secs:.0f}s = {n / max(secs, 1e-9):.0f}/s]", file=sys.stderr)
