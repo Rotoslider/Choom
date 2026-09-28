@@ -97,3 +97,60 @@ describe('schedule_self_followup — time under the wrong key', () => {
     expect(JSON.stringify(res.result)).not.toContain('heads-up');
   });
 });
+
+describe('schedule_self_followup — time only in the prompt heading (2026-09-28)', () => {
+  // DeepSeek wrote the time into the prompt and left out `at` on 45 calls in
+  // two weeks; 35 were never retried, so those wake-ups were lost.
+  test('the incident shape schedules at the heading time and says so', async () => {
+    const res = await handler.execute(call({
+      prompt: 'Tomorrow 7:30 AM, morning check: house status, weather, inbox. Then create 5 more self-followups.',
+      reason: 'morning presence',
+    }), ctx);
+    expect(res.error).toBeUndefined();
+    expect(written).toHaveLength(1);
+    const at = new Date(written[0].entry.trigger_at as string);
+    const local = at.toLocaleString('en-US', { timeZone: 'America/Denver', hour: 'numeric', minute: '2-digit' });
+    expect(local).toBe('7:30 AM');
+    expect(JSON.stringify(res.result)).toContain("read the time from your prompt's heading");
+  });
+
+  test('a time later in the task, not the heading, is not a schedule', async () => {
+    const res = await handler.execute(call({
+      prompt: 'Evening check: ask Donny whether the 3 PM huddle ran long.',
+    }), ctx);
+    expect(res.error).toContain('Provide either `at`');
+    expect(written).toHaveLength(0);
+  });
+
+  test('a heading with no clock time still errors', async () => {
+    const res = await handler.execute(call({ prompt: 'Sunday morning check-in routine: warm greeting for Donny.', repeat: 'daily' }), ctx);
+    expect(res.error).toContain('Provide either `at`');
+    expect(written).toHaveLength(0);
+  });
+});
+
+describe('parseLocalDateTime — named weekdays (2026-09-28)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { parseLocalDateTime, timeFromPromptHeading } = require('@/lib/local-time-parse') as typeof import('@/lib/local-time-parse');
+  const TZ = 'America/Denver';
+  const MON_11AM = new Date('2026-09-28T17:00:00Z'); // Monday 11:00 AM MDT
+  const local = (d: Date | null) => d && d.toLocaleString('en-US', { timeZone: TZ, weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+
+  test('"Saturday 9am" on a Monday is this Saturday, not tomorrow', () => {
+    expect(local(parseLocalDateTime('Saturday 9am', TZ, MON_11AM))).toBe('Sat, Oct 3, 9:00 AM');
+  });
+  test('today\'s weekday: later today if still ahead, next week if passed', () => {
+    expect(local(parseLocalDateTime('2:00pm Monday', TZ, MON_11AM))).toBe('Mon, Sep 28, 2:00 PM');
+    expect(local(parseLocalDateTime('Monday 9am', TZ, MON_11AM))).toBe('Mon, Oct 5, 9:00 AM');
+  });
+  test('an explicit date wins over the weekday; abbreviations are ordinary words', () => {
+    expect(local(parseLocalDateTime('Wed Sep 30 8am', TZ, MON_11AM))).toBe('Wed, Sep 30, 8:00 AM');
+    expect(local(parseLocalDateTime('sat 9am', TZ, MON_11AM))).toBe('Tue, Sep 29, 9:00 AM');
+  });
+  test('headings from the real failures', () => {
+    const WED_1046PM = new Date('2026-09-24T04:46:00Z');
+    expect(local(timeFromPromptHeading('Thursday 6:30 AM, departure day: final pre-trip check', TZ, WED_1046PM))).toBe('Thu, Sep 24, 6:30 AM');
+    expect(local(timeFromPromptHeading('Late-night quiet check (~12:30 AM Thu Sep 24): Donny is asleep.', TZ, WED_1046PM))).toBe('Thu, Sep 24, 12:30 AM');
+    expect(timeFromPromptHeading('Weekend Ark check-in: watch at 8 PM', TZ, WED_1046PM)).toBeNull();
+  });
+});

@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
 import prisma from '@/lib/db';
-import { parseLocalDateTime } from '@/lib/local-time-parse';
+import { parseLocalDateTime, timeFromPromptHeading } from '@/lib/local-time-parse';
 import { parseRule, parseWeekday, nextOccurrence, describeRepeat, seriesKey, findCoveringEntry, oneShotsCoveredByRoutine, SLOT_WINDOW_MIN, type Repeat } from '@/lib/self-followup-recurrence';
 import {
   QUEUE_ROOT,
@@ -118,6 +118,21 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
     }
     const hasDelay = rawDelay !== undefined && rawDelay !== null && String(rawDelay).trim() !== '';
     if (!hasDelay) {
+      // No time argument, but the prompt's heading names one ("Thursday 6:30
+      // AM, departure day: …") — use it and say so, rather than lose the
+      // wake-up: most models never retried this error (35 of 45, 09-14..28).
+      const fromHeading = timeFromPromptHeading(typeof args.prompt === 'string' ? args.prompt : '', USER_TZ);
+      if (fromHeading && fromHeading.getTime() > now) {
+        let t = fromHeading.getTime();
+        let clamp = '';
+        if (t < minMs) { t = minMs; clamp = `, bumped to ${fmtLocal(new Date(minMs))} for the ${MIN_DELAY_MIN}-min minimum lead time`; }
+        else if (t > maxMs) { t = maxMs; clamp = ', capped to the 30-day maximum'; }
+        return {
+          triggerAt: new Date(t),
+          note: ` (no \`at\` was given, so I read the time from your prompt's heading: ${fmtLocal(fromHeading)}${clamp}. Pass it as \`at\` next time; if that's not the time you meant, cancel this one and schedule again with \`at\`.)`,
+          effectiveMinutes: Math.round((t - now) / 60000),
+        };
+      }
       // Name the keys that DID arrive — "you sent X" beats "you sent nothing"
       // when the model is staring at its own call wondering what was wrong.
       const KNOWN = new Set(['at', 'delay_minutes', 'prompt', 'reason', 'room']);

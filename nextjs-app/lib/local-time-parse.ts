@@ -39,6 +39,7 @@ function zonedWallClockToUtc(
 }
 
 const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+const WEEKDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
 
 // Parse `input` as a wall-clock date/time in `tz`. Returns the UTC Date, or null
 // if no usable time-of-day could be found. A time with no date defaults to today
@@ -87,6 +88,19 @@ export function parseLocalDateTime(input: string, tz: string, now: Date = new Da
   if (hour < 0 || hour > 23 || minute > 59) return null;
   if (month < 1 || month > 12 || day < 1 || day > 31) return null;
 
+  // A named weekday with no date ("Saturday 9am") means its next occurrence —
+  // it used to be dropped, so "Saturday 9am" said on a Monday meant Tuesday.
+  // Full names only: "sat", "sun" and "wed" are ordinary words.
+  const wd = !hasExplicitDate && !tomorrow ? s.match(/\b(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/) : null;
+  if (wd) {
+    const target = WEEKDAYS.indexOf(wd[1]);
+    const todayIdx = new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+    let ahead = (target - todayIdx + 7) % 7;
+    if (ahead === 0 && zonedWallClockToUtc(year, month, day, hour, minute, tz).getTime() <= now.getTime()) ahead = 7;
+    const d = getZonedParts(new Date(zonedWallClockToUtc(year, month, day, 12, 0, tz).getTime() + ahead * 86400000), tz);
+    return zonedWallClockToUtc(d.year, d.month, d.day, hour, minute, tz);
+  }
+
   let dt = zonedWallClockToUtc(year, month, day, hour, minute, tz);
 
   // Time-only and already past → mean the next occurrence (tomorrow).
@@ -95,4 +109,16 @@ export function parseLocalDateTime(input: string, tz: string, now: Date = new Da
     dt = zonedWallClockToUtc(next.year, next.month, next.day, hour, minute, tz);
   }
   return dt;
+}
+
+// The time a followup prompt names in its HEADING — the label before the first
+// ": " ("Thursday 6:30 AM, departure day: …", "Late-night check (~12:30 AM Thu
+// Sep 24): …"). DeepSeek wrote the time there and left out `at` on 45
+// schedule_self_followup calls in two weeks (2026-09-14..28); 35 were never
+// retried, so the wake-up was lost. Only the heading is read, and only when it
+// names a clock time — a time mentioned later in the task is not a schedule.
+export function timeFromPromptHeading(prompt: string, tz: string, now: Date = new Date()): Date | null {
+  const heading = (prompt || '').slice(0, 140).split(/:\s/)[0];
+  if (!/\d\s*[ap]\.?m\b|\b\d{1,2}:\d{2}\b/i.test(heading)) return null;
+  return parseLocalDateTime(heading, tz, now);
 }
