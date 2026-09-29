@@ -141,3 +141,16 @@ describe('fine-grained error classes (C-09)', () => {
     expect(classOf('Memory not found')).not.toBe('upstream_4xx');
   });
 });
+
+describe('freecad open misses (2026-09-29)', () => {
+  // Counted as hard failures, two wrong guesses disabled open_freecad_document
+  // and Eve's third try — the right path — was refused.
+  test.each([
+    'No file at "freecad/eve_bracket_v1.FCStd" (looked at /Users/donnymott/choom-projects/freecad/eve_bracket_v1.FCStd). Use workspace_list_files to find the .FCStd, then pass its path relative to the workspace root.',
+    'No file at "freecad/bracket.FCStd". Files with that name, newest first: "uploads/freecad/bracket.FCStd". Call open_freecad_document again with the one you mean.',
+    'No file named "bracket.FCStd" anywhere in the workspace. The newest .FCStd files are: "freecad/freecad/eve_bracket_v2.FCStd".',
+  ])('%s', (e) => {
+    expect(recoverable(e, 'open_freecad_document')).toBe(true);
+  });
+});
+

@@ -64,8 +64,11 @@ export const NO_DATA = /no (?:history |data |results? )(?:data |found )?for /i;
  * ('), curly (’) or absent apostrophes. Do not narrow this without updating
  * __tests__/recoverable-error-classification.test.ts.
  */
+// "No file at" is the freecad skill's open_freecad_document miss — counted as
+// a hard failure it disabled the tool after two wrong guesses, and Eve's third
+// try (the right path) was refused (2026-09-29).
 export const PATH_ERROR =
-  /ENOENT|no such file or directory|file not found|path not found|does\s?n[o']?t exist|doesn[’']t exist|does not exist|not found in project/i;
+  /ENOENT|no such file or directory|file not found|path not found|does\s?n[o']?t exist|doesn[’']t exist|does not exist|not found in project|no file (?:at|named)\b/i;
 
 /**
  * A reference (image id, entity id, camera, service) that does not exist AND
