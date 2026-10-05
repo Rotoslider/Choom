@@ -11,6 +11,10 @@
  * Voice hand-off: while the hologram posts heartbeats saying it is speaking, browsers on the home
  * network stay quiet (lib/hologram-voice.ts), so a reply is never spoken twice and Chatterbox
  * never renders it twice.
+ *
+ * Like the web app, the hologram speaks a conversation only while a browser at home has that
+ * chat or room open: each content event carries `speak`, decided when it is sent. Rooms the
+ * Chooms run on their own, Signal chats and heartbeats are shown but stay silent.
  */
 import { isSentenceEnd, stripForTTS } from '@/lib/utils';
 
@@ -20,6 +24,7 @@ export interface HologramTurn {
   chatId: string;
   voice: string | null;
   source: 'chat' | 'group' | 'heartbeat' | 'delegation';
+  roomId: string | null;
 }
 
 type HologramEvent = Record<string, unknown>;
@@ -29,6 +34,7 @@ type Listener = (event: HologramEvent) => void;
 const store = globalThis as unknown as {
   __choomHologramListeners?: Set<Listener>;
   __choomHologramVoice?: { voice: boolean; at: number };
+  __choomHologramViewing?: Map<string, number>;
 };
 const listeners = (store.__choomHologramListeners ??= new Set<Listener>());
 
@@ -70,6 +76,25 @@ export function setHologramMuted(muted: boolean): void {
   // right after an unmute already know the hologram has the voice back (if it's running).
   const v = store.__choomHologramVoice;
   if (v && Date.now() - v.at < VOICE_FRESH_MS) setHologramVoice(!muted);
+}
+
+// ---- What browsers at home have open -------------------------------------------------------
+const viewing = (store.__choomHologramViewing ??= new Map<string, number>());
+
+/** A browser at home has this chat or room open (reported with each hand-off poll, every 10 s). */
+export function markViewing(kind: 'chat' | 'room', id: string): void {
+  viewing.set(`${kind}:${id}`, Date.now());
+}
+
+function isViewing(kind: 'chat' | 'room', id: string | null): boolean {
+  const at = id ? viewing.get(`${kind}:${id}`) : undefined;
+  return at !== undefined && Date.now() - at < VOICE_FRESH_MS;
+}
+
+function shouldSpeak(turn: HologramTurn): boolean {
+  if (turn.source === 'chat') return isViewing('chat', turn.chatId);
+  if (turn.source === 'group') return isViewing('room', turn.roomId);
+  return false; // heartbeats and delegation are shown, never spoken
 }
 
 // ---- Turn mirroring ------------------------------------------------------------------------
@@ -165,7 +190,8 @@ class SpeechSegmenter {
  * when the turn finishes. Cheap when nobody is subscribed.
  */
 export function startHologramTurn(turn: HologramTurn): { event: (data: Record<string, unknown>) => void; end: () => void } {
-  const speech = new SpeechSegmenter((text) => publishHologram({ type: 'content', ...turn, text }));
+  const speech = new SpeechSegmenter((text) =>
+    publishHologram({ type: 'content', ...turn, text, speak: shouldSpeak(turn) }));
   publishHologram({ type: 'turn_start', ...turn });
   return {
     event(data) {

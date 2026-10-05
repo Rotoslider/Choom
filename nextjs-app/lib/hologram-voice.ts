@@ -8,15 +8,23 @@
  * broadcastMute() tells the hologram to stop talking. Only changes are sent, never the
  * initial sync on page load, so opening a page can't override the hologram's state.
  * Per-message play buttons are unaffected.
+ *
+ * Each poll also says which chat or room this page has open (setHologramViewing): like the web
+ * app, the hologram speaks a conversation only while someone at home has it open.
  */
 import { registerAudioPlayer } from './audio-registry';
 
 let active = false;
 let lastMuted: boolean | null = null;
+let viewing: { chat?: string | null; room?: string | null } = {};
 
 async function refresh(): Promise<void> {
   try {
-    const res = await fetch('/api/hologram/voice', { cache: 'no-store' });
+    const q = new URLSearchParams();
+    if (viewing.chat) q.set('chat', viewing.chat);
+    if (viewing.room) q.set('room', viewing.room);
+    const qs = q.toString();
+    const res = await fetch(`/api/hologram/voice${qs ? `?${qs}` : ''}`, { cache: 'no-store' });
     active = res.ok && (await res.json()).voice === true;
   } catch {
     active = false;
@@ -40,6 +48,12 @@ if (typeof window !== 'undefined') {
       setTimeout(() => void refresh(), 1500);
     },
   });
+}
+
+/** Tell the hologram which conversation this page has open (null/empty when none). */
+export function setHologramViewing(v: { chat?: string | null; room?: string | null }): void {
+  viewing = v;
+  if (typeof window !== 'undefined') void refresh();
 }
 
 /** True when the hologram is speaking for the Chooms, so this browser should not. */

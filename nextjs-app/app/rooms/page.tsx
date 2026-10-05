@@ -19,6 +19,7 @@ import { useAppStore } from '@/lib/store';
 import { RoomTTSQueue } from '@/lib/room-tts-queue';
 import { broadcastMute } from '@/lib/audio-registry';
 import { cn, isSentenceEnd, formatDayTime } from '@/lib/utils';
+import { setHologramViewing } from '@/lib/hologram-voice';
 import type { Choom } from '@/lib/types';
 import { ThinkingBox } from '@/components/chat/thinking-box';
 
@@ -212,6 +213,12 @@ export default function RoomsPage() {
   // Point the activity-log store at the CURRENT ROOM. This does two things:
   // (1) any STT/TTS the user triggers here is tagged with the room id, not the
   // stale 1:1 chat id that was leaking group speech into the main chat's log;
+  // The Looking Glass hologram speaks only the room someone at home has open.
+  useEffect(() => {
+    setHologramViewing({ room: currentRoomId });
+    return () => setHologramViewing({});
+  }, [currentRoomId]);
+
   // (2) loads this room's activity (group turns are server-tagged with the room
   // id) so the room's Activity Log panel can show it.
   useEffect(() => {

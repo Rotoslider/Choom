@@ -15,6 +15,7 @@ import { log, useLogStore } from '@/lib/log-store';
 import { recoverReply } from '@/lib/stream-recovery';
 import type { Message, Choom, Chat, StreamingChatChunk, ServiceHealth } from '@/lib/types';
 import { cn } from '@/lib/utils';
+import { setHologramViewing } from '@/lib/hologram-voice';
 
 export default function Home() {
   const {
@@ -229,6 +230,12 @@ export default function Home() {
 
     fetchMessages();
   }, [currentChatId, chats]);
+
+  // The Looking Glass hologram speaks only the conversation someone at home has open.
+  useEffect(() => {
+    setHologramViewing({ chat: currentChatId || null });
+    return () => setHologramViewing({});
+  }, [currentChatId]);
 
   // Update activity log context and load persisted logs when choom/chat changes
   useEffect(() => {

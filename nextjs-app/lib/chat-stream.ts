@@ -104,6 +104,7 @@ export async function runChatTurn(params: ChatTurnParams): Promise<void> {
           chatId,
           voice: choom.voiceId ?? null,
           source: isHeartbeat ? 'heartbeat' : isDelegation ? 'delegation' : isGroupTurn ? 'group' : 'chat',
+          roomId: groupRoomId ?? null,
         });
         const send = (data: Record<string, unknown>) => {
           hologram.event(data);
