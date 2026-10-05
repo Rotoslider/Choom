@@ -8,3 +8,5 @@ portraits/*/mouth_check.jpg
 # Avatars stay local (this repo is public): each Choom's Avaturn export, and the stand-in
 # (TalkingHead's Avaturn sample, non-commercial; not ours to redistribute)
 bodies/
+# Per-frame cut-outs for make_alive.py (intermediate; rebuilt by tools/make_alive_masks.py)
+portraits/*/alive_masks.npz

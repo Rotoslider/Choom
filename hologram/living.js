@@ -50,9 +50,27 @@ const portraits = await Promise.all(manifest.map(async (m) => {
   );
   // Where her mouth is, for lip sync (tools/make_landmarks.py); absent means no lip sync.
   const mouth = await fetch(`${dir}/mouth.json`, { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  // A moving relief (tools/make_alive.py): her idle loop as video, color on top and depth below,
+  // with her mouth position for every frame. When present it replaces the still image.
+  const alive = await fetch(`${dir}/alive.json`, { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  let video = null;
+  let videoTexture = null;
+  if (alive) {
+    video = document.createElement('video');
+    Object.assign(video, { src: `${dir}/alive.mp4`, muted: true, loop: true, playsInline: true, preload: 'auto' });
+    videoTexture = new THREE.VideoTexture(video);
+    videoTexture.colorSpace = THREE.NoColorSpace; // color and depth share it; the shader decodes each
+    videoTexture.generateMipmaps = false;
+    videoTexture.minFilter = THREE.LinearFilter;
+    videoTexture.magFilter = THREE.LinearFilter;
+  }
   return {
     ...m,
     mouth,
+    alive,
+    video,
+    videoTexture,
+    aliveFrame: 0,
     role: ROLES[m.id] || '',
     color: asColor(color),
     depth: asData(depth),
@@ -111,6 +129,7 @@ function layerMaterial({ segX, segY, edgeThreshold, useMask }) {
       mouthTilt: { value: 0 },
       mouthShape: { value: new THREE.Vector3() },        // jaw open, lips round, lips wide (0..1)
       texSize: { value: new THREE.Vector2(1536, 2048) },
+      packed: { value: 0 },                               // 1: colorMap is a moving relief video
       edgeThreshold: { value: edgeThreshold },
       texel: { value: new THREE.Vector2(1 / segX, 1 / segY) },
     },
@@ -119,19 +138,35 @@ function layerMaterial({ segX, segY, edgeThreshold, useMask }) {
   });
 }
 
+// A moving relief stacks three panels in its video: her color on top, her depth in the middle, her
+// cut-out at the bottom (texture v runs bottom-up). Edges are clamped so panels don't bleed.
+const PACKED_GLSL = /* glsl */ `
+    uniform int packed;
+    vec2 panelUv(vec2 uv, float panel) {
+      return vec2(uv.x, clamp((panel + uv.y) / 3.0, panel / 3.0 + 0.0003, (panel + 1.0) / 3.0 - 0.0003));
+    }
+    vec2 colorUv(vec2 uv) { return packed == 1 ? panelUv(uv, 2.0) : uv; }
+    float depthAt(sampler2D depthMap, vec2 uv) {
+      return texture2D(depthMap, packed == 1 ? panelUv(uv, 1.0) : uv).r;
+    }
+    float maskAt(sampler2D maskMap, vec2 uv) {
+      return texture2D(maskMap, packed == 1 ? panelUv(uv, 0.0) : uv).r;
+    }`;
+
 const LAYER_VERT = /* glsl */ `
     uniform sampler2D depthMap;
     uniform float focus, depthScale, faceZ;
     uniform vec2 texel;
     varying vec2 vUv;
     varying float vEdge;
+    ${PACKED_GLSL}
     void main() {
       vUv = uv;
-      float d = texture2D(depthMap, uv).r;
-      float dl = texture2D(depthMap, uv - vec2(texel.x, 0.0)).r;
-      float dr = texture2D(depthMap, uv + vec2(texel.x, 0.0)).r;
-      float dd = texture2D(depthMap, uv - vec2(0.0, texel.y)).r;
-      float du = texture2D(depthMap, uv + vec2(0.0, texel.y)).r;
+      float d = depthAt(depthMap, uv);
+      float dl = depthAt(depthMap, uv - vec2(texel.x, 0.0));
+      float dr = depthAt(depthMap, uv + vec2(texel.x, 0.0));
+      float dd = depthAt(depthMap, uv - vec2(0.0, texel.y));
+      float du = depthAt(depthMap, uv + vec2(0.0, texel.y));
       vEdge = max(max(abs(d - dl), abs(d - dr)), max(abs(d - dd), abs(d - du)));
       vec3 p = position;
       p.z = (d - focus) * depthScale + faceZ;
@@ -147,7 +182,14 @@ const LAYER_FRAG = /* glsl */ `
     uniform float mouthTilt;
     varying vec2 vUv;
     varying float vEdge;
+    ${PACKED_GLSL}
     float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+    // Video frames arrive as raw sRGB values; still images are decoded by the GPU.
+    vec3 colorAt(vec2 uv) {
+      vec3 c = texture2D(colorMap, colorUv(uv)).rgb;
+      if (packed == 1) c = mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c));
+      return c;
+    }
 
     // Talking, the way a mouth opens: the corners stay put and the lips part in a lens shape from
     // corner to corner. Right under the lips the lower lip drops by that lens profile (zero at the
@@ -188,18 +230,18 @@ const LAYER_FRAG = /* glsl */ `
     }
 
     void main() {
-      if (useMask == 1 && texture2D(maskMap, vUv).r < 0.5) discard;
+      if (useMask == 1 && maskAt(maskMap, vUv) < 0.5) discard;
       // Only extreme depth jumps are dropped. Smaller ones stretch, which shows nearby skin or
       // cloth instead of a black gap.
       if (vEdge > edgeThreshold) discard;
       float gap = 0.0;
       vec2 spot = vec2(0.0);
       vec2 uv = mouthOn == 1 ? mouthWarp(vUv, gap, spot) : vUv;
-      vec3 c = texture2D(colorMap, uv).rgb;
+      vec3 c = colorAt(uv);
       if (gap > 0.0) {
         // The inside of her mouth, tinted from her own lips so it matches each Choom's light:
         // darkest up under the upper lip, a soft tongue rising from the bottom in the middle.
-        vec3 lip = texture2D(colorMap, mouthC).rgb;
+        vec3 lip = colorAt(mouthC);
         float height = spot.x;
         float middle = spot.y;
         vec3 inside = lip * mix(0.2, 0.06, smoothstep(0.35, 1.0, height));
@@ -209,7 +251,7 @@ const LAYER_FRAG = /* glsl */ `
       }
       if (sparkle > 0.0) {
         // Genesis is made of motes: let the bright specks in her image twinkle on their own.
-        vec3 local = texture2D(colorMap, vUv, 3.5).rgb;
+        vec3 local = packed == 1 ? colorAt(vUv) : texture2D(colorMap, vUv, 3.5).rgb;
         float speck = smoothstep(0.03, 0.22, dot(c - local, vec3(0.3, 0.5, 0.2)));
         float n = hash(floor(vUv * vec2(512.0, 683.0)));
         float twinkle = 0.25 + 1.5 * (0.5 + 0.5 * sin(time * (1.5 + 2.5 * n) + n * 6.2831));
@@ -221,11 +263,12 @@ const LAYER_FRAG = /* glsl */ `
 const frontMaterial = layerMaterial({ segX: 384, segY: 512, edgeThreshold: 0.35, useMask: true });
 const plateMaterial = layerMaterial({ segX: 192, segY: 256, edgeThreshold: 0.22, useMask: false });
 const portrait = new THREE.Group();
-for (const [material, segX, segY] of [[plateMaterial, 192, 256], [frontMaterial, 384, 512]]) {
+const [plateMesh] = [[plateMaterial, 192, 256], [frontMaterial, 384, 512]].map(([material, segX, segY]) => {
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 2.0, segX, segY), material);
   mesh.frustumCulled = false;
   portrait.add(mesh);
-}
+  return mesh;
+});
 portrait.scale.setScalar(0.94);
 scene.add(portrait);
 
@@ -503,17 +546,25 @@ const baseDepth = { value: 0.75 };
 
 function applyPortrait(i) {
   const p = portraits[i];
-  frontMaterial.uniforms.colorMap.value = p.color;
-  frontMaterial.uniforms.depthMap.value = p.depth;
-  frontMaterial.uniforms.maskMap.value = p.mask;
+  const fu = frontMaterial.uniforms;
+  fu.packed.value = p.alive ? 1 : 0;
+  fu.colorMap.value = p.alive ? p.videoTexture : p.color;
+  fu.depthMap.value = p.alive ? p.videoTexture : p.depth;
+  fu.maskMap.value = p.alive ? p.videoTexture : p.mask;
   plateMaterial.uniforms.colorMap.value = p.plate;
   plateMaterial.uniforms.depthMap.value = p.plateDepth;
-  shared.focus.value = p.focus;
+  // Her moving relief stands in empty glass: the still plate was painted for the old pose.
+  plateMesh.visible = !p.alive;
+  for (const q of portraits) if (q.video && q !== p) q.video.pause();
+  if (p.video) p.video.play().catch((e) => post('error', { message: `alive video: ${e.message}` }));
+  shared.focus.value = p.alive ? p.alive.focus : p.focus;
   configureParticles(p);
   frontMaterial.uniforms.sparkle.value = p.style === 'motes' ? 1 : 0;
-  const fu = frontMaterial.uniforms;
-  fu.mouthOn.value = p.mouth ? 1 : 0;
-  if (p.mouth) {
+  fu.mouthOn.value = p.mouth || p.alive ? 1 : 0;
+  if (p.alive) {
+    fu.texSize.value.set(p.alive.texSize[0], p.alive.texSize[1]);
+    followAliveMouth(p);
+  } else if (p.mouth) {
     fu.mouthC.value.set(p.mouth.center[0], p.mouth.center[1]);
     fu.mouthSize.value.set(p.mouth.halfWidth, p.mouth.halfHeight, p.mouth.chin);
     fu.mouthTilt.value = p.mouth.tilt;
@@ -561,6 +612,24 @@ function setBody(on) {
   if (!on || bodyFor(p).ready) switchTo(current, true); // otherwise it switches once loaded
 }
 
+// Her mouth moves with her in the video: track which frame is showing and follow its landmarks.
+for (const p of portraits) {
+  if (!p.video) continue;
+  const onFrame = (now, meta) => {
+    p.aliveFrame = Math.round(meta.mediaTime * p.alive.fps) % p.alive.frames;
+    p.video.requestVideoFrameCallback(onFrame);
+  };
+  p.video.requestVideoFrameCallback(onFrame);
+}
+
+function followAliveMouth(p) {
+  const m = p.alive.mouth[p.aliveFrame];
+  const fu = frontMaterial.uniforms;
+  fu.mouthC.value.set(m[0], m[1]);
+  fu.mouthSize.value.set(m[2], m[3], m[4]);
+  fu.mouthTilt.value = m[5];
+}
+
 function switchTo(i, force = false) {
   const next = (i + portraits.length) % portraits.length;
   if (next === current && phase !== 'out' && !force) return;
@@ -601,6 +670,7 @@ function onControl(ev) {
   if (typeof ev.listening === 'boolean') listening = ev.listening;
   if (typeof ev.voice === 'boolean') setVoice(ev.voice);
   if (typeof ev.body === 'boolean') setBody(ev.body);
+  if (typeof ev.quilt === 'boolean') lkg.mode = ev.quilt ? 1 : 0; // debug: show the raw views
 }
 
 // ---- Choom app link: show whoever is talking and speak her reply in her own voice ----------
@@ -970,6 +1040,7 @@ renderer.setAnimationLoop((now) => {
   updateLevel(dt);
   if (headaudio) headaudio.update(dt * 1000);
   updateMouth(dt);
+  if (portraits[current].alive) followAliveMouth(portraits[current]);
   const thinking = mood === 'thinking' ? 1 : 0;
 
   // Idle life: slow sway, a little float, breathing depth.

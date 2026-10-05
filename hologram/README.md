@@ -58,6 +58,20 @@ Choom app is not at `http://donnys-mac-studio-3.local:3000`.
 Keys on the page: arrow keys or 1-4 switch Choom, hold L = listening, M = mute, B = body, `-`/`=` depth,
 `[`/`]` calibration center, H = readout.
 
+## Moving reliefs
+
+A Choom can have a moving relief instead of a still one: a seamless idle loop of her own render
+(blinks, breathing, a small head tilt) made with Wan2GP's MiniMax H3 first/last-frame model, turned
+into `portraits/<id>/alive.mp4` (three stacked panels: color, depth, cut-out) and `alive.json` (frame
+rate, focus, her mouth position on every frame, so lip sync follows her face). It plays in empty
+glass (the still plate is hidden) with her live particles, atom and lip sync on top.
+
+1. Clean her render (Aloy's gold rings and orbs) with a Flux.2 Klein edit, on black.
+2. Make the loop: `wgp.py --process JOB.json` with `model_type` `minimax_h3_fl2va_pdd`,
+   `image_prompt_type` `SE` and the clean image as both `image_start` and `image_end`.
+3. `U2NET_HOME=~/pinokio/api/wan2gp/app/ckpts/rembg ~/pinokio/api/wan2gp/app/venv/bin/python tools/make_alive_masks.py <id> LOOP.mp4`
+4. `~/pinokio/api/forge-neo/app/venv/bin/python tools/make_alive.py <id> LOOP.mp4`
+
 ## Portrait assets
 
 `portraits/` is generated from the concept renders in `sources/`:
