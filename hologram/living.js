@@ -227,7 +227,9 @@ const LAYER_FRAG = /* glsl */ `
       s.x *= squeeze;
       float cw = hw / squeeze;                              // where the corners now sit
       float lens = max(0.0, 1.0 - pow(q.x / cw, 2.0));      // 1 mid-mouth, 0 at the corners
-      float open = jaw * hh * 2.8 * mouthGain;
+      // A mouth already open in the picture (a laugh) only needs a little more jaw.
+      float parted = smoothstep(0.15 * hh, 0.6 * hh, mouthGap);
+      float open = jaw * hh * 2.8 * mouthGain * mix(1.0, 0.35, parted);
       // The upper lip's inner edge, nudged up past the seam between closed lips: left showing, the
       // seam (with a glint of teeth in a smile) reads as a straight line under the upper lip.
       float top = (mouthGap + 0.15 * hh) * lens;
@@ -242,12 +244,15 @@ const LAYER_FRAG = /* glsl */ `
       float lowerLip = rest - open * lens;
       // Edges soft by about one panel pixel, so they don't stair-step at the panel's resolution.
       float aa = clamp(fwidth(q.y), 0.5, 4.0);
-      gap = smoothstep(-0.5 * aa, aa, top - q.y) * smoothstep(-0.5 * aa, 1.5 * aa, q.y - lowerLip)
+      // Closed lips: the opening starts at the upper lip. Parted lips: her teeth stay, and only what
+      // the lowered lower lip uncovers goes dark.
+      float gapTop = mix(top, rest, parted);
+      gap = smoothstep(-0.5 * aa, aa, gapTop - q.y) * smoothstep(-0.5 * aa, 1.5 * aa, q.y - lowerLip)
           * smoothstep(0.5, 3.0, open);
       // Where in the opening this pixel sits, for shading the inside: height (0 at the lower lip,
       // 1 at the upper lip) and how central it is (1 mid-mouth, 0 at the corners). No teeth: pale
       // teeth with no real detail read as a second upper lip.
-      spot = vec2(clamp((q.y - lowerLip) / max(top - lowerLip, 0.5), 0.0, 1.0), lens);
+      spot = vec2(clamp((q.y - lowerLip) / max(gapTop - lowerLip, 0.5), 0.0, 1.0), lens);
       s.y += seam;
       return mouthC + vec2(ca * s.x - sa * s.y, sa * s.x + ca * s.y) / texSize;
     }
@@ -262,14 +267,18 @@ const LAYER_FRAG = /* glsl */ `
       vec2 uv = mouthOn == 1 ? mouthWarp(vUv, gap, spot) : vUv;
       vec3 c = colorAt(uv);
       if (gap > 0.0) {
-        // The inside of her mouth, tinted from her own lips so it matches each Choom's light:
-        // darkest up under the upper lip, a soft tongue rising from the bottom in the middle.
-        vec3 lip = colorAt(mouthC);
+        // The inside of her mouth, tinted from her own lips so it matches each Choom's light. Not a
+        // black void: a warm dark red, darkest up under the upper lip, with a soft tongue rising
+        // from the bottom in the middle.
+        // Her lip color, from the upper lip itself (the middle of a smile can be teeth).
+        vec2 up = vec2(-sin(mouthTilt), cos(mouthTilt)) * (mouthGap + 0.6 * mouthSize.y) / texSize;
+        vec3 lip = colorAt(mouthC + up);
         float height = spot.x;
         float middle = spot.y;
-        vec3 inside = lip * mix(0.2, 0.06, smoothstep(0.35, 1.0, height));
-        float tongue = (1.0 - smoothstep(0.08, 0.5, height)) * smoothstep(0.25, 0.8, middle);
-        inside = mix(inside, lip * 0.5, tongue * 0.75);
+        vec3 mouthRed = mix(lip, vec3(0.42, 0.10, 0.09), 0.45);
+        vec3 inside = mouthRed * mix(0.32, 0.1, smoothstep(0.3, 1.0, height));
+        float tongue = (1.0 - smoothstep(0.08, 0.55, height)) * smoothstep(0.2, 0.75, middle);
+        inside = mix(inside, mouthRed * 0.62, tongue * 0.85);
         c = mix(c, inside, gap);
       }
       if (sparkle > 0.0) {
@@ -657,12 +666,15 @@ function aliveLoad(p, player, clip) {
   player.video.load();
 }
 
+// While she talks or thinks only calm clips come next (eyes open, mouth at rest); a laugh or a
+// long eyes-closed breath waits for a quiet moment.
 function nextClip(p, after) {
-  const n = p.alive.clips.length;
-  if (n === 1) return 0;
-  let k;
-  do { k = Math.floor(Math.random() * n); } while (k === after);
-  return k;
+  const all = p.alive.clips.map((c, k) => k);
+  const busy = portraits[current] === p && mood !== 'idle';
+  let pool = all.filter((k) => k !== after && (!busy || p.alive.clips[k].talk !== false));
+  if (!pool.length) pool = all.filter((k) => k !== after);
+  if (!pool.length) return 0;
+  return pool[Math.floor(Math.random() * pool.length)];
 }
 
 function aliveStart(p) {
@@ -684,6 +696,10 @@ for (const p of portraits) {
     pl.video.addEventListener('ended', () => {
       if (idx !== p.active) return;
       const next = p.players[1 - idx];
+      // The next clip was picked while it loaded; if she has started talking since, swap a laugh or
+      // a long breath for a calm one (the last frame, the same picture, holds while it loads).
+      const busy = portraits[current] === p && mood !== 'idle';
+      if (busy && p.alive.clips[next.clip]?.talk === false) aliveLoad(p, next, nextClip(p, pl.clip));
       next.video.currentTime = 0;
       next.video.play().catch((e) => post('error', { message: `alive video: ${e.message}` }));
       // Hand over on the next clip's first frame; until then the last frame (the same picture) holds.
@@ -760,6 +776,12 @@ function onControl(ev) {
   if (typeof ev.quilt === 'boolean') lkg.mode = ev.quilt ? 1 : 0; // debug: show the raw views
   if (typeof ev.view === 'number') { lkg.mode = 2; lkg.debugView = ev.view; } // debug: one view full screen
   if (ev.view === false) lkg.mode = 0;
+  if (typeof ev.clip === 'number' && portraits[current].players) { // debug: jump to a moving relief clip
+    const p = portraits[current];
+    const pl = p.players[p.active];
+    aliveLoad(p, pl, ev.clip % p.alive.clips.length);
+    pl.video.play().catch(() => {});
+  }
 }
 
 // ---- Choom app link: show whoever is talking and speak her reply in her own voice ----------
@@ -873,13 +895,13 @@ function updateMouth(dt) {
   }
   const rawJaw = jaw;
   // Keep the lips honest to what's heard: closed in the silences between words (the viseme model
-  // can trail into them). HeadAudio needs about 80 ms to warm up after a silence, so for the first
-  // quarter second of each phrase the jaw follows the loudness heard instead (in sync by
+  // can trail into them). HeadAudio needs 80-300 ms to warm up after a silence, so for the first
+  // third of a second of each phrase the jaw follows the loudness heard instead (in sync by
   // construction), handing over to the visemes as they catch up.
   if (mood === 'speaking' && headaudio) {
     const voiced = Math.min(1, Math.max(0, (loudness - 0.02) / 0.06));
     if (voiced > 0.5) voicedFor += dt; else voicedFor = 0;
-    const onset = Math.max(0, 1 - voicedFor / 0.25);
+    const onset = Math.max(0, 1 - voicedFor / 0.35);
     jaw = Math.max(jaw * voiced, loudness * (0.25 + 0.45 * onset));
     syncSample(rawJaw, jaw);
   }
