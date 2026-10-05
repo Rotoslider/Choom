@@ -617,23 +617,27 @@ function updateMouth(dt) {
 }
 
 // Latency of each spoken turn, for the latency table: her first text after the turn starts, her
-// first voice after that text, and the silent gaps between pieces. Posted as `latency`.
-let clock = null;
+// first voice after that text (including any wait behind another Choom still talking in a room),
+// and the silent gaps between her pieces. Each turn keeps its own clock, since in a room the next
+// turn starts while the last speaker is still talking. Posted as `latency`.
+const clocks = new Map(); // choom name -> clock of her latest turn
 
-function finishClock() {
-  if (!clock || !clock.firstVoice || !clock.ended || speech.busy || speech.queue.length) return;
-  const gaps = clock.gaps;
+function finishClock(c) {
+  if (!c || !c.ended || c.pending > 0) return;
+  if (clocks.get(c.choom) === c) clocks.delete(c.choom);
+  if (!c.firstVoice) return; // never spoken (not an open conversation)
   post('latency', {
-    choom: clock.choom,
-    firstTextMs: Math.round(clock.firstText - clock.start),
-    firstVoiceMs: Math.round(clock.firstVoice - clock.firstText),
-    totalMs: Math.round(clock.firstVoice - clock.start),
-    pieces: clock.pieces,
-    maxGapMs: Math.round(gaps.length ? Math.max(...gaps) : 0),
-    avgGapMs: Math.round(gaps.length ? gaps.reduce((a, b) => a + b, 0) / gaps.length : 0),
+    choom: c.choom,
+    source: c.source,
+    firstTextMs: Math.round(c.firstText - c.start),
+    firstVoiceMs: Math.round(c.firstVoice - c.firstText),
+    totalMs: Math.round(c.firstVoice - c.start),
+    queuedBehind: c.queuedBehind,
+    pieces: c.pieces,
+    maxGapMs: Math.round(c.gaps.length ? Math.max(...c.gaps) : 0),
+    avgGapMs: Math.round(c.gaps.length ? c.gaps.reduce((a, b) => a + b, 0) / c.gaps.length : 0),
     lipSync: headaudio ? 'headaudio' : 'loudness',
   });
-  clock = null;
 }
 
 function choomIndex(name) {
@@ -681,7 +685,8 @@ function onChoomEvent(ev) {
   switch (ev.event) {
     case 'turn_start':
       lastTurn = { index: i, open: true };
-      clock = { choom: ev.choom, start: performance.now(), firstText: 0, firstVoice: 0, gaps: [], lastEnd: 0, pieces: 0, ended: false };
+      clocks.set(ev.choom, { choom: ev.choom, source: ev.source, start: performance.now(), firstText: 0, firstVoice: 0,
+        gaps: [], lastEnd: 0, pieces: 0, pending: 0, queuedBehind: 0, ended: false });
       if (!speech.busy && !speech.queue.length) {
         if (i >= 0) switchTo(i);
         mood = 'thinking';
@@ -691,10 +696,17 @@ function onChoomEvent(ev) {
       // The Choom app sends whole sentences (gathered from the stream like its own web voice).
       const texts = typeof ev.text === 'string' ? [ev.text] : Array.isArray(ev.sentences) ? chunkSentences(ev.sentences) : [];
       if (voiceOn && ev.speak === true && i >= 0 && texts.length) {
-        if (clock && clock.choom === ev.choom && !clock.firstText) clock.firstText = performance.now();
+        const c = clocks.get(ev.choom);
+        if (c && !c.firstText) {
+          c.firstText = performance.now();
+          c.queuedBehind = speech.queue.length + (speech.busy ? 1 : 0);
+        }
         for (const text of texts) {
           const first = !speech.busy && speech.queue.length === 0;
-          for (const piece of speechPieces(text, first)) speech.queue.push({ text: piece, voice: ev.voice, index: i });
+          for (const piece of speechPieces(text, first)) {
+            speech.queue.push({ text: piece, voice: ev.voice, index: i, clock: c });
+            if (c) c.pending++;
+          }
         }
         runSpeech();
       }
@@ -711,9 +723,10 @@ function onChoomEvent(ev) {
     case 'error':
       if (lastTurn && lastTurn.index === i) lastTurn.open = false;
       if (!speech.busy && !speech.queue.length) mood = 'idle';
-      if (clock && clock.choom === ev.choom) {
-        clock.ended = true;
-        finishClock();
+      if (clocks.has(ev.choom)) {
+        const c = clocks.get(ev.choom);
+        c.ended = true;
+        finishClock(c);
       }
       break;
   }
@@ -769,14 +782,19 @@ async function runSpeech() {
       }
       if (item.index !== current) switchTo(item.index);
       mood = 'speaking';
-      if (clock) {
+      const c = item.clock;
+      if (c) {
         const now = performance.now();
-        if (!clock.firstVoice) clock.firstVoice = now;
-        else if (clock.lastEnd) clock.gaps.push(now - clock.lastEnd);
-        clock.pieces++;
+        if (!c.firstVoice) c.firstVoice = now;
+        else if (c.lastEnd) c.gaps.push(now - c.lastEnd);
+        c.pieces++;
       }
       await play(audio);
-      if (clock) clock.lastEnd = performance.now();
+      if (c) {
+        c.lastEnd = performance.now();
+        c.pending--;
+        finishClock(c);
+      }
     }
   } finally {
     speech.busy = false;
@@ -786,7 +804,6 @@ async function runSpeech() {
 }
 
 function afterSpeech() {
-  finishClock();
   if (lastTurn && lastTurn.open) {
     if (lastTurn.index >= 0 && lastTurn.index !== current) switchTo(lastTurn.index);
     mood = 'thinking';
@@ -804,6 +821,7 @@ function setVoice(on) {
 function stopSpeech() {
   speech.epoch++;
   speech.queue.length = 0;
+  clocks.clear(); // interrupted turns aren't latency samples
   try { speech.source?.stop(); } catch { /* already stopped */ }
   speech.busy = false;
   afterSpeech();
