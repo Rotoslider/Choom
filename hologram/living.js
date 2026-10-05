@@ -223,13 +223,15 @@ const LAYER_FRAG = /* glsl */ `
       vec2 s = q;
       // Rounding pulls the lips toward the middle; spreading pushes them out.
       float lips = exp(-pow(q.x / (hw * 1.5), 2.0) - pow(q.y / (hh * 2.5), 2.0));
-      float squeeze = 1.0 + (0.3 * rnd - 0.14 * wide) * lips;
+      float squeeze = 1.0 + (0.3 * rnd - 0.14 * wide) * lips * mouthGain;
       s.x *= squeeze;
       float cw = hw / squeeze;                              // where the corners now sit
       float lens = max(0.0, 1.0 - pow(q.x / cw, 2.0));      // 1 mid-mouth, 0 at the corners
       // A mouth already open in the picture (a laugh) only needs a little more jaw.
       float parted = smoothstep(0.15 * hh, 0.6 * hh, mouthGap);
-      float open = jaw * hh * 2.8 * mouthGain * mix(1.0, 0.35, parted);
+      // Scaled by lip height, but no more than a narrow mouth's width allows (Eve's full lips on a
+      // narrow mouth looked swollen when they opened by height alone).
+      float open = jaw * min(hh, 0.3 * hw) * 2.8 * mouthGain * mix(1.0, 0.35, parted);
       // The upper lip's inner edge, nudged up past the seam between closed lips: left showing, the
       // seam (with a glint of teeth in a smile) reads as a straight line under the upper lip.
       float top = (mouthGap + 0.15 * hh) * lens;
@@ -666,15 +668,50 @@ function aliveLoad(p, player, clip) {
   player.video.load();
 }
 
-// While she talks or thinks only calm clips come next (eyes open, mouth at rest); a laugh or a
-// long eyes-closed breath waits for a quiet moment.
+// Which clips suit which moment. Talking, thinking or listening she faces you (the main loop, or
+// clips made for that mood); glances, long breaths and laughs are for quiet moments, and the main
+// loop comes up twice as often as each of them. Clips can say so in alive.json (`moods`).
+function clipMoods(c) {
+  if (c.moods) return c.moods;
+  if (/glance|breath|amused/.test(c.source || '')) return ['idle'];
+  return ['idle', 'talk', 'think', 'listen'];
+}
+
+// Clips also start and end in a pose (Aloy's finger up or her hand down): the next clip has to start
+// in the pose the last one ended in. A clip that changes pose comes up less often.
+const poseFrom = (c) => c.from || 'main';
+const poseTo = (c) => c.to || 'main';
+
+function wantedMood(p) {
+  if (portraits[current] !== p) return 'idle';
+  if (listening) return 'listen';
+  return mood === 'speaking' ? 'talk' : mood === 'thinking' ? 'think' : 'idle';
+}
+
 function nextClip(p, after) {
-  const all = p.alive.clips.map((c, k) => k);
-  const busy = portraits[current] === p && mood !== 'idle';
-  let pool = all.filter((k) => k !== after && (!busy || p.alive.clips[k].talk !== false));
-  if (!pool.length) pool = all.filter((k) => k !== after);
-  if (!pool.length) return 0;
-  return pool[Math.floor(Math.random() * pool.length)];
+  const want = wantedMood(p);
+  const clips = p.alive.clips;
+  const pose = after >= 0 && clips[after] ? poseTo(clips[after]) : 'main';
+  const all = clips.map((c, k) => k).filter((k) => poseFrom(clips[k]) === pose);
+  const fits = all.filter((k) => clipMoods(clips[k]).includes(want));
+  let pool = fits.filter((k) => k !== after);
+  if (!pool.length) pool = fits.length ? fits : all.filter((k) => k !== after);   // the only fitting clip may repeat
+  if (!pool.length) pool = all.length ? all : [0];
+  // The pose's main loop comes up twice as often as each other idle clip; pose changes half as often.
+  const main = all.find((k) => poseTo(clips[k]) === pose && clipMoods(clips[k]).includes('talk'));
+  const weights = pool.map((k) => (want === 'idle' && k === main ? 2 : 1) * (poseTo(clips[k]) !== pose ? 0.5 : 1));
+  let r = Math.random() * weights.reduce((a, b) => a + b, 0);
+  for (let i = 0; i < pool.length; i++) { r -= weights[i]; if (r <= 0) return pool[i]; }
+  return pool[pool.length - 1];
+}
+
+// When you start talking with her mid-glance (or mid-laugh), that clip plays out faster, so she
+// turns back to you sooner; clips can only change where they meet the shared picture.
+function hurryAlive(p) {
+  const pl = p.players[p.active];
+  if (pl.clip < 0) return;
+  const fits = clipMoods(p.alive.clips[pl.clip]).includes(wantedMood(p));
+  pl.video.playbackRate = fits ? (pl.baseRate || 1) : 2;
 }
 
 function aliveStart(p) {
@@ -698,10 +735,14 @@ for (const p of portraits) {
       const next = p.players[1 - idx];
       // The next clip was picked while it loaded; if she has started talking since, swap a laugh or
       // a long breath for a calm one (the last frame, the same picture, holds while it loads).
-      const busy = portraits[current] === p && mood !== 'idle';
-      if (busy && p.alive.clips[next.clip]?.talk === false) aliveLoad(p, next, nextClip(p, pl.clip));
+      if (next.clip >= 0 && !clipMoods(p.alive.clips[next.clip]).includes(wantedMood(p))) aliveLoad(p, next, nextClip(p, pl.clip));
       next.video.currentTime = 0;
-      next.video.play().catch((e) => post('error', { message: `alive video: ${e.message}` }));
+      // A little variety so the rotation never settles into a beat: each clip plays at its own
+      // speed, and between quiet clips the shared picture may rest a moment.
+      next.video.playbackRate = 0.94 + Math.random() * 0.12;
+      next.baseRate = next.video.playbackRate;
+      const rest = wantedMood(p) === 'idle' ? Math.random() * 800 : 0;
+      setTimeout(() => next.video.play().catch((e) => post('error', { message: `alive video: ${e.message}` })), rest);
       // Hand over on the next clip's first frame; until then the last frame (the same picture) holds.
       next.video.requestVideoFrameCallback(() => {
         p.active = 1 - idx;
@@ -902,7 +943,9 @@ function updateMouth(dt) {
     const voiced = Math.min(1, Math.max(0, (loudness - 0.02) / 0.06));
     if (voiced > 0.5) voicedFor += dt; else voicedFor = 0;
     const onset = Math.max(0, 1 - voicedFor / 0.35);
-    jaw = Math.max(jaw * voiced, loudness * (0.25 + 0.45 * onset));
+    // The jaw always follows the loudness heard; HeadAudio's shapes add to it. In the room its
+    // shapes sometimes ran 250-600 ms late for a whole phrase, and this keeps the jaw on time.
+    jaw = Math.max(jaw * voiced, loudness * (0.4 + 0.3 * onset));
     syncSample(rawJaw, jaw);
   }
   // HeadAudio's weights rarely sum near 1, and the panel shows her mouth only ~50 px wide: boost.
@@ -1205,7 +1248,10 @@ renderer.setAnimationLoop((now) => {
   updateLevel(dt);
   if (headaudio) headaudio.update(dt * 1000);
   updateMouth(dt);
-  if (portraits[current].alive) followAliveMouth(portraits[current]);
+  if (portraits[current].alive) {
+    followAliveMouth(portraits[current]);
+    hurryAlive(portraits[current]);
+  }
   const thinking = mood === 'thinking' ? 1 : 0;
 
   // Idle life: slow sway, a little float, breathing depth.

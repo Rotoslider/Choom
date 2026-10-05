@@ -72,6 +72,35 @@ def person_from_luma(bgr):
     return (person | (1 - filled)).astype(np.float32)
 
 
+# What each clip is for, from its name (<choom>_<action>.mp4): the moods it can play in (idle, talk,
+# think, listen, greet) and the pose it starts and ends in. Facing the viewer with her mouth at rest
+# suits talking; glances, breaths and laughs are for quiet moments; a transition moves between poses
+# (Aloy lowering or raising her hand).
+ROLES = {
+    "base": (["idle", "talk", "think", "listen"], "main", "main"),
+    "glance": (["idle"], "main", "main"),
+    "glance2": (["idle"], "main", "main"),
+    "breath": (["idle"], "main", "main"),
+    "amused": (["idle"], "main", "main"),
+    "beat": (["idle", "listen"], "main", "main"),
+    "listen": (["listen", "talk"], "main", "main"),
+    "bright": (["listen"], "main", "main"),
+    "thinkup": (["think"], "main", "main"),
+    "thinkdown": (["think"], "main", "main"),
+    "lower": (["idle"], "main", "relaxed"),
+    "raise": (["idle"], "relaxed", "main"),
+    "relaxed": (["idle", "talk", "think", "listen"], "relaxed", "relaxed"),
+    "relaxedlisten": (["listen", "talk"], "relaxed", "relaxed"),
+    "relaxedamused": (["idle"], "relaxed", "relaxed"),
+    "wave": (["greet"], "relaxed", "relaxed"),
+}
+
+
+def clip_role(cid, src):
+    action = Path(src).stem.removeprefix(f"{cid}_")
+    return ROLES.get(action, ROLES["base"])
+
+
 def read_clip(src):
     """Frames of one clip, cropped to the panel's 3:4."""
     cap = cv2.VideoCapture(str(src))
@@ -187,10 +216,9 @@ def main():
         enc.stdin.close()
         enc.wait()
         mouths, found = mouth_track(landmarker, c["frames"])
-        # Calm clips (eyes open, mouth at rest) can play while she talks; a laugh or a long
-        # eyes-closed breath is for quiet moments only. Named <choom>_<action>.mp4.
-        calm = not any(k in Path(c["src"]).stem for k in ("breath", "amused"))
-        meta_clips.append({"file": out.name, "frames": len(c["frames"]), "source": Path(c["src"]).name, "talk": calm,
+        moods, start, end = clip_role(cid, c["src"])
+        meta_clips.append({"file": out.name, "frames": len(c["frames"]), "source": Path(c["src"]).name,
+                           "moods": moods, "from": start, "to": end, "talk": "talk" in moods,
                            "mouth": [[round(v, 5) for v in m] for m in mouths.tolist()]})
         print(f"  wrote {out.name} ({out.stat().st_size / 1e6:.1f} MB), face found in {found}/{len(c['frames'])} frames")
 
