@@ -36,7 +36,9 @@ Choom app is not at `http://donnys-mac-studio-3.local:3000`.
   the Avaturn account and re-exports from its editor (Download, Avatar (T-Pose)). Avaturn has no
   photo upload on its phone flow, but hub.avaturn.me/create/upload takes the front and side
   photos directly; pick V2 (face blendshapes), and "Left" is the photo with her nose toward
-  image-right.
+  image-right. A model with no skeleton (a generated bust, e.g. from Hunyuan3D 2.1) works too: it's
+  framed by its bounds and gets the light treatment and sway, but no lips or blinks. Put trial models in
+  `bodies/preview/<id>.glb`: B shows them, but they never replace the relief by default.
 - **Lip sync:** HeadAudio (`vendor/headaudio`, MIT) reads mouth shapes (visemes) from her voice in
   an audio worklet. A shader opens her jaw, rounds or spreads her lips and fills the opening with
   a mouth tinted from her own lips, at the mouth position found by `tools/make_landmarks.py`. Her

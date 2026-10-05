@@ -64,15 +64,19 @@ const portraits = await Promise.all(manifest.map(async (m) => {
   };
 }));
 
-// 3D bodies: a Choom with a GLB at bodies/<id>.glb shows her rigged avatar instead of the relief.
-// B, or POST /control {"body": true|false}, flips the current Choom between the two; Chooms without
-// a body of their own borrow the stand-in avatar, when it's downloaded.
+// 3D bodies: a Choom with a GLB at bodies/<id>.glb shows her 3D body instead of the relief.
+// B, or POST /control {"body": true|false}, flips the current Choom between the two. A Choom without
+// a body of her own can still be flipped to a trial model in bodies/preview/<id>.glb, or else to
+// the stand-in avatar, when either is there; those never show by default.
 const STANDIN = '/bodies/standin/avaturn.glb';
 const exists = (url) => fetch(url, { method: 'HEAD', cache: 'no-store' }).then((r) => r.ok).catch(() => false);
 const hasStandin = await exists(STANDIN);
 await Promise.all(portraits.map(async (p) => {
-  p.hasBody = await exists(`/bodies/${p.id}.glb`);
-  p.bodyUrl = p.hasBody ? `/bodies/${p.id}.glb` : hasStandin ? STANDIN : null;
+  const own = `/bodies/${p.id}.glb`;
+  const preview = `/bodies/preview/${p.id}.glb`;
+  p.hasBody = await exists(own);
+  const hasPreview = !p.hasBody && await exists(preview);
+  p.bodyUrl = p.hasBody ? own : hasPreview ? preview : hasStandin ? STANDIN : null;
   p.showBody = p.hasBody;
 }));
 const bodies = new Map(); // url -> { ready: ChoomBody | null }

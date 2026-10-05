@@ -9,7 +9,7 @@ import { RoomEnvironment } from './vendor/addons/environments/RoomEnvironment.js
 // Framing in scene units: the panel shows y -1..1 and x -0.75..0.75 at the focal plane (z = 0).
 // Her eyes sit on the focal plane, where the panel is sharpest, a little above the middle; depth
 // is squashed so the back of her head doesn't blur.
-const FRAME = { eyeY: 0.28, scale: 2.6, depth: 0.75 };
+const FRAME = { eyeY: 0.28, scale: 2.6, depth: 0.75, bustHeight: 1.95, bustTop: 0.97, bustFront: 0.1 };
 
 export const VISEMES = ['viseme_sil', 'viseme_PP', 'viseme_FF', 'viseme_TH', 'viseme_DD', 'viseme_kk',
   'viseme_CH', 'viseme_SS', 'viseme_nn', 'viseme_RR', 'viseme_aa', 'viseme_E', 'viseme_I', 'viseme_O', 'viseme_U'];
@@ -196,18 +196,29 @@ export class ChoomBody {
     this.rimB.position.set(1.6, 0.4, -1.4);
     this.group.add(this.key, this.rimA, this.rimB);
 
-    // Frame her by her eyes.
-    const eyes = new THREE.Vector3();
+    // Frame her by her eyes. A model with no skeleton (a generated bust) is framed by its bounds
+    // instead: it fills the panel's height, its front just ahead of the focal plane.
     const l = find('LeftEye');
     const r = find('RightEye');
-    if (l && r) {
-      eyes.addVectors(l.getWorldPosition(new THREE.Vector3()), r.getWorldPosition(new THREE.Vector3())).multiplyScalar(0.5);
+    const head = find('Head');
+    this.rigged = Boolean(head);
+    if (head) {
+      const eyes = new THREE.Vector3();
+      if (l && r) {
+        eyes.addVectors(l.getWorldPosition(new THREE.Vector3()), r.getWorldPosition(new THREE.Vector3())).multiplyScalar(0.5);
+      } else {
+        head.getWorldPosition(eyes).add(new THREE.Vector3(0, 0.08, 0.06));
+      }
+      const s = FRAME.scale;
+      this.root.scale.set(s, s, s * FRAME.depth);
+      this.root.position.set(-eyes.x * s, FRAME.eyeY - eyes.y * s, -eyes.z * s * FRAME.depth);
     } else {
-      find('Head').getWorldPosition(eyes).add(new THREE.Vector3(0, 0.08, 0.06));
+      const box = new THREE.Box3().setFromObject(model);
+      const s = FRAME.bustHeight / (box.max.y - box.min.y);
+      this.root.scale.set(s, s, s * FRAME.depth);
+      this.root.position.set(-(box.min.x + box.max.x) / 2 * s, FRAME.bustTop - box.max.y * s,
+        FRAME.bustFront - box.max.z * s * FRAME.depth);
     }
-    const s = FRAME.scale;
-    this.root.scale.set(s, s, s * FRAME.depth);
-    this.root.position.set(-eyes.x * s, FRAME.eyeY - eyes.y * s, -eyes.z * s * FRAME.depth);
 
     this.morphNames = [...this.morphs.keys()];
     this.blinkStart = -1;
