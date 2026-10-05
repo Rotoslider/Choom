@@ -60,17 +60,26 @@ Keys on the page: arrow keys or 1-4 switch Choom, hold L = listening, M = mute, 
 
 ## Moving reliefs
 
-A Choom can have a moving relief instead of a still one: a seamless idle loop of her own render
-(blinks, breathing, a small head tilt) made with Wan2GP's MiniMax H3 first/last-frame model, turned
-into `portraits/<id>/alive.mp4` (three stacked panels: color, depth, cut-out) and `alive.json` (frame
-rate, focus, her mouth position on every frame, so lip sync follows her face). It plays in empty
-glass (the still plate is hidden) with her live particles, atom and lip sync on top.
+Each Choom is a moving relief: short idle clips of her own render (a calm loop, a glance aside, a slow
+breath, an amused laugh) made with Wan2GP's MiniMax H3 first/last-frame model, every clip starting and
+ending on the same picture of her. They become `portraits/<id>/alive_<k>.mp4` (three stacked panels:
+color, depth, U2-Net cut-out; depth normalized across all her clips) and `alive.json` (frame rate,
+focus, and per clip her mouth on every frame plus a `talk` flag). The page plays the clips shuffled on
+two alternating players, only calm ones while she talks or thinks, in empty glass (the still plate is
+hidden) with her live particles, atom and lip sync on top.
 
-1. Clean her render (Aloy's gold rings and orbs) with a Flux.2 Klein edit, on black.
-2. Make the loop: `wgp.py --process JOB.json` with `model_type` `minimax_h3_fl2va_pdd`,
-   `image_prompt_type` `SE` and the clean image as both `image_start` and `image_end`.
-3. `U2NET_HOME=~/pinokio/api/wan2gp/app/ckpts/rembg ~/pinokio/api/wan2gp/app/venv/bin/python tools/make_alive_masks.py <id> LOOP.mp4`
-4. `~/pinokio/api/forge-neo/app/venv/bin/python tools/make_alive.py <id> LOOP.mp4`
+1. Clean her render (painted rings, screens, sparks, backgrounds) with a Flux.2 Klein edit, on black.
+2. Make the clips in one Wan2GP session: a queue zip (`queue.json` of tasks with `model_type`
+   `minimax_h3_fl2va_pdd`, `image_prompt_type` `SE`, the clean image as `image_start` and
+   `image_end`), run with `wgp.py --process QUEUE.zip --output-dir DIR`. About 5 minutes per clip; the
+   hologram drops to a few fps while it runs, since they share the GPU.
+3. `U2NET_HOME=~/pinokio/api/wan2gp/app/ckpts/rembg ~/pinokio/api/wan2gp/app/venv/bin/python tools/make_alive_masks.py <id> MAIN.mp4 MORE.mp4 ...`
+4. `~/pinokio/api/forge-neo/app/venv/bin/python tools/make_alive.py <id> MAIN.mp4 MORE.mp4 ...`
+   (clips named `<id>_breath`/`<id>_amused` are kept out of talking).
+
+Lip sync is checked on every spoken piece: `lipsync` entries in `telemetry.log` give the mouth's lag
+and correlation against the voice heard. Debug hooks on `POST /control`: `{"view": N}` (one view full
+screen, `false` to leave), `{"quilt": true}` (raw views), `{"clip": k}` (jump to a clip).
 
 ## Portrait assets
 
