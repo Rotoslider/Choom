@@ -129,8 +129,11 @@ const LAYER_FRAG = /* glsl */ `
     varying float vEdge;
     float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 
-    // Talking: her chin and lower lip move down, the lips round or spread, and the opening fills
-    // with a dark mouth and a hint of upper teeth. Worked in texture pixels in the mouth's frame.
+    // Talking, the way a mouth opens: the corners stay put and the lips part in a lens shape from
+    // corner to corner. Right under the lips the lower lip drops by that lens profile (zero at the
+    // corners); lower down it becomes the whole jaw dropping, fading out past the chin. The
+    // opening fills exactly the space the lower lip leaves, so no lip line is drawn twice. Lips
+    // also round or spread. Worked in texture pixels in the mouth's own frame.
     vec2 mouthWarp(vec2 uv, out float gap, out float teeth) {
       gap = 0.0;
       teeth = 0.0;
@@ -143,19 +146,22 @@ const LAYER_FRAG = /* glsl */ `
       vec2 s = q;
       // Rounding pulls the lips toward the middle; spreading pushes them out.
       float lips = exp(-pow(q.x / (hw * 1.5), 2.0) - pow(q.y / (hh * 2.5), 2.0));
-      s.x *= 1.0 + (0.3 * rnd - 0.14 * wide) * lips;
-      // Below the lip line, sample from higher up so the chin moves down; fade out past the chin.
+      float squeeze = 1.0 + (0.3 * rnd - 0.14 * wide) * lips;
+      s.x *= squeeze;
+      float cw = hw / squeeze;                              // where the corners now sit
+      float lens = max(0.0, 1.0 - pow(q.x / cw, 2.0));      // 1 mid-mouth, 0 at the corners
       float open = jaw * hh * 2.8;
       if (q.y < 0.0) {
-        float across = exp(-pow(q.x / (hw * 1.9), 2.0));
+        float below = smoothstep(0.0, hh * 3.0, -q.y);      // 0 at the lips, 1 toward the chin
+        float jawShape = exp(-pow(q.x / (hw * 2.0), 2.0));  // the jaw itself is wider than the mouth
         float down = smoothstep(-chin * 1.7, -chin * 0.15, q.y);
-        s.y += open * across * down;
+        s.y += open * mix(lens, jawShape, below) * down;
       }
-      float mw = hw * 0.8 * (1.0 - 0.38 * rnd + 0.12 * wide);
-      float r = length(vec2(q.x / mw, (q.y + open * 0.5) / (open * 0.5 + 0.5)));
-      gap = (1.0 - smoothstep(0.55, 1.0, r)) * smoothstep(0.5, 3.0, open);
+      // The opening: between the upper lip line and the lowered lower lip.
+      float lowerLip = -open * lens;
+      gap = smoothstep(0.0, 1.5, -q.y) * smoothstep(0.0, 1.5, q.y - lowerLip) * smoothstep(0.5, 3.0, open);
       // Upper teeth only once the mouth is properly open (a sliver would read as a stray line).
-      teeth = smoothstep(-open * 0.42, -open * 0.12, q.y) * (1.0 - smoothstep(0.5, 0.8, abs(q.x) / mw))
+      teeth = smoothstep(lowerLip * 0.55, lowerLip * 0.2, q.y) * smoothstep(0.35, 0.7, lens)
             * 0.5 * smoothstep(5.0, 14.0, open);
       return mouthC + vec2(ca * s.x - sa * s.y, sa * s.x + ca * s.y) / texSize;
     }
