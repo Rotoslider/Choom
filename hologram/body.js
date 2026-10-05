@@ -14,6 +14,11 @@ const FRAME = { eyeY: 0.28, scale: 2.6, depth: 0.75 };
 export const VISEMES = ['viseme_sil', 'viseme_PP', 'viseme_FF', 'viseme_TH', 'viseme_DD', 'viseme_kk',
   'viseme_CH', 'viseme_SS', 'viseme_nn', 'viseme_RR', 'viseme_aa', 'viseme_E', 'viseme_I', 'viseme_O', 'viseme_U'];
 
+// How far each viseme opens the jaw (0..1).
+const JAW_OPEN = { viseme_PP: 0, viseme_FF: 0.12, viseme_TH: 0.2, viseme_DD: 0.25, viseme_kk: 0.3,
+  viseme_CH: 0.22, viseme_SS: 0.1, viseme_nn: 0.2, viseme_RR: 0.22, viseme_aa: 1, viseme_E: 0.55,
+  viseme_I: 0.35, viseme_O: 0.7, viseme_U: 0.32 };
+
 const ANIMATED = ['Hips', 'Spine', 'Spine1', 'Spine2', 'Neck', 'Head', 'LeftShoulder', 'RightShoulder',
   'LeftEye', 'RightEye'];
 const AXES = { x: new THREE.Vector3(1, 0, 0), y: new THREE.Vector3(0, 1, 0), z: new THREE.Vector3(0, 0, 1) };
@@ -358,8 +363,15 @@ export class ChoomBody {
     this.morph(this.thinkSide > 0 ? 'mouthLeft' : 'mouthRight', 0.12 * thinking);
     this.morph(this.thinkSide > 0 ? 'mouthRight' : 'mouthLeft', 0);
 
-    // Lips.
-    for (const name of VISEMES) this.morph(name, st.visemes[name] || 0);
+    // Lips. Her mouth is only ~50 px wide on the panel, so the jaw opens a little further than the
+    // visemes alone take it, by how open each mouth shape is.
+    let open = 0;
+    for (const name of VISEMES) {
+      const v = st.visemes[name] || 0;
+      this.morph(name, v);
+      open += v * (JAW_OPEN[name] || 0);
+    }
+    this.morph('jawOpen', Math.min(0.45, open * 0.45));
   }
 }
 
