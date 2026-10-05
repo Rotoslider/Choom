@@ -28,6 +28,18 @@ function post(kind, data = {}) {
 window.addEventListener('error', (e) => post('error', { message: e.message, source: e.filename, line: e.lineno }));
 window.addEventListener('unhandledrejection', (e) => post('error', { message: String(e.reason) }));
 
+// One of the two video players a moving relief takes turns with.
+function makePlayer() {
+  const video = document.createElement('video');
+  Object.assign(video, { muted: true, playsInline: true, preload: 'auto' });
+  const texture = new THREE.VideoTexture(video);
+  texture.colorSpace = THREE.NoColorSpace; // color and depth share it; the shader decodes each
+  texture.generateMipmaps = false;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  return { video, texture, clip: -1 };
+}
+
 const getJSON = async (url) => (await fetch(url, { cache: 'no-store' })).json();
 const calibration = await getJSON('/calibration.json');
 const manifest = await getJSON('/portraits/manifest.json');
@@ -53,26 +65,17 @@ const portraits = await Promise.all(manifest.map(async (m) => {
   );
   // Where her mouth is, for lip sync (tools/make_landmarks.py); absent means no lip sync.
   const mouth = await fetch(`${dir}/mouth.json`, { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
-  // A moving relief (tools/make_alive.py): her idle loop as video, color on top and depth below,
+  // A moving relief (tools/make_alive.py): her idle clips as video (color, depth and cut-out panels)
   // with her mouth position for every frame. When present it replaces the still image.
   const alive = await fetch(`${dir}/alive.json`, { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
-  let video = null;
-  let videoTexture = null;
-  if (alive) {
-    video = document.createElement('video');
-    Object.assign(video, { src: `${dir}/alive.mp4`, muted: true, loop: true, playsInline: true, preload: 'auto' });
-    videoTexture = new THREE.VideoTexture(video);
-    videoTexture.colorSpace = THREE.NoColorSpace; // color and depth share it; the shader decodes each
-    videoTexture.generateMipmaps = false;
-    videoTexture.minFilter = THREE.LinearFilter;
-    videoTexture.magFilter = THREE.LinearFilter;
-  }
+  if (alive && !alive.clips) alive.clips = [{ file: 'alive.mp4', frames: alive.frames, mouth: alive.mouth }]; // one-clip format
   return {
     ...m,
+    dir,
     mouth,
     alive,
-    video,
-    videoTexture,
+    players: alive ? [makePlayer(), makePlayer()] : null,
+    active: 0,
     aliveFrame: 0,
     role: ROLES[m.id] || '',
     color: asColor(color),
@@ -271,7 +274,15 @@ const LAYER_FRAG = /* glsl */ `
       }
       if (sparkle > 0.0) {
         // Genesis is made of motes: let the bright specks in her image twinkle on their own.
-        vec3 local = packed == 1 ? colorAt(vUv) : texture2D(colorMap, vUv, 3.5).rgb;
+        // Her neighborhood's average: the mip chain for a still, a few nearby taps for a video.
+        vec3 local;
+        if (packed == 1) {
+          vec2 o = 3.0 / texSize;
+          local = 0.2 * (c + colorAt(vUv + vec2(o.x, 0.0)) + colorAt(vUv - vec2(o.x, 0.0))
+                           + colorAt(vUv + vec2(0.0, o.y)) + colorAt(vUv - vec2(0.0, o.y)));
+        } else {
+          local = texture2D(colorMap, vUv, 3.5).rgb;
+        }
         float speck = smoothstep(0.03, 0.22, dot(c - local, vec3(0.3, 0.5, 0.2)));
         float n = hash(floor(vUv * vec2(512.0, 683.0)));
         float twinkle = 0.25 + 1.5 * (0.5 + 0.5 * sin(time * (1.5 + 2.5 * n) + n * 6.2831));
@@ -568,15 +579,15 @@ function applyPortrait(i) {
   const p = portraits[i];
   const fu = frontMaterial.uniforms;
   fu.packed.value = p.alive ? 1 : 0;
-  fu.colorMap.value = p.alive ? p.videoTexture : p.color;
-  fu.depthMap.value = p.alive ? p.videoTexture : p.depth;
-  fu.maskMap.value = p.alive ? p.videoTexture : p.mask;
+  fu.colorMap.value = p.alive ? p.players[p.active].texture : p.color;
+  fu.depthMap.value = p.alive ? p.players[p.active].texture : p.depth;
+  fu.maskMap.value = p.alive ? p.players[p.active].texture : p.mask;
   plateMaterial.uniforms.colorMap.value = p.plate;
   plateMaterial.uniforms.depthMap.value = p.plateDepth;
   // Her moving relief stands in empty glass: the still plate was painted for the old pose.
   plateMesh.visible = !p.alive;
-  for (const q of portraits) if (q.video && q !== p) q.video.pause();
-  if (p.video) p.video.play().catch((e) => post('error', { message: `alive video: ${e.message}` }));
+  for (const q of portraits) if (q.players && q !== p) for (const pl of q.players) pl.video.pause();
+  if (p.players) aliveStart(p);
   shared.focus.value = p.alive ? p.alive.focus : p.focus;
   configureParticles(p);
   frontMaterial.uniforms.sparkle.value = p.style === 'motes' ? 1 : 0;
@@ -636,18 +647,68 @@ function setBody(on) {
   if (!on || bodyFor(p).ready) switchTo(current, true); // otherwise it switches once loaded
 }
 
-// Her mouth moves with her in the video: track which frame is showing and follow its landmarks.
+// Her idle clips all start and end on the same picture of her, so they can follow each other in any
+// order: two players take turns, the next clip loading in one while the other plays, never the same
+// clip twice running. A single clip simply loops. Her mouth follows the frame on show.
+function aliveLoad(p, player, clip) {
+  player.clip = clip;
+  player.video.loop = p.alive.clips.length === 1;
+  player.video.src = `${p.dir}/${p.alive.clips[clip].file}`;
+  player.video.load();
+}
+
+function nextClip(p, after) {
+  const n = p.alive.clips.length;
+  if (n === 1) return 0;
+  let k;
+  do { k = Math.floor(Math.random() * n); } while (k === after);
+  return k;
+}
+
+function aliveStart(p) {
+  const a = p.players[p.active];
+  if (a.clip < 0) aliveLoad(p, a, 0);
+  a.video.play().catch((e) => post('error', { message: `alive video: ${e.message}` }));
+  const b = p.players[1 - p.active];
+  if (p.alive.clips.length > 1 && b.clip < 0) aliveLoad(p, b, nextClip(p, a.clip));
+}
+
+function bindAliveTextures(p) {
+  const fu = frontMaterial.uniforms;
+  fu.colorMap.value = fu.depthMap.value = fu.maskMap.value = p.players[p.active].texture;
+}
+
 for (const p of portraits) {
-  if (!p.video) continue;
-  const onFrame = (now, meta) => {
-    p.aliveFrame = Math.round(meta.mediaTime * p.alive.fps) % p.alive.frames;
-    p.video.requestVideoFrameCallback(onFrame);
-  };
-  p.video.requestVideoFrameCallback(onFrame);
+  if (!p.players) continue;
+  p.players.forEach((pl, idx) => {
+    pl.video.addEventListener('ended', () => {
+      if (idx !== p.active) return;
+      const next = p.players[1 - idx];
+      next.video.currentTime = 0;
+      next.video.play().catch((e) => post('error', { message: `alive video: ${e.message}` }));
+      // Hand over on the next clip's first frame; until then the last frame (the same picture) holds.
+      next.video.requestVideoFrameCallback(() => {
+        p.active = 1 - idx;
+        p.aliveFrame = 0;
+        if (portraits[current] === p) bindAliveTextures(p);
+        aliveLoad(p, pl, nextClip(p, next.clip)); // the finished player fetches the clip after
+        post('alive-clip', { choom: p.name, clip: p.alive.clips[next.clip].source || next.clip });
+      });
+    });
+    const onFrame = (now, meta) => {
+      if (idx === p.active && pl.clip >= 0) {
+        p.aliveFrame = Math.min(Math.round(meta.mediaTime * p.alive.fps), p.alive.clips[pl.clip].frames - 1);
+      }
+      pl.video.requestVideoFrameCallback(onFrame);
+    };
+    pl.video.requestVideoFrameCallback(onFrame);
+  });
 }
 
 function followAliveMouth(p) {
-  const m = p.alive.mouth[p.aliveFrame];
+  const clip = p.players[p.active].clip;
+  if (clip < 0) return;
+  const m = p.alive.clips[clip].mouth[p.aliveFrame];
   const fu = frontMaterial.uniforms;
   fu.mouthC.value.set(m[0], m[1]);
   fu.mouthSize.value.set(m[2], m[3], m[4]);
@@ -782,11 +843,13 @@ function bestLag(a, b) {
 }
 function syncReport(c) {
   const n = sync.jaw.length;
+  const peak = (a) => Math.round(Math.max(0, ...a) * 100) / 100;
+  const entry = { choom: c?.choom, frames: n, jawPeak: peak(sync.jaw), loudPeak: peak(sync.loud), fps };
   if (n > 60) {
-    const [rawLagMs, rawCorr] = bestLag(sync.raw, sync.loud);
-    const [lagMs, corr] = bestLag(sync.jaw, sync.loud);
-    post('lipsync', { choom: c?.choom, frames: n, rawLagMs, rawCorr, lagMs, corr, delayMs: Math.round(speechDelay.delayTime.value * 1000) });
+    [entry.rawLagMs, entry.rawCorr] = bestLag(sync.raw, sync.loud);
+    [entry.lagMs, entry.corr] = bestLag(sync.jaw, sync.loud);
   }
+  post('lipsync', { ...entry, delayMs: Math.round(speechDelay.delayTime.value * 1000) });
   sync.raw.length = 0;
   sync.jaw.length = 0;
   sync.loud.length = 0;

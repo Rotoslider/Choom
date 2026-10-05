@@ -9,4 +9,4 @@ portraits/*/mouth_check.jpg
 # (TalkingHead's Avaturn sample, non-commercial; not ours to redistribute)
 bodies/
 # Per-frame cut-outs for make_alive.py (intermediate; rebuilt by tools/make_alive_masks.py)
-portraits/*/alive_masks.npz
+portraits/*/alive_masks*.npz
