@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Living Portraits</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; cursor: none; }
+  #c { position: fixed; left: 0; top: 0; width: 1536px; height: 2048px; display: block; }
+  #hud {
+    position: fixed; left: 40px; top: 40px; padding: 18px 24px; max-width: 1300px;
+    font: 500 30px/1.45 ui-monospace, monospace; color: #fff;
+    background: rgba(0, 0, 0, 0.72); border-radius: 10px; white-space: pre;
+  }
+  #hud .warn { color: #ffb15e; }
+</style>
+</head>
+<body>
+<canvas id="c" width="1536" height="2048"></canvas>
+<div id="hud" hidden></div>
+<script type="module" src="living.js"></script>
+</body>
+</html>

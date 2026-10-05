@@ -1,0 +1,39 @@
+[
+  {
+    "name": "Aloy",
+    "color": "#f4b650",
+    "style": "embers",
+    "orbit": true,
+    "threads": true,
+    "id": "aloy",
+    "focus": 0.5482,
+    "source": "aloy_hologram_s7001.png"
+  },
+  {
+    "name": "Optic",
+    "color": "#57dbe3",
+    "accent": "#ff7d45",
+    "style": "scan",
+    "id": "optic",
+    "focus": 0.4927,
+    "source": "optic_hologram_s7002.png"
+  },
+  {
+    "name": "Genesis",
+    "color": "#b79bff",
+    "accent": "#ff9a5c",
+    "style": "motes",
+    "id": "genesis",
+    "focus": 0.8361,
+    "source": "genesis_hologram_s7001.png"
+  },
+  {
+    "name": "Eve",
+    "color": "#e4eeff",
+    "accent": "#7cf0a2",
+    "style": "code",
+    "id": "eve",
+    "focus": 0.481,
+    "source": "eve_hologram_s7101.png"
+  }
+]

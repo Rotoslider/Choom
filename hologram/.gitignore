@@ -1,0 +1,6 @@
+# Runtime files written next to the hologram client
+.chrome-profile/
+telemetry.log
+server.log
+chrome.log
+__pycache__/
