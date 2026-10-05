@@ -4,3 +4,4 @@ telemetry.log
 server.log
 chrome.log
 __pycache__/
+portraits/*/mouth_check.jpg

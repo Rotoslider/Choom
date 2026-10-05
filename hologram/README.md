@@ -24,6 +24,11 @@ Choom app is not at `http://donnys-mac-studio-3.local:3000`.
   Glass Bridge is not needed. `living.js` shows each Choom as two RGB-D layers (her cut-out in
   front, a background plate with her painted out behind), with idle sway and breathing, her own
   particles, and for Aloy an atom of four orbiting sister orbs on 3D gold threads.
+- **Lip sync:** HeadAudio (`vendor/headaudio`, MIT) reads mouth shapes (visemes) from her voice in
+  an audio worklet. A shader opens her jaw, rounds or spreads her lips and fills the opening with
+  a mouth tinted from her own lips, at the mouth position found by `tools/make_landmarks.py`. Her
+  audio is delayed 80 ms so voice and lips line up. Each spoken turn posts a `latency` entry
+  (first text, first voice, gaps between pieces) to `telemetry.log`.
 - **Choom app link:** `server.py` relays the Choom app's feed to the page and proxies speech to
   the app's `/api/tts`. She speaks only a conversation a browser at home has open (the app marks
   each sentence `speak`). While the hologram runs it posts a heartbeat to `/api/hologram/voice`, so
@@ -45,9 +50,11 @@ Keys on the page: arrow keys or 1-4 switch Choom, hold L = listening, M = mute, 
 ```
 U2NET_HOME=~/pinokio/api/wan2gp/app/ckpts/rembg ~/pinokio/api/wan2gp/app/venv/bin/python tools/make_masks.py
 ~/pinokio/api/forge-neo/app/venv/bin/python tools/make_depth.py
+~/pinokio/api/forge-neo/app/venv/bin/python tools/make_landmarks.py
 ```
 
 `make_masks.py` cuts each Choom out (U2-Net). `make_depth.py` runs Depth Anything V2 Large, shapes
 the depth for the panel, builds the background plates, and does Aloy's cleanup (gold threads and
-orbs become live 3D). `tools/deinterleave.py OUT.jpg [views]` rebuilds views from what the Portrait
+orbs become live 3D). `make_landmarks.py` finds each mouth for lip sync (MediaPipe; writes
+`mouth.json` and a `mouth_check.jpg`). `tools/deinterleave.py OUT.jpg [views]` rebuilds views from what the Portrait
 is showing, to check depth without being in front of it.

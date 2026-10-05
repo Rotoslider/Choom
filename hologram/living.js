@@ -4,6 +4,7 @@
 
 import * as THREE from './vendor/three.module.js';
 import { LookingGlassRenderer } from './lenticular.js';
+import { HeadAudio } from './vendor/headaudio/headaudio.min.mjs';
 
 const ROLES = {
   aloy: 'The Orchestrator',
@@ -45,8 +46,11 @@ const portraits = await Promise.all(manifest.map(async (m) => {
   const [color, depth, mask, plate, plateDepth] = await Promise.all(
     ['color.jpg', 'depth.png', 'mask.png', 'plate.jpg', 'plate_depth.png'].map((f) => loadTexture(`${dir}/${f}`)),
   );
+  // Where her mouth is, for lip sync (tools/make_landmarks.py); absent means no lip sync.
+  const mouth = await fetch(`${dir}/mouth.json`, { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
   return {
     ...m,
+    mouth,
     role: ROLES[m.id] || '',
     color: asColor(color),
     depth: asData(depth),
@@ -81,6 +85,12 @@ function layerMaterial({ segX, segY, edgeThreshold, useMask }) {
       maskMap: { value: null },
       useMask: { value: useMask ? 1 : 0 },
       sparkle: { value: 0 },
+      mouthOn: { value: 0 },
+      mouthC: { value: new THREE.Vector2(0.5, 0.5) },
+      mouthSize: { value: new THREE.Vector3(1, 1, 1) },  // half width, half lip height, chin distance (texture px)
+      mouthTilt: { value: 0 },
+      mouthShape: { value: new THREE.Vector3() },        // jaw open, lips round, lips wide (0..1)
+      texSize: { value: new THREE.Vector2(1536, 2048) },
       edgeThreshold: { value: edgeThreshold },
       texel: { value: new THREE.Vector2(1 / segX, 1 / segY) },
     },
@@ -111,16 +121,60 @@ const LAYER_VERT = /* glsl */ `
 const LAYER_FRAG = /* glsl */ `
     uniform sampler2D colorMap, maskMap;
     uniform float opacity, glow, edgeThreshold, sparkle, time;
-    uniform int useMask;
+    uniform int useMask, mouthOn;
+    uniform vec2 mouthC, texSize;
+    uniform vec3 mouthSize, mouthShape;
+    uniform float mouthTilt;
     varying vec2 vUv;
     varying float vEdge;
     float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+
+    // Talking: her chin and lower lip move down, the lips round or spread, and the opening fills
+    // with a dark mouth and a hint of upper teeth. Worked in texture pixels in the mouth's frame.
+    vec2 mouthWarp(vec2 uv, out float gap, out float teeth) {
+      gap = 0.0;
+      teeth = 0.0;
+      float jaw = mouthShape.x, rnd = mouthShape.y, wide = mouthShape.z;
+      if (jaw + rnd + wide < 0.002) return uv;
+      float hw = mouthSize.x, hh = mouthSize.y, chin = mouthSize.z;
+      float ca = cos(mouthTilt), sa = sin(mouthTilt);
+      vec2 p = (uv - mouthC) * texSize;
+      vec2 q = vec2(ca * p.x + sa * p.y, -sa * p.x + ca * p.y);
+      vec2 s = q;
+      // Rounding pulls the lips toward the middle; spreading pushes them out.
+      float lips = exp(-pow(q.x / (hw * 1.5), 2.0) - pow(q.y / (hh * 2.5), 2.0));
+      s.x *= 1.0 + (0.3 * rnd - 0.14 * wide) * lips;
+      // Below the lip line, sample from higher up so the chin moves down; fade out past the chin.
+      float open = jaw * hh * 2.8;
+      if (q.y < 0.0) {
+        float across = exp(-pow(q.x / (hw * 1.9), 2.0));
+        float down = smoothstep(-chin * 1.7, -chin * 0.15, q.y);
+        s.y += open * across * down;
+      }
+      float mw = hw * 0.8 * (1.0 - 0.38 * rnd + 0.12 * wide);
+      float r = length(vec2(q.x / mw, (q.y + open * 0.5) / (open * 0.5 + 0.5)));
+      gap = (1.0 - smoothstep(0.55, 1.0, r)) * smoothstep(0.5, 3.0, open);
+      // Upper teeth only once the mouth is properly open (a sliver would read as a stray line).
+      teeth = smoothstep(-open * 0.42, -open * 0.12, q.y) * (1.0 - smoothstep(0.5, 0.8, abs(q.x) / mw))
+            * 0.5 * smoothstep(5.0, 14.0, open);
+      return mouthC + vec2(ca * s.x - sa * s.y, sa * s.x + ca * s.y) / texSize;
+    }
+
     void main() {
       if (useMask == 1 && texture2D(maskMap, vUv).r < 0.5) discard;
       // Only extreme depth jumps are dropped. Smaller ones stretch, which shows nearby skin or
       // cloth instead of a black gap.
       if (vEdge > edgeThreshold) discard;
-      vec3 c = texture2D(colorMap, vUv).rgb;
+      float gap = 0.0, teeth = 0.0;
+      vec2 uv = mouthOn == 1 ? mouthWarp(vUv, gap, teeth) : vUv;
+      vec3 c = texture2D(colorMap, uv).rgb;
+      if (gap > 0.0) {
+        // Mouth and teeth take her own lip color, so they match each Choom's light.
+        vec3 lip = texture2D(colorMap, mouthC).rgb;
+        vec3 inside = lip * 0.16;
+        vec3 tooth = mix(lip, vec3(dot(lip, vec3(0.33))), 0.65) * 1.5;
+        c = mix(c, mix(inside, tooth, teeth), gap);
+      }
       if (sparkle > 0.0) {
         // Genesis is made of motes: let the bright specks in her image twinkle on their own.
         vec3 local = texture2D(colorMap, vUv, 3.5).rgb;
@@ -425,6 +479,14 @@ function applyPortrait(i) {
   shared.focus.value = p.focus;
   configureParticles(p);
   frontMaterial.uniforms.sparkle.value = p.style === 'motes' ? 1 : 0;
+  const fu = frontMaterial.uniforms;
+  fu.mouthOn.value = p.mouth ? 1 : 0;
+  if (p.mouth) {
+    fu.mouthC.value.set(p.mouth.center[0], p.mouth.center[1]);
+    fu.mouthSize.value.set(p.mouth.halfWidth, p.mouth.halfHeight, p.mouth.chin);
+    fu.mouthTilt.value = p.mouth.tilt;
+    fu.texSize.value.set(p.mouth.texSize[0], p.mouth.texSize[1]);
+  }
   orbGroup.visible = Boolean(p.orbit);
   drawLabel(p);
   labelT = 0;
@@ -484,14 +546,88 @@ let level = 0;
 const levelBuf = new Float32Array(1024);
 const speech = { queue: [], busy: false, epoch: 0, source: null };
 
-function ensureAudio() {
-  if (!audioCtx) {
-    audioCtx = new AudioContext();
-    analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 1024;
-    analyser.connect(audioCtx.destination);
+// Her voice: source -> 80 ms delay -> analyser (glow) -> speakers, and source -> HeadAudio, which
+// reads mouth shapes (visemes) 50-100 ms late; the delay lines voice and lips up.
+let headaudio = null;
+let speechDelay = null;
+const visemes = {};
+const audioReady = (async () => {
+  audioCtx = new AudioContext();
+  analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 1024;
+  analyser.connect(audioCtx.destination);
+  speechDelay = new DelayNode(audioCtx, { delayTime: 0.08 });
+  speechDelay.connect(analyser);
+  try {
+    await audioCtx.audioWorklet.addModule('./vendor/headaudio/headworklet.min.mjs');
+    const node = new HeadAudio(audioCtx, {
+      processorOptions: {},
+      parameterData: { vadGateActiveDb: -40, vadGateInactiveDb: -60 },
+    });
+    await node.loadModel('./vendor/headaudio/model-en-mixed.bin');
+    node.onvalue = (key, value) => { visemes[key] = value; };
+    headaudio = node;
+  } catch (e) {
+    post('error', { message: `lip sync unavailable, using loudness: ${e.message}` });
   }
-  if (audioCtx.state === 'suspended') audioCtx.resume();
+})();
+
+function ensureAudio() {
+  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+}
+
+// Each viseme as [jaw open, lips round, lips wide]; HeadAudio's weights blend them.
+const VISEME_SHAPES = {
+  viseme_sil: [0, 0, 0], viseme_PP: [0, 0.1, 0], viseme_FF: [0.12, 0, 0.2], viseme_TH: [0.2, 0, 0.1],
+  viseme_DD: [0.25, 0, 0.15], viseme_kk: [0.3, 0, 0.1], viseme_CH: [0.22, 0.45, 0], viseme_SS: [0.1, 0, 0.45],
+  viseme_nn: [0.2, 0, 0.1], viseme_RR: [0.22, 0.5, 0], viseme_aa: [1, 0, 0.1], viseme_E: [0.55, 0, 0.6],
+  viseme_I: [0.35, 0, 0.85], viseme_O: [0.7, 0.85, 0], viseme_U: [0.32, 1, 0],
+};
+const mouthNow = { jaw: 0, round: 0, wide: 0 };
+
+function updateMouth(dt) {
+  let jaw = 0;
+  let round = 0;
+  let wide = 0;
+  if (mood === 'speaking') {
+    if (headaudio) {
+      for (const [key, [j, r, w]] of Object.entries(VISEME_SHAPES)) {
+        const v = visemes[key] || 0;
+        jaw += v * j;
+        round += v * r;
+        wide += v * w;
+      }
+    } else {
+      jaw = level * 0.9;
+    }
+  }
+  // HeadAudio's weights rarely sum near 1, and the panel shows her mouth only ~50 px wide: boost.
+  jaw *= 1.5;
+  const k = Math.min(dt * 25, 1);
+  mouthNow.jaw += (Math.min(jaw, 1) - mouthNow.jaw) * k;
+  mouthNow.round += (Math.min(round, 1) - mouthNow.round) * k;
+  mouthNow.wide += (Math.min(wide, 1) - mouthNow.wide) * k;
+  frontMaterial.uniforms.mouthShape.value.set(mouthNow.jaw, mouthNow.round, mouthNow.wide);
+}
+
+// Latency of each spoken turn, for the latency table: her first text after the turn starts, her
+// first voice after that text, and the silent gaps between pieces. Posted as `latency`.
+let clock = null;
+
+function finishClock() {
+  if (!clock || !clock.firstVoice || !clock.ended || speech.busy || speech.queue.length) return;
+  const gaps = clock.gaps;
+  post('latency', {
+    choom: clock.choom,
+    firstTextMs: Math.round(clock.firstText - clock.start),
+    firstVoiceMs: Math.round(clock.firstVoice - clock.firstText),
+    totalMs: Math.round(clock.firstVoice - clock.start),
+    pieces: clock.pieces,
+    maxGapMs: Math.round(gaps.length ? Math.max(...gaps) : 0),
+    avgGapMs: Math.round(gaps.length ? gaps.reduce((a, b) => a + b, 0) / gaps.length : 0),
+    lipSync: headaudio ? 'headaudio' : 'loudness',
+  });
+  clock = null;
 }
 
 function choomIndex(name) {
@@ -539,6 +675,7 @@ function onChoomEvent(ev) {
   switch (ev.event) {
     case 'turn_start':
       lastTurn = { index: i, open: true };
+      clock = { choom: ev.choom, start: performance.now(), firstText: 0, firstVoice: 0, gaps: [], lastEnd: 0, pieces: 0, ended: false };
       if (!speech.busy && !speech.queue.length) {
         if (i >= 0) switchTo(i);
         mood = 'thinking';
@@ -548,6 +685,7 @@ function onChoomEvent(ev) {
       // The Choom app sends whole sentences (gathered from the stream like its own web voice).
       const texts = typeof ev.text === 'string' ? [ev.text] : Array.isArray(ev.sentences) ? chunkSentences(ev.sentences) : [];
       if (voiceOn && ev.speak === true && i >= 0 && texts.length) {
+        if (clock && clock.choom === ev.choom && !clock.firstText) clock.firstText = performance.now();
         for (const text of texts) {
           const first = !speech.busy && speech.queue.length === 0;
           for (const piece of speechPieces(text, first)) speech.queue.push({ text: piece, voice: ev.voice, index: i });
@@ -567,6 +705,10 @@ function onChoomEvent(ev) {
     case 'error':
       if (lastTurn && lastTurn.index === i) lastTurn.open = false;
       if (!speech.busy && !speech.queue.length) mood = 'idle';
+      if (clock && clock.choom === ev.choom) {
+        clock.ended = true;
+        finishClock();
+      }
       break;
   }
   post('choom-event', { event: ev.event, choom: ev.choom, source: ev.source });
@@ -580,6 +722,7 @@ async function fetchSpeech(item) {
   });
   if (!r.ok) throw new Error(`speech ${r.status}`);
   const bytes = await r.arrayBuffer();
+  await audioReady;
   ensureAudio();
   return audioCtx.decodeAudioData(bytes);
 }
@@ -588,7 +731,8 @@ function play(buffer) {
   return new Promise((resolve) => {
     const src = audioCtx.createBufferSource();
     src.buffer = buffer;
-    src.connect(analyser);
+    src.connect(speechDelay);
+    if (headaudio) src.connect(headaudio);
     src.onended = resolve;
     speech.source = src;
     src.start();
@@ -619,7 +763,14 @@ async function runSpeech() {
       }
       if (item.index !== current) switchTo(item.index);
       mood = 'speaking';
+      if (clock) {
+        const now = performance.now();
+        if (!clock.firstVoice) clock.firstVoice = now;
+        else if (clock.lastEnd) clock.gaps.push(now - clock.lastEnd);
+        clock.pieces++;
+      }
       await play(audio);
+      if (clock) clock.lastEnd = performance.now();
     }
   } finally {
     speech.busy = false;
@@ -629,6 +780,7 @@ async function runSpeech() {
 }
 
 function afterSpeech() {
+  finishClock();
   if (lastTurn && lastTurn.open) {
     if (lastTurn.index >= 0 && lastTurn.index !== current) switchTo(lastTurn.index);
     mood = 'thinking';
@@ -720,6 +872,8 @@ renderer.setAnimationLoop((now) => {
 
   listenAmt += ((listening ? 1 : 0) - listenAmt) * Math.min(dt * 6, 1);
   updateLevel(dt);
+  if (headaudio) headaudio.update(dt * 1000);
+  updateMouth(dt);
   const thinking = mood === 'thinking' ? 1 : 0;
 
   // Idle life: slow sway, a little float, breathing depth.
