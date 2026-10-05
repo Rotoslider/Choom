@@ -5,3 +5,5 @@ server.log
 chrome.log
 __pycache__/
 portraits/*/mouth_check.jpg
+# Stand-in avatar for previewing bodies (TalkingHead's Avaturn sample, non-commercial; not ours to redistribute)
+bodies/standin/

@@ -24,6 +24,15 @@ Choom app is not at `http://donnys-mac-studio-3.local:3000`.
   Glass Bridge is not needed. `living.js` shows each Choom as two RGB-D layers (her cut-out in
   front, a background plate with her painted out behind), with idle sway and breathing, her own
   particles, and for Aloy an atom of four orbiting sister orbs on 3D gold threads.
+- **3D bodies:** a Choom with `bodies/<id>.glb` (an Avaturn T2 export: rigged, with ARKit and
+  Oculus viseme blend shapes) appears as that avatar instead of her relief (`body.js`). Her arms
+  come down from the T-pose, she's framed by her eyes on the focal plane, and every material gets
+  the light treatment: lit from within, a rim in her colors, scan lines, a fade at the bottom,
+  Optic's scan band, Genesis's motes, Eve's wireframe, and a build-up from below as she appears.
+  She breathes, sways, blinks, glances around, leans in to listen and looks away to think, and
+  HeadAudio's visemes drive her blend shapes directly. B flips between body and relief; Chooms
+  without a body borrow `bodies/standin/avaturn.glb` (TalkingHead's Avaturn sample, not
+  committed) if you download it there.
 - **Lip sync:** HeadAudio (`vendor/headaudio`, MIT) reads mouth shapes (visemes) from her voice in
   an audio worklet. A shader opens her jaw, rounds or spreads her lips and fills the opening with
   a mouth tinted from her own lips, at the mouth position found by `tools/make_landmarks.py`. Her
@@ -40,7 +49,7 @@ Choom app is not at `http://donnys-mac-studio-3.local:3000`.
   Choom starts talking to you, and puts a monitor back in the layout if GNOME leaves it connected
   but off after an input switch (`HOLOGRAM_DISPLAY_WATCHDOG=0` turns that off).
 
-Keys on the page: arrow keys or 1-4 switch Choom, hold L = listening, M = mute, `-`/`=` depth,
+Keys on the page: arrow keys or 1-4 switch Choom, hold L = listening, M = mute, B = body, `-`/`=` depth,
 `[`/`]` calibration center, H = readout.
 
 ## Portrait assets

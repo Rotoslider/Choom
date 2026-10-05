@@ -1,10 +1,12 @@
 // Living portraits: each Choom's hologram render as an RGB-D relief in the Portrait, with idle
 // breathing and sway, her own particle style, and her name drawn at the glass plane.
 // Portrait buttons: top = previous Choom, middle = next, bottom (hold) = listening preview.
+// A Choom with a 3D body (body.js) can show that instead of her relief.
 
 import * as THREE from './vendor/three.module.js';
 import { LookingGlassRenderer } from './lenticular.js';
 import { HeadAudio } from './vendor/headaudio/headaudio.min.mjs';
+import { loadBody, VISEMES } from './body.js';
 
 const ROLES = {
   aloy: 'The Orchestrator',
@@ -61,6 +63,20 @@ const portraits = await Promise.all(manifest.map(async (m) => {
     accent: new THREE.Color(m.accent || m.color),
   };
 }));
+
+// 3D bodies: a Choom with a GLB at bodies/<id>.glb shows her rigged avatar instead of the relief.
+// B, or POST /control {"body": true|false}, flips the current Choom between the two; Chooms without
+// a body of their own borrow the stand-in avatar, when it's downloaded.
+const STANDIN = '/bodies/standin/avaturn.glb';
+const exists = (url) => fetch(url, { method: 'HEAD', cache: 'no-store' }).then((r) => r.ok).catch(() => false);
+const hasStandin = await exists(STANDIN);
+await Promise.all(portraits.map(async (p) => {
+  p.hasBody = await exists(`/bodies/${p.id}.glb`);
+  p.bodyUrl = p.hasBody ? `/bodies/${p.id}.glb` : hasStandin ? STANDIN : null;
+  p.showBody = p.hasBody;
+}));
+const bodies = new Map(); // url -> { ready: ChoomBody | null }
+let body = null;          // the body on show, if any
 
 const scene = new THREE.Scene();
 
@@ -502,11 +518,48 @@ function applyPortrait(i) {
   orbGroup.visible = Boolean(p.orbit);
   drawLabel(p);
   labelT = 0;
+  for (const entry of bodies.values()) if (entry.ready) entry.ready.group.visible = false;
+  body = (p.showBody && bodyFor(p)?.ready) || null;
+  if (body) {
+    body.setLook(p);
+    body.group.visible = true;
+  }
+  portrait.visible = !body;
 }
 
-function switchTo(i) {
+// Start loading a Choom's body (once per GLB); when it arrives, show it if she still wants it.
+function bodyFor(p) {
+  if (!p.bodyUrl) return null;
+  const url = p.bodyUrl;
+  if (!bodies.has(url)) {
+    const entry = { ready: null };
+    bodies.set(url, entry);
+    const started = performance.now();
+    loadBody(url, renderer).then((b) => {
+      b.group.visible = false;
+      scene.add(b.group);
+      entry.ready = b;
+      post('body', { url, ms: Math.round(performance.now() - started), morphs: b.morphNames.length });
+      const now = portraits[current];
+      if (now.showBody && now.bodyUrl === url) switchTo(current, true);
+    }).catch((e) => post('error', { message: `body ${url}: ${e.message}` }));
+  }
+  return bodies.get(url);
+}
+
+function setBody(on) {
+  const p = portraits[current];
+  if (!p.bodyUrl) {
+    post('error', { message: `no body for ${p.name}` });
+    return;
+  }
+  p.showBody = on;
+  if (!on || bodyFor(p).ready) switchTo(current, true); // otherwise it switches once loaded
+}
+
+function switchTo(i, force = false) {
   const next = (i + portraits.length) % portraits.length;
-  if (next === current && phase !== 'out') return;
+  if (next === current && phase !== 'out' && !force) return;
   pending = next;
   if (phase !== 'out') {
     phase = 'out';
@@ -543,6 +596,7 @@ function onControl(ev) {
   if (ev.action === 'prev') switchTo(current - 1);
   if (typeof ev.listening === 'boolean') listening = ev.listening;
   if (typeof ev.voice === 'boolean') setVoice(ev.voice);
+  if (typeof ev.body === 'boolean') setBody(ev.body);
 }
 
 // ---- Choom app link: show whoever is talking and speak her reply in her own voice ----------
@@ -596,6 +650,7 @@ const VISEME_SHAPES = {
   viseme_I: [0.35, 0, 0.85], viseme_O: [0.7, 0.85, 0], viseme_U: [0.32, 1, 0],
 };
 const mouthNow = { jaw: 0, round: 0, wide: 0 };
+const bodyVisemes = Object.fromEntries(VISEMES.map((v) => [v, 0])); // a body's lips: the visemes themselves
 
 function updateMouth(dt) {
   let jaw = 0;
@@ -620,6 +675,11 @@ function updateMouth(dt) {
   mouthNow.round += (Math.min(round, 1) - mouthNow.round) * k;
   mouthNow.wide += (Math.min(wide, 1) - mouthNow.wide) * k;
   frontMaterial.uniforms.mouthShape.value.set(mouthNow.jaw, mouthNow.round, mouthNow.wide);
+  for (const v of VISEMES) {
+    let target = 0;
+    if (mood === 'speaking') target = headaudio ? (visemes[v] || 0) * 1.3 : v === 'viseme_aa' ? level * 0.8 : 0;
+    bodyVisemes[v] += (Math.min(target, 1) - bodyVisemes[v]) * k;
+  }
 }
 
 // Latency of each spoken turn, for the latency table: her first text after the turn starts, her
@@ -855,6 +915,7 @@ window.addEventListener('keydown', (e) => {
     case 'Digit1': case 'Digit2': case 'Digit3': case 'Digit4': switchTo(Number(e.code.slice(-1)) - 1); break;
     case 'KeyL': listening = true; break;
     case 'KeyM': setVoice(!voiceOn); break;
+    case 'KeyB': setBody(!portraits[current].showBody); break;
     case 'Space': paused = !paused; break;
     case 'KeyH': hudOn = !hudOn; hud.hidden = !hudOn; break;
     case 'Minus': baseDepth.value = Math.max(0.2, baseDepth.value - 0.05); break;
@@ -874,6 +935,7 @@ let fps = 0;
 let fpsT = performance.now();
 let last = performance.now();
 
+for (const p of portraits) if (p.hasBody) bodyFor(p); // real bodies load up front
 applyPortrait(current);
 
 renderer.setAnimationLoop((now) => {
@@ -916,6 +978,14 @@ renderer.setAnimationLoop((now) => {
   shared.opacity.value = presence;
   shared.glow.value = 1 + 0.22 * listenAmt + 0.3 * level + thinking * 0.06 * Math.sin(simTime * 3.2);
 
+  if (body) {
+    body.update({
+      dt: paused ? 0 : dt, time: simTime, presence, glow: shared.glow.value, level, listen: listenAmt,
+      thinking: mood === 'thinking', speaking: mood === 'speaking', visemes: bodyVisemes,
+      bandY: band.position.y, bandOn: band.visible,
+    });
+  }
+
   updateParticles(paused ? 0 : dt, 1 + 1.5 * listenAmt + 1.4 * thinking + 2.5 * level);
   shared.time.value = simTime;
   if (orbGroup.visible) updateOrbs(presence);
@@ -943,10 +1013,11 @@ renderer.setAnimationLoop((now) => {
     fpsT = now;
     if (hudOn) {
       const exact = innerWidth === 1536 && innerHeight === 2048 && devicePixelRatio === 1;
-      hud.innerHTML = `LIVING PORTRAITS  ${fps} fps\nchoom ${portraits[current].name}   depth ${baseDepth.value.toFixed(2)}\n` +
+      const shown = body ? `body ${body.url.split('/').pop()}` : `depth ${baseDepth.value.toFixed(2)}`;
+      hud.innerHTML = `LIVING PORTRAITS  ${fps} fps\nchoom ${portraits[current].name}   ${shown}\n` +
         (exact ? `window ${innerWidth}x${innerHeight} at ${screenX},${screenY}` :
           `<span class="warn">window ${innerWidth}x${innerHeight} at ${screenX},${screenY} NOT pixel-exact</span>`) +
-        `\n← → or buttons: switch   hold L or bottom button: listen\n- = depth   h hide`;
+        `\n← → or buttons: switch   hold L or bottom button: listen\nb body   - = depth   h hide`;
     }
   }
 });
@@ -958,7 +1029,7 @@ const windowInfo = () => ({
 post('start', { page: 'living', chooms: portraits.map((p) => p.name), window: windowInfo() });
 function sendStatus() {
   post('status', {
-    page: 'living', fps, choom: portraits[current].name, listening, mood, voiceOn,
+    page: 'living', fps, choom: portraits[current].name, body: body ? body.url : null, listening, mood, voiceOn,
     queued: speech.queue.length, window: windowInfo(),
   });
 }
