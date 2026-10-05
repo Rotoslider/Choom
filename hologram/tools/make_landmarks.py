@@ -59,6 +59,7 @@ def main():
             "halfHeight": round(half_height, 2),
             "chin": round(chin, 2),
             "tilt": round(tilt, 4),
+            "lift": round(cy - (ly + ry) / 2, 2),       # corners above the lip line (a smile), px
             "texSize": [w, h],
         }
         (folder / "mouth.json").write_text(json.dumps(mouth, indent=2))

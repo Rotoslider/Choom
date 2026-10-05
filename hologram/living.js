@@ -131,6 +131,7 @@ function layerMaterial({ segX, segY, edgeThreshold, useMask }) {
       mouthSize: { value: new THREE.Vector3(1, 1, 1) },  // half width, half lip height, chin distance (texture px)
       mouthTilt: { value: 0 },
       mouthGap: { value: 0 },                             // half the gap her lips already have (texture px)
+      mouthLift: { value: 0 },                            // how far her mouth corners curve up (texture px)
       mouthGain: { value: 1 },                            // how far the jaw opens
       mouthShape: { value: new THREE.Vector3() },        // jaw open, lips round, lips wide (0..1)
       texSize: { value: new THREE.Vector2(1536, 2048) },
@@ -184,7 +185,7 @@ const LAYER_FRAG = /* glsl */ `
     uniform int useMask, mouthOn;
     uniform vec2 mouthC, texSize;
     uniform vec3 mouthSize, mouthShape;
-    uniform float mouthTilt, mouthGap, mouthGain;
+    uniform float mouthTilt, mouthGap, mouthGain, mouthLift;
     varying vec2 vUv;
     varying float vEdge;
     ${PACKED_GLSL}
@@ -203,6 +204,8 @@ const LAYER_FRAG = /* glsl */ `
     // also round or spread. Worked in texture pixels in the mouth's own frame. When her lips are
     // already parted in the picture (a moving relief's smile), the opening starts at the upper
     // lip's inner edge, so the teeth showing between them don't read as a line under that lip.
+    // The lip line follows her smile: it curves up toward the corners by mouthLift, so the opening
+    // stays between her lips instead of running out past the corners as dark slivers.
     vec2 mouthWarp(vec2 uv, out float gap, out vec2 spot) {
       gap = 0.0;
       spot = vec2(0.0);
@@ -212,6 +215,8 @@ const LAYER_FRAG = /* glsl */ `
       float ca = cos(mouthTilt), sa = sin(mouthTilt);
       vec2 p = (uv - mouthC) * texSize;
       vec2 q = vec2(ca * p.x + sa * p.y, -sa * p.x + ca * p.y);
+      float seam = mouthLift * min(pow(q.x / hw, 2.0), 1.0);  // the lip line's height here
+      q.y -= seam;
       vec2 s = q;
       // Rounding pulls the lips toward the middle; spreading pushes them out.
       float lips = exp(-pow(q.x / (hw * 1.5), 2.0) - pow(q.y / (hh * 2.5), 2.0));
@@ -232,11 +237,15 @@ const LAYER_FRAG = /* glsl */ `
       }
       // The opening: between the upper lip's inner edge and the lowered lower lip.
       float lowerLip = rest - open * lens;
-      gap = smoothstep(0.0, 1.0, top - q.y) * smoothstep(0.0, 1.5, q.y - lowerLip) * smoothstep(0.5, 3.0, open);
+      // Edges soft by about one panel pixel, so they don't stair-step at the panel's resolution.
+      float aa = clamp(fwidth(q.y), 0.5, 4.0);
+      gap = smoothstep(-0.5 * aa, aa, top - q.y) * smoothstep(-0.5 * aa, 1.5 * aa, q.y - lowerLip)
+          * smoothstep(0.5, 3.0, open);
       // Where in the opening this pixel sits, for shading the inside: height (0 at the lower lip,
       // 1 at the upper lip) and how central it is (1 mid-mouth, 0 at the corners). No teeth: pale
       // teeth with no real detail read as a second upper lip.
       spot = vec2(clamp((q.y - lowerLip) / max(top - lowerLip, 0.5), 0.0, 1.0), lens);
+      s.y += seam;
       return mouthC + vec2(ca * s.x - sa * s.y, sa * s.x + ca * s.y) / texSize;
     }
 
@@ -573,8 +582,9 @@ function applyPortrait(i) {
   frontMaterial.uniforms.sparkle.value = p.style === 'motes' ? 1 : 0;
   fu.mouthOn.value = p.mouth || p.alive ? 1 : 0;
   // A moving relief's mouth opens a little less: its face is livelier to begin with.
-  fu.mouthGain.value = p.alive ? 0.75 : 1;
+  fu.mouthGain.value = p.alive ? 0.65 : 1;
   fu.mouthGap.value = 0;
+  fu.mouthLift.value = p.mouth?.lift ?? 0;
   if (p.alive) {
     fu.texSize.value.set(p.alive.texSize[0], p.alive.texSize[1]);
     followAliveMouth(p);
@@ -643,6 +653,7 @@ function followAliveMouth(p) {
   fu.mouthSize.value.set(m[2], m[3], m[4]);
   fu.mouthTilt.value = m[5];
   fu.mouthGap.value = m[6] ?? 0;
+  fu.mouthLift.value = m[7] ?? 0;
 }
 
 function switchTo(i, force = false) {
@@ -686,6 +697,8 @@ function onControl(ev) {
   if (typeof ev.voice === 'boolean') setVoice(ev.voice);
   if (typeof ev.body === 'boolean') setBody(ev.body);
   if (typeof ev.quilt === 'boolean') lkg.mode = ev.quilt ? 1 : 0; // debug: show the raw views
+  if (typeof ev.view === 'number') { lkg.mode = 2; lkg.debugView = ev.view; } // debug: one view full screen
+  if (ev.view === false) lkg.mode = 0;
 }
 
 // ---- Choom app link: show whoever is talking and speak her reply in her own voice ----------

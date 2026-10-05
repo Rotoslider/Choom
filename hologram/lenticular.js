@@ -43,7 +43,8 @@ uniform int invView;
 uniform int flipSubp;
 uniform vec3 tile;        // cols, rows, number of views
 uniform vec2 viewPortion; // fraction of the quilt texture the tiles fill
-uniform int mode;         // 0 = lenticular, 1 = raw quilt
+uniform int mode;         // 0 = lenticular, 1 = raw quilt, 2 = one view full screen (debug)
+uniform float debugView;
 varying vec2 vUv;
 
 vec2 texArr(vec3 uvz) {
@@ -68,6 +69,10 @@ vec4 sampleView(float u, float v, float subpixel) {
 void main() {
   if (mode == 1) {
     gl_FragColor = linearToOutputTexel(texture2D(quilt, vUv));
+    return;
+  }
+  if (mode == 2) {
+    gl_FragColor = linearToOutputTexel(texture2D(quilt, texArr(vec3(vUv, debugView))));
     return;
   }
   vec4 s0 = sampleView(vUv.x, vUv.y, 0.0);
@@ -137,6 +142,7 @@ export class LookingGlassRenderer {
         tile: { value: new THREE.Vector3(cols, rows, this.numViews) },
         viewPortion: { value: new THREE.Vector2((this.tileW * cols) / quiltWidth, (this.tileH * rows) / quiltHeight) },
         mode: { value: 0 },
+        debugView: { value: 24 },
       },
       depthTest: false,
       depthWrite: false,
@@ -227,6 +233,7 @@ export class LookingGlassRenderer {
     u.center.value = this.center;
     u.invView.value = this.invView;
     u.mode.value = this.mode;
+    u.debugView.value = this.debugView ?? 24;
     this.renderer.setRenderTarget(null);
     this.renderer.render(this.screenScene, this.screenCamera);
   }

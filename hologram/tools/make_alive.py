@@ -103,7 +103,10 @@ def main():
     else:
         print("no alive_masks.npz (tools/make_alive_masks.py); falling back to a brightness cut-out")
         masks = np.stack([person_from_luma(f) for f in frames])
-    masks = circular_smooth(masks) > 0.5
+    # U2-Net now and then bites into an edge for a frame or two (Aloy's sleeve); a vote over seven
+    # frames keeps those dropouts from flickering.
+    masks = circular_smooth(masks, (1 / 7,) * 7) > 0.5
+    masks = circular_smooth(masks.astype(np.float32)) > 0.5
     raws = np.stack([model.infer_image(f, input_size=1022) for f in frames]).astype(np.float32)
 
     # Depth Anything's scale drifts frame to frame: line every frame up with the first one on the
@@ -147,7 +150,8 @@ def main():
         mouths.append([cx / w, 1 - cy / h, math.dist((lx, ly), (rx, ry)) / 2,
                        math.dist(px(UPPER_OUTER), px(LOWER_OUTER)) / 2, math.dist((cx, cy), px(CHIN)),
                        -math.atan2(ry - ly, rx - lx),
-                       math.dist((ux, uy), (dx, dy)) / 2])  # half the gap her lips already have
+                       math.dist((ux, uy), (dx, dy)) / 2,   # half the gap her lips already have
+                       cy - (ly + ry) / 2])                 # how far her mouth corners curve up (a smile)
 
     # Fill frames where the face wasn't found from their neighbours, then smooth the jitter out.
     known = [i for i, m in enumerate(mouths) if m is not None]
@@ -169,7 +173,7 @@ def main():
 
     meta = {"fps": fps, "frames": n, "texSize": [w, h], "focus": round(focus, 4), "panels": ["color", "depth", "cut"],
             "mouth": [[round(v, 5) for v in m] for m in mouths.tolist()],
-            "mouthFields": ["u", "v", "halfWidth", "halfHeight", "chin", "tilt", "halfGap"]}
+            "mouthFields": ["u", "v", "halfWidth", "halfHeight", "chin", "tilt", "halfGap", "lift"]}
     (folder / "alive.json").write_text(json.dumps(meta))
     print(f"wrote {out} ({out.stat().st_size / 1e6:.1f} MB) and alive.json; focus {focus:.3f}, "
           f"face found in {len(known)}/{n} frames")
