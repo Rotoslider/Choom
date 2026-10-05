@@ -3,6 +3,7 @@ import { isSentenceEnd, stripForTTS } from './utils';
 import { log } from './log-store';
 import { withAudioLock } from './audio-lock';
 import { registerAudioPlayer } from './audio-registry';
+import { hologramHasVoice } from './hologram-voice';
 
 interface QueueEntry {
   audio: HTMLAudioElement;
@@ -67,7 +68,8 @@ export class StreamingTTS {
 
   // Called for each token from the LLM stream
   onToken(token: string) {
-    if (this.disposed || this.isMuted) return;
+    // The Looking Glass hologram speaks for the Chooms when it's running at home (hologram-voice.ts).
+    if (this.disposed || this.isMuted || hologramHasVoice()) return;
 
     this.buffer += token;
     this.fullText += token;

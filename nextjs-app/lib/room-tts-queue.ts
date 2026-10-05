@@ -2,6 +2,7 @@ import type { TTSSettings } from './types';
 import { stripForTTS } from './utils';
 import { withAudioLock } from './audio-lock';
 import { registerAudioPlayer } from './audio-registry';
+import { hologramHasVoice } from './hologram-voice';
 
 // Split a block of text into sentence-sized chunks for snappy, incremental TTS.
 // Splits after sentence-ending punctuation followed by whitespace; very short
@@ -73,7 +74,8 @@ export class RoomTTSQueue {
   // Queue a speaker's message. Split into sentences so the first one starts
   // synthesizing immediately; the synth loop then races ahead of playback.
   enqueue(text: string, voiceId: string | null, endpoint?: string | null) {
-    if (this.disposed || this.muted) return;
+    // The Looking Glass hologram speaks for the Chooms when it's running at home (hologram-voice.ts).
+    if (this.disposed || this.muted || hologramHasVoice()) return;
     const clean = stripForTTS(text || '');
     if (!clean.trim()) return;
     const voice = voiceId || 'sophie';

@@ -28,6 +28,7 @@ import {
 } from '@/lib/chat-shared';
 import { runAgenticLoop } from '@/lib/agentic-loop';
 import { buildHeartbeatGrounding } from '@/lib/heartbeat-grounding';
+import { startHologramTurn } from '@/lib/hologram-bus';
 import type { LLMSettings, ToolCall, ToolResult, ToolDefinition, ImageGenSettings, WeatherSettings, LLMProviderConfig } from '@/lib/types';
 import type { Choom, Chat, Message } from '@prisma/client';
 
@@ -95,7 +96,17 @@ export async function runChatTurn(params: ChatTurnParams): Promise<void> {
         // SSE state shared with the agentic loop (was a `streamClosed` local
         // closure variable before the C-22 split).
         const sse = { closed: false };
+        // Mirror the turn to the Looking Glass hologram feed (a no-op with no subscriber). It runs
+        // before the closed check: the hologram keeps speaking after a web client navigates away.
+        const hologram = startHologramTurn({
+          choom: choom.name,
+          choomId,
+          chatId,
+          voice: choom.voiceId ?? null,
+          source: isHeartbeat ? 'heartbeat' : isDelegation ? 'delegation' : isGroupTurn ? 'group' : 'chat',
+        });
         const send = (data: Record<string, unknown>) => {
+          hologram.event(data);
           if (sse.closed) return; // Silently skip if controller already closed (e.g., aborted delegation)
           try {
             controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
@@ -603,6 +614,7 @@ export async function runChatTurn(params: ChatTurnParams): Promise<void> {
             error: error instanceof Error ? error.message : 'Unknown error',
           });
         } finally {
+          hologram.end();
           // Clear GUI activity marker so heartbeats can resume
           if (!isDelegation) {
             clearGuiActivity(choom.name);
