@@ -711,6 +711,7 @@ let lastTurn = null;          // { index, open }
 let audioCtx = null;
 let analyser = null;
 let level = 0;
+let loudness = 0;              // this frame's voice loudness, unsmoothed (what's heard right now)
 const levelBuf = new Float32Array(1024);
 const speech = { queue: [], busy: false, epoch: 0, source: null };
 
@@ -730,7 +731,8 @@ const audioReady = (async () => {
     await audioCtx.audioWorklet.addModule('./vendor/headaudio/headworklet.min.mjs');
     const node = new HeadAudio(audioCtx, {
       processorOptions: {},
-      parameterData: { vadGateActiveDb: -40, vadGateInactiveDb: -60 },
+      // The Chooms' voices sit around 210 Hz; HeadAudio assumes 150 unless told.
+      parameterData: { vadGateActiveDb: -40, vadGateInactiveDb: -60, speakerMeanHz: 210 },
     });
     await node.loadModel('./vendor/headaudio/model-en-mixed.bin');
     node.onvalue = (key, value) => { visemes[key] = value; };
@@ -754,6 +756,42 @@ const VISEME_SHAPES = {
 const mouthNow = { jaw: 0, round: 0, wide: 0 };
 const bodyVisemes = Object.fromEntries(VISEMES.map((v) => [v, 0])); // a body's lips: the visemes themselves
 
+// Lip-sync check: for each spoken piece, how far her mouth (HeadAudio's jaw) runs behind (+) or
+// ahead of (-) the voice heard (loudness after the audio delay), by cross-correlation at frame
+// rate. Posted as `lipsync` so the audio delay can be tuned from real speech.
+const sync = { raw: [], jaw: [], loud: [] };
+let voicedFor = 0;
+function syncSample(raw, jaw) {
+  sync.raw.push(raw);
+  sync.jaw.push(jaw);
+  sync.loud.push(loudness);
+}
+function bestLag(a, b) {
+  const z = (x) => { const m = x.reduce((p, q) => p + q, 0) / x.length; const d = Math.sqrt(x.reduce((p, q) => p + (q - m) ** 2, 0) / x.length) || 1; return x.map((v) => (v - m) / d); };
+  const A = z(a);
+  const B = z(b);
+  let best = 0;
+  let bestCorr = -2;
+  for (let lag = -15; lag <= 20; lag++) {
+    let sum = 0;
+    let count = 0;
+    for (let i = Math.max(0, -lag); i < A.length && i + lag < A.length; i++) { sum += A[i + lag] * B[i]; count++; }
+    if (sum / Math.max(count, 1) > bestCorr) { bestCorr = sum / Math.max(count, 1); best = lag; }
+  }
+  return [Math.round((best * 1000) / Math.max(fps, 30)), Math.round(bestCorr * 100) / 100];
+}
+function syncReport(c) {
+  const n = sync.jaw.length;
+  if (n > 60) {
+    const [rawLagMs, rawCorr] = bestLag(sync.raw, sync.loud);
+    const [lagMs, corr] = bestLag(sync.jaw, sync.loud);
+    post('lipsync', { choom: c?.choom, frames: n, rawLagMs, rawCorr, lagMs, corr, delayMs: Math.round(speechDelay.delayTime.value * 1000) });
+  }
+  sync.raw.length = 0;
+  sync.jaw.length = 0;
+  sync.loud.length = 0;
+}
+
 function updateMouth(dt) {
   let jaw = 0;
   let round = 0;
@@ -769,6 +807,18 @@ function updateMouth(dt) {
     } else {
       jaw = level * 0.9;
     }
+  }
+  const rawJaw = jaw;
+  // Keep the lips honest to what's heard: closed in the silences between words (the viseme model
+  // can trail into them). HeadAudio needs about 80 ms to warm up after a silence, so for the first
+  // quarter second of each phrase the jaw follows the loudness heard instead (in sync by
+  // construction), handing over to the visemes as they catch up.
+  if (mood === 'speaking' && headaudio) {
+    const voiced = Math.min(1, Math.max(0, (loudness - 0.02) / 0.06));
+    if (voiced > 0.5) voicedFor += dt; else voicedFor = 0;
+    const onset = Math.max(0, 1 - voicedFor / 0.25);
+    jaw = Math.max(jaw * voiced, loudness * (0.25 + 0.45 * onset));
+    syncSample(rawJaw, jaw);
   }
   // HeadAudio's weights rarely sum near 1, and the panel shows her mouth only ~50 px wide: boost.
   jaw *= 1.5;
@@ -958,6 +1008,7 @@ async function runSpeech() {
         c.pieces++;
       }
       await play(audio);
+      syncReport(c);
       if (c) {
         c.lastEnd = performance.now();
         c.pending--;
@@ -1002,6 +1053,7 @@ function updateLevel(dt) {
     let sum = 0;
     for (let i = 0; i < levelBuf.length; i++) sum += levelBuf[i] * levelBuf[i];
     target = Math.min(1, Math.sqrt(sum / levelBuf.length) * 4.5);
+    loudness = target;
   }
   // Fast attack, slower release, so the glow follows syllables without flicker.
   level += (target - level) * Math.min(dt * (target > level ? 30 : 8), 1);
