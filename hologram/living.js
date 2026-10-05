@@ -8,6 +8,9 @@ import { LookingGlassRenderer } from './lenticular.js';
 import { HeadAudio } from './vendor/headaudio/headaudio.min.mjs';
 import { loadBody, VISEMES } from './body.js';
 
+// Chatterbox voices, for events that don't name one.
+const VOICES = { aloy: 'aloy', optic: 'Eva_zu_Beck', genesis: 'sophie', eve: 'Useful' };
+
 const ROLES = {
   aloy: 'The Orchestrator',
   optic: 'She can see everything',
@@ -127,6 +130,8 @@ function layerMaterial({ segX, segY, edgeThreshold, useMask }) {
       mouthC: { value: new THREE.Vector2(0.5, 0.5) },
       mouthSize: { value: new THREE.Vector3(1, 1, 1) },  // half width, half lip height, chin distance (texture px)
       mouthTilt: { value: 0 },
+      mouthGap: { value: 0 },                             // half the gap her lips already have (texture px)
+      mouthGain: { value: 1 },                            // how far the jaw opens
       mouthShape: { value: new THREE.Vector3() },        // jaw open, lips round, lips wide (0..1)
       texSize: { value: new THREE.Vector2(1536, 2048) },
       packed: { value: 0 },                               // 1: colorMap is a moving relief video
@@ -179,7 +184,7 @@ const LAYER_FRAG = /* glsl */ `
     uniform int useMask, mouthOn;
     uniform vec2 mouthC, texSize;
     uniform vec3 mouthSize, mouthShape;
-    uniform float mouthTilt;
+    uniform float mouthTilt, mouthGap, mouthGain;
     varying vec2 vUv;
     varying float vEdge;
     ${PACKED_GLSL}
@@ -195,7 +200,9 @@ const LAYER_FRAG = /* glsl */ `
     // corner to corner. Right under the lips the lower lip drops by that lens profile (zero at the
     // corners); lower down it becomes the whole jaw dropping, fading out past the chin. The
     // opening fills exactly the space the lower lip leaves, so no lip line is drawn twice. Lips
-    // also round or spread. Worked in texture pixels in the mouth's own frame.
+    // also round or spread. Worked in texture pixels in the mouth's own frame. When her lips are
+    // already parted in the picture (a moving relief's smile), the opening starts at the upper
+    // lip's inner edge, so the teeth showing between them don't read as a line under that lip.
     vec2 mouthWarp(vec2 uv, out float gap, out vec2 spot) {
       gap = 0.0;
       spot = vec2(0.0);
@@ -212,20 +219,24 @@ const LAYER_FRAG = /* glsl */ `
       s.x *= squeeze;
       float cw = hw / squeeze;                              // where the corners now sit
       float lens = max(0.0, 1.0 - pow(q.x / cw, 2.0));      // 1 mid-mouth, 0 at the corners
-      float open = jaw * hh * 2.8;
-      if (q.y < 0.0) {
-        float below = smoothstep(0.0, hh * 3.0, -q.y);      // 0 at the lips, 1 toward the chin
+      float open = jaw * hh * 2.8 * mouthGain;
+      // The upper lip's inner edge, nudged up past the seam between closed lips: left showing, the
+      // seam (with a glint of teeth in a smile) reads as a straight line under the upper lip.
+      float top = (mouthGap + 0.15 * hh) * lens;
+      float rest = -mouthGap * lens;                        // the lower lip's, before she speaks
+      if (q.y < rest) {
+        float below = smoothstep(0.0, hh * 3.0, rest - q.y); // 0 at the lips, 1 toward the chin
         float jawShape = exp(-pow(q.x / (hw * 2.0), 2.0));  // the jaw itself is wider than the mouth
         float down = smoothstep(-chin * 1.7, -chin * 0.15, q.y);
         s.y += open * mix(lens, jawShape, below) * down;
       }
-      // The opening: between the upper lip line and the lowered lower lip.
-      float lowerLip = -open * lens;
-      gap = smoothstep(0.0, 1.5, -q.y) * smoothstep(0.0, 1.5, q.y - lowerLip) * smoothstep(0.5, 3.0, open);
+      // The opening: between the upper lip's inner edge and the lowered lower lip.
+      float lowerLip = rest - open * lens;
+      gap = smoothstep(0.0, 1.0, top - q.y) * smoothstep(0.0, 1.5, q.y - lowerLip) * smoothstep(0.5, 3.0, open);
       // Where in the opening this pixel sits, for shading the inside: height (0 at the lower lip,
       // 1 at the upper lip) and how central it is (1 mid-mouth, 0 at the corners). No teeth: pale
       // teeth with no real detail read as a second upper lip.
-      spot = vec2(clamp((q.y - lowerLip) / max(-lowerLip, 0.5), 0.0, 1.0), lens);
+      spot = vec2(clamp((q.y - lowerLip) / max(top - lowerLip, 0.5), 0.0, 1.0), lens);
       return mouthC + vec2(ca * s.x - sa * s.y, sa * s.x + ca * s.y) / texSize;
     }
 
@@ -561,6 +572,9 @@ function applyPortrait(i) {
   configureParticles(p);
   frontMaterial.uniforms.sparkle.value = p.style === 'motes' ? 1 : 0;
   fu.mouthOn.value = p.mouth || p.alive ? 1 : 0;
+  // A moving relief's mouth opens a little less: its face is livelier to begin with.
+  fu.mouthGain.value = p.alive ? 0.75 : 1;
+  fu.mouthGap.value = 0;
   if (p.alive) {
     fu.texSize.value.set(p.alive.texSize[0], p.alive.texSize[1]);
     followAliveMouth(p);
@@ -628,6 +642,7 @@ function followAliveMouth(p) {
   fu.mouthC.value.set(m[0], m[1]);
   fu.mouthSize.value.set(m[2], m[3], m[4]);
   fu.mouthTilt.value = m[5];
+  fu.mouthGap.value = m[6] ?? 0;
 }
 
 function switchTo(i, force = false) {
@@ -844,7 +859,7 @@ function onChoomEvent(ev) {
         for (const text of texts) {
           const first = !speech.busy && speech.queue.length === 0;
           for (const piece of speechPieces(text, first)) {
-            speech.queue.push({ text: piece, voice: ev.voice, index: i, clock: c });
+            speech.queue.push({ text: piece, voice: ev.voice || VOICES[portraits[i].id], index: i, clock: c });
             if (c) c.pending++;
           }
         }

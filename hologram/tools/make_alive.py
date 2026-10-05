@@ -146,7 +146,8 @@ def main():
         cx, cy = (ux + dx) / 2, (uy + dy) / 2
         mouths.append([cx / w, 1 - cy / h, math.dist((lx, ly), (rx, ry)) / 2,
                        math.dist(px(UPPER_OUTER), px(LOWER_OUTER)) / 2, math.dist((cx, cy), px(CHIN)),
-                       -math.atan2(ry - ly, rx - lx)])
+                       -math.atan2(ry - ly, rx - lx),
+                       math.dist((ux, uy), (dx, dy)) / 2])  # half the gap her lips already have
 
     # Fill frames where the face wasn't found from their neighbours, then smooth the jitter out.
     known = [i for i, m in enumerate(mouths) if m is not None]
@@ -155,7 +156,7 @@ def main():
     for i in range(n):
         if mouths[i] is None:
             mouths[i] = mouths[min(known, key=lambda k: min(abs(k - i), n - abs(k - i)))]
-    mouths = circular_smooth(np.array(mouths, np.float64), (0.1, 0.2, 0.4, 0.2, 0.1))
+    mouths = circular_smooth(np.array(mouths, np.float64), (0.25, 0.5, 0.25))  # light: it must keep up with her head
 
     out = folder / "alive.mp4"
     enc = subprocess.Popen(["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{w}x{h * 3}",
@@ -168,7 +169,7 @@ def main():
 
     meta = {"fps": fps, "frames": n, "texSize": [w, h], "focus": round(focus, 4), "panels": ["color", "depth", "cut"],
             "mouth": [[round(v, 5) for v in m] for m in mouths.tolist()],
-            "mouthFields": ["u", "v", "halfWidth", "halfHeight", "chin", "tilt"]}
+            "mouthFields": ["u", "v", "halfWidth", "halfHeight", "chin", "tilt", "halfGap"]}
     (folder / "alive.json").write_text(json.dumps(meta))
     print(f"wrote {out} ({out.stat().st_size / 1e6:.1f} MB) and alive.json; focus {focus:.3f}, "
           f"face found in {len(known)}/{n} frames")
