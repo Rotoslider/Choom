@@ -31,8 +31,12 @@ Choom app is not at `http://donnys-mac-studio-3.local:3000`.
   Optic's scan band, Genesis's motes, Eve's wireframe, and a build-up from below as she appears.
   She breathes, sways, blinks, glances around, leans in to listen and looks away to think, and
   HeadAudio's visemes drive her blend shapes directly. B flips between body and relief; Chooms
-  without a body borrow `bodies/standin/avaturn.glb` (TalkingHead's Avaturn sample, not
-  committed) if you download it there.
+  without a body borrow `bodies/standin/avaturn.glb` (TalkingHead's Avaturn sample) if you
+  download it there. The GLBs aren't committed (the repo is public); each Choom's avatar lives in
+  the Avaturn account and re-exports from its editor (Download, Avatar (T-Pose)). Avaturn has no
+  photo upload on its phone flow, but hub.avaturn.me/create/upload takes the front and side
+  photos directly; pick V2 (face blendshapes), and "Left" is the photo with her nose toward
+  image-right.
 - **Lip sync:** HeadAudio (`vendor/headaudio`, MIT) reads mouth shapes (visemes) from her voice in
   an audio worklet. A shader opens her jaw, rounds or spreads her lips and fills the opening with
   a mouth tinted from her own lips, at the mouth position found by `tools/make_landmarks.py`. Her
