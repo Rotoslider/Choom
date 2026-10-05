@@ -134,9 +134,9 @@ const LAYER_FRAG = /* glsl */ `
     // corners); lower down it becomes the whole jaw dropping, fading out past the chin. The
     // opening fills exactly the space the lower lip leaves, so no lip line is drawn twice. Lips
     // also round or spread. Worked in texture pixels in the mouth's own frame.
-    vec2 mouthWarp(vec2 uv, out float gap, out float teeth) {
+    vec2 mouthWarp(vec2 uv, out float gap, out vec2 spot) {
       gap = 0.0;
-      teeth = 0.0;
+      spot = vec2(0.0);
       float jaw = mouthShape.x, rnd = mouthShape.y, wide = mouthShape.z;
       if (jaw + rnd + wide < 0.002) return uv;
       float hw = mouthSize.x, hh = mouthSize.y, chin = mouthSize.z;
@@ -160,9 +160,10 @@ const LAYER_FRAG = /* glsl */ `
       // The opening: between the upper lip line and the lowered lower lip.
       float lowerLip = -open * lens;
       gap = smoothstep(0.0, 1.5, -q.y) * smoothstep(0.0, 1.5, q.y - lowerLip) * smoothstep(0.5, 3.0, open);
-      // Upper teeth only once the mouth is properly open (a sliver would read as a stray line).
-      teeth = smoothstep(lowerLip * 0.55, lowerLip * 0.2, q.y) * smoothstep(0.35, 0.7, lens)
-            * 0.5 * smoothstep(5.0, 14.0, open);
+      // Where in the opening this pixel sits, for shading the inside: height (0 at the lower lip,
+      // 1 at the upper lip) and how central it is (1 mid-mouth, 0 at the corners). No teeth: pale
+      // teeth with no real detail read as a second upper lip.
+      spot = vec2(clamp((q.y - lowerLip) / max(-lowerLip, 0.5), 0.0, 1.0), lens);
       return mouthC + vec2(ca * s.x - sa * s.y, sa * s.x + ca * s.y) / texSize;
     }
 
@@ -171,15 +172,20 @@ const LAYER_FRAG = /* glsl */ `
       // Only extreme depth jumps are dropped. Smaller ones stretch, which shows nearby skin or
       // cloth instead of a black gap.
       if (vEdge > edgeThreshold) discard;
-      float gap = 0.0, teeth = 0.0;
-      vec2 uv = mouthOn == 1 ? mouthWarp(vUv, gap, teeth) : vUv;
+      float gap = 0.0;
+      vec2 spot = vec2(0.0);
+      vec2 uv = mouthOn == 1 ? mouthWarp(vUv, gap, spot) : vUv;
       vec3 c = texture2D(colorMap, uv).rgb;
       if (gap > 0.0) {
-        // Mouth and teeth take her own lip color, so they match each Choom's light.
+        // The inside of her mouth, tinted from her own lips so it matches each Choom's light:
+        // darkest up under the upper lip, a soft tongue rising from the bottom in the middle.
         vec3 lip = texture2D(colorMap, mouthC).rgb;
-        vec3 inside = lip * 0.16;
-        vec3 tooth = mix(lip, vec3(dot(lip, vec3(0.33))), 0.65) * 1.5;
-        c = mix(c, mix(inside, tooth, teeth), gap);
+        float height = spot.x;
+        float middle = spot.y;
+        vec3 inside = lip * mix(0.2, 0.06, smoothstep(0.35, 1.0, height));
+        float tongue = (1.0 - smoothstep(0.08, 0.5, height)) * smoothstep(0.25, 0.8, middle);
+        inside = mix(inside, lip * 0.5, tongue * 0.75);
+        c = mix(c, inside, gap);
       }
       if (sparkle > 0.0) {
         // Genesis is made of motes: let the bright specks in her image twinkle on their own.
