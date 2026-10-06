@@ -138,6 +138,7 @@ function layerMaterial({ segX, segY, edgeThreshold, useMask, own = false }) {
       mouthGap: { value: 0 },                             // half the gap her lips already have (texture px)
       mouthLift: { value: 0 },                            // how far her mouth corners curve up (texture px)
       mouthGain: { value: 1 },                            // how far the jaw opens
+      mouthStyle: { value: 0 },                           // 0 lower lip only; 1 both lips; 2 both lips and a hint of teeth
       mouthShape: { value: new THREE.Vector3() },        // jaw open, lips round, lips wide (0..1)
       bottomFade: { value: 0 },                           // on the group stage: fade out her lowest part
       texSize: { value: new THREE.Vector2(1536, 2048) },
@@ -188,7 +189,7 @@ const LAYER_VERT = /* glsl */ `
 const LAYER_FRAG = /* glsl */ `
     uniform sampler2D colorMap, maskMap;
     uniform float opacity, glow, edgeThreshold, sparkle, time, bottomFade;
-    uniform int useMask, mouthOn;
+    uniform int useMask, mouthOn, mouthStyle;
     uniform vec2 mouthC, texSize;
     uniform vec3 mouthSize, mouthShape;
     uniform float mouthTilt, mouthGap, mouthGain, mouthLift;
@@ -249,23 +250,31 @@ const LAYER_FRAG = /* glsl */ `
       // Scaled by lip height, but no more than a narrow mouth's width allows (Eve's full lips on a
       // narrow mouth looked swollen when they opened by height alone).
       float open = jaw * min(hh, 0.3 * hw) * 2.8 * mouthGain * mix(1.0, 0.35, parted);
+      // Style 1 and 2: both lips move, as in real speech. The upper lip lifts about a third of the
+      // opening and the jaw drops the rest (style 0: the upper lip stays put).
+      float rise = mouthStyle >= 1 ? 0.32 * open : 0.0;
+      float drop = open - rise;
       // The upper lip's inner edge, nudged up past the seam between closed lips: left showing, the
       // seam (with a glint of teeth in a smile) reads as a straight line under the upper lip.
       float top = (mouthGap + 0.15 * hh) * lens;
       float rest = -mouthGap * lens;                        // the lower lip's, before she speaks
+      if (rise > 0.0 && q.y > top) {
+        float above = smoothstep(0.0, hh * 2.6, q.y - top);  // the lift fades out toward her nose
+        s.y -= rise * lens * (1.0 - above);
+      }
       if (q.y < rest) {
         float below = smoothstep(0.0, hh * 3.0, rest - q.y); // 0 at the lips, 1 toward the chin
         float jawShape = exp(-pow(q.x / (hw * 2.0), 2.0));  // the jaw itself is wider than the mouth
         float down = smoothstep(-chin * 1.7, -chin * 0.15, q.y);
-        s.y += open * mix(lens, jawShape, below) * down;
+        s.y += drop * mix(lens, jawShape, below) * down;
       }
-      // The opening: between the upper lip's inner edge and the lowered lower lip.
-      float lowerLip = rest - open * lens;
+      // The opening: between the upper lip's (raised) inner edge and the lowered lower lip.
+      float lowerLip = rest - drop * lens;
       // Edges soft by about one panel pixel, so they don't stair-step at the panel's resolution.
       float aa = clamp(fwidth(q.y), 0.5, 4.0);
       // Closed lips: the opening starts at the upper lip. Parted lips: her teeth stay, and only what
       // the lowered lower lip uncovers goes dark.
-      float gapTop = mix(top, rest, parted);
+      float gapTop = mix(top + rise * lens, rest, parted);
       gap = smoothstep(-0.5 * aa, aa, gapTop - q.y) * smoothstep(-0.5 * aa, 1.5 * aa, q.y - lowerLip)
           * smoothstep(0.5, 3.0, open);
       // Where in the opening this pixel sits, for shading the inside: height (0 at the lower lip,
@@ -298,6 +307,19 @@ const LAYER_FRAG = /* glsl */ `
         vec3 inside = mouthRed * mix(0.32, 0.1, smoothstep(0.3, 1.0, height));
         float tongue = (1.0 - smoothstep(0.08, 0.55, height)) * smoothstep(0.2, 0.75, middle);
         inside = mix(inside, mouthRed * 0.62, tongue * 0.85);
+        if (mouthStyle >= 1) {
+          // Softer and less red, darkest at the back, the tongue only just there.
+          mouthRed = mix(lip, vec3(0.36, 0.11, 0.10), 0.5);
+          inside = mouthRed * mix(0.26, 0.06, smoothstep(0.25, 1.0, height));
+          inside = mix(inside, mouthRed * 0.5, tongue * 0.6);
+        }
+        if (mouthStyle >= 2) {
+          // The edge of her upper teeth in shadow, only when she opens wide: dimmer than her lip,
+          // so it never reads as a second lip.
+          float teeth = smoothstep(0.74, 0.9, height) * smoothstep(0.45, 0.85, middle) * smoothstep(0.35, 0.75, mouthShape.x);
+          vec3 enamel = mix(lip, vec3(0.93, 0.86, 0.76), 0.75) * 0.72;   // warm ivory in the lip's light, in shadow
+          inside = mix(inside, enamel, teeth * 0.75);
+        }
         c = mix(c, inside, gap);
       }
       if (sparkle > 0.0) {
@@ -888,6 +910,7 @@ const SLEEP_FROM = 23;
 const SLEEP_UNTIL = 7;
 const SLEEP_AFTER_QUIET_MS = 10 * 60 * 1000;
 let debugHour = null;     // debug: pretend it's this hour (/control {"hour": 23})
+let debugJaw = null;      // debug: hold the mouth open this far (/control {"jaw": 0.6})
 let debugSleep = false;   // debug: doze off now, however early or busy it is (/control {"sleep": true})
 let presence = { home: null, desk: null, bed: null }; // from Home Assistant; see onPresence
 let gaze = { looking: false, face: false };          // from the tower's camera; see onGaze
@@ -1122,7 +1145,9 @@ for (const p of portraits) {
 function followAliveMouth(p) {
   const clip = p.players[p.active].clip;
   if (clip < 0) return;
-  const m = p.alive.clips[clip].mouth[p.aliveFrame];
+  const track = p.alive.clips[clip].mouth;
+  const m = track[Math.min(p.aliveFrame, track.length - 1)]; // a clip jumped to by hand can start past the last frame
+  if (!m) return;
   const fu = frontMaterial.uniforms;
   // In a full-body move her face is small and turning: no lip sync there (the track is mostly guessed).
   fu.mouthOn.value = poseFrom(p.alive.clips[clip]) === 'full' ? 0 : 1;
@@ -1305,6 +1330,8 @@ function onControl(ev) {
   if (typeof ev.sleep === 'boolean') debugSleep = ev.sleep;
   if (ev.activity === true) lastActivity = performance.now(); // someone talking near the tower (tower_ears)
   if (typeof ev.gaze === 'boolean') onGaze({ looking: ev.gaze, face: true }); // debug: pretend he's looking
+  if (typeof ev.mouthStyle === 'number') frontMaterial.uniforms.mouthStyle.value = ev.mouthStyle; // try a mouth
+  if (typeof ev.jaw === 'number' || ev.jaw === null) debugJaw = ev.jaw; // hold the mouth open this far (null: off)
   if (ev.presence && typeof ev.presence === 'object') onPresence(ev.presence); // debug: pretend presence
   if (typeof ev.picture === 'string') showPicture(ev.picture, ev.kind || 'picture', portraits[current]); // debug: a gallery image id
   if (ev.stage === true) stageEnter(current); // debug: the group stage
@@ -1313,6 +1340,7 @@ function onControl(ev) {
     const p = portraits[current];
     const pl = p.players[p.active];
     aliveLoad(p, pl, ev.clip % p.alive.clips.length);
+    p.aliveFrame = 0;
     pl.video.play().catch(() => {});
   }
 }
@@ -1446,7 +1474,8 @@ function updateMouth(dt) {
   mouthNow.jaw += (Math.min(jaw, 1) - mouthNow.jaw) * k;
   mouthNow.round += (Math.min(round, 1) - mouthNow.round) * k;
   mouthNow.wide += (Math.min(wide, 1) - mouthNow.wide) * k;
-  frontMaterial.uniforms.mouthShape.value.set(mouthNow.jaw, mouthNow.round, mouthNow.wide);
+  if (debugJaw !== null) frontMaterial.uniforms.mouthShape.value.set(debugJaw, 0, 0); // a held opening, to compare styles
+  else frontMaterial.uniforms.mouthShape.value.set(mouthNow.jaw, mouthNow.round, mouthNow.wide);
   for (const v of VISEMES) {
     let target = 0;
     if (mood === 'speaking') target = headaudio ? (visemes[v] || 0) * 1.3 : v === 'viseme_aa' ? level * 0.8 : 0;
