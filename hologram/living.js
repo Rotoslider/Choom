@@ -1637,21 +1637,30 @@ function onGaze(ev) {
 }
 
 // Background turns (hourly heartbeats, delegated tasks) that start while the glass sleeps are left
-// to run unseen: they would wake her, switch Chooms and have her doze off again every hour.
+// to run unseen: they would wake her, switch Chooms and have her doze off again every hour. A
+// heartbeat that starts while Donny is in a conversation (the stage is up, someone is talking, or
+// he talked with one of them in the last few minutes) runs unseen too: it took the front of the
+// stage, floated her pictures in the middle of the room's talk, and pulled the glass back to her
+// after each sister's reply.
 const unseenTurns = new Set();
+const CONVERSATION_MS = 3 * 60 * 1000;
+let lastConversation = -Infinity;  // the last chat or room event, or Donny typing or talking to them
 
 function onChoomEvent(ev) {
   const i = choomIndex(ev.choom);
   const background = ev.source === 'heartbeat' || ev.source === 'delegation';
+  if (ev.source === 'chat' || ev.source === 'group' || ev.event === 'listening') lastActivity = lastConversation = performance.now();
   if (background && ev.event === 'turn_start') {
-    if (sleepy()) unseenTurns.add(ev.choom);
+    const talking = ev.source === 'heartbeat' && (stage.on || speech.busy || speech.queue.length > 0 ||
+      performance.now() - lastConversation < CONVERSATION_MS);
+    if (sleepy() || talking) unseenTurns.add(ev.choom);
     else unseenTurns.delete(ev.choom);
+    if (talking) post('unseen', { choom: ev.choom, source: ev.source });
   }
   if (unseenTurns.has(ev.choom) && background && ev.event !== 'listening') {
     if (ev.event === 'turn_end' || ev.event === 'error') unseenTurns.delete(ev.choom);
     return;
   }
-  if (ev.source === 'chat' || ev.source === 'group' || ev.event === 'listening') lastActivity = performance.now();
   if (stage.on && (ev.source === 'group' || (ev.event === 'listening' && ev.roomId))) stage.until = performance.now() + STAGE_LINGER_MS;
   if (stage.on && ev.event === 'listening' && ev.listening === true && ev.chatId && !ev.roomId) stageExit();
   switch (ev.event) {

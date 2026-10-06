@@ -162,7 +162,9 @@ puts the glass to sleep at any hour, getting up wakes it. Leaving counts only af
 - **Screensaver:** after two quiet minutes, a random Choom takes the glass every 3 to 5 minutes (not
   while she sleeps, on the stage, or when someone is talking near the tower).
 - **Weather:** wind brings Genesis's wind clips and drifting dust; rain and snow fall through the glass.
-- **Background turns:** heartbeats and delegated tasks that start at night run unseen.
+- **Background turns:** heartbeats and delegated tasks that start at night run unseen, and so does a
+  heartbeat that starts during a conversation (the stage is up, someone is talking, or a chat in the
+  last three minutes), so it doesn't take the front or float its pictures in the middle of it.
 
 ## Portrait buttons and screens
 
