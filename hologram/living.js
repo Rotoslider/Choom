@@ -392,6 +392,7 @@ const bandMaterial = new THREE.MeshBasicMaterial({
 });
 const band = new THREE.Mesh(new THREE.PlaneGeometry(1.42, 0.008), bandMaterial);
 band.position.z = 0.07;
+const EVE_BAND = [0.045, 0.94]; // the compile band's travel, in heights on her picture (0 bottom, 1 top)
 scene.add(band);
 
 const rand = (a, b) => a + Math.random() * (b - a);
@@ -1817,8 +1818,11 @@ renderer.setAnimationLoop((now) => {
   particleMaterial.uniforms.opacity.value = presence * (0.85 + 0.4 * listenAmt + 0.5 * level);
 
   if (band.visible) {
-    const cycle = style === 'scan' ? (bandT % 5) / 5 : 0.5 + 0.5 * Math.sin(bandT * tau / 7);
-    band.position.y = style === 'scan' ? 1 - cycle * 2 : -0.75 + cycle * 1.3;
+    const cycle = style === 'scan' ? (bandT % 5) / 5 : 0.5 + 0.5 * Math.sin(bandT * tau / 9);
+    // Eve's compile band sweeps from just below her crossed arms to just above her head and back
+    // (picture heights measured on her moving relief: arms end at 0.09, her hair tops out at 0.92).
+    const v = EVE_BAND[0] + cycle * (EVE_BAND[1] - EVE_BAND[0]);
+    band.position.y = style === 'scan' ? 1 - cycle * 2 : (v - 0.5) * 2.0 * portrait.scale.y + portrait.position.y;
     const edgeFade = style === 'scan' ? Math.sin(cycle * Math.PI) : 1;
     bandMaterial.opacity = 0.75 * presence * edgeFade;
   }
