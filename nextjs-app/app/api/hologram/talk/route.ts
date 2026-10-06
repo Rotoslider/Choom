@@ -9,9 +9,12 @@
  * and the hologram follows it on its own feed. Ignored from away. { dryRun: true } only reports
  * which chat it would use.
  *
- * { room: true, text } ("OK Chooms, ..."): his words go to the group room he last spoke in, as if he
- * had typed them there, and the room stays marked as open at home while it runs.
+ * { room: true, text } ("OK Chooms, ..."): his words go to the Signal room (the room set as "Signal
+ * room" on the Rooms page), or else the room he last spoke in, as if he had typed them there, and the
+ * room stays marked as open at home while it runs.
  */
+import { readFile } from 'fs/promises';
+import { join } from 'path';
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/db';
 import { markViewing, requestFromAway } from '@/lib/hologram-bus';
@@ -79,15 +82,20 @@ function drain(response: Response, keepOpen: ReturnType<typeof setInterval>) {
 
 async function talkToRoom(request: Request, text: string, dryRun: boolean) {
   if (!text) return NextResponse.json({ ok: false, error: 'text is required' }, { status: 400 });
-  // The room he last spoke in (his messages have no Choom as author); the Chooms' own rooms update
-  // all the time, so "most recently updated" would often be one he isn't in.
-  const last = await prisma.groupMessage.findFirst({
+  // The Signal room if one is set (bridge-config defaultGroupRoomId), else the room he last spoke in
+  // (his messages have no Choom as author); the Chooms' own rooms update all the time, so "most
+  // recently updated" would often be one he isn't in.
+  const config = await readFile(join(process.cwd(), 'services', 'signal-bridge', 'bridge-config.json'), 'utf-8')
+    .then((t) => JSON.parse(t) as { defaultGroupRoomId?: string | null }).catch(() => ({ defaultGroupRoomId: null }));
+  const signalRoom = config.defaultGroupRoomId
+    ? await prisma.groupRoom.findUnique({ where: { id: config.defaultGroupRoomId } })
+    : null;
+  const room = signalRoom && !signalRoom.archived ? signalRoom : (await prisma.groupMessage.findFirst({
     where: { role: 'user', authorChoomId: null, room: { archived: false } },
     orderBy: { createdAt: 'desc' },
     include: { room: true },
-  });
-  if (!last) return NextResponse.json({ ok: false, error: 'no group room he has spoken in' }, { status: 404 });
-  const room = last.room;
+  }))?.room;
+  if (!room) return NextResponse.json({ ok: false, error: 'no Signal room and no room he has spoken in' }, { status: 404 });
   if (dryRun) return NextResponse.json({ ok: true, dryRun: true, roomId: room.id, room: room.title });
 
   const settings = await (await serverSettings(request)).json();
