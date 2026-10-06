@@ -49,7 +49,9 @@ same picture of her, so the page can play them in any order without a visible se
    brings smoke); say "a plain pure black background". Seven-second sleep loops come out cleaner than
    ten-second ones.
 3. **Cut-outs.** `U2NET_HOME=~/pinokio/api/wan2gp/app/ckpts/rembg ~/pinokio/api/wan2gp/app/venv/bin/python tools/make_alive_masks.py <id> CLIP.mp4 ...`
-   (U2-Net per frame, kept per clip as `alive_masks_<clip>.npz`).
+   (U2-Net per frame, kept per clip as `alive_masks_<clip>.npz`). U2-Net can lose most of her for a
+   stretch when something busy moves around her (blowing hair); `make_alive.py` adds back anything
+   lit inside her first frame's outline, since every clip starts on her picture.
 4. **Reliefs.** `~/pinokio/api/forge-neo/app/venv/bin/python tools/make_alive.py <id> MAIN.mp4 CLIP.mp4 ...`
    (main clip first): Depth Anything V2 Large per frame (fused attention, half precision, about 0.2 s a
    frame; raw depth cached per clip as `alive_depth_<clip>.npy`), lined up with the main clip and
@@ -189,6 +191,7 @@ back in the layout if GNOME leaves it connected but off after an input switch.
 | `{"presence": {"bed": true}}` | pretend presence (`null` clears a role) |
 | `{"picture": "<image id>"}` | float a gallery picture |
 | `{"gaze": true}` | pretend he's looking at the glass |
+| `{"mouthStyle": 3}`, `{"jaw": 0.6}` | try a mouth style (0 to 3), hold her mouth open (`null` to let go) |
 
 `POST /simulate` injects a Choom-app event, e.g. `{"event": "tool", "choom": "Genesis", "tool": "get_weather"}`.
 `GET /status` shows the page, the feed, weather, presence and the listener's state. `telemetry.log`

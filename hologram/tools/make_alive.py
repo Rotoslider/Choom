@@ -238,6 +238,12 @@ def main():
         else:
             print(f"no {cut_file.name} (tools/make_alive_masks.py); falling back to a brightness cut-out")
             masks = np.stack([person_from_luma(f) for f in frames]).astype(np.float32)
+        # U2-Net can lose most of her body for a stretch when something busy moves around her
+        # (Genesis's hair and motes in the wind: only her head was left, her neck and shoulders went
+        # black). Every clip starts on her reference picture, so anything lit inside that first
+        # outline is her and goes back in.
+        lit = np.stack([cv2.GaussianBlur(f.max(axis=2).astype(np.float32) / 255.0, (0, 0), 2.0) > BG_LUMA for f in frames])
+        masks = np.maximum(masks, ((masks[0] > 0.5)[None] & lit).astype(np.float32))
         # U2-Net now and then bites into an edge for a frame or two (Aloy's sleeve); a vote over
         # seven frames keeps those dropouts from flickering.
         masks = circular_smooth(masks, (1 / 7,) * 7) > 0.5

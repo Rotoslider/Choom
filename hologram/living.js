@@ -138,7 +138,7 @@ function layerMaterial({ segX, segY, edgeThreshold, useMask, own = false }) {
       mouthGap: { value: 0 },                             // half the gap her lips already have (texture px)
       mouthLift: { value: 0 },                            // how far her mouth corners curve up (texture px)
       mouthGain: { value: 1 },                            // how far the jaw opens
-      mouthStyle: { value: 0 },                           // 0 lower lip only; 1 both lips; 2 both lips and a hint of teeth
+      mouthStyle: { value: 2 },                           // 0 lower lip only; 1 both lips; 2 a hint of teeth; 3 her teeth
       mouthShape: { value: new THREE.Vector3() },        // jaw open, lips round, lips wide (0..1)
       bottomFade: { value: 0 },                           // on the group stage: fade out her lowest part
       texSize: { value: new THREE.Vector2(1536, 2048) },
@@ -227,9 +227,9 @@ const LAYER_FRAG = /* glsl */ `
     // lip's inner edge, so the teeth showing between them don't read as a line under that lip.
     // The lip line follows her smile: it curves up toward the corners by mouthLift, so the opening
     // stays between her lips instead of running out past the corners as dark slivers.
-    vec2 mouthWarp(vec2 uv, out float gap, out vec2 spot) {
+    vec2 mouthWarp(vec2 uv, out float gap, out vec4 spot) {
       gap = 0.0;
-      spot = vec2(0.0);
+      spot = vec4(0.0);
       float jaw = mouthShape.x, rnd = mouthShape.y, wide = mouthShape.z;
       if (jaw + rnd + wide < 0.002) return uv;
       float hw = mouthSize.x, hh = mouthSize.y, chin = mouthSize.z;
@@ -280,7 +280,30 @@ const LAYER_FRAG = /* glsl */ `
       // Where in the opening this pixel sits, for shading the inside: height (0 at the lower lip,
       // 1 at the upper lip) and how central it is (1 mid-mouth, 0 at the corners). No teeth: pale
       // teeth with no real detail read as a second upper lip.
-      spot = vec2(clamp((q.y - lowerLip) / max(gapTop - lowerLip, 0.5), 0.0, 1.0), lens);
+      spot.xy = vec2(clamp((q.y - lowerLip) / max(gapTop - lowerLip, 0.5), 0.0, 1.0), lens);
+      if (mouthStyle >= 3) {
+        // Style 3, her teeth (z upper, w lower: how much tooth and how lit). The upper front teeth
+        // show under the upper lip whenever her lips part: up to 0.7 of a lip high (teeth don't grow
+        // as she opens) and never more than half the opening, so there's always dark below them.
+        // Shadowed where the lip overhangs, a little darker at the biting edge, darker toward the
+        // corners as they curve away, with faint gaps between the front teeth so they read as
+        // teeth rather than a pale band. The lower teeth only on wide sounds, a sliver over the
+        // lower lip. Already parted lips show her own teeth instead.
+        float topC = mouthGap + 0.15 * hh + rise, lowC = -mouthGap - drop;  // mid-mouth edges
+        float toothH = max(min(0.7 * hh, 0.5 * (topC - lowC)), 0.5);
+        float edge = topC - toothH;                                    // the biting edge, level
+        float down = clamp((gapTop - q.y) / toothH, 0.0, 1.0);         // 0 under the lip, 1 at the edge
+        float u = abs(q.x) / cw;
+        float gaps = min(min(u, abs(u - 0.36)), abs(u - 0.64));        // between the front teeth
+        float apart = 1.0 - 0.22 * (1.0 - smoothstep(0.01, 0.035, gaps));
+        float upper = smoothstep(edge - 0.08 * hh, edge + 0.08 * hh, q.y)
+                    * mix(0.4, 1.0, smoothstep(0.0, 0.45, down)) * mix(1.0, 0.8, smoothstep(0.75, 1.0, down))
+                    * smoothstep(0.3, 0.8, lens) * (0.65 + 0.35 * lens) * apart;
+        float over = (q.y - lowerLip) / hh;                            // lip heights over the lower lip
+        float lower = (1.0 - smoothstep(0.2, 0.36, over)) * smoothstep(0.4, 0.85, lens) * apart
+                    * max(smoothstep(0.15, 0.6, wide), 0.5 * parted);
+        spot.zw = vec2(upper * (1.0 - parted), lower);
+      }
       s.y += seam;
       return mouthC + vec2(ca * s.x - sa * s.y, sa * s.x + ca * s.y) / texSize;
     }
@@ -291,7 +314,7 @@ const LAYER_FRAG = /* glsl */ `
       // cloth instead of a black gap.
       if (vEdge > edgeThreshold) discard;
       float gap = 0.0;
-      vec2 spot = vec2(0.0);
+      vec4 spot = vec4(0.0);
       vec2 uv = mouthOn == 1 ? mouthWarp(vUv, gap, spot) : vUv;
       vec3 c = colorAt(uv);
       if (gap > 0.0) {
@@ -313,12 +336,21 @@ const LAYER_FRAG = /* glsl */ `
           inside = mouthRed * mix(0.26, 0.06, smoothstep(0.25, 1.0, height));
           inside = mix(inside, mouthRed * 0.5, tongue * 0.6);
         }
-        if (mouthStyle >= 2) {
+        if (mouthStyle == 2) {
           // The edge of her upper teeth in shadow, only when she opens wide: dimmer than her lip,
           // so it never reads as a second lip.
           float teeth = smoothstep(0.74, 0.9, height) * smoothstep(0.45, 0.85, middle) * smoothstep(0.35, 0.75, mouthShape.x);
           vec3 enamel = mix(lip, vec3(0.93, 0.86, 0.76), 0.75) * 0.72;   // warm ivory in the lip's light, in shadow
           inside = mix(inside, enamel, teeth * 0.75);
+        }
+        if (mouthStyle >= 3) {
+          // Warm ivory in her own light: tinted by her lips' hue and as bright as her light, so they
+          // don't look grey beside warm skin. Shading darkens them toward the inside of her mouth;
+          // the lower teeth are dimmer still, in the upper ones' shadow.
+          float light = dot(lip, vec3(0.3, 0.5, 0.2));
+          vec3 enamel = mix(vec3(0.98, 0.88, 0.7), lip / max(light, 0.05), 0.25) * clamp(1.7 * light, 0.5, 1.0);
+          inside = mix(inside, enamel * spot.z, smoothstep(0.0, 0.25, spot.z));
+          inside = mix(inside, enamel * 0.6 * spot.w, smoothstep(0.0, 0.25, spot.w));
         }
         c = mix(c, inside, gap);
       }
@@ -946,7 +978,7 @@ function seekClip(p, pose, wanted, after = -1) {
 const TOOL_LOOKS = [
   [/camera|snapshot|analyze_image|vision/, /scan|glance|bright/],
   [/memor|remember|recall|followup/, /daydream|thinkup|hum/],
-  [/weather|forecast/, /skycheck|windy|thinkup/],
+  [/weather|forecast/, /skycheck|thinkup/], // (her wind clips are for windy days only)
   [/generate_image|save_generated|draw|paint/, /eyebrow|smirk|smile/],
   [/search|browse|fetch|web/, /scan|thinkdown|glance/],
   [/^ha_|home|printer|calendar|inbox/, /scan|glance|thinkdown/],
