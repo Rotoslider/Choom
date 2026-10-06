@@ -15,6 +15,7 @@ stop_all() {
   pkill -f -- "--user-data-dir=$PROFILE" || true
   pkill -f -- "$DIR/server.py" || true
   pkill -f -- "$DIR/tower_ears.py" || true
+  pkill -f -- "pw-record --rate (16000|48000) --channels 1 --format s16 -" || true  # its recorder
   # Hand the voice back to the browsers right away instead of waiting for the heartbeat to lapse.
   curl -s -m 3 -X POST -H 'Content-Type: application/json' -d '{"voice":false}' \
     "$CHOOM_URL/api/hologram/voice" > /dev/null || true

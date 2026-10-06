@@ -18,6 +18,7 @@ import json
 import os
 import queue
 import re
+import select
 import subprocess
 import threading
 import time
@@ -31,8 +32,9 @@ from faster_whisper import WhisperModel
 
 CHOOM_URL = os.environ.get("CHOOM_URL", "http://donnys-mac-studio-3.local:3000")
 HOLOGRAM_URL = os.environ.get("HOLOGRAM_URL", "http://127.0.0.1:8765")
-RATE = 16000
-FRAME = 480                      # 30 ms
+RATE = 16000                     # what VAD and Whisper get
+CAPTURE_RATE = 16000             # the EMEET's microphone runs at 16 kHz (it plays at 48 kHz)
+FRAME = 480                      # 30 ms at RATE
 COMMAND_WAIT_S = 8               # after a bare "OK Eve", how long she waits for the words
 FOLLOW_UP_S = 6                  # after her answer, how long the mic stays open for a reply
 NAMES = {                        # what Whisper may write for each name
@@ -42,6 +44,12 @@ NAMES = {                        # what Whisper may write for each name
     "Eve": r"eve|eva|eave|evie",
 }
 WAKE = re.compile(r"^\W*(?:ok|okay|o\.k\.|hey)\W+(" + "|".join(NAMES.values()) + r")\b\W*(.*)$", re.I | re.S)
+
+
+def die_with_parent():
+    """pw-record ends with this process, so a relaunch never leaves a recorder holding the mic."""
+    import ctypes
+    ctypes.CDLL("libc.so.6").prctl(1, 15)  # PR_SET_PDEATHSIG, SIGTERM
 
 
 def choom_for(word):
@@ -99,15 +107,23 @@ class Ears:
         self.frames = queue.Queue()
 
     def capture(self):
-        """Raw 16 kHz mono from the default PipeWire source, restarted if it ever stops."""
+        """Mono from the default PipeWire source, restarted if it ever stops. The recorder dies with
+        this process: recorders orphaned by relaunches once wedged PipeWire's capture of the EMEET,
+        and the mic went silent for every app (the browser's mic button too) until PipeWire restarted."""
         while True:
-            proc = subprocess.Popen(["pw-record", "--rate", str(RATE), "--channels", "1", "--format", "s16", "-"],
-                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            proc = subprocess.Popen(["pw-record", "--rate", str(CAPTURE_RATE), "--channels", "1", "--format", "s16", "-"],
+                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, preexec_fn=die_with_parent)
+            step = CAPTURE_RATE // RATE
             while True:
-                chunk = proc.stdout.read(FRAME * 2)
-                if len(chunk) < FRAME * 2:
+                # A stalled microphone sends nothing at all (no error, no end): notice within 5 s.
+                if not select.select([proc.stdout], [], [], 5)[0]:
+                    tell_hologram("error", message="mic stalled: no audio for 5 s")
                     break
-                self.frames.put(chunk)
+                chunk = proc.stdout.read(FRAME * step * 2)
+                if len(chunk) < FRAME * step * 2:
+                    break
+                wide = np.frombuffer(chunk, np.int16).astype(np.int32).reshape(-1, step)
+                self.frames.put(wide.mean(axis=1).astype(np.int16).tobytes())  # averaging is the low-pass
             proc.kill()
             time.sleep(2)
 
