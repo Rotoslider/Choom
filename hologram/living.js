@@ -580,7 +580,12 @@ let pending = null;
 let phase = 'in';        // 'in' -> 'idle' -> 'out' -> 'in'
 let phaseT = 0;
 let labelT = 0;
-let listening = false;
+let listening = false;          // the Portrait's bottom button (or L)
+// Donny typing to her or talking into the mic in the Choom app at home. Dropped when her turn
+// starts, or after a while if the "stopped" message never comes.
+let appListening = false;
+let appListenUntil = 0;
+const heard = () => listening || (appListening && performance.now() < appListenUntil);
 let listenAmt = 0;
 let paused = false;
 let simTime = 0;
@@ -684,7 +689,7 @@ const poseTo = (c) => c.to || 'main';
 
 function wantedMood(p) {
   if (portraits[current] !== p) return 'idle';
-  if (listening) return 'listen';
+  if (heard()) return 'listen';
   return mood === 'speaking' ? 'talk' : mood === 'thinking' ? 'think' : 'idle';
 }
 
@@ -1052,7 +1057,15 @@ function speechPieces(text, first) {
 function onChoomEvent(ev) {
   const i = choomIndex(ev.choom);
   switch (ev.event) {
+    case 'listening':
+      // Donny typing to her or talking into the mic: she turns to listen. Typing to a Choom brings
+      // her to the glass, unless someone is mid-turn.
+      appListening = ev.listening === true;
+      appListenUntil = performance.now() + (ev.source === 'mic' ? 120000 : 30000);
+      if (appListening && i >= 0 && i !== current && mood === 'idle' && !speech.busy && !speech.queue.length) switchTo(i);
+      break;
     case 'turn_start':
+      appListening = false; // he sent it: her turn now
       // Back on the glass after more than ten minutes for a real conversation: a greeting is due.
       if (i >= 0 && (ev.source === 'chat' || ev.source === 'group') && performance.now() - (portraits[i].lastShown || 0) > 600000) {
         portraits[i].greet = true;
@@ -1271,7 +1284,7 @@ renderer.setAnimationLoop((now) => {
     if (phaseT >= 0.9) phase = 'idle';
   }
 
-  listenAmt += ((listening ? 1 : 0) - listenAmt) * Math.min(dt * 6, 1);
+  listenAmt += ((heard() ? 1 : 0) - listenAmt) * Math.min(dt * 6, 1);
   updateLevel(dt);
   if (headaudio) headaudio.update(dt * 1000);
   updateMouth(dt);
@@ -1343,7 +1356,7 @@ const windowInfo = () => ({
 post('start', { page: 'living', chooms: portraits.map((p) => p.name), window: windowInfo() });
 function sendStatus() {
   post('status', {
-    page: 'living', fps, choom: portraits[current].name, body: body ? body.url : null, listening, mood, voiceOn,
+    page: 'living', fps, choom: portraits[current].name, body: body ? body.url : null, listening: heard(), mood, voiceOn,
     queued: speech.queue.length, window: windowInfo(),
   });
 }

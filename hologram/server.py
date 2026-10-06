@@ -201,6 +201,8 @@ def follow_choom():
                         continue
                     if event.get("type") in ("turn_start", "content") and event.get("source") in ("chat", "group"):
                         wake_screen()
+                    elif event.get("type") == "listening" and event.get("listening"):
+                        wake_screen()  # Donny started typing or talking to them
                     broadcast({**event, "type": "choom", "event": event.get("type")})
         except Exception as e:  # network drop, app restart, timeout
             choom_feed.update(state=f"disconnected ({type(e).__name__})")
