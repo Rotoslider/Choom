@@ -94,8 +94,10 @@ What the moods do on the page:
   her (`wake`). A Choom only sleeps if she has a sleep loop and a wake clip. Heartbeats and delegated
   tasks that start while the glass sleeps run unseen, so they don't wake her every hour.
 - **yawn:** now and then in the two hours before sleep and after it, and likely right after waking.
-- **windy:** Genesis's wind clips join her quiet moments when the local wind (from the Choom app's
-  weather, every 10 minutes) is 15 mph or more.
+- **windy:** Genesis's wind clips come up often in her quiet moments when the local wind (from the Choom app's
+  weather, every 10 minutes) is 15 mph or more, and fine warm dust drifts through the glass on the
+  wind. Rain or snow outside falls through it too, and Genesis glances up at the sky when the
+  weather turns.
 - **The gap:** the first time you talk to a Choom in a chat after eight hours or more, she lights up
   (her happy clip) before she answers, unless what you said calls for another expression.
 - **Tool moments:** when a Choom calls a tool, the glass flares and she plays a clip that fits it,

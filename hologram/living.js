@@ -319,11 +319,13 @@ const LAYER_FRAG = /* glsl */ `
         c = mix(c, lifted + detail * speckThere * twinkle * wave, sparkle);
       }
       // On the group stage her picture's bottom edge would float in the glass as a straight cut:
-      // she fades out toward it instead (fully faded pixels are dropped, so they hide no one).
+      // she fades out toward it instead (fully faded pixels are dropped, so they hide no one). The
+      // fade is shaped for the eye (the screen is sRGB): linear, it would still look a fifth bright
+      // where the pixels stop.
       if (bottomFade > 0.0) {
         float f = smoothstep(0.15 * bottomFade, bottomFade, vUv.y);
-        if (f < 0.02) discard;
-        c *= f;
+        if (f < 0.01) discard;
+        c *= pow(f, 2.2);
       }
       gl_FragColor = vec4(c * glow * opacity, 1.0);
     }`;
@@ -616,6 +618,99 @@ let appListening = false;
 let weather = { wind: 0, gust: 0, description: '' };
 const windy = () => Math.max(weather.wind || 0, (weather.gust || 0) * 0.7) >= 15;
 fetch('/status', { cache: 'no-store' }).then((r) => r.json()).then((st) => { if (st.weather) weather = st.weather; }).catch(() => {});
+
+// ---- Weather in the glass -------------------------------------------------------------------
+// Rain or snow outside falls through the glass too (rare out here), and on a windy day fine warm
+// dust drifts past on the wind, faster the harder it blows. It hangs around and behind her and
+// dims while she sleeps.
+const WX = 360;
+const wxPos = new Float32Array(WX * 3);
+const wxSeed = new Float32Array(WX);
+for (let k = 0; k < WX; k++) {
+  wxSeed[k] = Math.random();
+  wxPos.set([(Math.random() * 2 - 1) * 0.95, (Math.random() * 2 - 1) * 1.05, -0.7 + Math.random() * 0.9], k * 3);
+}
+const wxGeo = new THREE.BufferGeometry();
+wxGeo.setAttribute('position', new THREE.BufferAttribute(wxPos, 3));
+wxGeo.setAttribute('aSeed', new THREE.BufferAttribute(wxSeed, 1));
+const wxMaterial = new THREE.ShaderMaterial({
+  uniforms: { color: { value: new THREE.Color() }, size: { value: 3 }, opacity: { value: 0 }, streak: { value: 0 } },
+  vertexShader: /* glsl */ `
+    attribute float aSeed;
+    uniform float size;
+    varying float vSeed;
+    void main() {
+      vSeed = aSeed;
+      gl_PointSize = size * (0.6 + 0.8 * aSeed);
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }`,
+  fragmentShader: /* glsl */ `
+    uniform vec3 color;
+    uniform float opacity, streak;
+    varying float vSeed;
+    void main() {
+      vec2 q = gl_PointCoord - 0.5;
+      q.x *= 1.0 + 6.0 * streak; // a raindrop is a thin falling streak
+      float r = length(q);
+      if (r > 0.5) discard;
+      gl_FragColor = vec4(color * smoothstep(0.5, 0.0, r) * opacity * (0.5 + 0.5 * vSeed), 1.0);
+    }`,
+  blending: THREE.AdditiveBlending,
+  transparent: true,
+  depthWrite: false,
+});
+const wxPoints = new THREE.Points(wxGeo, wxMaterial);
+wxPoints.frustumCulled = false;
+wxPoints.visible = false;
+scene.add(wxPoints);
+const WX_LOOK = {
+  rain: { color: [0.55, 0.7, 0.95], size: 13, streak: 1, opacity: 0.55 },
+  snow: { color: [0.9, 0.95, 1.0], size: 5, streak: 0, opacity: 0.55 },
+  dust: { color: [0.85, 0.64, 0.4], size: 3.5, streak: 0, opacity: 0.42 },
+};
+let wxAmt = 0;
+let wxKind = null;
+function weatherKind() {
+  const d = String(weather.description || '').toLowerCase();
+  if (/snow|sleet|flurr/.test(d)) return 'snow';
+  if (/rain|drizzle|shower|storm|thunder/.test(d)) return 'rain';
+  return windy() ? 'dust' : null;
+}
+function updateWeather(dt, time, dim) {
+  const kind = weatherKind();
+  if (kind) wxKind = kind; // the old kind keeps moving while it fades out
+  wxAmt += ((kind ? 1 : 0) - wxAmt) * Math.min(dt * 0.5, 1);
+  wxPoints.visible = wxAmt > 0.01 && wxKind !== null;
+  if (!wxPoints.visible) return;
+  const look = WX_LOOK[wxKind];
+  const u = wxMaterial.uniforms;
+  u.color.value.setRGB(...look.color);
+  u.size.value = look.size;
+  u.streak.value = look.streak;
+  u.opacity.value = look.opacity * wxAmt * dim;
+  const wind = Math.max(weather.wind || 0, (weather.gust || 0) * 0.7);
+  for (let k = 0; k < WX; k++) {
+    const n = wxSeed[k];
+    let x = wxPos[k * 3], y = wxPos[k * 3 + 1];
+    if (wxKind === 'rain') {
+      y -= (1.6 + 0.8 * n) * dt;
+      x += wind * 0.008 * dt;
+    } else if (wxKind === 'snow') {
+      y -= (0.12 + 0.1 * n) * dt;
+      x += (Math.sin(time * 0.7 + n * 40) * 0.04 + wind * 0.004) * dt;
+    } else {
+      x += wind * (0.008 + 0.008 * n) * dt;
+      y += Math.sin(time * 0.9 + n * 40) * 0.02 * dt;
+    }
+    if (y < -1.05) y += 2.1;
+    if (y > 1.05) y -= 2.1;
+    if (x > 0.95) x -= 1.9;
+    if (x < -0.95) x += 1.9;
+    wxPos[k * 3] = x;
+    wxPos[k * 3 + 1] = y;
+  }
+  wxGeo.attributes.position.needsUpdate = true;
+}
 let toolBoost = 0;             // 1 when she calls a tool, fading over four seconds
 let sleepAmt = 0;              // 1 while she sleeps: the glass dims and slows
 let bandT = 0;                 // the scan/compile band's own clock (it races during tool moments)
@@ -852,7 +947,7 @@ function nextClip(p, after) {
   const weights = pool.map((k) => {
     let w = want === 'idle' && (k === main || (pose === 'main' && poseTo(clips[k]) !== pose)) ? 2 : 1;
     if (/longcalm/.test(clips[k].source || '')) w *= 2;
-    if (breezy && clipMoods(clips[k]).includes('windy')) w *= 3;
+    if (breezy && clipMoods(clips[k]).includes('windy')) w *= 6; // on a windy day about one clip in four
     if (clipMoods(clips[k]).includes('yawn')) w *= justWoke ? 6 : 0.5;
     if (stage.on && portraits[current] !== p && /glance|scan|smile|beat|bright/.test(clips[k].source || '')) w *= 2;
     if (night && want === 'idle') w *= calmName.test(clips[k].source || '') ? 2 : livelyName.test(clips[k].source || '') ? 0.5 : 1;
@@ -971,7 +1066,7 @@ const stage = { on: false, until: 0, mix: 0, place: [], shown: [], slots: [] };
 function stageSlot(j) {
   if (!stage.slots[j]) {
     const material = layerMaterial({ segX: 192, segY: 256, edgeThreshold: 0.35, useMask: true, own: true });
-    material.uniforms.bottomFade.value = 0.6;
+    material.uniforms.bottomFade.value = 0.5;
     const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 2.0, 192, 256), material);
     mesh.frustumCulled = false;
     mesh.visible = false;
@@ -1684,8 +1779,9 @@ renderer.setAnimationLoop((now) => {
   bandT += (paused ? 0 : dt) * (1 + 3 * toolBoost);
   updateParticles(paused ? 0 : dt, (1 + 1.5 * listenAmt + 1.4 * thinking + 2.5 * level + 4 * toolBoost) * (1 - 0.7 * sleepAmt));
   shared.time.value = simTime;
-  if (orbGroup.visible) updateOrbs(presence);
+  if (orbGroup.visible) updateOrbs(presence * (1 - 0.6 * sleepAmt)); // her atom dims while she sleeps
   particleMaterial.uniforms.time.value = simTime;
+  updateWeather(paused ? 0 : dt, simTime, presence * (1 - 0.7 * sleepAmt));
   particleMaterial.uniforms.opacity.value = presence * (0.85 + 0.4 * listenAmt + 0.5 * level);
 
   if (band.visible) {
