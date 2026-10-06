@@ -40,13 +40,13 @@ COMMAND_WAIT_S = 8               # after a bare "OK Eve", how long she waits for
 FOLLOW_UP_S = 6                  # after her answer, how long the mic stays open for a reply
 SENTENCE_QUIET = 53              # frames of quiet (1.6 s) that end what he's saying to her
 MAX_SPEECH_S = 45                # the longest single message (the app's speech-to-text splits long ones)
-ROOM = "Chooms"                  # "OK Chooms" / "OK everyone": the room he last spoke in
+ROOM = "Chooms"                  # "OK Chooms" / "OK girls" / "OK everyone": the group room
 NAMES = {                        # what Whisper may write for each name
     "Aloy": r"aloy|aloi|eloy|eloi|aloe|alloy|alloi|a loy|aloya|aloha",
     "Optic": r"optic|optik|optics|optick",
     "Genesis": r"genesis|genisis|jenesis",
     "Eve": r"eve|eva|eave|evie",
-    ROOM: r"chooms?|choom's|chums|chumps|everyone|everybody",   # all of them: the group room
+    ROOM: r"chooms?|choom's|chums|chumps|girls|gals|everyone|everybody",   # all of them: the group room
 }
 WAKE = re.compile(r"^\W*(?:ok|okay|o\.k\.|hey)\W+(" + "|".join(NAMES.values()) + r")\b\W*(.*)$", re.I | re.S)
 
@@ -184,7 +184,7 @@ class Ears:
         """(Choom, rest of what was said) if the utterance opens with a wake phrase."""
         audio = np.frombuffer(pcm, np.int16).astype(np.float32) / 32768
         segments, _ = self.model.transcribe(audio, language="en", beam_size=1, condition_on_previous_text=False,
-                                            initial_prompt="OK Aloy. OK Optic. OK Genesis. OK Eve. OK Chooms.")
+                                            initial_prompt="OK Aloy. OK Optic. OK Genesis. OK Eve. OK Chooms. OK girls.")
         segments = list(segments)
         if not segments or segments[0].no_speech_prob > 0.6 or segments[0].avg_logprob < -1.0:
             return None

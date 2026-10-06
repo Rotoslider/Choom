@@ -119,8 +119,8 @@ she has dozed off at night, not on the group stage, and not in her first minutes
 **Talking at the tower:** say "OK Aloy" (or OK Optic, OK Genesis, OK Eve) and that Choom comes to
 the glass and listens; what you say next (or straight after, "OK Genesis, what's the weather?") goes
 to her current chat in the app and she answers in the glass. After her answer the mic stays open
-six seconds for a reply without the wake phrase. "OK Chooms" (or "OK everyone") talks to the group
-room you last spoke in: the stage comes up with all four listening, your words go into the room as
+six seconds for a reply without the wake phrase. "OK Chooms" (or "OK girls", "OK everyone") talks to the
+group room set as the Signal room on the Rooms page (or else the room you last spoke in): the stage comes up with all four listening, your words go into the room as
 if typed there, and the reply window opens once the room has finished. `tower_ears.py` listens to the EMEET's microphone
 (PipeWire), finds speech with WebRTC VAD and checks how each utterance begins with faster-whisper
 small.en on the GPU, so a name said mid-sentence never calls anyone; nothing is kept or sent
