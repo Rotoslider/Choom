@@ -5,8 +5,11 @@
  * GET /api/hologram/events streams it. The hologram shows whoever is talking and speaks her
  * reply in her own voice. With no subscriber connected, publishing is a no-op.
  *
- * Events: turn_start, thinking, tool, content (speakable text), retract, done, error, turn_end.
- * Each carries { choom, choomId, chatId, voice, source }.
+ * Events: turn_start, thinking, tool, image, content (speakable text), retract, done, error,
+ * turn_end. Each carries { choom, choomId, chatId, voice, source }. A tool event names the sister
+ * when Aloy delegates (target); an image event carries the gallery imageId and its kind: selfie,
+ * picture, snapshot (a camera) or looking (an image she is analyzing), so the hologram can float it
+ * beside her.
  *
  * Voice hand-off: while the hologram posts heartbeats saying it is speaking, browsers on the home
  * network stay quiet (lib/hologram-voice.ts), so a reply is never spoken twice and Chatterbox
@@ -227,6 +230,9 @@ export function startHologramTurn(
     publishHologram({ type: 'content', ...turn, text, speak: shouldSpeak(turn) }));
   const said = (turn.source === 'chat' || turn.source === 'group') && prompt ? prompt.slice(0, 500) : undefined;
   publishHologram({ type: 'turn_start', ...turn, ...(said ? { prompt: said } : {}) });
+  // Which tool made the next image: a self-portrait, a camera snapshot, or any other picture.
+  let lastTool: string | null = null;
+  let selfPortrait = false;
   return {
     event(data) {
       if (listeners.size === 0) return;
@@ -242,10 +248,25 @@ export function startHologramTurn(
           publishHologram({ type: 'thinking', ...turn });
           break;
         case 'tool_call': {
-          const call = data.toolCall as { name?: unknown } | undefined;
-          publishHologram({ type: 'tool', ...turn, tool: typeof call?.name === 'string' ? call.name : null });
+          const call = data.toolCall as { name?: unknown; arguments?: unknown } | undefined;
+          const name = typeof call?.name === 'string' ? call.name : null;
+          const args = (call?.arguments && typeof call.arguments === 'object' ? call.arguments : {}) as Record<string, unknown>;
+          lastTool = name;
+          if (name === 'generate_image') selfPortrait = args.self_portrait === true;
+          const target = name === 'delegate_to_choom' && typeof args.choom_name === 'string' ? args.choom_name : null;
+          publishHologram({ type: 'tool', ...turn, tool: name, ...(target ? { target } : {}) });
+          if (name === 'analyze_image' && typeof args.image_id === 'string') {
+            publishHologram({ type: 'image', ...turn, imageId: args.image_id, kind: 'looking' });
+          }
           break;
         }
+        case 'image_generated':
+          if (typeof data.imageId === 'string') {
+            const kind = lastTool === 'ha_get_camera_snapshot' ? 'snapshot' : selfPortrait ? 'selfie' : 'picture';
+            publishHologram({ type: 'image', ...turn, imageId: data.imageId, kind });
+          }
+          selfPortrait = false;
+          break;
         case 'done':
           speech.flush();
           publishHologram({ type: 'done', ...turn });

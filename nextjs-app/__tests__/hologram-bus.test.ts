@@ -96,3 +96,22 @@ test('a chat turn tells the hologram what Donny said, heartbeats do not', () => 
   expect(starts[0].prompt).toBe('My dog is sick, I am worried.');
   expect(starts[1].prompt).toBeUndefined();
 });
+
+test('pictures and delegation reach the hologram with what it needs to show them', () => {
+  const { events, off } = capture();
+  const t = startHologramTurn({ ...turn('chat', 'c1'), choom: 'Aloy', choomId: 'a' });
+  t.event({ type: 'tool_call', toolCall: { id: '1', name: 'generate_image', arguments: { prompt: 'me', self_portrait: true } } });
+  t.event({ type: 'image_generated', imageId: 'img1', imageUrl: 'data:image/png;base64,AAAA' });
+  t.event({ type: 'tool_call', toolCall: { id: '2', name: 'generate_image', arguments: { prompt: 'a mesa' } } });
+  t.event({ type: 'image_generated', imageId: 'img2', imageUrl: 'data:image/png;base64,AAAA' });
+  t.event({ type: 'tool_call', toolCall: { id: '3', name: 'ha_get_camera_snapshot', arguments: { entity_id: 'camera.porch' } } });
+  t.event({ type: 'image_generated', imageId: 'img3', imageUrl: 'data:image/jpeg;base64,AAAA' });
+  t.event({ type: 'tool_call', toolCall: { id: '4', name: 'analyze_image', arguments: { image_id: 'img2' } } });
+  t.event({ type: 'tool_call', toolCall: { id: '5', name: 'delegate_to_choom', arguments: { choom_name: 'Genesis', task: 'x' } } });
+  t.end();
+  off();
+  const images = events.filter((e) => e.type === 'image').map((e) => [e.imageId, e.kind]);
+  expect(images).toEqual([['img1', 'selfie'], ['img2', 'picture'], ['img3', 'snapshot'], ['img2', 'looking']]);
+  expect(events.some((e) => 'imageUrl' in e)).toBe(false); // never the multi-MB image itself
+  expect(events.find((e) => e.tool === 'delegate_to_choom')?.target).toBe('Genesis');
+});
