@@ -103,8 +103,11 @@ What the moods do on the page:
 - **Pictures:** a picture she makes, a camera snapshot she checks, or an image she's analyzing floats
   up beside her face for about ten seconds, framed in her color (the Choom app's feed sends the
   gallery id; `server.py` serves it at `/choom-image/<id>`). A selfie also plays one of her "look
-  at me" moves (mood `pose`) when she has them. When Aloy delegates, that sister's orb in her atom
-  flares.
+  at me" moves (mood `pose`) when she has them: two times in three a full-body move (pose `full`,
+  e.g. Aloy's twirl, made from a full-body picture built from her reference sheet), reached and left
+  with a quick camera-cut fade since that framing can't join her waist-up picture; otherwise a
+  waist-up move. No lip sync during full-body moves. When Aloy delegates, that sister's orb in her
+  atom flares.
 - **Tool moments:** when a Choom calls a tool, the glass flares and she plays a clip that fits it,
   found by name (`TOOL_LOOKS`): looking around for a camera snapshot or picture, drifting off
   for a memory search, glancing at the sky for the weather, a playful look for a picture she makes.

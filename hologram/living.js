@@ -323,6 +323,9 @@ const LAYER_FRAG = /* glsl */ `
       // fade is shaped for the eye (the screen is sRGB): linear, it would still look a fifth bright
       // where the pixels stop.
       if (bottomFade > 0.0) {
+        // Bits of black background caught inside her cut-out (at her hair) are invisible on black
+        // glass, but on the stage they would hide whoever stands behind her.
+        if (dot(c, vec3(0.2126, 0.7152, 0.0722)) < 0.0015) discard; // about 5/255: background black, not her pupils
         float f = smoothstep(0.15 * bottomFade, bottomFade, vUv.y);
         if (f < 0.01) discard;
         c *= pow(f, 2.2);
@@ -758,6 +761,9 @@ function updateWeather(dt, time, dim) {
 }
 let toolBoost = 0;             // 1 when she calls a tool, fading over four seconds
 let lastSwitchAt = performance.now(); // when the Choom on the glass last changed (the screensaver's clock)
+const CUT_OUT_S = 0.25;        // a camera cut: her last frame fades out this fast,
+const CUT_IN_S = 0.35;         // and the new framing fades in over this
+let cutFade = null;            // { t, shown } while a cut is under way
 let sleepAmt = 0;              // 1 while she sleeps: the glass dims and slows
 let bandT = 0;                 // the scan/compile band's own clock (it races during tool moments)
 let lastActivity = performance.now(); // the last conversation, listening or button press
@@ -932,7 +938,9 @@ function suits(p, k) {
 
 function nextClip(p, after) {
   const clips = p.alive.clips;
-  const pose = after >= 0 && clips[after] ? poseTo(clips[after]) : 'main';
+  let pose = after >= 0 && clips[after] ? poseTo(clips[after]) : 'main';
+  // After a full-body move, cut back to the framing she was in.
+  if (pose === 'full') pose = p.cutFrom || 'main';
   const want = wantedMood(p);
   // Asleep: stay asleep, or wake first if anything else is wanted. Sleepy: doze off (via a pose
   // change if needed).
@@ -962,6 +970,15 @@ function nextClip(p, after) {
   }
   // A selfie she just made: one of her "look at me" moves (via a pose change if needed).
   if (p.poseWanted && want !== 'listen' && want !== 'sleep') {
+    const full = clips.map((c, k) => k).filter((k) => poseFrom(clips[k]) === 'full' && clipMoods(clips[k]).includes('pose'));
+    const waistUp = clips.some((c) => clipMoods(c).includes('pose') && poseFrom(c) !== 'full');
+    if (full.length && pose !== 'full' && (!waistUp || Math.random() < 0.65)) { // full-body (by a cut) two times in three
+      p.poseWanted = false;
+      p.cutFrom = pose; // where to cut back to after the move
+      const move = full[Math.floor(Math.random() * full.length)];
+      (p.moments ||= new Set()).add(move);
+      return move;
+    }
     const move = seekClip(p, pose, 'pose', after);
     const arrived = move >= 0 && clipMoods(clips[move]).includes('pose');
     if (move < 0 || arrived) p.poseWanted = false;
@@ -1025,7 +1042,8 @@ function hurryAlive(p) {
                   Boolean(p.moments?.has(p.players[1 - p.active].clip)));
   // Woken from sleep: the sleep clip hurries along even more, so she's awake in a few seconds.
   const asleep = poseFrom(p.alive.clips[pl.clip]) === 'asleep' && poseTo(p.alive.clips[pl.clip]) === 'asleep';
-  pl.video.playbackRate = !fits ? (asleep ? 3 : 2) : waiting ? 1.5 : (pl.baseRate || 1);
+  // At double speed an idle clip reads as frantic talking; 1.4x still brings her back soon.
+  pl.video.playbackRate = !fits ? (asleep ? 2.5 : 1.4) : waiting ? 1.3 : (pl.baseRate || 1);
 }
 
 function aliveStart(p) {
@@ -1064,7 +1082,11 @@ for (const p of portraits) {
       // speed, and between quiet clips the shared picture may rest a moment.
       next.video.playbackRate = 0.94 + Math.random() * 0.12;
       next.baseRate = next.video.playbackRate;
-      const rest = wantedMood(p) === 'idle' ? Math.random() * 800 : 0;
+      // A clip in another framing (her full-body moves) can't join this picture: a camera cut,
+      // her last frame fading out before the next clip starts (and back in on its first frame).
+      const isCut = next.clip >= 0 && poseFrom(p.alive.clips[next.clip]) !== poseTo(p.alive.clips[pl.clip]);
+      if (isCut && portraits[current] === p) cutFade = { t: 0, shown: false };
+      const rest = isCut ? CUT_OUT_S * 1000 : wantedMood(p) === 'idle' ? Math.random() * 800 : 0;
       setTimeout(() => {
         // Not if she left the glass meanwhile (her players were paused).
         if (portraits[current] !== p && !stage.on && stage.mix === 0) return;
@@ -1078,6 +1100,7 @@ for (const p of portraits) {
         if (clipMoods(p.alive.clips[next.clip]).includes('wake')) p.wokeAt = performance.now();
         if (portraits[current] === p) bindAliveTextures(p);
         else if (stage.mix > 0 || stage.on) bindStageSlot(portraits.indexOf(p));
+        if (cutFade) cutFade.shown = true; // the new framing is on: fade back in
         aliveLoad(p, pl, nextClip(p, next.clip)); // the finished player fetches the clip after
         post('alive-clip', { choom: p.name, clip: p.alive.clips[next.clip].source || next.clip });
       });
@@ -1097,6 +1120,8 @@ function followAliveMouth(p) {
   if (clip < 0) return;
   const m = p.alive.clips[clip].mouth[p.aliveFrame];
   const fu = frontMaterial.uniforms;
+  // In a full-body move her face is small and turning: no lip sync there (the track is mostly guessed).
+  fu.mouthOn.value = poseFrom(p.alive.clips[clip]) === 'full' ? 0 : 1;
   fu.mouthC.value.set(m[0], m[1]);
   fu.mouthSize.value.set(m[2], m[3], m[4]);
   fu.mouthTilt.value = m[5];
@@ -1592,7 +1617,9 @@ function onChoomEvent(ev) {
         if (speech.busy || speech.queue.length) stopSpeech();
         stageExit();
         if (i >= 0 && i !== current) switchTo(i);
-      } else if (appListening && i >= 0 && i !== current && mood === 'idle' && !speech.busy && !speech.queue.length) switchTo(i);
+      } else if (appListening && !ev.roomId && i >= 0 && i !== current && mood === 'idle' && !speech.busy && !speech.queue.length) {
+        switchTo(i); // typing or the mic in a chat brings her forward; in a room they all just listen
+      }
       break;
     case 'turn_start':
       appListening = false; // he sent it: her turn now
@@ -1866,7 +1893,19 @@ renderer.setAnimationLoop((now) => {
   frontMaterial.uniforms.bottomFade.value = 0.22 * sm;
   const breath = 1 + Math.sin(simTime * tau / 4.6) * 0.035;
   shared.depthScale.value = baseDepth.value * breath * (0.25 + 0.75 * presence);
-  shared.opacity.value = presence;
+  // A camera cut: fade out, hold dark until the new framing's first frame, fade in.
+  let cutDim = 0;
+  if (cutFade) {
+    cutFade.t += dt;
+    if (!cutFade.shown) cutDim = Math.min(cutFade.t / CUT_OUT_S, 1);
+    else {
+      cutFade.inT = (cutFade.inT || 0) + dt;
+      cutDim = 1 - Math.min(cutFade.inT / CUT_IN_S, 1);
+      if (cutDim === 0) cutFade = null;
+    }
+    if (cutFade && cutFade.t > 3) cutFade = null; // never stay dark if a clip fails to start
+  }
+  shared.opacity.value = presence * (1 - cutDim);
   shared.glow.value = 1 + 0.22 * listenAmt + 0.3 * level + thinking * 0.06 * Math.sin(simTime * 3.2) + 0.2 * toolBoost;
 
   if (body) {

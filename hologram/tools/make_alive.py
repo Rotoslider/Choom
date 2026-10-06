@@ -131,6 +131,11 @@ ROLES = {
     "relaxedturn": (["pose"], "relaxed", "relaxed"),
     "relaxedpoint": (["pose"], "relaxed", "relaxed"),
     "relaxedhips": (["pose"], "relaxed", "relaxed"),
+    # Full-body moves: another framing, so the page reaches them (and leaves them) with a camera cut.
+    "fulltwirl": (["pose"], "full", "full"),
+    "fullwave": (["pose"], "full", "full"),
+    "fullpose": (["pose"], "full", "full"),
+    "fullspin": (["pose"], "full", "full"),
     # Yawns, for late evening and early morning.
     "yawn": (["yawn"], "main", "main"),
     "relaxedyawn": (["yawn"], "relaxed", "relaxed"),
@@ -251,10 +256,18 @@ def main():
     # changing clips never changes her depth.
     ref, ref_mask = clips[0]["raw"][0].astype(np.float32), clips[0]["masks"][0]
     for c in clips:
+        # A full-body clip is framed differently, so it lines up with its own first frame instead.
+        own = clip_role(cid, c["src"])[1] == "full"
+        c_ref, c_mask = (c["raw"][0].astype(np.float32), c["masks"][0]) if own else (ref, ref_mask)
         for i in range(len(c["raw"])):
-            sel = c["masks"][i] & ref_mask
-            a, b = np.polyfit(c["raw"][i][sel].astype(np.float32), ref[sel], 1)
+            sel = c["masks"][i] & c_mask
+            a, b = np.polyfit(c["raw"][i][sel].astype(np.float32), c_ref[sel], 1)
             c["raw"][i] = a * c["raw"][i].astype(np.float32) + b
+        if own:  # and its depth range is mapped onto the main clip's, so normalizing them together fits
+            ref_lo, ref_hi = np.percentile(ref[ref_mask], [2, 99.5])
+            own_lo, own_hi = np.percentile(c["raw"][::2][c["masks"][::2]].astype(np.float32), [2, 99.5])
+            scale = (ref_hi - ref_lo) / max(own_hi - own_lo, 1e-6)
+            c["raw"] = ((c["raw"].astype(np.float32) - own_lo) * scale + ref_lo).astype(np.float16)
     # Percentiles from every other frame at a quarter of the pixels: the same answer, far less memory.
     allv = np.concatenate([c["raw"][::2, ::2, ::2][c["masks"][::2, ::2, ::2]].astype(np.float32) for c in clips])
     lo, hi = np.percentile(allv, [2, 99.5])
