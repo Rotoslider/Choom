@@ -108,6 +108,19 @@ What the moods do on the page:
 minutes), the Chooms take turns on the glass, three to five minutes each, picked at random. Not once
 she has dozed off at night, not on the group stage, and not in her first minutes after waking.
 
+**Talking at the tower:** say "OK Aloy" (or OK Optic, OK Genesis, OK Eve) and that Choom comes to
+the glass and listens; what you say next (or straight after, "OK Genesis, what's the weather?") goes
+to her current chat in the app and she answers in the glass. After her answer the mic stays open
+six seconds for a reply without the wake phrase. `tower_ears.py` listens to the EMEET's microphone
+(PipeWire), finds speech with WebRTC VAD and checks how each utterance begins with faster-whisper
+small.en on the GPU, so a name said mid-sentence never calls anyone; nothing is kept or sent
+until it hears a wake phrase. The words go to the Choom app's `/api/stt` and on to
+`/api/hologram/talk`, which picks her chat the way Signal does and keeps it marked as open at home
+so the hologram speaks the reply. Set up once:
+`python3 -m venv .venv-ears && .venv-ears/bin/pip install faster-whisper==1.2.1 ctranslate2==4.8.2 webrtcvad-wheels`;
+`launch.sh` then starts it (`ears.log`; `HOLOGRAM_EARS=0` to leave it off). The EMEET's mic level
+must be up (`wpctl set-volume @DEFAULT_AUDIO_SOURCE@ 1.0`): at 50% its gain sits at 0 of 4.
+
 **Presence (Home Assistant):** `server.py` watches Home Assistant every 5 seconds once
 `~/.config/choom-hologram/ha_url` (e.g. `http://homeassistant.local:8123`) and `ha_token` (a
 long-lived access token from your HA profile, Security tab; `chmod 600`) exist; no restart needed.

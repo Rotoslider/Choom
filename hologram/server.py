@@ -368,7 +368,7 @@ class Handler(SimpleHTTPRequestHandler):
         return super().do_GET()
 
     def do_POST(self):
-        if self.path not in ("/log", "/control", "/speak", "/simulate"):
+        if self.path not in ("/log", "/control", "/speak", "/simulate", "/ears"):
             self.send_error(404)
             return
         length = int(self.headers.get("Content-Length", 0))
@@ -395,6 +395,21 @@ class Handler(SimpleHTTPRequestHandler):
         if self.path == "/simulate":
             # Test hook: inject a Choom-app event, e.g. {"event": "content", "choom": "aloy", ...}
             broadcast({**entry, "type": "choom"})
+            self.send_response(204)
+            self.end_headers()
+            return
+        if self.path == "/ears":
+            # tower_ears.py: "OK Eve" heard at the tower. The page shows her listening (and brings her
+            # to the glass); the screens wake. Only events are logged, never what was said.
+            event, choom = entry.get("event"), entry.get("choom")
+            if event == "wake":
+                wake_screen()
+            if event in ("wake", "listen"):
+                broadcast({"type": "choom", "event": "listening", "source": "mic", "tower": True,
+                           "listening": event == "wake" or entry.get("listening") is True,
+                           "choom": choom, "chatId": None, "roomId": None})
+            self._log({"kind": "ears", "event": event, "choom": choom,
+                       **({"message": entry["message"]} if "message" in entry else {})})
             self.send_response(204)
             self.end_headers()
             return

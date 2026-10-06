@@ -14,6 +14,7 @@ CHOOM_URL="${CHOOM_URL:-http://donnys-mac-studio-3.local:3000}"
 stop_all() {
   pkill -f -- "--user-data-dir=$PROFILE" || true
   pkill -f -- "$DIR/server.py" || true
+  pkill -f -- "$DIR/tower_ears.py" || true
   # Hand the voice back to the browsers right away instead of waiting for the heartbeat to lapse.
   curl -s -m 3 -X POST -H 'Content-Type: application/json' -d '{"voice":false}' \
     "$CHOOM_URL/api/hologram/voice" > /dev/null || true
@@ -44,6 +45,10 @@ stop_all
 sleep 0.5
 nohup python3 "$DIR/server.py" --port "$PORT" > "$DIR/server.log" 2>&1 &
 sleep 0.5
+# The tower's ears ("OK Aloy"), when their venv is set up (see README); HOLOGRAM_EARS=0 turns them off.
+if [[ -x "$DIR/.venv-ears/bin/python" && "${HOLOGRAM_EARS:-1}" != 0 ]]; then
+  nohup "$DIR/.venv-ears/bin/python" "$DIR/tower_ears.py" > "$DIR/ears.log" 2>&1 &
+fi
 
 nohup google-chrome \
   --user-data-dir="$PROFILE" \

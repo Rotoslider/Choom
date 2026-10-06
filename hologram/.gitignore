@@ -15,3 +15,5 @@ portraits/*/alive_*.mp4
 portraits/*/alive_*.part
 portraits/*/alive_depth_*.npy
 telemetry.log.1
+.venv-ears/
+ears.log

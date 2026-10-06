@@ -1450,7 +1450,7 @@ function speechPieces(text, first) {
 // lights up before she answers, unless what he says calls for something else. Kept in this
 // browser profile so it survives relaunches.
 const LONG_GAP_MS = 8 * 3600 * 1000;
-let lastTyped = { chatId: null, at: 0 }; // the chat Donny last typed or spoke into, from the app at home
+let lastTyped = { chatId: null, choom: null, at: 0 }; // where Donny last typed or spoke: an app chat, or a Choom at the tower
 function lastTalk(id) {
   try { return Number(localStorage.getItem(`lastTalk:${id}`)) || 0; } catch { return 0; }
 }
@@ -1515,8 +1515,14 @@ function onChoomEvent(ev) {
       // her to the glass, unless someone is mid-turn.
       appListening = ev.listening === true;
       appListenUntil = performance.now() + (ev.source === 'mic' ? 120000 : 30000);
-      if (appListening && ev.chatId) lastTyped = { chatId: ev.chatId, at: performance.now() };
-      if (appListening && i >= 0 && i !== current && mood === 'idle' && !speech.busy && !speech.queue.length) switchTo(i);
+      if (appListening && ev.chatId) lastTyped = { chatId: ev.chatId, choom: ev.choom, at: performance.now() };
+      if (appListening && ev.tower) {
+        // "OK Eve" at the tower: she comes to the glass at once, even over someone talking.
+        lastTyped = { chatId: null, choom: ev.choom, at: performance.now() };
+        if (speech.busy || speech.queue.length) stopSpeech();
+        stageExit();
+        if (i >= 0 && i !== current) switchTo(i);
+      } else if (appListening && i >= 0 && i !== current && mood === 'idle' && !speech.busy && !speech.queue.length) switchTo(i);
       break;
     case 'turn_start':
       appListening = false; // he sent it: her turn now
@@ -1527,7 +1533,8 @@ function onChoomEvent(ev) {
       // scheduled routines and Signal messages arrive as chat turns too. (Room messages count;
       // "test" is the simulate hook.)
       const fromDonny = ev.source === 'group' || ev.source === 'test' ||
-        (ev.source === 'chat' && ev.chatId && ev.chatId === lastTyped.chatId && performance.now() - lastTyped.at < 300000);
+        (ev.source === 'chat' && performance.now() - lastTyped.at < 300000 &&
+         (lastTyped.chatId ? ev.chatId === lastTyped.chatId : lastTyped.choom === ev.choom)); // a chatId, or the tower's Choom
       if (i >= 0) portraits[i].emotion = fromDonny && typeof ev.prompt === 'string' ? feeling(ev.prompt) : null;
       if (i >= 0 && ev.source === 'chat' && fromDonny) {
         const p = portraits[i];
