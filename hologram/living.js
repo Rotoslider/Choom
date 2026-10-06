@@ -1300,6 +1300,7 @@ function onControl(ev) {
   if (ev.weather && typeof ev.weather === 'object') weather = ev.weather; // debug: pretend weather
   if (typeof ev.hour === 'number' || ev.hour === null) debugHour = ev.hour;
   if (typeof ev.sleep === 'boolean') debugSleep = ev.sleep;
+  if (ev.activity === true) lastActivity = performance.now(); // someone talking near the tower (tower_ears)
   if (ev.presence && typeof ev.presence === 'object') onPresence(ev.presence); // debug: pretend presence
   if (typeof ev.picture === 'string') showPicture(ev.picture, ev.kind || 'picture', portraits[current]); // debug: a gallery image id
   if (ev.stage === true) stageEnter(current); // debug: the group stage
@@ -1613,7 +1614,11 @@ function onChoomEvent(ev) {
       appListening = ev.listening === true;
       appListenUntil = performance.now() + (ev.source === 'mic' ? 120000 : 30000);
       if (appListening && ev.chatId) lastTyped = { chatId: ev.chatId, choom: ev.choom, at: performance.now() };
-      if (appListening && ev.tower) {
+      if (appListening && ev.tower && ev.group) {
+        // "OK Chooms": the room. The stage comes up and all four listen.
+        if (ev.wake && (speech.busy || speech.queue.length)) stopSpeech();
+        stageEnter(current);
+      } else if (appListening && ev.tower) {
         // "OK Eve" at the tower: she comes to the glass at once, even over someone talking.
         lastTyped = { chatId: null, choom: ev.choom, at: performance.now() };
         if (ev.wake && (speech.busy || speech.queue.length)) stopSpeech(); // "OK Eve" interrupts; a reply window never does

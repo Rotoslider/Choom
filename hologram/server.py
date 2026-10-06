@@ -445,9 +445,15 @@ class Handler(SimpleHTTPRequestHandler):
             event, choom = entry.get("event"), entry.get("choom")
             if event == "wake":
                 wake_screen()
+            if event == "voice":  # someone is talking near the tower: no screensaver turn now (not logged)
+                broadcast({"type": "control", "activity": True})
+                self.send_response(204)
+                self.end_headers()
+                return
             if event in ("wake", "listen"):
                 broadcast({"type": "choom", "event": "listening", "source": "mic", "tower": True,
                            "wake": event == "wake",  # only the wake phrase itself may interrupt her
+                           "group": choom == "Chooms",  # "OK Chooms": the room, all four listen
                            "listening": event == "wake" or entry.get("listening") is True,
                            "choom": choom, "chatId": None, "roomId": None})
             self._log({"kind": "ears", "event": event, "choom": choom,

@@ -40,11 +40,13 @@ COMMAND_WAIT_S = 8               # after a bare "OK Eve", how long she waits for
 FOLLOW_UP_S = 6                  # after her answer, how long the mic stays open for a reply
 SENTENCE_QUIET = 53              # frames of quiet (1.6 s) that end what he's saying to her
 MAX_SPEECH_S = 45                # the longest single message (the app's speech-to-text splits long ones)
+ROOM = "Chooms"                  # "OK Chooms" / "OK everyone": the room he last spoke in
 NAMES = {                        # what Whisper may write for each name
     "Aloy": r"aloy|aloi|eloy|eloi|aloe|alloy|alloi|a loy|aloya|aloha",
     "Optic": r"optic|optik|optics|optick",
     "Genesis": r"genesis|genisis|jenesis",
     "Eve": r"eve|eva|eave|evie",
+    ROOM: r"chooms?|choom's|chums|chumps|everyone|everybody",   # all of them: the group room
 }
 WAKE = re.compile(r"^\W*(?:ok|okay|o\.k\.|hey)\W+(" + "|".join(NAMES.values()) + r")\b\W*(.*)$", re.I | re.S)
 
@@ -108,6 +110,7 @@ class Ears:
         self.vad = webrtcvad.Vad(2)
         self.floor = 30.0                    # the room's background level (frame RMS), tracked
         self.last_capture = {}
+        self.voice_told = 0.0
         self.model = WhisperModel("small.en", device="cuda", compute_type="float16")
         list(self.model.transcribe(np.zeros(RATE, np.float32), language="en")[0])  # the first call takes seconds
         self.frames = queue.Queue()
@@ -159,6 +162,9 @@ class Ears:
                 voiced = (voiced + [is_speech])[-10:]
                 if sum(voiced) >= 6:
                     speech = list(ring)
+                    if time.time() - self.voice_told > 20:  # someone is talking nearby: hold the screensaver
+                        self.voice_told = time.time()
+                        tell_hologram("voice")
                 elif deadline and time.time() > deadline:
                     return None
                 continue
@@ -178,7 +184,7 @@ class Ears:
         """(Choom, rest of what was said) if the utterance opens with a wake phrase."""
         audio = np.frombuffer(pcm, np.int16).astype(np.float32) / 32768
         segments, _ = self.model.transcribe(audio, language="en", beam_size=1, condition_on_previous_text=False,
-                                            initial_prompt="OK Aloy. OK Optic. OK Genesis. OK Eve.")
+                                            initial_prompt="OK Aloy. OK Optic. OK Genesis. OK Eve. OK Chooms.")
         segments = list(segments)
         if not segments or segments[0].no_speech_prob > 0.6 or segments[0].avg_logprob < -1.0:
             return None
@@ -207,17 +213,19 @@ class Ears:
         if len(text.split()) < 1:
             return None  # nothing said after all (a cough, the tail of her voice): keep listening
         try:
-            post_json(f"{CHOOM_URL}/api/hologram/talk", {"choom": choom, "text": text}, timeout=60)
+            target = {"room": True} if choom == ROOM else {"choom": choom}
+            post_json(f"{CHOOM_URL}/api/hologram/talk", {**target, "text": text}, timeout=60)
             return True
         except Exception as e:
             tell_hologram("error", choom, message=f"talk: {type(e).__name__}")
             tell_hologram("listen", choom, listening=False)
             return False
 
-    def wait_for_answer(self):
-        """Until her turn has started and she has finished speaking: idle twice in a row (an unread
-        status is never taken for idle; that once opened the reply window mid-answer)."""
-        started, idle_polls, deadline = False, 0, time.time() + 180
+    def wait_for_answer(self, quiet_polls=2):
+        """Until her turn has started and she has finished speaking: idle quiet_polls times in a row
+        (an unread status is never taken for idle; that once opened the reply window mid-answer).
+        A room needs longer: there are pauses between one Choom and the next."""
+        started, idle_polls, deadline = False, 0, time.time() + 300
         while time.time() < deadline:
             status = hologram_status()
             if status is not None:
@@ -226,7 +234,7 @@ class Ears:
                     started, idle_polls = True, 0
                 elif started:
                     idle_polls += 1
-                    if idle_polls >= 2:
+                    if idle_polls >= quiet_polls:
                         return True
             time.sleep(1)
         return False
@@ -262,7 +270,7 @@ class Ears:
             if not sent:
                 return
             # Ignore what the mic hears while she thinks and talks (mostly her own voice).
-            self.wait_for_answer()
+            self.wait_for_answer(10 if choom == ROOM else 2)
             while not self.frames.empty():
                 self.frames.get_nowait()
             pcm, rest, follow_up = None, "", True
