@@ -877,6 +877,7 @@ function wantedMood(p) {
   if (portraits[current] !== p) return 'idle';
   if (heard()) return 'listen';
   if (mood === 'idle' && sleepy() && canSleep(p)) return 'sleep';
+  if (mood === 'idle' && gaze.looking) return 'listen'; // he's looking at her: her facing-you clips
   return mood === 'speaking' ? 'talk' : mood === 'thinking' ? 'think' : 'idle';
 }
 
@@ -889,6 +890,7 @@ const SLEEP_AFTER_QUIET_MS = 10 * 60 * 1000;
 let debugHour = null;     // debug: pretend it's this hour (/control {"hour": 23})
 let debugSleep = false;   // debug: doze off now, however early or busy it is (/control {"sleep": true})
 let presence = { home: null, desk: null, bed: null }; // from Home Assistant; see onPresence
+let gaze = { looking: false, face: false };          // from the tower's camera; see onGaze
 const hourNow = () => debugHour ?? new Date().getHours();
 function sleepy() {
   if (debugSleep || presence.bed === true) return mood === 'idle' && !heard() && !speech.busy;
@@ -1275,6 +1277,7 @@ events.onmessage = (e) => {
   if (ev.type === 'control') onControl(ev);
   if (ev.type === 'choom') onChoomEvent(ev);
   if (ev.type === 'presence') onPresence(ev);
+  if (ev.type === 'gaze') onGaze(ev);
   if (ev.type === 'weather') {
     // The weather turns: Genesis, who loves it, glances up at the sky (if she's on the glass).
     const turned = weather.description && ev.description && ev.description !== weather.description;
@@ -1301,6 +1304,7 @@ function onControl(ev) {
   if (typeof ev.hour === 'number' || ev.hour === null) debugHour = ev.hour;
   if (typeof ev.sleep === 'boolean') debugSleep = ev.sleep;
   if (ev.activity === true) lastActivity = performance.now(); // someone talking near the tower (tower_ears)
+  if (typeof ev.gaze === 'boolean') onGaze({ looking: ev.gaze, face: true }); // debug: pretend he's looking
   if (ev.presence && typeof ev.presence === 'object') onPresence(ev.presence); // debug: pretend presence
   if (typeof ev.picture === 'string') showPicture(ev.picture, ev.kind || 'picture', portraits[current]); // debug: a gallery image id
   if (ev.stage === true) stageEnter(current); // debug: the group stage
@@ -1557,6 +1561,19 @@ function onPresence(next) {
   post('presence-seen', { ...presence, arrived, gotUp });
 }
 fetch('/status', { cache: 'no-store' }).then((r) => r.json()).then((st) => { if (st.presence) onPresence(st.presence); }).catch(() => {});
+
+// The tower's eyes (tower_eyes.py): Donny looking at the glass. While he looks she keeps to her
+// facing-you clips (a glance aside hurries back) and leans in a little, sometimes with a smile his
+// way as he first looks; when he looks away she goes back to her own moments. The screensaver won't
+// take her off the glass while he's looking at her.
+function onGaze(ev) {
+  const was = gaze.looking;
+  gaze = { looking: ev.looking === true, face: ev.face === true };
+  if (gaze.face) lastActivity = performance.now();
+  const p = portraits[current];
+  if (gaze.looking && !was && mood === 'idle' && p.alive && Math.random() < 0.35) p.toolLook = /smile|bright/;
+  post('gaze-seen', gaze);
+}
 
 // Background turns (hourly heartbeats, delegated tasks) that start while the glass sleeps are left
 // to run unseen: they would wake her, switch Chooms and have her doze off again every hour.
@@ -1876,7 +1893,7 @@ renderer.setAnimationLoop((now) => {
     if (phaseT >= 0.9) phase = 'idle';
   }
 
-  listenAmt += ((heard() ? 1 : 0) - listenAmt) * Math.min(dt * 6, 1);
+  listenAmt += ((heard() ? 1 : gaze.looking ? 0.35 : 0) - listenAmt) * Math.min(dt * 6, 1); // leans in a little when he looks
   updateLevel(dt);
   if (headaudio) headaudio.update(dt * 1000);
   updateMouth(dt);
@@ -2002,7 +2019,7 @@ let turnLength = TURN_MS[0];
 setInterval(() => {
   const now = performance.now();
   if (!QUIET_BEFORE_MS || now - lastActivity < QUIET_BEFORE_MS || now - lastSwitchAt < turnLength) return;
-  if (mood !== 'idle' || speech.busy || speech.queue.length || heard() || phase !== 'idle' || sleepy() || stage.on) return;
+  if (mood !== 'idle' || speech.busy || speech.queue.length || heard() || phase !== 'idle' || sleepy() || stage.on || gaze.looking) return;
   const here = portraits[current];
   const clip = here.alive && here.players[here.active].clip >= 0 ? here.alive.clips[here.players[here.active].clip] : null;
   if ((clip && (poseFrom(clip) === 'asleep' || poseTo(clip) === 'asleep')) || now - (here.wokeAt || 0) < 3 * 60 * 1000) return;

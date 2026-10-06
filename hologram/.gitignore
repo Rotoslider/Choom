@@ -17,3 +17,4 @@ portraits/*/alive_depth_*.npy
 telemetry.log.1
 .venv-ears/
 ears.log
+eyes.log

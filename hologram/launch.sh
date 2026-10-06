@@ -15,6 +15,7 @@ stop_all() {
   pkill -f -- "--user-data-dir=$PROFILE" || true
   pkill -f -- "$DIR/server.py" || true
   pkill -f -- "$DIR/tower_ears.py" || true
+  pkill -f -- "$DIR/tower_eyes.py" || true
   pkill -f -- "pw-record --rate (16000|48000) --channels 1 --format s16 -" || true  # its recorder
   # Hand the voice back to the browsers right away instead of waiting for the heartbeat to lapse.
   curl -s -m 3 -X POST -H 'Content-Type: application/json' -d '{"voice":false}' \
@@ -49,6 +50,10 @@ sleep 0.5
 # The tower's ears ("OK Aloy"), when their venv is set up (see README); HOLOGRAM_EARS=0 turns them off.
 if [[ -x "$DIR/.venv-ears/bin/python" && "${HOLOGRAM_EARS:-1}" != 0 ]]; then
   nohup "$DIR/.venv-ears/bin/python" "$DIR/tower_ears.py" > "$DIR/ears.log" 2>&1 &
+fi
+# The tower's eyes (is he looking at the glass?); they wait quietly until a camera is plugged in.
+if [[ -x "$DIR/.venv-ears/bin/python" && "${HOLOGRAM_EYES:-1}" != 0 ]]; then
+  nohup "$DIR/.venv-ears/bin/python" "$DIR/tower_eyes.py" > "$DIR/eyes.log" 2>&1 &
 fi
 
 nohup google-chrome \

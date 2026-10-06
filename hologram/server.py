@@ -409,7 +409,7 @@ class Handler(SimpleHTTPRequestHandler):
         return super().do_GET()
 
     def do_POST(self):
-        if self.path not in ("/log", "/control", "/speak", "/simulate", "/ears"):
+        if self.path not in ("/log", "/control", "/speak", "/simulate", "/ears", "/eyes"):
             self.send_error(404)
             return
         length = int(self.headers.get("Content-Length", 0))
@@ -458,6 +458,20 @@ class Handler(SimpleHTTPRequestHandler):
                            "choom": choom, "chatId": None, "roomId": None})
             self._log({"kind": "ears", "event": event, "choom": choom,
                        **{k: entry[k] for k in ("message", "seconds", "ended", "floor") if k in entry}})
+            self.send_response(204)
+            self.end_headers()
+            return
+        if self.path == "/eyes":
+            # tower_eyes.py: Donny looking at the glass or away, or a camera plugged in or out. Only
+            # those changes are passed on and logged; no picture ever leaves tower_eyes.py.
+            if "camera" in entry:
+                latest["eyes_camera"] = entry["camera"]
+                self._log({"kind": "eyes", "camera": entry["camera"]})
+            else:
+                gaze = {"looking": entry.get("looking") is True, "face": entry.get("face") is True}
+                latest["gaze"] = gaze
+                broadcast({"type": "gaze", **gaze})
+                self._log({"kind": "eyes", **gaze})
             self.send_response(204)
             self.end_headers()
             return

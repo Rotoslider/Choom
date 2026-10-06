@@ -19,6 +19,7 @@ Portrait with its own profile. Environment:
 |---|---|---|
 | `CHOOM_URL` | `http://donnys-mac-studio-3.local:3000` | the Choom app |
 | `HOLOGRAM_EARS` | `1` | `0` leaves the tower's microphone off |
+| `HOLOGRAM_EYES` | `1` | `0` leaves the camera off |
 | `HOLOGRAM_DISPLAY_WATCHDOG` | `1` | `0` stops the display watchdog |
 | `HOLOGRAM_CONFIG` | `~/.config/choom-hologram` | Home Assistant files (below) |
 
@@ -117,6 +118,18 @@ wake phrase itself interrupts her. Nothing is kept; events go to `telemetry.log`
 Setup: `python3 -m venv .venv-ears && .venv-ears/bin/pip install faster-whisper==1.2.1 ctranslate2==4.8.2 webrtcvad-wheels`.
 Keep the microphone's input level up (`wpctl set-volume @DEFAULT_AUDIO_SOURCE@ 1.0`).
 
+## Eye contact
+
+`tower_eyes.py` (same venv; started by `launch.sh`, `HOLOGRAM_EYES=0` to leave it off) watches a USB
+camera mounted at the Portrait's top edge, found by name (a Logitech Brio first; virtual cameras are
+skipped), and waits quietly until one is plugged in. MediaPipe's face landmarker gives his head's
+turn and tilt and where his irises sit; turn plus eyes within 15° of straight on, with his usual tilt
+(learned while he faces the camera), counts as looking at the glass (after 0.5 s; away after 1.5 s).
+While he looks, the Choom keeps to her facing-you clips and leans in a little, sometimes with a smile
+as he first looks, and the screensaver waits. Frames are never kept; only changes are sent and logged.
+Test on a video: `.venv-ears/bin/python tower_eyes.py --source clip.mp4 --print`. Setup:
+`.venv-ears/bin/pip install mediapipe opencv-python-headless`.
+
 ## Presence (Home Assistant)
 
 `server.py` checks Home Assistant every 5 seconds once these files exist in `~/.config/choom-hologram`
@@ -175,6 +188,7 @@ back in the layout if GNOME leaves it connected but off after an input switch.
 | `{"weather": {"wind": 25}}` | pretend weather |
 | `{"presence": {"bed": true}}` | pretend presence (`null` clears a role) |
 | `{"picture": "<image id>"}` | float a gallery picture |
+| `{"gaze": true}` | pretend he's looking at the glass |
 
 `POST /simulate` injects a Choom-app event, e.g. `{"event": "tool", "choom": "Genesis", "tool": "get_weather"}`.
 `GET /status` shows the page, the feed, weather, presence and the listener's state. `telemetry.log`

@@ -17,6 +17,7 @@ app: listening, thinking, using tools, sleeping at night.
   lips following the words.
 - **Talking at the tower.** Say "OK Aloy" (or Optic, Genesis, Eve) and she turns to listen; "OK
   Chooms" talks to the group room. Typing or the mic in the app works too.
+- **Eye contact.** With a camera by the glass, she turns to you when you look at her.
 - **Expressions and moments.** Happy, surprised, sad or concerned when the conversation calls for it;
   a look that fits each tool she uses; pictures she makes float beside her.
 - **Selfies.** A selfie she makes comes with a "look at me" move, sometimes a full-body twirl.
@@ -38,13 +39,14 @@ app: listening, thinking, using tools, sleeping at night.
 - **A PC with a GPU** to drive it, here an RTX PRO 6000 in a NUC. It renders the 48 views, runs the
   wake-phrase listener, and makes the moving reliefs.
 - **A speakerphone** for her voice and the microphone, here an EMEET OfficeCore M0 Plus.
+- **A camera** at the Portrait's top edge for eye contact, here a Logitech MX Brio (optional).
 - **Optional:** Home Assistant with presence sensors.
 
 ## Setup
 
 1. Copy the Portrait's calibration file from its USB drive into `calibration/`.
 2. Install the udev rule for the Portrait's buttons (see the [reference](docs/reference.md#portrait-buttons-and-screens)).
-3. For talking at the tower: `python3 -m venv .venv-ears && .venv-ears/bin/pip install faster-whisper==1.2.1 ctranslate2==4.8.2 webrtcvad-wheels`.
+3. For talking at the tower and eye contact: `python3 -m venv .venv-ears && .venv-ears/bin/pip install faster-whisper==1.2.1 ctranslate2==4.8.2 webrtcvad-wheels mediapipe opencv-python-headless`.
 4. Point it at the Choom app: `export CHOOM_URL=http://<choom-host>:3000`.
 5. Optional, Home Assistant: put `ha_url`, `ha_token` and `presence.json` in `~/.config/choom-hologram`
    (see the [reference](docs/reference.md#presence-home-assistant)).
