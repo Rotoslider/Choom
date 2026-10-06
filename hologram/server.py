@@ -451,7 +451,7 @@ class Handler(SimpleHTTPRequestHandler):
                            "listening": event == "wake" or entry.get("listening") is True,
                            "choom": choom, "chatId": None, "roomId": None})
             self._log({"kind": "ears", "event": event, "choom": choom,
-                       **({"message": entry["message"]} if "message" in entry else {})})
+                       **{k: entry[k] for k in ("message", "seconds", "ended", "floor") if k in entry}})
             self.send_response(204)
             self.end_headers()
             return

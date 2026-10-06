@@ -37,7 +37,7 @@ CAPTURE_RATE = 16000             # the EMEET's microphone runs at 16 kHz (it pla
 FRAME = 480                      # 30 ms at RATE
 COMMAND_WAIT_S = 8               # after a bare "OK Eve", how long she waits for the words
 FOLLOW_UP_S = 6                  # after her answer, how long the mic stays open for a reply
-SENTENCE_QUIET = 40              # frames of silence (1.2 s) that end what he's saying to her
+SENTENCE_QUIET = 53              # frames of quiet (1.6 s) that end what he's saying to her
 NAMES = {                        # what Whisper may write for each name
     "Aloy": r"aloy|aloi|eloy|eloi|aloe|alloy|alloi|a loy|aloya|aloha",
     "Optic": r"optic|optik|optics|optick",
@@ -103,7 +103,10 @@ def speech_to_text(pcm):
 
 class Ears:
     def __init__(self):
-        self.vad = webrtcvad.Vad(2)
+        self.vad = webrtcvad.Vad(2)          # finding utterances to check for a wake phrase
+        self.vad_words = webrtcvad.Vad(1)    # while he talks to her: keeps soft syllables
+        self.floor = 30.0                    # the room's background level (frame RMS), tracked
+        self.last_capture = {}
         self.model = WhisperModel("small.en", device="cuda", compute_type="float16")
         list(self.model.transcribe(np.zeros(RATE, np.float32), language="en")[0])  # the first call takes seconds
         self.frames = queue.Queue()
@@ -143,7 +146,13 @@ class Ears:
                 if speech is None and deadline and time.time() > deadline:
                     return None
                 continue
-            is_speech = self.vad.is_speech(frame, RATE)
+            # Speech by the detector, or clearly louder than the room: the EMEET's noise suppression
+            # leaves soft syllables faint enough for WebRTC VAD to call them silence mid-sentence.
+            level = float(np.sqrt(np.mean(np.frombuffer(frame, np.int16).astype(np.float32) ** 2)))
+            vad = self.vad_words if quiet_frames > 25 else self.vad
+            is_speech = vad.is_speech(frame, RATE) or level > max(60.0, 6 * self.floor)
+            if not is_speech:
+                self.floor += (level - self.floor) * 0.02
             if speech is None:
                 ring = (ring + [frame])[-10:]
                 voiced = (voiced + [is_speech])[-10:]
@@ -156,6 +165,9 @@ class Ears:
             silent_run = 0 if is_speech else silent_run + 1
             if silent_run >= quiet_frames or len(speech) >= 20 * RATE // FRAME:   # quiet long enough, or 20 s
                 pcm = b"".join(speech)
+                self.last_capture = {"seconds": round(len(pcm) / 2 / RATE, 1),
+                                     "ended": "quiet" if silent_run >= quiet_frames else "20 s cap",
+                                     "floor": round(self.floor, 1)}
                 return pcm if len(pcm) >= int(0.4 * RATE) * 2 else self.utterance(start_within and max(deadline - time.time(), 0.1), quiet_frames)
 
     def wake(self, pcm):
@@ -180,7 +192,7 @@ class Ears:
         """His words to her chat: the app's transcript (wake phrase removed), else Whisper's."""
         if not self.is_speech(pcm):
             return None
-        tell_hologram("heard", choom)
+        tell_hologram("heard", choom, **self.last_capture)  # length and how it ended, never the words
         try:
             text = speech_to_text(pcm)
             match = WAKE.match(text)
