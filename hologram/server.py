@@ -267,6 +267,7 @@ def ha_get(base, token, path):
 
 
 PRESENT_STATES = ("home", "on", "detected", "occupied", "true")
+AWAY_GRACE_S = 120  # gone only after two minutes of absence: phones drop Wi-Fi now and then
 
 
 def presence_watch():
@@ -277,6 +278,7 @@ def presence_watch():
     without it, "home" is the person entity named Donny. Checks every 5 s. Waits quietly (and picks
     the files up without a restart) until ha_url and ha_token exist."""
     last, entities, resolved_at = None, {}, 0.0
+    shown, absent_since = {}, {}  # what the page was told per role, and since when a role has read absent
     while True:
         try:
             url_file, token_file, map_file = HA_CONFIG / "ha_url", HA_CONFIG / "ha_token", HA_CONFIG / "presence.json"
@@ -307,6 +309,15 @@ def presence_watch():
                     now[role] = raw == spec["equals"]
                 else:
                     now[role] = raw.lower() in PRESENT_STATES
+            # Arriving counts at once; leaving only after AWAY_GRACE_S of absence in a row.
+            for role, value in now.items():
+                if value is False and shown.get(role) is True:
+                    absent_since.setdefault(role, time.time())
+                    if time.time() - absent_since[role] < AWAY_GRACE_S:
+                        now[role] = True
+                        continue
+                absent_since.pop(role, None)
+            shown = dict(now)
             latest["presence_state"] = "watching " + ", ".join(
                 f"{role}: {spec['entity'] if isinstance(spec, dict) else spec}" for role, spec in entities.items())
             if now != last:
