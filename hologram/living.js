@@ -1616,7 +1616,7 @@ function onChoomEvent(ev) {
       if (appListening && ev.tower) {
         // "OK Eve" at the tower: she comes to the glass at once, even over someone talking.
         lastTyped = { chatId: null, choom: ev.choom, at: performance.now() };
-        if (speech.busy || speech.queue.length) stopSpeech();
+        if (ev.wake && (speech.busy || speech.queue.length)) stopSpeech(); // "OK Eve" interrupts; a reply window never does
         stageExit();
         if (i >= 0 && i !== current) switchTo(i);
       } else if (appListening && !ev.roomId && i >= 0 && i !== current && mood === 'idle' && !speech.busy && !speech.queue.length) {

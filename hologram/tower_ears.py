@@ -72,11 +72,12 @@ def tell_hologram(event, choom=None, **extra):
 
 
 def hologram_status():
+    """The page's latest status, or None if it couldn't be read (never mistaken for "idle")."""
     try:
         with urllib.request.urlopen(f"{HOLOGRAM_URL}/status", timeout=3) as response:
-            return json.loads(response.read()).get("status") or {}
+            return json.loads(response.read()).get("status") or None
     except Exception:
-        return {}
+        return None
 
 
 def wav_bytes(pcm):
@@ -168,8 +169,17 @@ class Ears:
         match = WAKE.match(" ".join(s.text for s in segments))
         return (choom_for(match.group(1)), match.group(2).strip()) if match else None
 
+    def is_speech(self, pcm):
+        """Whisper invents tidy sentences out of noise; check the clip really holds words first."""
+        audio = np.frombuffer(pcm, np.int16).astype(np.float32) / 32768
+        segments = list(self.model.transcribe(audio, language="en", beam_size=1, condition_on_previous_text=False)[0])
+        words = " ".join(s.text for s in segments).split()
+        return bool(words) and min(s.no_speech_prob for s in segments) < 0.5 and max(s.avg_logprob for s in segments) > -1.0
+
     def send(self, choom, pcm, local_rest=""):
         """His words to her chat: the app's transcript (wake phrase removed), else Whisper's."""
+        if not self.is_speech(pcm):
+            return None
         tell_hologram("heard", choom)
         try:
             text = speech_to_text(pcm)
@@ -189,15 +199,19 @@ class Ears:
             return False
 
     def wait_for_answer(self):
-        """Until her turn has started and she has finished speaking (or a minute and a half)."""
-        started, deadline = False, time.time() + 90
+        """Until her turn has started and she has finished speaking: idle twice in a row (an unread
+        status is never taken for idle; that once opened the reply window mid-answer)."""
+        started, idle_polls, deadline = False, 0, time.time() + 180
         while time.time() < deadline:
             status = hologram_status()
-            busy = status.get("mood") in ("thinking", "speaking") or status.get("queued")
-            if busy:
-                started = True
-            elif started:
-                return True
+            if status is not None:
+                busy = status.get("mood") in ("thinking", "speaking") or status.get("queued")
+                if busy:
+                    started, idle_polls = True, 0
+                elif started:
+                    idle_polls += 1
+                    if idle_polls >= 2:
+                        return True
             time.sleep(1)
         return False
 
@@ -217,7 +231,10 @@ class Ears:
                     if not rest:
                         pcm = None
                         continue
-            sent = self.send(choom, pcm, rest)
+            # In the reply window, a sound under 0.8 s (a cough, a door, the end of a word on the TV)
+            # isn't a reply: keep listening without bothering speech-to-text.
+            short = follow_up and len(pcm) < int(0.8 * RATE) * 2
+            sent = None if short else self.send(choom, pcm, rest)
             if sent is None:
                 empty += 1
                 if empty >= 3:  # noise, not words: stop listening

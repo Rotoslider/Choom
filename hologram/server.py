@@ -447,6 +447,7 @@ class Handler(SimpleHTTPRequestHandler):
                 wake_screen()
             if event in ("wake", "listen"):
                 broadcast({"type": "choom", "event": "listening", "source": "mic", "tower": True,
+                           "wake": event == "wake",  # only the wake phrase itself may interrupt her
                            "listening": event == "wake" or entry.get("listening") is True,
                            "choom": choom, "chatId": None, "roomId": None})
             self._log({"kind": "ears", "event": event, "choom": choom,
