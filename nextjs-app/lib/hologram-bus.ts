@@ -215,12 +215,18 @@ class SpeechSegmenter {
 
 /**
  * Start mirroring one chat turn. Feed it every SSE event the turn sends (event), and call end()
- * when the turn finishes. Cheap when nobody is subscribed.
+ * when the turn finishes. Cheap when nobody is subscribed. `prompt` is what Donny (or the room)
+ * just said: the hologram reads its feeling so she can react before she answers. Only the start
+ * event carries it, trimmed.
  */
-export function startHologramTurn(turn: HologramTurn): { event: (data: Record<string, unknown>) => void; end: () => void } {
+export function startHologramTurn(
+  turn: HologramTurn,
+  prompt?: string,
+): { event: (data: Record<string, unknown>) => void; end: () => void } {
   const speech = new SpeechSegmenter((text) =>
     publishHologram({ type: 'content', ...turn, text, speak: shouldSpeak(turn) }));
-  publishHologram({ type: 'turn_start', ...turn });
+  const said = (turn.source === 'chat' || turn.source === 'group') && prompt ? prompt.slice(0, 500) : undefined;
+  publishHologram({ type: 'turn_start', ...turn, ...(said ? { prompt: said } : {}) });
   return {
     event(data) {
       if (listeners.size === 0) return;

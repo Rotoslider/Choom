@@ -105,7 +105,7 @@ export async function runChatTurn(params: ChatTurnParams): Promise<void> {
           voice: choom.voiceId ?? null,
           source: isHeartbeat ? 'heartbeat' : isDelegation ? 'delegation' : isGroupTurn ? 'group' : 'chat',
           roomId: groupRoomId ?? null,
-        });
+        }, message);
         const send = (data: Record<string, unknown>) => {
           hologram.event(data);
           if (sse.closed) return; // Silently skip if controller already closed (e.g., aborted delegation)

@@ -86,3 +86,13 @@ test('requests through ngrok or from a public address count as away from home', 
   expect(requestFromAway(req({ host: 'donnys-mac-studio-3.local:3443', 'x-forwarded-for': '192.168.1.20' }))).toBe(false);
   expect(requestFromAway(req({ host: 'localhost:3000' }))).toBe(false);
 });
+
+test('a chat turn tells the hologram what Donny said, heartbeats do not', () => {
+  const { events, off } = capture();
+  startHologramTurn(turn('chat', 'c1'), 'My dog is sick, I am worried.').end();
+  startHologramTurn(turn('heartbeat', 'c2'), 'internal heartbeat prompt').end();
+  off();
+  const starts = events.filter((e) => e.type === 'turn_start');
+  expect(starts[0].prompt).toBe('My dog is sick, I am worried.');
+  expect(starts[1].prompt).toBeUndefined();
+});
