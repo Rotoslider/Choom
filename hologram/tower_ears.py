@@ -177,8 +177,7 @@ class Ears:
             tell_hologram("error", choom, message=f"speech-to-text: {type(e).__name__}")
             text = local_rest
         if len(text.split()) < 1:
-            tell_hologram("listen", choom, listening=False)
-            return False
+            return None  # nothing said after all (a cough, the tail of her voice): keep listening
         try:
             post_json(f"{CHOOM_URL}/api/hologram/talk", {"choom": choom, "text": text}, timeout=60)
             return True
@@ -202,7 +201,7 @@ class Ears:
 
     def conversation(self, choom, pcm=None, rest=""):
         """A wake phrase was heard: listen, send, and keep listening for replies."""
-        follow_up = False
+        follow_up, empty = False, 0
         while True:
             tell_hologram("listen", choom, listening=True)
             if pcm is None:
@@ -216,7 +215,16 @@ class Ears:
                     if not rest:
                         pcm = None
                         continue
-            if not self.send(choom, pcm, rest):
+            sent = self.send(choom, pcm, rest)
+            if sent is None:
+                empty += 1
+                if empty >= 3:  # noise, not words: stop listening
+                    tell_hologram("listen", choom, listening=False)
+                    return
+                pcm, rest = None, ""
+                continue
+            empty = 0
+            if not sent:
                 return
             # Ignore what the mic hears while she thinks and talks (mostly her own voice).
             self.wait_for_answer()
