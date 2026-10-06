@@ -13,6 +13,7 @@ seconds for a reply without the wake phrase.
 Run with the hologram's own venv (launch.sh starts it when the venv exists):
     .venv-ears/bin/python tower_ears.py
 """
+import collections
 import io
 import json
 import os
@@ -103,8 +104,7 @@ def speech_to_text(pcm):
 
 class Ears:
     def __init__(self):
-        self.vad = webrtcvad.Vad(2)          # finding utterances to check for a wake phrase
-        self.vad_words = webrtcvad.Vad(1)    # while he talks to her: keeps soft syllables
+        self.vad = webrtcvad.Vad(2)
         self.floor = 30.0                    # the room's background level (frame RMS), tracked
         self.last_capture = {}
         self.model = WhisperModel("small.en", device="cuda", compute_type="float16")
@@ -136,6 +136,7 @@ class Ears:
         """The next stretch of speech (with 300 ms before it), or None if none starts in time. It ends
         after quiet_frames of silence (25 = 750 ms, enough for "OK Aloy"; 40 for whole sentences)."""
         ring, voiced, speech, silent_run = [], [], None, 0
+        recent = collections.deque(maxlen=quiet_frames)
         deadline = time.time() + start_within if start_within else None
         while True:
             try:
@@ -149,8 +150,7 @@ class Ears:
             # Speech by the detector, or clearly louder than the room: the EMEET's noise suppression
             # leaves soft syllables faint enough for WebRTC VAD to call them silence mid-sentence.
             level = float(np.sqrt(np.mean(np.frombuffer(frame, np.int16).astype(np.float32) ** 2)))
-            vad = self.vad_words if quiet_frames > 25 else self.vad
-            is_speech = vad.is_speech(frame, RATE) or level > max(60.0, 6 * self.floor)
+            is_speech = self.vad.is_speech(frame, RATE) or level > max(60.0, 6 * self.floor)
             if not is_speech:
                 self.floor += (level - self.floor) * 0.02
             if speech is None:
@@ -162,11 +162,14 @@ class Ears:
                     return None
                 continue
             speech.append(frame)
-            silent_run = 0 if is_speech else silent_run + 1
-            if silent_run >= quiet_frames or len(speech) >= 20 * RATE // FRAME:   # quiet long enough, or 20 s
+            # It ends when nine tenths of the last quiet_frames were quiet: a stray "speech" frame in
+            # the room's background can't hold it open, and a short breath doesn't end it.
+            recent.append(not is_speech)
+            silent_run = sum(recent) if len(recent) == quiet_frames else 0
+            if silent_run >= 0.9 * quiet_frames or len(speech) >= 20 * RATE // FRAME:   # quiet enough, or 20 s
                 pcm = b"".join(speech)
                 self.last_capture = {"seconds": round(len(pcm) / 2 / RATE, 1),
-                                     "ended": "quiet" if silent_run >= quiet_frames else "20 s cap",
+                                     "ended": "quiet" if silent_run >= 0.9 * quiet_frames else "20 s cap",
                                      "floor": round(self.floor, 1)}
                 return pcm if len(pcm) >= int(0.4 * RATE) * 2 else self.utterance(start_within and max(deadline - time.time(), 0.1), quiet_frames)
 
