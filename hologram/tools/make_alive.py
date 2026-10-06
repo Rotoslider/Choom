@@ -126,6 +126,11 @@ ROLES = {
     "skycheck": (["idle"], "main", "main"),
     "giggle": (["idle"], "main", "main"),
     "relaxedgiggle": (["idle"], "relaxed", "relaxed"),
+    # "Look at me" moves, played with a selfie she has just made.
+    "relaxedtoss": (["pose"], "relaxed", "relaxed"),
+    "relaxedturn": (["pose"], "relaxed", "relaxed"),
+    "relaxedpoint": (["pose"], "relaxed", "relaxed"),
+    "relaxedhips": (["pose"], "relaxed", "relaxed"),
     # Yawns, for late evening and early morning.
     "yawn": (["yawn"], "main", "main"),
     "relaxedyawn": (["yawn"], "relaxed", "relaxed"),

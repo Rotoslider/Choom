@@ -475,10 +475,10 @@ function updateParticles(dt, speed) {
 // arcs beside her head come forward. A rigid tilt, so orb spacing is unchanged.
 const ATOM = { cy: 0.26, rx: 0.6, ry: 0.34, lean: 0.62, speed: 0.46, pitch: 0.32 };
 const ORBITS = [
-  { color: 0xb79bff, phase: 0.0 },              // Genesis
-  { color: 0x57dbe3, phase: 0.6 * Math.PI },    // Optic
-  { color: 0xe4eeff, phase: 1.1 * Math.PI },    // Eve
-  { color: 0xf4b650, phase: 1.7 * Math.PI },    // Aloy
+  { who: 'genesis', color: 0xb79bff, phase: 0.0 },
+  { who: 'optic', color: 0x57dbe3, phase: 0.6 * Math.PI },
+  { who: 'eve', color: 0xe4eeff, phase: 1.1 * Math.PI },
+  { who: 'aloy', color: 0xf4b650, phase: 1.7 * Math.PI },
 ].map((o, k) => ({
   ...o, rx: ATOM.rx, ry: ATOM.ry, cy: ATOM.cy, speed: ATOM.speed, yaw: 0, pitch: ATOM.pitch,
   roll: k * Math.PI / 4, lean: k % 2 === 0 ? ATOM.lean : -ATOM.lean,
@@ -557,7 +557,8 @@ const tmp = new THREE.Vector3();
 function updateOrbs(presence) {
   for (const o of orbs) {
     orbPosition(o, simTime, o.core.position);
-    o.core.scale.setScalar(1 + 0.8 * toolBoost); // her sisters' orbs flare while she works a tool
+    // Her sisters' orbs flare while she works a tool, and the one she hands a task to flares most.
+    o.core.scale.setScalar((1 + 0.8 * toolBoost) * (1 + 1.8 * (o.flare || 0)));
     o.core.material.opacity = presence;
     o.core.material.transparent = presence < 1;
     // The trail is the orbit's recent past, sampled backwards in time.
@@ -567,12 +568,55 @@ function updateOrbs(presence) {
     }
     o.trail.geometry.attributes.position.needsUpdate = true;
     o.trailMaterial.uniforms.time.value = simTime;
-    o.trailMaterial.uniforms.opacity.value = presence;
+    o.trailMaterial.uniforms.opacity.value = presence * (1 + 1.5 * (o.flare || 0));
   }
   for (const m of threadMaterials) {
     m.uniforms.time.value = simTime;
     m.uniforms.opacity.value = presence;
   }
+}
+
+// ---- Pictures in the glass -------------------------------------------------------------------
+// A picture she makes, a camera snapshot she checks or an image she's looking at floats up beside
+// her face for a few seconds, framed in her color (above the stage when the room is up). A selfie
+// comes with one of her "look at me" moves when she has them.
+const FRAME_COLOR = { aloy: 0xf4b650, optic: 0x57dbe3, genesis: 0xb79bff, eve: 0xe4eeff };
+const picture = { group: new THREE.Group(), mesh: null, frame: null, t: 0, hold: 0, active: false };
+picture.group.visible = false;
+scene.add(picture.group);
+const pictureLoader = new THREE.TextureLoader();
+function showPicture(imageId, kind, p) {
+  pictureLoader.load(`/choom-image/${encodeURIComponent(imageId)}`, (tex) => {
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = 8;
+    const aspect = tex.image.width / tex.image.height;
+    const w = aspect >= 1 ? 0.6 : 0.62 * aspect; // its longer side about a third of the glass
+    const h = w / aspect;
+    for (const m of [picture.mesh, picture.frame]) if (m) { picture.group.remove(m); m.geometry.dispose(); m.material.map?.dispose(); m.material.dispose(); }
+    picture.mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h),
+      new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0, depthWrite: false }));
+    picture.frame = new THREE.Mesh(new THREE.PlaneGeometry(w + 0.024, h + 0.024),
+      new THREE.MeshBasicMaterial({ color: FRAME_COLOR[p.id] ?? 0xffffff, transparent: true, opacity: 0,
+        blending: THREE.AdditiveBlending, depthWrite: false }));
+    picture.frame.position.z = -0.004;
+    picture.group.add(picture.frame, picture.mesh);
+    picture.t = 0;
+    picture.hold = kind === 'snapshot' || kind === 'looking' ? 8 : 11;
+    picture.active = picture.group.visible = true;
+    post('picture', { choom: p.name, kind });
+  }, undefined, () => post('error', { message: `picture ${imageId} did not load` }));
+}
+function updatePicture(dt) {
+  if (!picture.active) return;
+  picture.t += dt;
+  const shown = ease(Math.min(picture.t / 0.7, 1)) * Math.min(Math.max((picture.hold + 0.9 - picture.t) / 0.9, 0), 1);
+  const sm = ease(stage.mix);
+  picture.group.position.set(0.45 * (1 - sm), 0.46 + 0.22 * sm + Math.sin(picture.t * 1.1) * 0.012, 0.05);
+  picture.group.rotation.y = -0.16 * (1 - sm) + Math.sin(picture.t * 0.6) * 0.03;
+  picture.group.scale.setScalar((0.85 + 0.15 * Math.min(picture.t / 0.7, 1)) * (1 - 0.25 * sm));
+  picture.mesh.material.opacity = shown;
+  picture.frame.material.opacity = 0.5 * shown;
+  if (picture.t > picture.hold + 0.9) picture.active = picture.group.visible = false;
 }
 
 // ---- Name label at the glass plane (z = 0 is the sharpest depth on the panel) --------------
@@ -883,7 +927,7 @@ function suits(p, k) {
   const want = wantedMood(p);
   const c = p.alive.clips[k];
   return clipMoods(c).includes(want) || (p.moments?.has(k) && want !== 'listen' && want !== 'sleep') ||
-         (p.emotion && poseFrom(c) !== poseTo(c)); // on her way to an expression
+         ((p.emotion || p.poseWanted) && poseFrom(c) !== poseTo(c)); // on her way to an expression or a move
 }
 
 function nextClip(p, after) {
@@ -915,6 +959,14 @@ function nextClip(p, after) {
     if (felt < 0 || arrived) p.emotion = null;
     if (arrived) (p.moments ||= new Set()).add(felt); // played out in full, not hurried
     if (felt >= 0) return felt;
+  }
+  // A selfie she just made: one of her "look at me" moves (via a pose change if needed).
+  if (p.poseWanted && want !== 'listen' && want !== 'sleep') {
+    const move = seekClip(p, pose, 'pose', after);
+    const arrived = move >= 0 && clipMoods(clips[move]).includes('pose');
+    if (move < 0 || arrived) p.poseWanted = false;
+    if (arrived) (p.moments ||= new Set()).add(move);
+    if (move >= 0) return move;
   }
   if ((want === 'think' || want === 'idle') && p.toolLook) {
     const look = p.toolLook;
@@ -1222,6 +1274,7 @@ function onControl(ev) {
   if (typeof ev.hour === 'number' || ev.hour === null) debugHour = ev.hour;
   if (typeof ev.sleep === 'boolean') debugSleep = ev.sleep;
   if (ev.presence && typeof ev.presence === 'object') onPresence(ev.presence); // debug: pretend presence
+  if (typeof ev.picture === 'string') showPicture(ev.picture, ev.kind || 'picture', portraits[current]); // debug: a gallery image id
   if (ev.stage === true) stageEnter(current); // debug: the group stage
   if (ev.stage === false) stageExit();
   if (typeof ev.clip === 'number' && portraits[current].players) { // debug: jump to a moving relief clip
@@ -1496,7 +1549,24 @@ function onChoomEvent(ev) {
   if (stage.on && (ev.source === 'group' || (ev.event === 'listening' && ev.roomId))) stage.until = performance.now() + STAGE_LINGER_MS;
   if (stage.on && ev.event === 'listening' && ev.listening === true && ev.chatId && !ev.roomId) stageExit();
   switch (ev.event) {
+    case 'image':
+      // A picture she made, a camera snapshot, or an image she's looking at.
+      if (i >= 0 && (i === current || stage.on) && typeof ev.imageId === 'string') {
+        const p = portraits[i];
+        showPicture(ev.imageId, ev.kind, p);
+        if (ev.kind === 'selfie' && p.alive?.clips.some((c) => clipMoods(c).includes('pose'))) {
+          p.poseWanted = true;
+          const a = p.players[p.active], b = p.players[1 - p.active];
+          if (i === current && a.clip >= 0 && !a.video.ended && b.video.paused && !p.moments?.has(b.clip)) aliveLoad(p, b, nextClip(p, a.clip));
+        }
+      }
+      break;
     case 'tool':
+      // Aloy hands a task to a sister: that sister's orb in her atom flares.
+      if (typeof ev.target === 'string') {
+        const orb = orbs.find((o) => o.who === ev.target.toLowerCase());
+        if (orb) orb.flare = 1;
+      }
       if (i === current) {
         toolBoost = 1;
         const look = toolLook(ev.tool), p = portraits[i];
@@ -1816,6 +1886,8 @@ renderer.setAnimationLoop((now) => {
   // Tool moments: while she works a tool her light surges for a few seconds (Aloy's orbs flare,
   // Optic's scan races, Genesis's motes swirl, Eve's code pours down).
   toolBoost = Math.max(0, toolBoost - dt / 4);
+  for (const o of orbs) o.flare = Math.max(0, (o.flare || 0) - dt / 3.5);
+  updatePicture(paused ? 0 : dt);
   bandT += (paused ? 0 : dt) * (1 + 3 * toolBoost);
   updateParticles(paused ? 0 : dt, (1 + 1.5 * listenAmt + 1.4 * thinking + 2.5 * level + 4 * toolBoost) * (1 - 0.7 * sleepAmt));
   shared.time.value = simTime;

@@ -100,6 +100,11 @@ What the moods do on the page:
   weather turns.
 - **The gap:** the first time you talk to a Choom in a chat after eight hours or more, she lights up
   (her happy clip) before she answers, unless what you said calls for another expression.
+- **Pictures:** a picture she makes, a camera snapshot she checks, or an image she's analyzing floats
+  up beside her face for about ten seconds, framed in her color (the Choom app's feed sends the
+  gallery id; `server.py` serves it at `/choom-image/<id>`). A selfie also plays one of her "look
+  at me" moves (mood `pose`) when she has them. When Aloy delegates, that sister's orb in her atom
+  flares.
 - **Tool moments:** when a Choom calls a tool, the glass flares and she plays a clip that fits it,
   found by name (`TOOL_LOOKS`): looking around for a camera snapshot or picture, drifting off
   for a memory search, glancing at the sky for the weather, a playful look for a picture she makes.
@@ -148,7 +153,7 @@ and correlation against the voice heard. Debug hooks on `POST /control`: `{"view
 screen, `false` to leave), `{"quilt": true}` (raw views), `{"clip": k}` (jump to a clip),
 `{"sleep": true}` (doze off now), `{"hour": 22}` (pretend it's that hour, `null` to stop),
 `{"weather": {"wind": 25}}` (pretend weather), `{"stage": true}` (the group stage),
-`{"presence": {"bed": true}}` (pretend presence; `null` clears a role). `POST /simulate`
+`{"presence": {"bed": true}}` (pretend presence; `null` clears a role), `{"picture": "<gallery image id>"}`. `POST /simulate`
 injects a Choom-app event (`{"event": "tool", "choom": "genesis", "tool": "get_weather"}`).
 
 ## Portrait assets

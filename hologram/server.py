@@ -9,6 +9,7 @@ Serves the pages, the device calibration and a /log sink for page telemetry. It 
 Buttons and Choom activity reach the page over /events.
 """
 import argparse
+import base64
 import fcntl
 import json
 import os
@@ -19,6 +20,7 @@ import subprocess
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import base64
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -260,6 +262,30 @@ def weather_watch():
         time.sleep(600)
 
 
+IMAGE_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
+image_cache = {}  # the last few pictures fetched for the page: id -> (content type, bytes)
+
+
+def choom_image(image_id):
+    """A picture from the Choom app's gallery as plain image bytes, so the page can draw it (the app
+    keeps images as base64 data URIs, and its pages send no CORS headers)."""
+    if image_id not in image_cache:
+        with urllib.request.urlopen(f"{CHOOM_URL}/api/images/{image_id}", timeout=30) as response:
+            record = json.loads(response.read())
+        url = record.get("imageUrl") or (record.get("image") or {}).get("imageUrl") or ""
+        match = re.match(r"data:(image/[\w.+-]+);base64,(.*)", url, re.S)
+        if match:
+            image_cache[image_id] = (match.group(1), base64.b64decode(match.group(2)))
+        elif url:
+            with urllib.request.urlopen(urllib.parse.urljoin(CHOOM_URL, url), timeout=30) as response:
+                image_cache[image_id] = (response.headers.get_content_type(), response.read())
+        else:
+            raise ValueError("no image in the record")
+        while len(image_cache) > 6:
+            image_cache.pop(next(iter(image_cache)))
+    return image_cache[image_id]
+
+
 def ha_get(base, token, path):
     request = urllib.request.Request(f"{base}{path}", headers={"Authorization": f"Bearer {token}"})
     with urllib.request.urlopen(request, timeout=10) as response:
@@ -365,6 +391,21 @@ class Handler(SimpleHTTPRequestHandler):
             return self._send_json({**latest, "buttons": buttons, "choom_feed": choom_feed})
         if self.path == "/events":
             return self._stream_events()
+        if self.path.startswith("/choom-image/"):
+            image_id = self.path[len("/choom-image/"):]
+            if not IMAGE_ID.fullmatch(image_id):
+                return self.send_error(400)
+            try:
+                content_type, data = choom_image(image_id)
+            except Exception as e:
+                self._log({"kind": "error", "message": f"picture {image_id}: {type(e).__name__}"})
+                return self.send_error(404)
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         return super().do_GET()
 
     def do_POST(self):
