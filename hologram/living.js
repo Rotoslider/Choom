@@ -528,6 +528,7 @@ const tmp = new THREE.Vector3();
 function updateOrbs(presence) {
   for (const o of orbs) {
     orbPosition(o, simTime, o.core.position);
+    o.core.scale.setScalar(1 + 0.8 * toolBoost); // her sisters' orbs flare while she works a tool
     o.core.material.opacity = presence;
     o.core.material.transparent = presence < 1;
     // The trail is the orbit's recent past, sampled backwards in time.
@@ -584,6 +585,9 @@ let listening = false;          // the Portrait's bottom button (or L)
 // Donny typing to her or talking into the mic in the Choom app at home. Dropped when her turn
 // starts, or after a while if the "stopped" message never comes.
 let appListening = false;
+let toolBoost = 0;             // 1 when she calls a tool, fading over four seconds
+let bandT = 0;                 // the scan/compile band's own clock (it races during tool moments)
+let lastActivity = performance.now(); // the last conversation, listening or button press
 let appListenUntil = 0;
 const heard = () => listening || (appListening && performance.now() < appListenUntil);
 let listenAmt = 0;
@@ -708,6 +712,12 @@ function nextClip(p, after) {
   }
   const want = wantedMood(p);
   const all = clips.map((c, k) => k).filter((k) => poseFrom(clips[k]) === pose);
+  // Saying something happy, sad, surprised or worried: that expression, once.
+  if (want === 'talk' && p.emotion) {
+    const felt = all.find((k) => clipMoods(clips[k]).includes(p.emotion));
+    p.emotion = null;
+    if (felt !== undefined) return felt;
+  }
   const fits = all.filter((k) => clipMoods(clips[k]).includes(want));
   // Right after a pose change she stays put for at least one clip (no hand up-down-up fidgeting).
   const justMoved = after >= 0 && clips[after] && poseFrom(clips[after]) !== poseTo(clips[after]);
@@ -718,7 +728,17 @@ function nextClip(p, after) {
   // and coming back to it as often as anything else (so Aloy spends about a third of her quiet time
   // with her hand down).
   const main = all.find((k) => poseTo(clips[k]) === pose && clipMoods(clips[k]).includes('talk'));
-  const weights = pool.map((k) => (want === 'idle' && (k === main || (pose === 'main' && poseTo(clips[k]) !== pose)) ? 2 : 1));
+  // Late at night (10 pm to 6 am) the calm clips come up more and the laughs and teasing less.
+  const hour = new Date().getHours();
+  const night = hour >= 22 || hour < 6;
+  const calmName = /longcalm|breath|daydream|hum|base|relaxed\.|loop/;
+  const livelyName = /amused|eyebrow|smirk|beat|glance/;
+  const weights = pool.map((k) => {
+    let w = want === 'idle' && (k === main || (pose === 'main' && poseTo(clips[k]) !== pose)) ? 2 : 1;
+    if (/longcalm/.test(clips[k].source || '')) w *= 2;
+    if (night && want === 'idle') w *= calmName.test(clips[k].source || '') ? 2 : livelyName.test(clips[k].source || '') ? 0.5 : 1;
+    return w;
+  });
   let r = Math.random() * weights.reduce((a, b) => a + b, 0);
   for (let i = 0; i < pool.length; i++) { r -= weights[i]; if (r <= 0) return pool[i]; }
   return pool[pool.length - 1];
@@ -730,7 +750,9 @@ function hurryAlive(p) {
   const pl = p.players[p.active];
   if (pl.clip < 0) return;
   const fits = clipMoods(p.alive.clips[pl.clip]).includes(wantedMood(p));
-  pl.video.playbackRate = fits ? (pl.baseRate || 1) : 2;
+  // An expression waiting to play: move along a little faster to reach it.
+  const waiting = p.emotion && p.alive.clips.some((c) => clipMoods(c).includes(p.emotion));
+  pl.video.playbackRate = !fits ? 2 : waiting ? 1.5 : (pl.baseRate || 1);
 }
 
 function aliveStart(p) {
@@ -814,6 +836,7 @@ function switchTo(i, force = false) {
 }
 
 function onButton(button, action) {
+  lastActivity = performance.now();
   post('button', { button, action });
   if (action === 'press' && button === 'top') switchTo(current - 1);
   if (action === 'press' && button === 'middle') switchTo(current + 1);
@@ -1019,6 +1042,19 @@ function choomIndex(name) {
 }
 
 // Join short sentences into chunks of up to ~260 characters: fewer TTS calls, natural phrasing.
+// What a sentence she says feels like, for an expression clip while she says it. Plain word lists:
+// instant, and wrong only in harmless ways (a missed feeling just means her calm face).
+const FEELINGS = [
+  ['sad', /\b(sorry to hear|i'm so sorry|so sorry|heartbreaking|passed away|i miss|miss you|grief|lonely|that's rough|unfortunately)\b/i],
+  ['concerned', /\b(worried|worry|are you (ok|okay|alright|all right)|be careful|take care|stay safe|hope you're|sounds (hard|tough|stressful|rough)|that's not good|get some rest)\b/i],
+  ['surprised', /\b(wow|whoa|oh my|no way|seriously\?|really\?|can't believe|unbelievable|incredible)\b/i],
+  ['happy', /\b(love it|love that|yay|awesome|amazing|wonderful|great news|so happy|congrat\w*|proud of you|haha|delighted|fantastic|can't wait)\b/i],
+];
+function feeling(text) {
+  for (const [name, words] of FEELINGS) if (words.test(text)) return name;
+  return null;
+}
+
 function chunkSentences(sentences) {
   const chunks = [];
   let buf = '';
@@ -1056,7 +1092,12 @@ function speechPieces(text, first) {
 
 function onChoomEvent(ev) {
   const i = choomIndex(ev.choom);
+  if (ev.source === 'chat' || ev.source === 'group' || ev.event === 'listening') lastActivity = performance.now();
   switch (ev.event) {
+    case 'tool':
+      if (i === current) toolBoost = 1;
+      post('tool', { choom: ev.choom, tool: ev.tool });
+      break;
     case 'listening':
       // Donny typing to her or talking into the mic: she turns to listen. Typing to a Choom brings
       // her to the glass, unless someone is mid-turn.
@@ -1090,7 +1131,7 @@ function onChoomEvent(ev) {
         for (const text of texts) {
           const first = !speech.busy && speech.queue.length === 0;
           for (const piece of speechPieces(text, first)) {
-            speech.queue.push({ text: piece, voice: ev.voice || VOICES[portraits[i].id], index: i, clock: c });
+            speech.queue.push({ text: piece, voice: ev.voice || VOICES[portraits[i].id], index: i, clock: c, feeling: feeling(piece) });
             if (c) c.pending++;
           }
         }
@@ -1175,7 +1216,10 @@ async function runSpeech() {
         else if (c.lastEnd) c.gaps.push(now - c.lastEnd);
         c.pieces++;
       }
+      // An expression clip for what she's saying, if this piece feels a certain way.
+      portraits[item.index].emotion = item.feeling || null;
       await play(audio);
+      portraits[item.index].emotion = null;
       syncReport(c);
       if (c) {
         c.lastEnd = performance.now();
@@ -1303,7 +1347,7 @@ renderer.setAnimationLoop((now) => {
   const breath = 1 + Math.sin(simTime * tau / 4.6) * 0.035;
   shared.depthScale.value = baseDepth.value * breath * (0.25 + 0.75 * presence);
   shared.opacity.value = presence;
-  shared.glow.value = 1 + 0.22 * listenAmt + 0.3 * level + thinking * 0.06 * Math.sin(simTime * 3.2);
+  shared.glow.value = 1 + 0.22 * listenAmt + 0.3 * level + thinking * 0.06 * Math.sin(simTime * 3.2) + 0.2 * toolBoost;
 
   if (body) {
     body.update({
@@ -1313,14 +1357,18 @@ renderer.setAnimationLoop((now) => {
     });
   }
 
-  updateParticles(paused ? 0 : dt, 1 + 1.5 * listenAmt + 1.4 * thinking + 2.5 * level);
+  // Tool moments: while she works a tool her light surges for a few seconds (Aloy's orbs flare,
+  // Optic's scan races, Genesis's motes swirl, Eve's code pours down).
+  toolBoost = Math.max(0, toolBoost - dt / 4);
+  bandT += (paused ? 0 : dt) * (1 + 3 * toolBoost);
+  updateParticles(paused ? 0 : dt, 1 + 1.5 * listenAmt + 1.4 * thinking + 2.5 * level + 4 * toolBoost);
   shared.time.value = simTime;
   if (orbGroup.visible) updateOrbs(presence);
   particleMaterial.uniforms.time.value = simTime;
   particleMaterial.uniforms.opacity.value = presence * (0.85 + 0.4 * listenAmt + 0.5 * level);
 
   if (band.visible) {
-    const cycle = style === 'scan' ? (simTime % 5) / 5 : 0.5 + 0.5 * Math.sin(simTime * tau / 7);
+    const cycle = style === 'scan' ? (bandT % 5) / 5 : 0.5 + 0.5 * Math.sin(bandT * tau / 7);
     band.position.y = style === 'scan' ? 1 - cycle * 2 : -0.75 + cycle * 1.3;
     const edgeFade = style === 'scan' ? Math.sin(cycle * Math.PI) : 1;
     bandMaterial.opacity = 0.75 * presence * edgeFade;
@@ -1361,3 +1409,20 @@ function sendStatus() {
   });
 }
 setInterval(sendStatus, 2000);
+
+// When it's quiet (no conversation, typing or button for 15 minutes), the Chooms take turns on the
+// glass, so the tower feels lived in by all four. A Choom arriving after a while away greets (Aloy
+// waves). Set QUIET_TURN_MS to 0 to keep whoever was last.
+const QUIET_TURN_MS = 15 * 60 * 1000;
+let lastTurnTaken = performance.now();
+setInterval(() => {
+  const now = performance.now();
+  if (!QUIET_TURN_MS || now - lastActivity < QUIET_TURN_MS || now - lastTurnTaken < QUIET_TURN_MS) return;
+  if (mood !== 'idle' || speech.busy || speech.queue.length || heard() || phase !== 'idle') return;
+  const others = portraits.map((q, k) => k).filter((k) => k !== current);
+  const next = others[Math.floor(Math.random() * others.length)];
+  if (now - (portraits[next].lastShown || 0) > 600000) portraits[next].greet = true;
+  lastTurnTaken = now;
+  post('quiet-turn', { from: portraits[current].name, to: portraits[next].name });
+  switchTo(next);
+}, 30000);

@@ -93,6 +93,25 @@ ROLES = {
     "relaxedlisten": (["listen", "talk"], "relaxed", "relaxed"),
     "relaxedamused": (["idle"], "relaxed", "relaxed"),
     "wave": (["greet"], "relaxed", "relaxed"),
+    # Quiet-moment variety; the warm, facing-him ones also suit listening (and the long calm loop
+    # suits talking too).
+    "smile": (["idle", "listen"], "main", "main"),
+    "hum": (["idle"], "main", "main"),
+    "daydream": (["idle"], "main", "main"),
+    "eyebrow": (["idle", "listen"], "main", "main"),
+    "longcalm": (["idle", "talk", "listen"], "main", "main"),
+    "orbwatch": (["idle"], "main", "main"),
+    "scan": (["idle"], "main", "main"),
+    "sway": (["idle"], "main", "main"),
+    "smirk": (["idle", "listen"], "main", "main"),
+    "tilt": (["idle", "listen"], "main", "main"),
+    "relaxedhair": (["idle"], "relaxed", "relaxed"),
+    "relaxedlongcalm": (["idle", "talk", "listen"], "relaxed", "relaxed"),
+    # Expressions, played while she says something that feels that way.
+    "happy": (["happy"], "main", "main"),
+    "surprised": (["surprised"], "main", "main"),
+    "sad": (["sad"], "main", "main"),
+    "concerned": (["concerned"], "main", "main"),
 }
 
 
