@@ -37,6 +37,7 @@ CAPTURE_RATE = 16000             # the EMEET's microphone runs at 16 kHz (it pla
 FRAME = 480                      # 30 ms at RATE
 COMMAND_WAIT_S = 8               # after a bare "OK Eve", how long she waits for the words
 FOLLOW_UP_S = 6                  # after her answer, how long the mic stays open for a reply
+SENTENCE_QUIET = 40              # frames of silence (1.2 s) that end what he's saying to her
 NAMES = {                        # what Whisper may write for each name
     "Aloy": r"aloy|aloi|eloy|eloi|aloe|alloy|alloi|a loy|aloya|aloha",
     "Optic": r"optic|optik|optics|optick",
@@ -127,8 +128,9 @@ class Ears:
             proc.kill()
             time.sleep(2)
 
-    def utterance(self, start_within=None):
-        """The next stretch of speech (with 300 ms before it), or None if none starts in time."""
+    def utterance(self, start_within=None, quiet_frames=25):
+        """The next stretch of speech (with 300 ms before it), or None if none starts in time. It ends
+        after quiet_frames of silence (25 = 750 ms, enough for "OK Aloy"; 40 for whole sentences)."""
         ring, voiced, speech, silent_run = [], [], None, 0
         deadline = time.time() + start_within if start_within else None
         while True:
@@ -151,9 +153,9 @@ class Ears:
                 continue
             speech.append(frame)
             silent_run = 0 if is_speech else silent_run + 1
-            if silent_run >= 25 or len(speech) >= 15 * RATE // FRAME:   # 750 ms of quiet, or 15 s
+            if silent_run >= quiet_frames or len(speech) >= 20 * RATE // FRAME:   # quiet long enough, or 20 s
                 pcm = b"".join(speech)
-                return pcm if len(pcm) >= int(0.4 * RATE) * 2 else self.utterance(start_within and max(deadline - time.time(), 0.1))
+                return pcm if len(pcm) >= int(0.4 * RATE) * 2 else self.utterance(start_within and max(deadline - time.time(), 0.1), quiet_frames)
 
     def wake(self, pcm):
         """(Choom, rest of what was said) if the utterance opens with a wake phrase."""
@@ -205,7 +207,7 @@ class Ears:
         while True:
             tell_hologram("listen", choom, listening=True)
             if pcm is None:
-                pcm = self.utterance(start_within=FOLLOW_UP_S if follow_up else COMMAND_WAIT_S)
+                pcm = self.utterance(start_within=FOLLOW_UP_S if follow_up else COMMAND_WAIT_S, quiet_frames=SENTENCE_QUIET)
                 if pcm is None:
                     tell_hologram("listen", choom, listening=False)
                     return
@@ -243,7 +245,9 @@ class Ears:
             choom, rest = heard
             tell_hologram("wake", choom)
             if len(rest.split()) >= 2:
-                self.conversation(choom, pcm, rest)     # "OK Genesis, what's the weather?"
+                # "OK Aloy, how about ..." with a pause: the sentence may go on, so listen for the rest.
+                more = self.utterance(start_within=1.0, quiet_frames=SENTENCE_QUIET)
+                self.conversation(choom, pcm + (more or b""), rest)     # "OK Genesis, what's the weather?"
             else:
                 self.conversation(choom)                # "OK Genesis" ... then the question
 

@@ -765,6 +765,7 @@ const CUT_OUT_S = 0.25;        // a camera cut: her last frame fades out this fa
 const CUT_IN_S = 0.35;         // and the new framing fades in over this
 let cutFade = null;            // { t, shown } while a cut is under way
 let sleepAmt = 0;              // 1 while she sleeps: the glass dims and slows
+let fullAmt = 0;               // 1 during a full-body move: her atom and band step aside
 let bandT = 0;                 // the scan/compile band's own clock (it races during tool moments)
 let lastActivity = performance.now(); // the last conversation, listening or button press
 let appListenUntil = 0;
@@ -960,8 +961,9 @@ function nextClip(p, after) {
   }
   const all = clips.map((c, k) => k).filter((k) => poseFrom(clips[k]) === pose);
   // Saying (or just hearing) something happy, sad, surprised or worried: that expression, once.
-  // From another pose she gets there first (Aloy raises her hand, then smiles).
-  if ((want === 'talk' || want === 'think') && p.emotion) {
+  // From another pose she gets there first (Aloy raises her hand, then smiles). Never mid-sentence:
+  // a laughing face fights her lip sync, so a feeling from her own words waits until she's done.
+  if ((want === 'think' || want === 'idle') && p.emotion) {
     const felt = seekClip(p, pose, p.emotion, after);
     const arrived = felt >= 0 && clipMoods(clips[felt]).includes(p.emotion);
     if (felt < 0 || arrived) p.emotion = null;
@@ -1038,7 +1040,7 @@ function hurryAlive(p) {
   if (pl.clip < 0) return;
   const fits = suits(p, pl.clip);
   // An expression waiting to play: move along a little faster to reach it.
-  const waiting = !p.moments?.has(pl.clip) && ((p.emotion && p.alive.clips.some((c) => clipMoods(c).includes(p.emotion))) ||
+  const waiting = !p.moments?.has(pl.clip) && ((p.emotion && wantedMood(p) !== 'talk' && p.alive.clips.some((c) => clipMoods(c).includes(p.emotion))) ||
                   Boolean(p.moments?.has(p.players[1 - p.active].clip)));
   // Woken from sleep: the sleep clip hurries along even more, so she's awake in a few seconds.
   const asleep = poseFrom(p.alive.clips[pl.clip]) === 'asleep' && poseTo(p.alive.clips[pl.clip]) === 'asleep';
@@ -1930,7 +1932,10 @@ renderer.setAnimationLoop((now) => {
   bandT += (paused ? 0 : dt) * (1 + 3 * toolBoost);
   updateParticles(paused ? 0 : dt, (1 + 1.5 * listenAmt + 1.4 * thinking + 2.5 * level + 4 * toolBoost) * (1 - 0.7 * sleepAmt));
   shared.time.value = simTime;
-  if (orbGroup.visible) updateOrbs(presence * (1 - 0.6 * sleepAmt)); // her atom dims while she sleeps
+  // Her atom dims while she sleeps and steps aside in a full-body move (it's sized for her close-up).
+  const fullNow = curClip && poseFrom(curClip) === 'full' ? 1 : 0;
+  fullAmt += (fullNow - fullAmt) * Math.min(dt * 5, 1);
+  if (orbGroup.visible) updateOrbs(presence * (1 - 0.6 * sleepAmt) * (1 - fullAmt));
   particleMaterial.uniforms.time.value = simTime;
   updateWeather(paused ? 0 : dt, simTime, presence * (1 - 0.7 * sleepAmt));
   particleMaterial.uniforms.opacity.value = presence * (0.85 + 0.4 * listenAmt + 0.5 * level);
@@ -1942,7 +1947,7 @@ renderer.setAnimationLoop((now) => {
     const v = EVE_BAND[0] + cycle * (EVE_BAND[1] - EVE_BAND[0]);
     band.position.y = style === 'scan' ? 1 - cycle * 2 : (v - 0.5) * 2.0 * portrait.scale.y + portrait.position.y;
     const edgeFade = style === 'scan' ? Math.sin(cycle * Math.PI) : 1;
-    bandMaterial.opacity = 0.75 * presence * edgeFade;
+    bandMaterial.opacity = 0.75 * presence * edgeFade * (1 - fullAmt);
   }
 
   // Name shows for a few seconds after each switch.
