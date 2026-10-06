@@ -8,6 +8,9 @@
  * so the hologram speaks her reply. Answers as soon as the turn has started; the turn runs on here
  * and the hologram follows it on its own feed. Ignored from away. { dryRun: true } only reports
  * which chat it would use.
+ *
+ * { room: true, text } ("OK Chooms, ..."): his words go to the group room he last spoke in, as if he
+ * had typed them there, and the room stays marked as open at home while it runs.
  */
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/db';
@@ -20,9 +23,10 @@ const NOT_HIS_CONVERSATION = /^(\[Delegation\]|\[Autonomous\]|Briefing )/;
 
 export async function POST(request: Request) {
   if (requestFromAway(request)) return NextResponse.json({ ok: false, away: true }, { status: 403 });
-  const body = (await request.json().catch(() => ({}))) as { choom?: unknown; text?: unknown; dryRun?: unknown };
+  const body = (await request.json().catch(() => ({}))) as { choom?: unknown; text?: unknown; dryRun?: unknown; room?: unknown };
   const name = typeof body.choom === 'string' ? body.choom.trim().toLowerCase() : '';
   const text = typeof body.text === 'string' ? body.text.trim() : '';
+  if (body.room === true) return talkToRoom(request, text, body.dryRun === true);
   if (!name || !text) return NextResponse.json({ ok: false, error: 'choom and text are required' }, { status: 400 });
 
   const choom = (await prisma.choom.findMany()).find((c) => c.name.toLowerCase() === name);
@@ -55,7 +59,13 @@ export async function POST(request: Request) {
     clearInterval(keepOpen);
     return NextResponse.json({ ok: false, error: `chat answered ${response.status}` }, { status: 502 });
   }
-  const reader = response.body.getReader();
+  drain(response, keepOpen);
+  return NextResponse.json({ ok: true, choom: choom.name, chatId: chat.id });
+}
+
+/** The turn streams on here to its end (the hologram has its own feed); then the room or chat closes. */
+function drain(response: Response, keepOpen: ReturnType<typeof setInterval>) {
+  const reader = response.body!.getReader();
   void (async () => {
     try {
       while (!(await reader.read()).done) { /* the turn streams on; the hologram has its own feed */ }
@@ -65,5 +75,39 @@ export async function POST(request: Request) {
       clearInterval(keepOpen);
     }
   })();
-  return NextResponse.json({ ok: true, choom: choom.name, chatId: chat.id });
+}
+
+async function talkToRoom(request: Request, text: string, dryRun: boolean) {
+  if (!text) return NextResponse.json({ ok: false, error: 'text is required' }, { status: 400 });
+  // The room he last spoke in (his messages have no Choom as author); the Chooms' own rooms update
+  // all the time, so "most recently updated" would often be one he isn't in.
+  const last = await prisma.groupMessage.findFirst({
+    where: { role: 'user', authorChoomId: null, room: { archived: false } },
+    orderBy: { createdAt: 'desc' },
+    include: { room: true },
+  });
+  if (!last) return NextResponse.json({ ok: false, error: 'no group room he has spoken in' }, { status: 404 });
+  const room = last.room;
+  if (dryRun) return NextResponse.json({ ok: true, dryRun: true, roomId: room.id, room: room.title });
+
+  const settings = await (await serverSettings(request)).json();
+  markViewing('room', room.id);
+  const keepOpen = setInterval(() => markViewing('room', room.id), 10_000);
+  let response: Response;
+  try {
+    response = await fetch(new URL('/api/group-chat', request.url), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ roomId: room.id, message: text, settings }),
+    });
+  } catch (e) {
+    clearInterval(keepOpen);
+    return NextResponse.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, { status: 502 });
+  }
+  if (!response.ok || !response.body) {
+    clearInterval(keepOpen);
+    return NextResponse.json({ ok: false, error: `group chat answered ${response.status}` }, { status: 502 });
+  }
+  drain(response, keepOpen);
+  return NextResponse.json({ ok: true, roomId: room.id, room: room.title });
 }
