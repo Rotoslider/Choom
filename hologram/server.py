@@ -271,8 +271,9 @@ PRESENT_STATES = ("home", "on", "detected", "occupied", "true")
 
 def presence_watch():
     """Donny's presence from Home Assistant, passed to the page when it changes: home (a person
-    entity), and at the desk or in bed (zones of a presence sensor). presence.json maps roles to
-    entities, e.g. {"home": "person.donny", "desk": "binary_sensor.desk_zone", "bed": "binary_sensor.bed_zone"};
+    entity, or the phone's Wi-Fi), and at the desk or in bed (zones of a presence sensor).
+    presence.json maps roles to entities, e.g. {"home": {"entity": "sensor.phone_wi_fi_connection",
+    "equals": "<home network>"}, "desk": "binary_sensor.desk_zone", "bed": "binary_sensor.bed_zone"};
     without it, "home" is the person entity named Donny. Checks every 5 s. Waits quietly (and picks
     the files up without a restart) until ha_url and ha_token exist."""
     last, entities, resolved_at = None, {}, 0.0
@@ -294,10 +295,20 @@ def presence_watch():
                         entities["home"] = (named or people)[0]["entity_id"]
                 resolved_at = time.time()
             now = {}
-            for role, entity in entities.items():
-                state = str(ha_get(base, token, f"/api/states/{entity}").get("state", "")).lower()
-                now[role] = None if state in ("unavailable", "unknown", "") else state in PRESENT_STATES
-            latest["presence_state"] = f"watching {entities}"
+            for role, spec in entities.items():
+                # A role is an entity id (present when it reads home/on/detected/occupied), or
+                # {"entity": ..., "equals": value} (present when it reads exactly that, e.g. the
+                # phone's Wi-Fi network at home).
+                entity = spec["entity"] if isinstance(spec, dict) else spec
+                raw = str(ha_get(base, token, f"/api/states/{entity}").get("state", ""))
+                if raw.lower() in ("unavailable", "unknown", ""):
+                    now[role] = None
+                elif isinstance(spec, dict) and "equals" in spec:
+                    now[role] = raw == spec["equals"]
+                else:
+                    now[role] = raw.lower() in PRESENT_STATES
+            latest["presence_state"] = "watching " + ", ".join(
+                f"{role}: {spec['entity'] if isinstance(spec, dict) else spec}" for role, spec in entities.items())
             if now != last:
                 entry = {"type": "presence", **now, "time": time.strftime("%Y-%m-%dT%H:%M:%S")}
                 latest["presence"] = entry

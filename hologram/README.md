@@ -111,9 +111,11 @@ she has dozed off at night, not on the group stage, and not in her first minutes
 **Presence (Home Assistant):** `server.py` watches Home Assistant every 5 seconds once
 `~/.config/choom-hologram/ha_url` (e.g. `http://homeassistant.local:8123`) and `ha_token` (a
 long-lived access token from your HA profile, Security tab; `chmod 600`) exist; no restart needed.
-Optional `presence.json` maps roles to entities, e.g.
-`{"home": "person.donny", "desk": "binary_sensor.desk_zone", "bed": "binary_sensor.bed_zone"}`;
-without it, "home" is the person entity named Donny. Coming home or sitting down at the desk wakes
+Optional `presence.json` maps roles to entities: an entity id (present when it reads home, on,
+detected or occupied) or `{"entity": ..., "equals": ...}`, e.g.
+`{"home": {"entity": "sensor.<phone>_wi_fi_connection", "equals": "<home network>"}, "desk": "binary_sensor.desk_zone", "bed": "binary_sensor.bed_zone"}`;
+without it, "home" is the person entity named Donny. The phone's Wi-Fi sensor (HA companion app)
+is the quickest home signal: it changes the moment the phone joins or leaves the home network. Coming home or sitting down at the desk wakes
 whoever is on the glass and she greets you (Aloy waves, the others smile); getting into bed puts the
 glass to sleep whatever the hour, and getting up wakes it. `/status` shows `presence_state`. These
 files stay out of git.

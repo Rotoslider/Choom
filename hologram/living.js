@@ -1472,7 +1472,7 @@ function onPresence(next) {
     if (p.alive?.clips.some((c) => clipMoods(c).includes('greet'))) p.greet = true;
     else if (p.alive) p.toolLook = /smile|bright/;
   }
-  post('presence', { ...presence, arrived, gotUp });
+  post('presence-seen', { ...presence, arrived, gotUp });
 }
 fetch('/status', { cache: 'no-store' }).then((r) => r.json()).then((st) => { if (st.presence) onPresence(st.presence); }).catch(() => {});
 
