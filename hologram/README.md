@@ -74,11 +74,39 @@ hidden) with her live particles, atom and lip sync on top.
    `image_end`), run with `wgp.py --process QUEUE.zip --output-dir DIR`. About 5 minutes per clip; the
    hologram drops to a few fps while it runs, since they share the GPU.
 3. `U2NET_HOME=~/pinokio/api/wan2gp/app/ckpts/rembg ~/pinokio/api/wan2gp/app/venv/bin/python tools/make_alive_masks.py <id> MAIN.mp4 MORE.mp4 ...`
+   (masks are kept per clip, `alive_masks_<clip>.npz`, so adding clips only cuts out the new ones)
 4. `~/pinokio/api/forge-neo/app/venv/bin/python tools/make_alive.py <id> MAIN.mp4 MORE.mp4 ...`
    Each clip's role comes from its name (`<id>_<action>.mp4`, see `ROLES` in make_alive.py): the
-   moods it plays in (idle, talk, think, listen, greet) and the pose it starts and ends in. Aloy has a
-   hand-down pose reached through `lower`/`raise`, and waves (`wave`, mood greet) when she takes the
-   glass after ten minutes away.
+   moods it plays in and the pose it starts and ends in. Raw depth is cached per clip too
+   (`alive_depth_<clip>.npy`, about 0.2 GB each, local only), so a rebuild after adding clips only runs
+   Depth Anything (fused attention, half precision: ~0.2 s a frame with the GPU free) on the new ones.
+   Don't run it while a Wan2GP queue is rendering: sharing the GPU slows it more than tenfold. Aloy has a hand-down pose reached through
+   `lower`/`raise`, and waves (`wave`, mood greet) when she takes the glass after ten minutes away.
+
+What the moods do on the page:
+
+- **idle, talk, think, listen:** quiet-moment variety, and the calm, facing-you clips while she talks,
+  thinks it over or hears you (typing or the mic in the Choom app at home, or the bottom button).
+- **happy, surprised, sad, concerned:** played once when what you said, or what she's saying, feels
+  that way (a word list in `FEELINGS`).
+- **sleep, wake:** from 11 pm to 7 am, after ten quiet minutes, she dozes off (`fallasleep` into the
+  asleep pose), sleeps (`sleep`, `sleep2`) and the glass dims; any conversation, typing or button wakes
+  her (`wake`). A Choom only sleeps if she has a sleep loop and a wake clip. Heartbeats and delegated
+  tasks that start while the glass sleeps run unseen, so they don't wake her every hour.
+- **yawn:** now and then in the two hours before sleep and after it, and likely right after waking.
+- **windy:** Genesis's wind clips join her quiet moments when the local wind (from the Choom app's
+  weather, every 10 minutes) is 15 mph or more.
+- **The gap:** the first time you talk to a Choom in a chat after eight hours or more, she lights up
+  (her happy clip) before she answers, unless what you said calls for another expression.
+- **Tool moments:** when a Choom calls a tool, the glass flares and she plays a clip that fits it,
+  found by name (`TOOL_LOOKS`): looking around for a camera snapshot or picture, drifting off
+  for a memory search, glancing at the sky for the weather, a playful look for a picture she makes.
+
+**Group stage:** when the Chooms talk in a group room, all four stand in the glass: the speaker in
+front (with her voice, mouth and particles), her sisters smaller behind her and turned toward her,
+glancing about more often, everyone fading out toward the bottom of her picture.
+When the turn passes, the two trade places. The stage folds back to the one speaker three minutes
+after the room goes quiet, or as soon as you talk to one of them in a chat.
 
 The clip videos (`portraits/<id>/alive_<k>.mp4`) stay on the NUC, not in git: every rebuild re-encodes
 them all. Their sources are in the concept folder (`renders/alive/clips/`). Without them a Choom
@@ -86,7 +114,10 @@ shows her still relief.
 
 Lip sync is checked on every spoken piece: `lipsync` entries in `telemetry.log` give the mouth's lag
 and correlation against the voice heard. Debug hooks on `POST /control`: `{"view": N}` (one view full
-screen, `false` to leave), `{"quilt": true}` (raw views), `{"clip": k}` (jump to a clip).
+screen, `false` to leave), `{"quilt": true}` (raw views), `{"clip": k}` (jump to a clip),
+`{"sleep": true}` (doze off now), `{"hour": 22}` (pretend it's that hour, `null` to stop),
+`{"weather": {"wind": 25}}` (pretend weather), `{"stage": true}` (the group stage). `POST /simulate`
+injects a Choom-app event (`{"event": "tool", "choom": "genesis", "tool": "get_weather"}`).
 
 ## Portrait assets
 

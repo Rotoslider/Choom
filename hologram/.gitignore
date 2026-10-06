@@ -12,3 +12,5 @@ bodies/
 portraits/*/alive_masks*.npz
 # Moving relief videos stay on the NUC (every rebuild re-encodes them all); alive.json is tracked
 portraits/*/alive_*.mp4
+portraits/*/alive_*.part
+portraits/*/alive_depth_*.npy

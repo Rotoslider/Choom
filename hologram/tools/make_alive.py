@@ -17,6 +17,7 @@ import cv2
 import mediapipe as mp
 import numpy as np
 import torch
+from depth_anything_v2.dinov2_layers import attention
 from depth_anything_v2.dpt import DepthAnythingV2
 from mediapipe.tasks.python import BaseOptions, vision
 
@@ -26,6 +27,18 @@ from make_landmarks import (CHIN, LEFT_CORNER, LOWER_INNER, LOWER_OUTER, MODEL, 
                             UPPER_INNER, UPPER_OUTER)
 
 HOLOGRAM = Path(__file__).resolve().parents[1]
+
+
+def fused_attention(self, x):
+    """DINOv2 attention through PyTorch's fused kernel: without xFormers, Depth Anything builds the
+    full attention matrix (7000 tokens per frame here), which is several times slower."""
+    B, N, C = x.shape
+    qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
+    x = torch.nn.functional.scaled_dot_product_attention(qkv[0], qkv[1], qkv[2]).transpose(1, 2).reshape(B, N, C)
+    return self.proj_drop(self.proj(x))
+
+
+attention.Attention.forward = fused_attention
 
 
 def circular_smooth(stack, weights=(0.25, 0.5, 0.25)):
@@ -107,6 +120,15 @@ ROLES = {
     "tilt": (["idle", "listen"], "main", "main"),
     "relaxedhair": (["idle"], "relaxed", "relaxed"),
     "relaxedlongcalm": (["idle", "talk", "listen"], "relaxed", "relaxed"),
+    "longcalm2": (["idle", "talk", "listen"], "main", "main"),
+    "groove": (["idle"], "main", "main"),
+    "heartglow": (["idle"], "main", "main"),
+    "skycheck": (["idle"], "main", "main"),
+    "giggle": (["idle"], "main", "main"),
+    "relaxedgiggle": (["idle"], "relaxed", "relaxed"),
+    # Yawns, for late evening and early morning.
+    "yawn": (["yawn"], "main", "main"),
+    "relaxedyawn": (["yawn"], "relaxed", "relaxed"),
     # Expressions, played while she says something that feels that way.
     "happy": (["happy"], "main", "main"),
     "surprised": (["surprised"], "main", "main"),
@@ -183,45 +205,56 @@ def main():
     end on the same picture of her, so the page can play them in any order."""
     cid, sources = sys.argv[1], sys.argv[2:]
     folder = HOLOGRAM / "portraits" / cid
+    model = None
+    # Only masks and depth stay in memory (depth as float16); frames are read again when writing,
+    # so a Choom with thirty clips fits. Each clip's raw depth is kept (alive_depth_<clip>.npy, local
+    # only) and reused until the clip changes, so adding clips only runs Depth Anything on the new ones.
     clips = []
-    for k, src in enumerate(sources):
+    for src in sources:
         fps, frames = read_clip(src)
         h, w = frames[0].shape[:2]
-        cut_file = folder / f"alive_masks_{k}.npz"
+        cut_file = folder / f"alive_masks_{Path(src).stem}.npz"
         if cut_file.exists():
             masks = np.load(cut_file)["masks"].astype(np.float32)
             assert masks.shape == (len(frames), h, w), f"{cut_file.name} {masks.shape} vs frames {(len(frames), h, w)}"
         else:
             print(f"no {cut_file.name} (tools/make_alive_masks.py); falling back to a brightness cut-out")
-            masks = np.stack([person_from_luma(f) for f in frames])
+            masks = np.stack([person_from_luma(f) for f in frames]).astype(np.float32)
         # U2-Net now and then bites into an edge for a frame or two (Aloy's sleeve); a vote over
         # seven frames keeps those dropouts from flickering.
         masks = circular_smooth(masks, (1 / 7,) * 7) > 0.5
         masks = circular_smooth(masks.astype(np.float32)) > 0.5
-        clips.append({"src": src, "fps": fps, "frames": frames, "masks": masks})
-        print(f"{cid} clip {k}: {len(frames)} frames {w}x{h} at {fps:g} fps ({Path(src).name})")
-
-    model = DepthAnythingV2(encoder="vitl", features=256, out_channels=[256, 512, 1024, 1024])
-    model.load_state_dict(torch.load(WEIGHTS, map_location="cpu"))
-    model = model.to("cuda").eval()
-    for c in clips:
-        c["raw"] = np.stack([model.infer_image(f, input_size=1022) for f in c["frames"]]).astype(np.float32)
+        depth_file = folder / f"alive_depth_{Path(src).stem}.npy"
+        fresh = depth_file.exists() and depth_file.stat().st_mtime >= Path(src).stat().st_mtime
+        raw = np.load(depth_file) if fresh else None
+        if raw is None or raw.shape != (len(frames), h, w):
+            if model is None:
+                model = DepthAnythingV2(encoder="vitl", features=256, out_channels=[256, 512, 1024, 1024])
+                model.load_state_dict(torch.load(WEIGHTS, map_location="cpu"))
+                model = model.to("cuda").eval()
+            with torch.autocast("cuda", dtype=torch.float16):  # half precision: 6x faster with the fused attention
+                raw = np.stack([model.infer_image(f, input_size=1022) for f in frames]).astype(np.float16)
+            np.save(depth_file, raw)
+        clips.append({"src": src, "fps": fps, "frames": len(frames), "masks": masks, "raw": raw})
+        print(f"{cid} clip {len(clips) - 1}: {len(frames)} frames {w}x{h} at {fps:g} fps ({Path(src).name})")
+        del frames
     del model
     torch.cuda.empty_cache()
 
     # Depth Anything's scale drifts frame to frame: line every frame of every clip up with the main
     # clip's first frame on the pixels that are her in both, then normalize them all together, so
     # changing clips never changes her depth.
-    ref, ref_mask = clips[0]["raw"][0], clips[0]["masks"][0]
+    ref, ref_mask = clips[0]["raw"][0].astype(np.float32), clips[0]["masks"][0]
     for c in clips:
         for i in range(len(c["raw"])):
             sel = c["masks"][i] & ref_mask
-            a, b = np.polyfit(c["raw"][i][sel], ref[sel], 1)
-            c["raw"][i] = a * c["raw"][i] + b
-    allv = np.concatenate([c["raw"][c["masks"]] for c in clips])
+            a, b = np.polyfit(c["raw"][i][sel].astype(np.float32), ref[sel], 1)
+            c["raw"][i] = a * c["raw"][i].astype(np.float32) + b
+    # Percentiles from every other frame at a quarter of the pixels: the same answer, far less memory.
+    allv = np.concatenate([c["raw"][::2, ::2, ::2][c["masks"][::2, ::2, ::2]].astype(np.float32) for c in clips])
     lo, hi = np.percentile(allv, [2, 99.5])
     del allv
-    h, w = clips[0]["frames"][0].shape[:2]
+    h, w = clips[0]["masks"][0].shape
     face = np.zeros((h, w), bool)
     face[int(h * 0.12):int(h * 0.42), int(w * 0.32):int(w * 0.68)] = True
     ref_depth = np.clip((ref - lo) / max(hi - lo, 1e-6), 0, 1)
@@ -232,25 +265,30 @@ def main():
     gray = lambda a: cv2.cvtColor(np.round(np.clip(a, 0, 1) * 255).astype(np.uint8), cv2.COLOR_GRAY2BGR)
     meta_clips = []
     for k, c in enumerate(clips):
-        depth = circular_smooth(np.clip((c["raw"] - lo) / max(hi - lo, 1e-6), 0, 1))
+        _, frames = read_clip(c["src"])
+        depth = circular_smooth(np.clip((c.pop("raw").astype(np.float32) - lo) / max(hi - lo, 1e-6), 0, 1))
         out = folder / f"alive_{k}.mp4"
+        part = out.with_suffix(".part")  # swapped in when done, so a running page never reads half a file
         enc = subprocess.Popen(["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{w}x{h * 3}",
                                 "-r", f"{c['fps']:g}", "-i", "-", "-c:v", "libx264", "-preset", "slow", "-crf", "14",
-                                "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(out)], stdin=subprocess.PIPE)
-        for i, bgr in enumerate(c["frames"]):
+                                "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-f", "mp4", str(part)],
+                               stdin=subprocess.PIPE)
+        for i, bgr in enumerate(frames):
             d = cv2.bilateralFilter(depth[i].astype(np.float32), 9, 0.04, 5)
             person = drop_rim(d, c["masks"][i])
             d = extend_edges(shape_depth(d, person, focus, DETAIL), person)
             cut = cv2.GaussianBlur(person.astype(np.float32), (0, 0), 1.2)
             enc.stdin.write(np.vstack([bgr, gray(d), gray(cut)]).tobytes())
         enc.stdin.close()
-        enc.wait()
-        mouths, found = mouth_track(landmarker, c["frames"])
+        assert enc.wait() == 0, f"ffmpeg failed on {out.name}"
+        part.replace(out)
+        mouths, found = mouth_track(landmarker, frames)
+        del frames, depth
         moods, start, end = clip_role(cid, c["src"])
-        meta_clips.append({"file": out.name, "frames": len(c["frames"]), "source": Path(c["src"]).name,
+        meta_clips.append({"file": out.name, "frames": c["frames"], "source": Path(c["src"]).name,
                            "moods": moods, "from": start, "to": end, "talk": "talk" in moods,
                            "mouth": [[round(v, 5) for v in m] for m in mouths.tolist()]})
-        print(f"  wrote {out.name} ({out.stat().st_size / 1e6:.1f} MB), face found in {found}/{len(c['frames'])} frames")
+        print(f"  wrote {out.name} ({out.stat().st_size / 1e6:.1f} MB), face found in {found}/{c['frames']} frames")
 
     meta = {"fps": clips[0]["fps"], "texSize": [w, h], "focus": round(focus, 4), "panels": ["color", "depth", "cut"],
             "mouthFields": ["u", "v", "halfWidth", "halfHeight", "chin", "tilt", "halfGap", "lift"], "clips": meta_clips}

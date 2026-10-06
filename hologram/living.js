@@ -120,10 +120,12 @@ const shared = {
   time: { value: 0 },
 };
 
-function layerMaterial({ segX, segY, edgeThreshold, useMask }) {
+// `own`: a sister on the group stage keeps her own focus, depth, fade and glow.
+function layerMaterial({ segX, segY, edgeThreshold, useMask, own = false }) {
+  const base = own ? { ...shared, focus: { value: 0.5 }, depthScale: { value: 0.75 }, opacity: { value: 0 }, glow: { value: 1 } } : shared;
   return new THREE.ShaderMaterial({
     uniforms: {
-      ...shared,
+      ...base,
       colorMap: { value: null },
       depthMap: { value: null },
       maskMap: { value: null },
@@ -137,6 +139,7 @@ function layerMaterial({ segX, segY, edgeThreshold, useMask }) {
       mouthLift: { value: 0 },                            // how far her mouth corners curve up (texture px)
       mouthGain: { value: 1 },                            // how far the jaw opens
       mouthShape: { value: new THREE.Vector3() },        // jaw open, lips round, lips wide (0..1)
+      bottomFade: { value: 0 },                           // on the group stage: fade out her lowest part
       texSize: { value: new THREE.Vector2(1536, 2048) },
       packed: { value: 0 },                               // 1: colorMap is a moving relief video
       edgeThreshold: { value: edgeThreshold },
@@ -184,7 +187,7 @@ const LAYER_VERT = /* glsl */ `
 
 const LAYER_FRAG = /* glsl */ `
     uniform sampler2D colorMap, maskMap;
-    uniform float opacity, glow, edgeThreshold, sparkle, time;
+    uniform float opacity, glow, edgeThreshold, sparkle, time, bottomFade;
     uniform int useMask, mouthOn;
     uniform vec2 mouthC, texSize;
     uniform vec3 mouthSize, mouthShape;
@@ -314,6 +317,13 @@ const LAYER_FRAG = /* glsl */ `
         float wave = 0.7 + 0.6 * smoothstep(0.6, 1.0, sin(vUv.y * 14.0 - time * 1.3 + vnoise(vUv * 4.0) * 3.0));
         vec3 lifted = c - (c - local) * speckHere;                  // her, with the glitter lifted off
         c = mix(c, lifted + detail * speckThere * twinkle * wave, sparkle);
+      }
+      // On the group stage her picture's bottom edge would float in the glass as a straight cut:
+      // she fades out toward it instead (fully faded pixels are dropped, so they hide no one).
+      if (bottomFade > 0.0) {
+        float f = smoothstep(0.15 * bottomFade, bottomFade, vUv.y);
+        if (f < 0.02) discard;
+        c *= f;
       }
       gl_FragColor = vec4(c * glow * opacity, 1.0);
     }`;
@@ -606,8 +616,8 @@ let appListening = false;
 let weather = { wind: 0, gust: 0, description: '' };
 const windy = () => Math.max(weather.wind || 0, (weather.gust || 0) * 0.7) >= 15;
 fetch('/status', { cache: 'no-store' }).then((r) => r.json()).then((st) => { if (st.weather) weather = st.weather; }).catch(() => {});
-let toolBoost = 0;
-let sleepAmt = 0;              // 1 while she sleeps: the glass dims and slows             // 1 when she calls a tool, fading over four seconds
+let toolBoost = 0;             // 1 when she calls a tool, fading over four seconds
+let sleepAmt = 0;              // 1 while she sleeps: the glass dims and slows
 let bandT = 0;                 // the scan/compile band's own clock (it races during tool moments)
 let lastActivity = performance.now(); // the last conversation, listening or button press
 let appListenUntil = 0;
@@ -628,7 +638,7 @@ function applyPortrait(i) {
   plateMaterial.uniforms.depthMap.value = p.plateDepth;
   // Her moving relief stands in empty glass: the still plate was painted for the old pose.
   plateMesh.visible = !p.alive;
-  for (const q of portraits) if (q.players && q !== p) for (const pl of q.players) pl.video.pause();
+  if (!stage.on) for (const q of portraits) if (q.players && q !== p) for (const pl of q.players) pl.video.pause();
   if (p.players && p.alive) aliveStart(p);
   shared.focus.value = p.alive ? p.alive.focus : p.focus;
   configureParticles(p);
@@ -657,6 +667,7 @@ function applyPortrait(i) {
     body.group.visible = true;
   }
   portrait.visible = !body;
+  if (stage.on) orbGroup.visible = band.visible = false; // the orbs and the band are sized for her alone
 }
 
 // Start loading a Choom's body (once per GLB); when it arrives, show it if she still wants it.
@@ -716,7 +727,7 @@ const poseTo = (c) => c.to || 'main';
 function wantedMood(p) {
   if (portraits[current] !== p) return 'idle';
   if (heard()) return 'listen';
-  if (mood === 'idle' && sleepy()) return 'sleep';
+  if (mood === 'idle' && sleepy() && canSleep(p)) return 'sleep';
   return mood === 'speaking' ? 'talk' : mood === 'thinking' ? 'think' : 'idle';
 }
 
@@ -726,11 +737,19 @@ function wantedMood(p) {
 const SLEEP_FROM = 23;
 const SLEEP_UNTIL = 7;
 const SLEEP_AFTER_QUIET_MS = 10 * 60 * 1000;
+let debugHour = null;     // debug: pretend it's this hour (/control {"hour": 23})
+let debugSleep = false;   // debug: doze off now, however early or busy it is (/control {"sleep": true})
+const hourNow = () => debugHour ?? new Date().getHours();
 function sleepy() {
-  const h = new Date().getHours();
+  if (debugSleep) return mood === 'idle' && !heard() && !speech.busy;
+  const h = hourNow();
   const night = SLEEP_FROM > SLEEP_UNTIL ? h >= SLEEP_FROM || h < SLEEP_UNTIL : h >= SLEEP_FROM && h < SLEEP_UNTIL;
   return night && performance.now() - lastActivity > SLEEP_AFTER_QUIET_MS && mood === 'idle' && !heard() && !speech.busy;
 }
+
+// She only dozes off if she has a sleep loop to stay asleep in (and can wake from it).
+const canSleep = (p) => p.alive && p.alive.clips.some((c) => clipMoods(c).includes('sleep') && poseFrom(c) === 'asleep') &&
+                        p.alive.clips.some((c) => clipMoods(c).includes('wake'));
 
 // A clip that gets her into a mood from the pose she's in: one that starts here, or else the pose
 // change that leads to a pose where one starts (Aloy lowers her hand before she waves or sleeps).
@@ -743,6 +762,29 @@ function seekClip(p, pose, wanted, after = -1) {
   const targets = new Set(ks.filter((k) => clipMoods(clips[k]).includes(wanted)).map((k) => poseFrom(clips[k])));
   const toward = ks.find((k) => poseFrom(clips[k]) === pose && poseTo(clips[k]) !== pose && targets.has(poseTo(clips[k])));
   return toward ?? -1;
+}
+
+// Tool moments: what she's doing shows on her face. Looking through a camera or at a picture she
+// looks around, searching her memories she drifts off remembering, checking the weather she glances
+// up at the sky, making a picture she gets a playful look. Clips are found by name, so a Choom
+// without a fitting one just keeps thinking (the glass flares either way).
+const TOOL_LOOKS = [
+  [/camera|snapshot|analyze_image|vision/, /scan|glance|bright/],
+  [/memor|remember|recall|followup/, /daydream|thinkup|hum/],
+  [/weather|forecast/, /skycheck|windy|thinkup/],
+  [/generate_image|save_generated|draw|paint/, /eyebrow|smirk|smile/],
+  [/search|browse|fetch|web/, /scan|thinkdown|glance/],
+  [/^ha_|home|printer|calendar|inbox/, /scan|glance|thinkdown/],
+];
+const toolLook = (tool) => (TOOL_LOOKS.find(([t]) => t.test(tool || '')) || [])[1] || null;
+
+// Whether clip k suits what she's doing now (an expression or tool moment plays out unless she's
+// listening or asleep).
+function suits(p, k) {
+  const want = wantedMood(p);
+  const c = p.alive.clips[k];
+  return clipMoods(c).includes(want) || (p.moments?.has(k) && want !== 'listen' && want !== 'sleep') ||
+         (p.emotion && poseFrom(c) !== poseTo(c)); // on her way to an expression
 }
 
 function nextClip(p, after) {
@@ -767,13 +809,33 @@ function nextClip(p, after) {
   }
   const all = clips.map((c, k) => k).filter((k) => poseFrom(clips[k]) === pose);
   // Saying (or just hearing) something happy, sad, surprised or worried: that expression, once.
+  // From another pose she gets there first (Aloy raises her hand, then smiles).
   if ((want === 'talk' || want === 'think') && p.emotion) {
-    const felt = all.find((k) => clipMoods(clips[k]).includes(p.emotion));
-    p.emotion = null;
-    if (felt !== undefined) return felt;
+    const felt = seekClip(p, pose, p.emotion, after);
+    const arrived = felt >= 0 && clipMoods(clips[felt]).includes(p.emotion);
+    if (felt < 0 || arrived) p.emotion = null;
+    if (arrived) (p.moments ||= new Set()).add(felt); // played out in full, not hurried
+    if (felt >= 0) return felt;
+  }
+  if ((want === 'think' || want === 'idle') && p.toolLook) {
+    const look = p.toolLook;
+    p.toolLook = null;
+    const moments = all.filter((k) => k !== after && poseTo(clips[k]) === pose && look.test(clips[k].source || ''));
+    if (moments.length) {
+      const k = moments[Math.floor(Math.random() * moments.length)];
+      (p.moments ||= new Set()).add(k);
+      return k;
+    }
   }
   const breezy = want === 'idle' && windy();
-  const fits = all.filter((k) => clipMoods(clips[k]).includes(want) || (breezy && clipMoods(clips[k]).includes('windy')));
+  // A yawn now and then in the last hours before sleep and the first after it, and likely right
+  // after she wakes.
+  const hour = hourNow();
+  const justWoke = after >= 0 && clips[after] && clipMoods(clips[after]).includes('wake');
+  const drowsy = want === 'idle' && (justWoke || (hour >= SLEEP_FROM - 2 && hour < SLEEP_FROM) ||
+                                     (hour >= SLEEP_UNTIL && hour < SLEEP_UNTIL + 2));
+  const fits = all.filter((k) => clipMoods(clips[k]).includes(want) || (breezy && clipMoods(clips[k]).includes('windy')) ||
+                                 (drowsy && clipMoods(clips[k]).includes('yawn')));
   // Right after a pose change she stays put for at least one clip (no hand up-down-up fidgeting).
   const justMoved = after >= 0 && clips[after] && poseFrom(clips[after]) !== poseTo(clips[after]);
   let pool = fits.filter((k) => k !== after && !(justMoved && poseTo(clips[k]) !== pose));
@@ -784,14 +846,15 @@ function nextClip(p, after) {
   // with her hand down).
   const main = all.find((k) => poseTo(clips[k]) === pose && clipMoods(clips[k]).includes('talk'));
   // Late at night (10 pm to 6 am) the calm clips come up more and the laughs and teasing less.
-  const hour = new Date().getHours();
   const night = hour >= 22 || hour < 6;
-  const calmName = /longcalm|breath|daydream|hum|base|relaxed\.|loop/;
-  const livelyName = /amused|eyebrow|smirk|beat|glance/;
+  const calmName = /longcalm|breath|daydream|hum|base|relaxed\.|loop|heartglow/;
+  const livelyName = /amused|eyebrow|smirk|beat|glance|giggle|groove/;
   const weights = pool.map((k) => {
     let w = want === 'idle' && (k === main || (pose === 'main' && poseTo(clips[k]) !== pose)) ? 2 : 1;
     if (/longcalm/.test(clips[k].source || '')) w *= 2;
     if (breezy && clipMoods(clips[k]).includes('windy')) w *= 3;
+    if (clipMoods(clips[k]).includes('yawn')) w *= justWoke ? 6 : 0.5;
+    if (stage.on && portraits[current] !== p && /glance|scan|smile|beat|bright/.test(clips[k].source || '')) w *= 2;
     if (night && want === 'idle') w *= calmName.test(clips[k].source || '') ? 2 : livelyName.test(clips[k].source || '') ? 0.5 : 1;
     return w;
   });
@@ -805,9 +868,10 @@ function nextClip(p, after) {
 function hurryAlive(p) {
   const pl = p.players[p.active];
   if (pl.clip < 0) return;
-  const fits = clipMoods(p.alive.clips[pl.clip]).includes(wantedMood(p));
+  const fits = suits(p, pl.clip);
   // An expression waiting to play: move along a little faster to reach it.
-  const waiting = p.emotion && p.alive.clips.some((c) => clipMoods(c).includes(p.emotion));
+  const waiting = !p.moments?.has(pl.clip) && ((p.emotion && p.alive.clips.some((c) => clipMoods(c).includes(p.emotion))) ||
+                  Boolean(p.moments?.has(p.players[1 - p.active].clip)));
   // Woken from sleep: the sleep clip hurries along even more, so she's awake in a few seconds.
   const asleep = poseFrom(p.alive.clips[pl.clip]) === 'asleep' && poseTo(p.alive.clips[pl.clip]) === 'asleep';
   pl.video.playbackRate = !fits ? (asleep ? 3 : 2) : waiting ? 1.5 : (pl.baseRate || 1);
@@ -843,19 +907,25 @@ for (const p of portraits) {
       const next = p.players[1 - idx];
       // The next clip was picked while it loaded; if she has started talking since, swap a laugh or
       // a long breath for a calm one (the last frame, the same picture, holds while it loads).
-      if (next.clip >= 0 && !clipMoods(p.alive.clips[next.clip]).includes(wantedMood(p))) aliveLoad(p, next, nextClip(p, pl.clip));
+      if (next.clip >= 0 && !suits(p, next.clip)) aliveLoad(p, next, nextClip(p, pl.clip));
       next.video.currentTime = 0;
       // A little variety so the rotation never settles into a beat: each clip plays at its own
       // speed, and between quiet clips the shared picture may rest a moment.
       next.video.playbackRate = 0.94 + Math.random() * 0.12;
       next.baseRate = next.video.playbackRate;
       const rest = wantedMood(p) === 'idle' ? Math.random() * 800 : 0;
-      setTimeout(() => next.video.play().catch((e) => post('error', { message: `alive video: ${e.message}` })), rest);
+      setTimeout(() => {
+        // Not if she left the glass meanwhile (her players were paused).
+        if (portraits[current] !== p && !stage.on && stage.mix === 0) return;
+        next.video.play().catch((e) => post('error', { message: `alive video: ${e.message}` }));
+      }, rest);
       // Hand over on the next clip's first frame; until then the last frame (the same picture) holds.
       next.video.requestVideoFrameCallback(() => {
         p.active = 1 - idx;
         p.aliveFrame = 0;
+        p.moments?.delete(pl.clip); // that expression or tool moment has played
         if (portraits[current] === p) bindAliveTextures(p);
+        else if (stage.mix > 0 || stage.on) bindStageSlot(portraits.indexOf(p));
         aliveLoad(p, pl, nextClip(p, next.clip)); // the finished player fetches the clip after
         post('alive-clip', { choom: p.name, clip: p.alive.clips[next.clip].source || next.clip });
       });
@@ -882,9 +952,124 @@ function followAliveMouth(p) {
   fu.mouthLift.value = m[7] ?? 0;
 }
 
+// ---- The group stage -------------------------------------------------------------------------
+// When the Chooms talk in a group room, all four stand in the glass: whoever is talking in front
+// (the main portrait, with her voice, mouth, particles and name), her sisters smaller behind her and
+// turned toward her. When the turn passes, the two trade places: the new speaker steps forward and
+// the last one steps back into the spot she left. The stage stays up while the room talks and folds
+// back to the one speaker a few minutes after it goes quiet, or as soon as Donny talks to one of
+// them on her own.
+const STAGE_FRONT = { x: 0, y: -0.22, z: 0, s: 0.68 };
+const STAGE_BACK = [
+  { x: -0.47, y: 0.16, z: -0.1, s: 0.42 },
+  { x: 0, y: 0.42, z: -0.18, s: 0.36 },
+  { x: 0.47, y: 0.16, z: -0.1, s: 0.42 },
+];
+const STAGE_LINGER_MS = 3 * 60 * 1000;
+const stage = { on: false, until: 0, mix: 0, place: [], shown: [], slots: [] };
+
+function stageSlot(j) {
+  if (!stage.slots[j]) {
+    const material = layerMaterial({ segX: 192, segY: 256, edgeThreshold: 0.35, useMask: true, own: true });
+    material.uniforms.bottomFade.value = 0.6;
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 2.0, 192, 256), material);
+    mesh.frustumCulled = false;
+    mesh.visible = false;
+    scene.add(mesh);
+    stage.slots[j] = { mesh, material };
+  }
+  return stage.slots[j];
+}
+
+// Show what a sister on the stage is doing now: her moving relief's clip on show, or her still relief.
+function bindStageSlot(j) {
+  const p = portraits[j];
+  const u = stageSlot(j).material.uniforms;
+  const tex = p.alive ? p.players[p.active].texture : null;
+  u.packed.value = p.alive ? 1 : 0;
+  u.colorMap.value = tex || p.color;
+  u.depthMap.value = tex || p.depth;
+  u.maskMap.value = tex || p.mask;
+  u.focus.value = p.alive ? p.alive.focus : p.focus;
+  u.sparkle.value = p.style === 'motes' ? 1 : 0;
+  if (p.alive) u.texSize.value.set(p.alive.texSize[0], p.alive.texSize[1]);
+}
+
+// The room starts talking: everyone takes a place, the speaker (index i) in front.
+function stageEnter(i) {
+  stage.until = performance.now() + STAGE_LINGER_MS;
+  if (stage.on) return;
+  stage.on = true;
+  const front = i >= 0 ? i : current;
+  portraits.map((q, k) => k).filter((k) => k !== front).forEach((k, n) => { stage.place[k] = STAGE_BACK[n]; });
+  stage.place[front] = STAGE_FRONT;
+  portraits.forEach((q, k) => {
+    if (stage.mix === 0) stage.shown[k] = { ...stage.place[k] };
+    bindStageSlot(k);
+    if (q.players && q.alive) aliveStart(q);
+  });
+  orbGroup.visible = band.visible = false;
+  post('stage', { on: true, front: portraits[front].name });
+}
+
+function stageExit() {
+  if (!stage.on) return;
+  stage.on = false;
+  post('stage', { on: false });
+}
+
+// Every frame: the stage folds in or out, and everyone eases toward her place.
+function updateStage(dt) {
+  if (stage.on && performance.now() > stage.until && mood === 'idle' && !speech.busy && !speech.queue.length) stageExit();
+  const was = stage.mix;
+  stage.mix = Math.min(1, Math.max(0, stage.mix + (stage.on ? dt : -dt) / 1.4));
+  if (was > 0 && stage.mix === 0) {
+    // Folded away: her sisters stop playing, and her own orbs or band come back.
+    for (const slot of stage.slots) if (slot) slot.mesh.visible = false;
+    for (const q of portraits) if (q.players && q !== portraits[current]) for (const pl of q.players) pl.video.pause();
+    orbGroup.visible = Boolean(portraits[current].orbit);
+    band.visible = style === 'scan' || style === 'code';
+  }
+  if (stage.mix === 0) return;
+  const m = ease(stage.mix);
+  const k = Math.min(dt * 2.2, 1);
+  const front = stage.shown[current] || STAGE_FRONT;
+  portraits.forEach((q, j) => {
+    const place = stage.place[j];
+    if (!place) return;
+    const at = (stage.shown[j] ||= { ...place });
+    for (const key of ['x', 'y', 'z', 's']) at[key] += (place[key] - at[key]) * k;
+    const slot = stage.slots[j];
+    if (!slot) return;
+    slot.mesh.visible = j !== current;
+    if (!slot.mesh.visible) return;
+    slot.mesh.position.set(at.x, at.y + Math.sin(simTime * 0.9 + j * 1.7) * 0.006, at.z);
+    slot.mesh.scale.setScalar(0.94 * at.s);
+    // Turned a little toward whoever is talking (less so while nobody is).
+    const attentive = mood === 'idle' ? 0.5 : 1;
+    slot.mesh.rotation.y = Math.max(-0.3, Math.min(0.3, (front.x - at.x) * 0.65)) * attentive;
+    const u = slot.material.uniforms;
+    u.opacity.value = m;
+    u.glow.value = 0.72 * (1 - 0.45 * sleepAmt);
+    u.depthScale.value = shared.depthScale.value * 0.8;
+  });
+}
+
 function switchTo(i, force = false) {
   const next = (i + portraits.length) % portraits.length;
   if (next === current && phase !== 'out' && !force) return;
+  // On the stage the turn passes without a fade: the two trade places.
+  if (stage.on && stage.mix >= 1 && phase === 'idle' && next !== current) {
+    const last = current;
+    stage.place[last] = stage.place[next];
+    stage.place[next] = STAGE_FRONT;
+    current = next;
+    bindStageSlot(last);
+    applyPortrait(next);
+    labelT = 0;
+    post('choom', { choom: portraits[next].name, stage: true });
+    return;
+  }
   pending = next;
   if (phase !== 'out') {
     phase = 'out';
@@ -910,7 +1095,12 @@ events.onmessage = (e) => {
   if (ev.type === 'button') onButton(ev.button, ev.action);
   if (ev.type === 'control') onControl(ev);
   if (ev.type === 'choom') onChoomEvent(ev);
-  if (ev.type === 'weather') weather = ev;
+  if (ev.type === 'weather') {
+    // The weather turns: Genesis, who loves it, glances up at the sky (if she's on the glass).
+    const turned = weather.description && ev.description && ev.description !== weather.description;
+    weather = ev;
+    if (turned && portraits[current].id === 'genesis' && portraits[current].alive) portraits[current].toolLook = /skycheck/;
+  }
 };
 
 // Remote control (POST /control): the hook the Choom app will use to show who's talking.
@@ -927,6 +1117,11 @@ function onControl(ev) {
   if (typeof ev.quilt === 'boolean') lkg.mode = ev.quilt ? 1 : 0; // debug: show the raw views
   if (typeof ev.view === 'number') { lkg.mode = 2; lkg.debugView = ev.view; } // debug: one view full screen
   if (ev.view === false) lkg.mode = 0;
+  if (ev.weather && typeof ev.weather === 'object') weather = ev.weather; // debug: pretend weather
+  if (typeof ev.hour === 'number' || ev.hour === null) debugHour = ev.hour;
+  if (typeof ev.sleep === 'boolean') debugSleep = ev.sleep;
+  if (ev.stage === true) stageEnter(current); // debug: the group stage
+  if (ev.stage === false) stageExit();
   if (typeof ev.clip === 'number' && portraits[current].players) { // debug: jump to a moving relief clip
     const p = portraits[current];
     const pl = p.players[p.active];
@@ -1149,12 +1344,48 @@ function speechPieces(text, first) {
   return pieces;
 }
 
+// Remembering the gap: the first time he talks to her after a long while (overnight, a workday) she
+// lights up before she answers, unless what he says calls for something else. Kept in this
+// browser profile so it survives relaunches.
+const LONG_GAP_MS = 8 * 3600 * 1000;
+function lastTalk(id) {
+  try { return Number(localStorage.getItem(`lastTalk:${id}`)) || 0; } catch { return 0; }
+}
+function noteTalk(id) {
+  try { localStorage.setItem(`lastTalk:${id}`, String(Date.now())); } catch { /* storage unavailable */ }
+}
+
+// Background turns (hourly heartbeats, delegated tasks) that start while the glass sleeps are left
+// to run unseen: they would wake her, switch Chooms and have her doze off again every hour.
+const unseenTurns = new Set();
+
 function onChoomEvent(ev) {
   const i = choomIndex(ev.choom);
+  const background = ev.source === 'heartbeat' || ev.source === 'delegation';
+  if (background && ev.event === 'turn_start') {
+    if (sleepy()) unseenTurns.add(ev.choom);
+    else unseenTurns.delete(ev.choom);
+  }
+  if (unseenTurns.has(ev.choom) && background && ev.event !== 'listening') {
+    if (ev.event === 'turn_end' || ev.event === 'error') unseenTurns.delete(ev.choom);
+    return;
+  }
   if (ev.source === 'chat' || ev.source === 'group' || ev.event === 'listening') lastActivity = performance.now();
+  if (stage.on && (ev.source === 'group' || (ev.event === 'listening' && ev.roomId))) stage.until = performance.now() + STAGE_LINGER_MS;
+  if (stage.on && ev.event === 'listening' && ev.listening === true && ev.chatId && !ev.roomId) stageExit();
   switch (ev.event) {
     case 'tool':
-      if (i === current) toolBoost = 1;
+      if (i === current) {
+        toolBoost = 1;
+        const look = toolLook(ev.tool), p = portraits[i];
+        if (look && p.alive && p.alive.clips.length > 1) {
+          p.toolLook = look;
+          // Swap the waiting clip for the moment now, unless the hand-over to it is under way or an
+          // expression is waiting there (the moment follows it).
+          const a = p.players[p.active], b = p.players[1 - p.active];
+          if (a.clip >= 0 && !a.video.ended && b.video.paused && !p.moments?.has(b.clip)) aliveLoad(p, b, nextClip(p, a.clip));
+        }
+      }
       post('tool', { choom: ev.choom, tool: ev.tool });
       break;
     case 'listening':
@@ -1166,8 +1397,19 @@ function onChoomEvent(ev) {
       break;
     case 'turn_start':
       appListening = false; // he sent it: her turn now
+      if (ev.source === 'group') stageEnter(i);
+      else if (ev.source === 'chat') stageExit();
       // What he just said: she reacts to its feeling before she starts thinking it over.
       if (i >= 0) portraits[i].emotion = typeof ev.prompt === 'string' ? feeling(ev.prompt) : null;
+      if (i >= 0 && ev.source === 'chat') {
+        const p = portraits[i];
+        const since = lastTalk(p.id);
+        if (since && Date.now() - since > LONG_GAP_MS) {
+          p.emotion ||= 'happy';
+          post('gap', { choom: p.name, hours: Math.round((Date.now() - since) / 360000) / 10 });
+        }
+        noteTalk(p.id);
+      }
       // Back on the glass after more than ten minutes for a real conversation: a greeting is due.
       if (i >= 0 && (ev.source === 'chat' || ev.source === 'group') && performance.now() - (portraits[i].lastShown || 0) > 600000) {
         portraits[i].greet = true;
@@ -1377,6 +1619,12 @@ renderer.setAnimationLoop((now) => {
   if (phase === 'out') {
     presence = 1 - ease(Math.min(phaseT / 0.45, 1));
     if (phaseT >= 0.45) {
+      // Faded over to another Choom while the stage comes up: she takes the front, the last one her spot.
+      if (stage.on && stage.place[pending] !== STAGE_FRONT) {
+        stage.place[current] = stage.place[pending];
+        stage.place[pending] = STAGE_FRONT;
+        stage.shown[pending] = { ...STAGE_FRONT };
+      }
       current = pending;
       pending = null;
       applyPortrait(current);
@@ -1402,9 +1650,15 @@ renderer.setAnimationLoop((now) => {
 
   // Idle life: slow sway, a little float, breathing depth.
   const tau = Math.PI * 2;
+  updateStage(dt);
+  const sm = ease(stage.mix);
+  const front = stage.shown[current] || STAGE_FRONT;
   portrait.rotation.y = Math.sin(simTime * tau / 9.0) * 0.045;
-  portrait.position.y = Math.sin(simTime * tau / 6.5) * 0.012;
-  portrait.position.z = 0.06 * listenAmt + 0.025 * level;
+  portrait.position.x = front.x * sm;
+  portrait.position.y = Math.sin(simTime * tau / 6.5) * 0.012 + front.y * sm;
+  portrait.position.z = 0.06 * listenAmt + 0.025 * level + front.z * sm;
+  portrait.scale.setScalar(0.94 * (1 + (front.s - 1) * sm));
+  frontMaterial.uniforms.bottomFade.value = 0.22 * sm;
   const breath = 1 + Math.sin(simTime * tau / 4.6) * 0.035;
   shared.depthScale.value = baseDepth.value * breath * (0.25 + 0.75 * presence);
   shared.opacity.value = presence;
