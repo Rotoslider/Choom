@@ -712,6 +712,7 @@ function updateWeather(dt, time, dim) {
   wxGeo.attributes.position.needsUpdate = true;
 }
 let toolBoost = 0;             // 1 when she calls a tool, fading over four seconds
+let lastSwitchAt = performance.now(); // when the Choom on the glass last changed (the screensaver's clock)
 let sleepAmt = 0;              // 1 while she sleeps: the glass dims and slows
 let bandT = 0;                 // the scan/compile band's own clock (it races during tool moments)
 let lastActivity = performance.now(); // the last conversation, listening or button press
@@ -724,6 +725,7 @@ const baseDepth = { value: 0.75 };
 
 function applyPortrait(i) {
   const p = portraits[i];
+  lastSwitchAt = performance.now();
   const fu = frontMaterial.uniforms;
   fu.packed.value = p.alive ? 1 : 0;
   fu.colorMap.value = p.alive ? p.players[p.active].texture : p.color;
@@ -834,9 +836,10 @@ const SLEEP_UNTIL = 7;
 const SLEEP_AFTER_QUIET_MS = 10 * 60 * 1000;
 let debugHour = null;     // debug: pretend it's this hour (/control {"hour": 23})
 let debugSleep = false;   // debug: doze off now, however early or busy it is (/control {"sleep": true})
+let presence = { home: null, desk: null, bed: null }; // from Home Assistant; see onPresence
 const hourNow = () => debugHour ?? new Date().getHours();
 function sleepy() {
-  if (debugSleep) return mood === 'idle' && !heard() && !speech.busy;
+  if (debugSleep || presence.bed === true) return mood === 'idle' && !heard() && !speech.busy;
   const h = hourNow();
   const night = SLEEP_FROM > SLEEP_UNTIL ? h >= SLEEP_FROM || h < SLEEP_UNTIL : h >= SLEEP_FROM && h < SLEEP_UNTIL;
   return night && performance.now() - lastActivity > SLEEP_AFTER_QUIET_MS && mood === 'idle' && !heard() && !speech.busy;
@@ -1019,6 +1022,7 @@ for (const p of portraits) {
         p.active = 1 - idx;
         p.aliveFrame = 0;
         p.moments?.delete(pl.clip); // that expression or tool moment has played
+        if (clipMoods(p.alive.clips[next.clip]).includes('wake')) p.wokeAt = performance.now();
         if (portraits[current] === p) bindAliveTextures(p);
         else if (stage.mix > 0 || stage.on) bindStageSlot(portraits.indexOf(p));
         aliveLoad(p, pl, nextClip(p, next.clip)); // the finished player fetches the clip after
@@ -1190,6 +1194,7 @@ events.onmessage = (e) => {
   if (ev.type === 'button') onButton(ev.button, ev.action);
   if (ev.type === 'control') onControl(ev);
   if (ev.type === 'choom') onChoomEvent(ev);
+  if (ev.type === 'presence') onPresence(ev);
   if (ev.type === 'weather') {
     // The weather turns: Genesis, who loves it, glances up at the sky (if she's on the glass).
     const turned = weather.description && ev.description && ev.description !== weather.description;
@@ -1215,6 +1220,7 @@ function onControl(ev) {
   if (ev.weather && typeof ev.weather === 'object') weather = ev.weather; // debug: pretend weather
   if (typeof ev.hour === 'number' || ev.hour === null) debugHour = ev.hour;
   if (typeof ev.sleep === 'boolean') debugSleep = ev.sleep;
+  if (ev.presence && typeof ev.presence === 'object') onPresence(ev.presence); // debug: pretend presence
   if (ev.stage === true) stageEnter(current); // debug: the group stage
   if (ev.stage === false) stageExit();
   if (typeof ev.clip === 'number' && portraits[current].players) { // debug: jump to a moving relief clip
@@ -1443,12 +1449,32 @@ function speechPieces(text, first) {
 // lights up before she answers, unless what he says calls for something else. Kept in this
 // browser profile so it survives relaunches.
 const LONG_GAP_MS = 8 * 3600 * 1000;
+let lastTyped = { chatId: null, at: 0 }; // the chat Donny last typed or spoke into, from the app at home
 function lastTalk(id) {
   try { return Number(localStorage.getItem(`lastTalk:${id}`)) || 0; } catch { return 0; }
 }
 function noteTalk(id) {
   try { localStorage.setItem(`lastTalk:${id}`, String(Date.now())); } catch { /* storage unavailable */ }
 }
+
+// Presence from Home Assistant (server.py, once it has a token): home, at the desk, in bed. Coming
+// home or sitting down at the desk wakes whoever is on the glass and she greets him (Aloy waves, the
+// others smile); getting into bed puts the glass to sleep whatever the hour, and getting up wakes it.
+function onPresence(next) {
+  const was = presence;
+  const pick = (role) => (role in next ? next[role] : presence[role]); // roles not reported stay as they were
+  presence = { home: pick('home'), desk: pick('desk'), bed: pick('bed') };
+  const arrived = (was.home === false && presence.home === true) || (was.desk === false && presence.desk === true);
+  const gotUp = was.bed === true && presence.bed === false;
+  if (arrived || gotUp) lastActivity = performance.now();
+  if (arrived && presence.bed !== true) {
+    const p = portraits[current];
+    if (p.alive?.clips.some((c) => clipMoods(c).includes('greet'))) p.greet = true;
+    else if (p.alive) p.toolLook = /smile|bright/;
+  }
+  post('presence', { ...presence, arrived, gotUp });
+}
+fetch('/status', { cache: 'no-store' }).then((r) => r.json()).then((st) => { if (st.presence) onPresence(st.presence); }).catch(() => {});
 
 // Background turns (hourly heartbeats, delegated tasks) that start while the glass sleeps are left
 // to run unseen: they would wake her, switch Chooms and have her doze off again every hour.
@@ -1488,6 +1514,7 @@ function onChoomEvent(ev) {
       // her to the glass, unless someone is mid-turn.
       appListening = ev.listening === true;
       appListenUntil = performance.now() + (ev.source === 'mic' ? 120000 : 30000);
+      if (appListening && ev.chatId) lastTyped = { chatId: ev.chatId, at: performance.now() };
       if (appListening && i >= 0 && i !== current && mood === 'idle' && !speech.busy && !speech.queue.length) switchTo(i);
       break;
     case 'turn_start':
@@ -1495,8 +1522,13 @@ function onChoomEvent(ev) {
       if (ev.source === 'group') stageEnter(i);
       else if (ev.source === 'chat') stageExit();
       // What he just said: she reacts to its feeling before she starts thinking it over.
-      if (i >= 0) portraits[i].emotion = typeof ev.prompt === 'string' ? feeling(ev.prompt) : null;
-      if (i >= 0 && ev.source === 'chat') {
+      // A chat turn is Donny talking only if he typed or used the mic in that chat just before;
+      // scheduled routines and Signal messages arrive as chat turns too. (Room messages count;
+      // "test" is the simulate hook.)
+      const fromDonny = ev.source === 'group' || ev.source === 'test' ||
+        (ev.source === 'chat' && ev.chatId && ev.chatId === lastTyped.chatId && performance.now() - lastTyped.at < 300000);
+      if (i >= 0) portraits[i].emotion = fromDonny && typeof ev.prompt === 'string' ? feeling(ev.prompt) : null;
+      if (i >= 0 && ev.source === 'chat' && fromDonny) {
         const p = portraits[i];
         const since = lastTalk(p.id);
         if (since && Date.now() - since > LONG_GAP_MS) {
@@ -1827,19 +1859,25 @@ function sendStatus() {
 }
 setInterval(sendStatus, 2000);
 
-// When it's quiet (no conversation, typing or button for 15 minutes), the Chooms take turns on the
-// glass, so the tower feels lived in by all four. A Choom arriving after a while away greets (Aloy
-// waves). Set QUIET_TURN_MS to 0 to keep whoever was last.
-const QUIET_TURN_MS = 15 * 60 * 1000;
-let lastTurnTaken = performance.now();
+// Screensaver: when nobody is talking with them (no conversation, typing or button for two minutes)
+// the Chooms take turns on the glass, three to five minutes each, picked at random, so the tower
+// shows all four going about their quiet moments. Not once she has dozed off at night, not on the
+// group stage, and not in the first minutes after she wakes (let her wake up on the glass). A
+// Choom arriving after a long while away greets (Aloy waves). QUIET_BEFORE_MS 0 turns it off.
+const QUIET_BEFORE_MS = 2 * 60 * 1000;
+const TURN_MS = [3 * 60 * 1000, 5 * 60 * 1000];
+let turnLength = TURN_MS[0];
 setInterval(() => {
   const now = performance.now();
-  if (!QUIET_TURN_MS || now - lastActivity < QUIET_TURN_MS || now - lastTurnTaken < QUIET_TURN_MS) return;
-  if (mood !== 'idle' || speech.busy || speech.queue.length || heard() || phase !== 'idle' || sleepy()) return;
+  if (!QUIET_BEFORE_MS || now - lastActivity < QUIET_BEFORE_MS || now - lastSwitchAt < turnLength) return;
+  if (mood !== 'idle' || speech.busy || speech.queue.length || heard() || phase !== 'idle' || sleepy() || stage.on) return;
+  const here = portraits[current];
+  const clip = here.alive && here.players[here.active].clip >= 0 ? here.alive.clips[here.players[here.active].clip] : null;
+  if ((clip && (poseFrom(clip) === 'asleep' || poseTo(clip) === 'asleep')) || now - (here.wokeAt || 0) < 3 * 60 * 1000) return;
   const others = portraits.map((q, k) => k).filter((k) => k !== current);
   const next = others[Math.floor(Math.random() * others.length)];
-  if (now - (portraits[next].lastShown || 0) > 600000) portraits[next].greet = true;
-  lastTurnTaken = now;
-  post('quiet-turn', { from: portraits[current].name, to: portraits[next].name });
+  if (now - (portraits[next].lastShown || 0) > 45 * 60 * 1000) portraits[next].greet = true;
+  turnLength = TURN_MS[0] + Math.random() * (TURN_MS[1] - TURN_MS[0]);
+  post('quiet-turn', { from: here.name, to: portraits[next].name });
   switchTo(next);
-}, 30000);
+}, 15000);

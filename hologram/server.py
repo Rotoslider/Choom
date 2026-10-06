@@ -27,10 +27,15 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 CALIBRATION = HERE / "calibration" / "LKG-PORT-07952_visual.json"
 LOG = HERE / "telemetry.log"
+LOG_MAX_BYTES = 50_000_000
+log_lock = threading.Lock()
 latest = {}
 received_at = {}  # kind -> when the page last posted it
 heartbeat_now = threading.Event()  # set when the page's voice flips, to send the heartbeat at once
 CHOOM_URL = os.environ.get("CHOOM_URL", "http://donnys-mac-studio-3.local:3000")
+# Home Assistant access for presence, kept outside the repo: ha_url (e.g. http://homeassistant:8123),
+# ha_token (a long-lived access token) and optionally presence.json.
+HA_CONFIG = Path(os.environ.get("HOLOGRAM_CONFIG", Path.home() / ".config" / "choom-hologram"))
 
 # --- Portrait buttons --------------------------------------------------------------------
 DEVICE_NAME = "Looking Glass Looking Glass Portrait Consumer Control"
@@ -175,8 +180,11 @@ def display_watchdog():
         entry = {"kind": "display_fix", "time": time.strftime("%Y-%m-%dT%H:%M:%S"), "stuck": stuck,
                  "command": " ".join(cmd[1:]), "ok": result.returncode == 0, "error": result.stderr.strip()[:200]}
         latest["display_fix"] = entry
-        with LOG.open("a") as f:
-            f.write(json.dumps(entry) + "\n")
+        with log_lock:
+            if LOG.exists() and LOG.stat().st_size > LOG_MAX_BYTES:
+                LOG.replace(LOG.with_suffix(".log.1"))  # keep one old log; status lines add ~9 MB a day
+            with LOG.open("a") as f:
+                f.write(json.dumps(entry) + "\n")
 
 
 # --- Choom app feed -------------------------------------------------------------------------
@@ -191,6 +199,7 @@ def follow_choom():
                                              headers={"Accept": "text/event-stream"})
             with urllib.request.urlopen(request, timeout=45) as response:  # the feed pings every 15 s
                 choom_feed.update(state="connected", since=time.strftime("%H:%M:%S"))
+                last_kind = {}  # per conversation: the last event type passed on
                 for raw in response:
                     line = raw.decode("utf-8", "replace").strip()
                     if not line.startswith("data: "):
@@ -199,6 +208,12 @@ def follow_choom():
                         event = json.loads(line[6:])
                     except json.JSONDecodeError:
                         continue
+                    # A model's reasoning streams in as one "thinking" event per token (60 a second);
+                    # the page only needs to know it started.
+                    key = (event.get("choom"), event.get("chatId"))
+                    if event.get("type") == "thinking" and last_kind.get(key) == "thinking":
+                        continue
+                    last_kind[key] = event.get("type")
                     if event.get("type") in ("turn_start", "content") and event.get("source") in ("chat", "group"):
                         wake_screen()
                     elif event.get("type") == "listening" and event.get("listening"):
@@ -243,6 +258,56 @@ def weather_watch():
         except Exception as e:
             latest["weather_error"] = f"{type(e).__name__}: {e}"
         time.sleep(600)
+
+
+def ha_get(base, token, path):
+    request = urllib.request.Request(f"{base}{path}", headers={"Authorization": f"Bearer {token}"})
+    with urllib.request.urlopen(request, timeout=10) as response:
+        return json.loads(response.read())
+
+
+PRESENT_STATES = ("home", "on", "detected", "occupied", "true")
+
+
+def presence_watch():
+    """Donny's presence from Home Assistant, passed to the page when it changes: home (a person
+    entity), and at the desk or in bed (zones of a presence sensor). presence.json maps roles to
+    entities, e.g. {"home": "person.donny", "desk": "binary_sensor.desk_zone", "bed": "binary_sensor.bed_zone"};
+    without it, "home" is the person entity named Donny. Checks every 5 s. Waits quietly (and picks
+    the files up without a restart) until ha_url and ha_token exist."""
+    last, entities, resolved_at = None, {}, 0.0
+    while True:
+        try:
+            url_file, token_file, map_file = HA_CONFIG / "ha_url", HA_CONFIG / "ha_token", HA_CONFIG / "presence.json"
+            missing = [str(f) for f in (url_file, token_file) if not f.exists()]
+            if missing:
+                latest["presence_state"] = f"waiting for {' and '.join(missing)}"
+                time.sleep(60)
+                continue
+            base, token = url_file.read_text().strip().rstrip("/"), token_file.read_text().strip()
+            if time.time() - resolved_at > 600:  # re-read the mapping every 10 minutes
+                entities = json.loads(map_file.read_text()) if map_file.exists() else {}
+                if "home" not in entities:
+                    people = [e for e in ha_get(base, token, "/api/states") if e["entity_id"].startswith("person.")]
+                    named = [e for e in people if "donny" in (e["entity_id"] + str(e["attributes"].get("friendly_name", ""))).lower()]
+                    if named or len(people) == 1:
+                        entities["home"] = (named or people)[0]["entity_id"]
+                resolved_at = time.time()
+            now = {}
+            for role, entity in entities.items():
+                state = str(ha_get(base, token, f"/api/states/{entity}").get("state", "")).lower()
+                now[role] = None if state in ("unavailable", "unknown", "") else state in PRESENT_STATES
+            latest["presence_state"] = f"watching {entities}"
+            if now != last:
+                entry = {"type": "presence", **now, "time": time.strftime("%Y-%m-%dT%H:%M:%S")}
+                latest["presence"] = entry
+                broadcast(entry)
+                last = now
+        except Exception as e:  # HA restarting, network drop, a renamed entity
+            latest["presence_state"] = f"error: {type(e).__name__}: {e}"
+            time.sleep(30)
+            continue
+        time.sleep(5)
 
 
 def synthesize(text, voice):
@@ -375,4 +440,5 @@ if __name__ == "__main__":
     threading.Thread(target=voice_heartbeat, daemon=True).start()
     threading.Thread(target=display_watchdog, daemon=True).start()
     threading.Thread(target=weather_watch, daemon=True).start()
+    threading.Thread(target=presence_watch, daemon=True).start()
     ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()

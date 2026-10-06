@@ -104,6 +104,20 @@ What the moods do on the page:
   found by name (`TOOL_LOOKS`): looking around for a camera snapshot or picture, drifting off
   for a memory search, glancing at the sky for the weather, a playful look for a picture she makes.
 
+**Screensaver:** when nobody is talking with them (no conversation, typing or button for two
+minutes), the Chooms take turns on the glass, three to five minutes each, picked at random. Not once
+she has dozed off at night, not on the group stage, and not in her first minutes after waking.
+
+**Presence (Home Assistant):** `server.py` watches Home Assistant every 5 seconds once
+`~/.config/choom-hologram/ha_url` (e.g. `http://homeassistant.local:8123`) and `ha_token` (a
+long-lived access token from your HA profile, Security tab; `chmod 600`) exist; no restart needed.
+Optional `presence.json` maps roles to entities, e.g.
+`{"home": "person.donny", "desk": "binary_sensor.desk_zone", "bed": "binary_sensor.bed_zone"}`;
+without it, "home" is the person entity named Donny. Coming home or sitting down at the desk wakes
+whoever is on the glass and she greets you (Aloy waves, the others smile); getting into bed puts the
+glass to sleep whatever the hour, and getting up wakes it. `/status` shows `presence_state`. These
+files stay out of git.
+
 **Group stage:** when the Chooms talk in a group room, all four stand in the glass: the speaker in
 front (with her voice, mouth and particles), her sisters smaller behind her and turned toward her,
 glancing about more often, everyone fading out toward the bottom of her picture.
@@ -118,7 +132,8 @@ Lip sync is checked on every spoken piece: `lipsync` entries in `telemetry.log` 
 and correlation against the voice heard. Debug hooks on `POST /control`: `{"view": N}` (one view full
 screen, `false` to leave), `{"quilt": true}` (raw views), `{"clip": k}` (jump to a clip),
 `{"sleep": true}` (doze off now), `{"hour": 22}` (pretend it's that hour, `null` to stop),
-`{"weather": {"wind": 25}}` (pretend weather), `{"stage": true}` (the group stage). `POST /simulate`
+`{"weather": {"wind": 25}}` (pretend weather), `{"stage": true}` (the group stage),
+`{"presence": {"bed": true}}` (pretend presence; `null` clears a role). `POST /simulate`
 injects a Choom-app event (`{"event": "tool", "choom": "genesis", "tool": "get_weather"}`).
 
 ## Portrait assets
