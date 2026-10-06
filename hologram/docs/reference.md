@@ -81,9 +81,10 @@ reached and left with a quick camera-cut fade, no lip sync).
 ## Lip sync
 
 HeadAudio (`vendor/headaudio`, MIT) reads mouth shapes from her voice in an audio worklet; loudness
-leads the onsets. A shader opens her jaw along a lens that follows her lip line, rounds or spreads
-her lips and fills the opening with a mouth tinted from her own lips, at the mouth tracked on that
-frame of the clip. Her audio is delayed 80 ms so voice and lips line up. Every spoken piece logs a
+leads the onsets. A shader opens her jaw along a lens that follows her lip line, lifts her upper lip a
+little, rounds or spreads her lips, and fills the opening with a mouth tinted from her own lips, at
+the mouth tracked on that frame of the clip. Her upper teeth show under the lip whenever she opens
+(shaded, with faint gaps between the front teeth, in her own light), the lower ones on wide sounds. Her audio is delayed 80 ms so voice and lips line up. Every spoken piece logs a
 `lipsync` entry (lag and correlation against the voice heard) to `telemetry.log`.
 
 ## The Choom app link

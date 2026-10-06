@@ -138,7 +138,7 @@ function layerMaterial({ segX, segY, edgeThreshold, useMask, own = false }) {
       mouthGap: { value: 0 },                             // half the gap her lips already have (texture px)
       mouthLift: { value: 0 },                            // how far her mouth corners curve up (texture px)
       mouthGain: { value: 1 },                            // how far the jaw opens
-      mouthStyle: { value: 2 },                           // 0 lower lip only; 1 both lips; 2 a hint of teeth; 3 her teeth
+      mouthStyle: { value: 3 },                           // 0 lower lip only; 1 both lips; 2 a hint of teeth; 3 her teeth
       mouthShape: { value: new THREE.Vector3() },        // jaw open, lips round, lips wide (0..1)
       bottomFade: { value: 0 },                           // on the group stage: fade out her lowest part
       texSize: { value: new THREE.Vector2(1536, 2048) },
