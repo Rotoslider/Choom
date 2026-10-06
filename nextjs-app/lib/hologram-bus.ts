@@ -78,6 +78,34 @@ export function setHologramMuted(muted: boolean): void {
   if (v && Date.now() - v.at < VOICE_FRESH_MS) setHologramVoice(!muted);
 }
 
+// ---- Donny talking to them -----------------------------------------------------------------
+/**
+ * Donny typing to a Choom or talking into the mic (from the chat input at home): the hologram
+ * shows her listening until it hears that he stopped, or until her turn starts.
+ */
+export function setHologramListening(e: {
+  listening: boolean;
+  source: 'mic' | 'typing';
+  choom: string | null;
+  chatId: string | null;
+  roomId: string | null;
+}): void {
+  publishHologram({ type: 'listening', ...e });
+}
+
+const PRIVATE_IP = /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|::1$|fe80:|fc|fd)/i;
+
+/**
+ * True when a request came from away from home: through ngrok, or from a public address. Nobody
+ * is in front of the hologram then, so it neither takes that browser's voice nor reacts to it.
+ */
+export function requestFromAway(request: Request): boolean {
+  const host = request.headers.get('host') ?? '';
+  if (/ngrok/i.test(host)) return true;
+  const forwarded = (request.headers.get('x-forwarded-for') ?? '').split(',')[0].trim();
+  return forwarded !== '' && !PRIVATE_IP.test(forwarded.replace(/^::ffff:/, ''));
+}
+
 // ---- What browsers at home have open -------------------------------------------------------
 const viewing = (store.__choomHologramViewing ??= new Map<string, number>());
 

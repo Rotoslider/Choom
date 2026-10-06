@@ -9,21 +9,12 @@
  * ngrok (a phone away from home) keeps its own voice, since nobody is in front of the hologram.
  */
 import { NextResponse } from 'next/server';
-import { hologramVoiceActive, markViewing, setHologramVoice } from '@/lib/hologram-bus';
+import { hologramVoiceActive, markViewing, requestFromAway, setHologramVoice } from '@/lib/hologram-bus';
 
 export const dynamic = 'force-dynamic';
 
-const PRIVATE_IP = /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|::1$|fe80:|fc|fd)/i;
-
-function fromAway(request: Request): boolean {
-  const host = request.headers.get('host') ?? '';
-  if (/ngrok/i.test(host)) return true;
-  const forwarded = (request.headers.get('x-forwarded-for') ?? '').split(',')[0].trim();
-  return forwarded !== '' && !PRIVATE_IP.test(forwarded.replace(/^::ffff:/, ''));
-}
-
 export async function GET(request: Request) {
-  const away = fromAway(request);
+  const away = requestFromAway(request);
   if (!away) {
     const params = new URL(request.url).searchParams;
     const chat = params.get('chat');

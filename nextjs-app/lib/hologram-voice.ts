@@ -11,6 +11,9 @@
  *
  * Each poll also says which chat or room this page has open (setHologramViewing): like the web
  * app, the hologram speaks a conversation only while someone at home has it open.
+ *
+ * Typing in the chat input or talking into its mic tells the hologram too (hologramTyping,
+ * hologramMic), so the Choom turns to listen while Donny is talking to her.
  */
 import { registerAudioPlayer } from './audio-registry';
 
@@ -54,6 +57,50 @@ if (typeof window !== 'undefined') {
 export function setHologramViewing(v: { chat?: string | null; room?: string | null }): void {
   viewing = v;
   if (typeof window !== 'undefined') void refresh();
+}
+
+// ---- Listening: Donny typing or talking to them -------------------------------------------
+const TYPING_IDLE_MS = 4000; // this long without a keystroke and he has stopped typing
+const via = { mic: false, typing: false };
+let typingTimer: ReturnType<typeof setTimeout> | null = null;
+let listenChoom: string | null = null;
+
+function sendListening(source: 'mic' | 'typing', listening: boolean): void {
+  void fetch('/api/hologram/listening', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    // In a room it's everyone's conversation, so no one Choom is named.
+    body: JSON.stringify({ listening, source, chat: viewing.chat ?? null, room: viewing.room ?? null,
+      choom: viewing.room ? null : listenChoom }),
+  }).catch(() => {});
+}
+
+/** The chat input's mic opened or closed. */
+export function hologramMic(open: boolean, choom?: string | null): void {
+  if (choom !== undefined) listenChoom = choom;
+  if (via.mic === open) return;
+  via.mic = open;
+  sendListening('mic', open);
+}
+
+/** A keystroke in the chat input: he's typing to her until a pause or until the message goes. */
+export function hologramTyping(choom?: string | null): void {
+  if (choom !== undefined) listenChoom = choom;
+  if (!via.typing) {
+    via.typing = true;
+    sendListening('typing', true);
+  }
+  if (typingTimer) clearTimeout(typingTimer);
+  typingTimer = setTimeout(hologramTypingDone, TYPING_IDLE_MS);
+}
+
+/** The message was sent or cleared, or he paused: no longer typing. */
+export function hologramTypingDone(): void {
+  if (typingTimer) clearTimeout(typingTimer);
+  typingTimer = null;
+  if (!via.typing) return;
+  via.typing = false;
+  sendListening('typing', false);
 }
 
 /** True when the hologram is speaking for the Chooms, so this browser should not. */

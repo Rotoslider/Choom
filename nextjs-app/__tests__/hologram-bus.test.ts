@@ -1,6 +1,8 @@
 import {
   hologramVoiceActive,
   markViewing,
+  requestFromAway,
+  setHologramListening,
   setHologramVoice,
   startHologramTurn,
   subscribeHologram,
@@ -67,4 +69,20 @@ test('speaks only conversations someone at home has open', () => {
   say(turn('heartbeat', 'chatX'));   // heartbeat: never
   off();
   expect(events.filter((e) => e.type === 'content').map((e) => e.speak)).toEqual([false, true, false, false, true, false]);
+});
+
+test('Donny typing or talking reaches the hologram as a listening event', () => {
+  const { events, off } = capture();
+  setHologramListening({ listening: true, source: 'typing', choom: 'Aloy', chatId: 'c1', roomId: null });
+  setHologramListening({ listening: false, source: 'typing', choom: 'Aloy', chatId: 'c1', roomId: null });
+  off();
+  expect(events.map((e) => [e.type, e.listening, e.choom])).toEqual([['listening', true, 'Aloy'], ['listening', false, 'Aloy']]);
+});
+
+test('requests through ngrok or from a public address count as away from home', () => {
+  const req = (headers: Record<string, string>) => new Request('http://localhost/api/hologram/listening', { headers });
+  expect(requestFromAway(req({ host: 'abc.ngrok-free.app' }))).toBe(true);
+  expect(requestFromAway(req({ host: 'donnys-mac-studio-3.local:3443', 'x-forwarded-for': '203.0.113.7' }))).toBe(true);
+  expect(requestFromAway(req({ host: 'donnys-mac-studio-3.local:3443', 'x-forwarded-for': '192.168.1.20' }))).toBe(false);
+  expect(requestFromAway(req({ host: 'localhost:3000' }))).toBe(false);
 });

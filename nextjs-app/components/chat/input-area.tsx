@@ -8,6 +8,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 import { useAppStore } from '@/lib/store';
 import { STTClient } from '@/lib/stt-client';
+import { hologramMic, hologramTyping, hologramTypingDone } from '@/lib/hologram-voice';
 import { log } from '@/lib/log-store';
 import {
   Tooltip,
@@ -47,7 +48,7 @@ export function InputArea({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const sttClientRef = useRef<STTClient | null>(null);
-  const { ui, settings, isStreaming, toggleMute, setRecording } = useAppStore();
+  const { ui, settings, isStreaming, toggleMute, setRecording, currentChoom } = useAppStore();
 
   // Auto-resize textarea
   useEffect(() => {
@@ -115,6 +116,7 @@ export function InputArea({
 
     if ((hasText || hasAttachment) && !disabled && !isStreaming) {
       onSend(message.trim(), attachment || undefined);
+      hologramTypingDone();
       setMessage('');
       setAttachment(null);
       if (textareaRef.current) {
@@ -133,6 +135,7 @@ export function InputArea({
       // Cancel on Escape
       if (e.key === 'Escape') {
         setMessage('');
+        hologramTypingDone();
       }
     },
     [handleSend]
@@ -171,6 +174,7 @@ export function InputArea({
         sttClientRef.current.stopRecording();
       }
       setRecording(false);
+      hologramMic(false);
     } else {
       // Start recording
       setRecording(true);
@@ -180,6 +184,7 @@ export function InputArea({
       sttClientRef.current = new STTClient(settings.stt, {
         onRecordingChange: (isRecording) => {
           setRecording(isRecording);
+          if (!isRecording) hologramMic(false);
         },
         onResult: (result) => {
           log.sttResult(result.text, Date.now() - recordingStartTime);
@@ -192,17 +197,21 @@ export function InputArea({
         onError: (error) => {
           log.sttError(error.message);
           setRecording(false);
+          hologramMic(false);
         },
       });
 
       try {
         await sttClientRef.current.startRecording();
+        // The Choom on the hologram turns to listen while the mic is open.
+        hologramMic(true, currentChoom?.name ?? null);
       } catch (error) {
         log.sttError(error instanceof Error ? error.message : 'Failed to start recording');
         setRecording(false);
+        hologramMic(false);
       }
     }
-  }, [ui.isRecording, settings.stt, setRecording]);
+  }, [ui.isRecording, settings.stt, setRecording, currentChoom?.name]);
 
   return (
     <TooltipProvider>
@@ -265,7 +274,12 @@ export function InputArea({
               <Textarea
                 ref={textareaRef}
                 value={message}
-                onChange={(e) => setMessage(e.target.value)}
+                onChange={(e) => {
+                  setMessage(e.target.value);
+                  // The Choom on the hologram turns to listen while he types to her.
+                  if (e.target.value) hologramTyping(currentChoom?.name ?? null);
+                  else hologramTypingDone();
+                }}
                 onKeyDown={handleKeyDown}
                 onPaste={handlePaste}
                 placeholder={placeholder}
