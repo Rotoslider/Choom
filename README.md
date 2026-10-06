@@ -18,7 +18,7 @@ All 116 tools are organized into 27 modular **skills** with progressive disclosu
 - **Image Generation**: Stable Diffusion Forge integration with selfie mode, LoRA support, and LLM-guided sizing
 - **Text-to-Speech**: Streaming TTS via Chatterbox/Fatterbox with per-Choom voice selection. **Per-message playback**: every Choom response in 1:1 chats and group rooms gets a play/stop button — audio is generated on demand in the author's voice and cached to disk, so past conversations (including rooms the Chooms ran on their own) can be listened to any time. **Mute silences everything**: the mute button broadcasts to a global audio-player registry — the 1:1 stream, room queues, per-message playback, and any player orphaned by page navigation (a long agentic turn survives leaving the page by design; its TTS instance is disposed on unmount so it can't keep talking where the new page's mute button can't reach it)
 - **Speech-to-Text**: Whisper-based transcription with push-to-talk, toggle, and VAD modes
-- **Looking Glass Hologram**: The Chooms as live 3D portraits on a Looking Glass Portrait holographic display. The Portrait shows whoever is talking and she speaks her reply in her own voice; like the web app, only conversations someone at home has open are heard, and browsers at home hand their voice to the hologram so every reply is heard once. See [Looking Glass Hologram](#looking-glass-hologram)
+- **Looking Glass Hologram**: The Chooms as moving 3D reliefs in a Looking Glass Portrait. Whoever is talking comes to the glass and speaks in her own voice with lip sync, expressions and moments that fit what she is doing; all four share a stage in group rooms; you can talk to them at the tower ("OK Aloy", "OK Chooms"). See [Looking Glass Hologram](#looking-glass-hologram)
 - **Signal Bridge**: Two-way messaging through Signal, including voice transcription, image delivery, and image forwarding for vision analysis. **Continuous conversation across surfaces**: a Signal message continues the Choom's most-recently-active 1:1 chat — the one you had open on the web — instead of starting a fresh, context-less thread. Heartbeat/briefing/automation output lives in the Choom's persistent `[Autonomous]` chat, which never hijacks Signal routing: replying to a heartbeat continues your real conversation, and the Choom knows what she just said through the cross-session awareness block. **Cross-surface routing**: an un-addressed Signal message (no name) goes to whichever Choom you most recently had a *genuine* conversation with on **any** surface, web or Signal — so chatting with Eve on the web then texting carries the thread to Eve. Heartbeats and self-followups are ignored for this (they can't hijack who answers); name a Choom to switch. Group scratch chats (archived) and per-task delegation chats are excluded, so jumping into a group room or a delegation and back never hijacks your 1:1 thread; `group:` Signal messages route to the shared room on their own path
 - **Smart Home (Home Assistant)**: Full integration with Home Assistant for reading sensors, controlling lights/switches/climate, viewing history trends, and ambient home awareness. Three-layer environmental awareness: system prompt injection (every LLM call knows the current home state), heartbeat monitoring (periodic checks with intelligent reasoning), and conditional automations (trigger actions based on sensor thresholds). Includes an Entity Browser in Settings and works from both the web UI and Signal. See the [Smart Home Guide](#smart-home-home-assistant-1) for setup and usage
 - **Scheduled Tasks**: Cron-driven morning briefings, weather checks, aurora forecasts, health heartbeats, and YouTube music downloads. Custom heartbeats support **per-task model routing** — assign a fast/cheap model to simple tasks (selfies, reminders) while keeping the Choom's primary model for complex work
@@ -642,14 +642,24 @@ Every saved Choom response — assistant messages in 1:1 chats and Choom-authore
 
 ## Looking Glass Hologram
 
-The Chooms can appear on a [Looking Glass Portrait](https://lookingglassfactory.com) holographic display as live 3D portraits that show who is talking and speak each reply in that Choom's own voice. The client lives in `hologram/` and runs on the machine the Portrait is plugged into; [hologram/README.md](hologram/README.md) covers setup and how it works.
+![The Chooms on the Looking Glass Portrait](hologram/docs/images/chooms.jpg)
 
-How it connects to the app:
+The Chooms can live in a [Looking Glass Portrait](https://lookingglassfactory.com) holographic display
+as moving 3D reliefs: whoever is talking comes to the glass and speaks in her own voice, and you can
+talk to them at the tower ("OK Aloy", "OK Chooms"). The client lives in `hologram/` and runs on the
+machine the Portrait is plugged into: see [hologram/README.md](hologram/README.md).
 
-- **Live feed**: every chat turn (web, Signal, rooms, heartbeats, delegation) is mirrored to `GET /api/hologram/events` (`lib/hologram-bus.ts`): who is talking, when she is thinking or using a tool, and her reply as speakable sentences, gathered from the stream the same way the web voice does.
-- **Speaks like the web app**: a conversation is heard only while a browser at home has that chat or room open. Rooms the Chooms run on their own, Signal chats and heartbeats appear on the Portrait but stay silent.
-- **One voice**: while the hologram runs it posts a heartbeat to `/api/hologram/voice`, and browsers at home skip their own TTS (`lib/hologram-voice.ts`), so a reply is heard once and Chatterbox renders it once. A browser reached through ngrok keeps its own voice. Per-message play buttons are unaffected.
-- **Mute**: the web app's mute button also stops the hologram (`POST /api/hologram/mute`).
+On the app side:
+
+- **Live feed:** every chat turn (web, Signal, rooms, heartbeats, delegation) is mirrored to
+  `GET /api/hologram/events` (`lib/hologram-bus.ts`): who is talking, thinking, tools, pictures, and
+  her reply as speakable sentences, gathered from the stream the same way the web voice does.
+- **One voice:** while the hologram runs it posts a heartbeat to `/api/hologram/voice`, and browsers
+  at home skip their own TTS (`lib/hologram-voice.ts`), so a reply is heard once. A browser reached
+  through ngrok keeps its own voice. The mute button also stops the hologram (`/api/hologram/mute`).
+- **Listening:** typing or the mic in the chat input shows her listening (`/api/hologram/listening`).
+- **Talking at the tower:** `/api/hologram/talk` sends words heard at the tower to her current chat,
+  or to the Signal room.
 
 ## Memory System (`memories.db` & `dev.db`)
 
