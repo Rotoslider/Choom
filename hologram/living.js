@@ -598,7 +598,7 @@ function applyPortrait(i) {
   // Her moving relief stands in empty glass: the still plate was painted for the old pose.
   plateMesh.visible = !p.alive;
   for (const q of portraits) if (q.players && q !== p) for (const pl of q.players) pl.video.pause();
-  if (p.players) aliveStart(p);
+  if (p.players && p.alive) aliveStart(p);
   shared.focus.value = p.alive ? p.alive.focus : p.focus;
   configureParticles(p);
   frontMaterial.uniforms.sparkle.value = p.style === 'motes' ? 1 : 0;
@@ -689,17 +689,31 @@ function wantedMood(p) {
 }
 
 function nextClip(p, after) {
-  const want = wantedMood(p);
   const clips = p.alive.clips;
   const pose = after >= 0 && clips[after] ? poseTo(clips[after]) : 'main';
+  // A greeting (Aloy's wave) when she takes the glass after a while away; if it starts in another
+  // pose, first the clip that gets her there.
+  if (p.greet) {
+    const greets = clips.map((c, k) => k).filter((k) => clipMoods(clips[k]).includes('greet'));
+    const here = greets.find((k) => poseFrom(clips[k]) === pose);
+    if (here !== undefined) { p.greet = false; return here; }
+    const toward = clips.findIndex((c) => poseFrom(c) === pose && greets.some((k) => poseFrom(clips[k]) === poseTo(c)));
+    if (toward >= 0) return toward;
+    p.greet = false;
+  }
+  const want = wantedMood(p);
   const all = clips.map((c, k) => k).filter((k) => poseFrom(clips[k]) === pose);
   const fits = all.filter((k) => clipMoods(clips[k]).includes(want));
-  let pool = fits.filter((k) => k !== after);
+  // Right after a pose change she stays put for at least one clip (no hand up-down-up fidgeting).
+  const justMoved = after >= 0 && clips[after] && poseFrom(clips[after]) !== poseTo(clips[after]);
+  let pool = fits.filter((k) => k !== after && !(justMoved && poseTo(clips[k]) !== pose));
   if (!pool.length) pool = fits.length ? fits : all.filter((k) => k !== after);   // the only fitting clip may repeat
   if (!pool.length) pool = all.length ? all : [0];
-  // The pose's main loop comes up twice as often as each other idle clip; pose changes half as often.
+  // The pose's main loop comes up twice as often as each other idle clip; leaving the main pose too,
+  // and coming back to it as often as anything else (so Aloy spends about a third of her quiet time
+  // with her hand down).
   const main = all.find((k) => poseTo(clips[k]) === pose && clipMoods(clips[k]).includes('talk'));
-  const weights = pool.map((k) => (want === 'idle' && k === main ? 2 : 1) * (poseTo(clips[k]) !== pose ? 0.5 : 1));
+  const weights = pool.map((k) => (want === 'idle' && (k === main || (pose === 'main' && poseTo(clips[k]) !== pose)) ? 2 : 1));
   let r = Math.random() * weights.reduce((a, b) => a + b, 0);
   for (let i = 0; i < pool.length; i++) { r -= weights[i]; if (r <= 0) return pool[i]; }
   return pool[pool.length - 1];
@@ -730,6 +744,15 @@ function bindAliveTextures(p) {
 for (const p of portraits) {
   if (!p.players) continue;
   p.players.forEach((pl, idx) => {
+    // Her clip videos live only on this machine (not in git): if one can't be loaded, show her still
+    // relief instead of a frozen frame.
+    pl.video.addEventListener('error', () => {
+      if (!p.alive) return;
+      post('error', { message: `${p.name}'s moving relief is unavailable (${pl.video.currentSrc || 'no source'}); showing her still relief` });
+      p.alive = null;
+      for (const q of p.players) q.video.pause();
+      if (portraits[current] === p) applyPortrait(current);
+    });
     pl.video.addEventListener('ended', () => {
       if (idx !== p.active) return;
       const next = p.players[1 - idx];
@@ -1030,6 +1053,10 @@ function onChoomEvent(ev) {
   const i = choomIndex(ev.choom);
   switch (ev.event) {
     case 'turn_start':
+      // Back on the glass after more than ten minutes for a real conversation: a greeting is due.
+      if (i >= 0 && (ev.source === 'chat' || ev.source === 'group') && performance.now() - (portraits[i].lastShown || 0) > 600000) {
+        portraits[i].greet = true;
+      }
       lastTurn = { index: i, open: true };
       clocks.set(ev.choom, { choom: ev.choom, source: ev.source, start: performance.now(), firstText: 0, firstVoice: 0,
         gaps: [], lastEnd: 0, pieces: 0, pending: 0, queuedBehind: 0, ended: false });
@@ -1248,6 +1275,7 @@ renderer.setAnimationLoop((now) => {
   updateLevel(dt);
   if (headaudio) headaudio.update(dt * 1000);
   updateMouth(dt);
+  portraits[current].lastShown = now;
   if (portraits[current].alive) {
     followAliveMouth(portraits[current]);
     hurryAlive(portraits[current]);

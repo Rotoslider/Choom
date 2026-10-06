@@ -10,3 +10,5 @@ portraits/*/mouth_check.jpg
 bodies/
 # Per-frame cut-outs for make_alive.py (intermediate; rebuilt by tools/make_alive_masks.py)
 portraits/*/alive_masks*.npz
+# Moving relief videos stay on the NUC (every rebuild re-encodes them all); alive.json is tracked
+portraits/*/alive_*.mp4

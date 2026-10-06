@@ -75,7 +75,14 @@ hidden) with her live particles, atom and lip sync on top.
    hologram drops to a few fps while it runs, since they share the GPU.
 3. `U2NET_HOME=~/pinokio/api/wan2gp/app/ckpts/rembg ~/pinokio/api/wan2gp/app/venv/bin/python tools/make_alive_masks.py <id> MAIN.mp4 MORE.mp4 ...`
 4. `~/pinokio/api/forge-neo/app/venv/bin/python tools/make_alive.py <id> MAIN.mp4 MORE.mp4 ...`
-   (clips named `<id>_breath`/`<id>_amused` are kept out of talking).
+   Each clip's role comes from its name (`<id>_<action>.mp4`, see `ROLES` in make_alive.py): the
+   moods it plays in (idle, talk, think, listen, greet) and the pose it starts and ends in. Aloy has a
+   hand-down pose reached through `lower`/`raise`, and waves (`wave`, mood greet) when she takes the
+   glass after ten minutes away.
+
+The clip videos (`portraits/<id>/alive_<k>.mp4`) stay on the NUC, not in git: every rebuild re-encodes
+them all. Their sources are in the concept folder (`renders/alive/clips/`). Without them a Choom
+shows her still relief.
 
 Lip sync is checked on every spoken piece: `lipsync` entries in `telemetry.log` give the mouth's lag
 and correlation against the voice heard. Debug hooks on `POST /control`: `{"view": N}` (one view full
