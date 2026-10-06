@@ -39,6 +39,7 @@ FRAME = 480                      # 30 ms at RATE
 COMMAND_WAIT_S = 8               # after a bare "OK Eve", how long she waits for the words
 FOLLOW_UP_S = 6                  # after her answer, how long the mic stays open for a reply
 SENTENCE_QUIET = 53              # frames of quiet (1.6 s) that end what he's saying to her
+MAX_SPEECH_S = 45                # the longest single message (the app's speech-to-text splits long ones)
 NAMES = {                        # what Whisper may write for each name
     "Aloy": r"aloy|aloi|eloy|eloi|aloe|alloy|alloi|a loy|aloya|aloha",
     "Optic": r"optic|optik|optics|optick",
@@ -166,10 +167,10 @@ class Ears:
             # the room's background can't hold it open, and a short breath doesn't end it.
             recent.append(not is_speech)
             silent_run = sum(recent) if len(recent) == quiet_frames else 0
-            if silent_run >= 0.9 * quiet_frames or len(speech) >= 20 * RATE // FRAME:   # quiet enough, or 20 s
+            if silent_run >= 0.9 * quiet_frames or len(speech) >= MAX_SPEECH_S * RATE // FRAME:
                 pcm = b"".join(speech)
                 self.last_capture = {"seconds": round(len(pcm) / 2 / RATE, 1),
-                                     "ended": "quiet" if silent_run >= 0.9 * quiet_frames else "20 s cap",
+                                     "ended": "quiet" if silent_run >= 0.9 * quiet_frames else f"{MAX_SPEECH_S} s cap",
                                      "floor": round(self.floor, 1)}
                 return pcm if len(pcm) >= int(0.4 * RATE) * 2 else self.utterance(start_within and max(deadline - time.time(), 0.1), quiet_frames)
 
