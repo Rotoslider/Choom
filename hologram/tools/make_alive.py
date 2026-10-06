@@ -112,12 +112,23 @@ ROLES = {
     "surprised": (["surprised"], "main", "main"),
     "sad": (["sad"], "main", "main"),
     "concerned": (["concerned"], "main", "main"),
+    # Sleep: dozing off, sleeping, waking (Aloy sleeps with her hand down), and Genesis's wind.
+    "fallasleep": (["sleep"], "main", "asleep"),
+    "sleep": (["sleep"], "asleep", "asleep"),
+    "sleep2": (["sleep"], "asleep", "asleep"),
+    "wake": (["wake"], "asleep", "main"),
+    "windy": (["windy"], "main", "main"),
+    "windy2": (["windy"], "main", "main"),
 }
+AWAKE_POSE = {"aloy": "relaxed"}  # the pose a Choom falls asleep from and wakes into, if not "main"
 
 
 def clip_role(cid, src):
     action = Path(src).stem.removeprefix(f"{cid}_")
-    return ROLES.get(action, ROLES["base"])
+    moods, start, end = ROLES.get(action, ROLES["base"])
+    if action in ("fallasleep", "wake") and cid in AWAKE_POSE:
+        start, end = [AWAKE_POSE[cid] if pose == "main" else pose for pose in (start, end)]
+    return moods, start, end
 
 
 def read_clip(src):

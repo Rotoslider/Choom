@@ -199,6 +199,20 @@ const LAYER_FRAG = /* glsl */ `
       if (packed == 1) c = mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c));
       return c;
     }
+    // Her neighborhood's average around uv: the mip chain for a still, a few nearby taps for a video.
+    vec3 localAt(vec2 uv, vec3 here) {
+      if (packed == 1) {
+        vec2 o = 3.0 / texSize;
+        return 0.2 * (here + colorAt(uv + vec2(o.x, 0.0)) + colorAt(uv - vec2(o.x, 0.0))
+                           + colorAt(uv + vec2(0.0, o.y)) + colorAt(uv - vec2(0.0, o.y)));
+      }
+      return texture2D(colorMap, uv, 3.5).rgb;
+    }
+    float vnoise(vec2 q) {
+      vec2 i = floor(q), f = fract(q);
+      f = f * f * (3.0 - 2.0 * f);
+      return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
+    }
 
     // Talking, the way a mouth opens: the corners stay put and the lips part in a lens shape from
     // corner to corner. Right under the lips the lower lip drops by that lens profile (zero at the
@@ -284,20 +298,22 @@ const LAYER_FRAG = /* glsl */ `
         c = mix(c, inside, gap);
       }
       if (sparkle > 0.0) {
-        // Genesis is made of motes: let the bright specks in her image twinkle on their own.
-        // Her neighborhood's average: the mip chain for a still, a few nearby taps for a video.
-        vec3 local;
-        if (packed == 1) {
-          vec2 o = 3.0 / texSize;
-          local = 0.2 * (c + colorAt(vUv + vec2(o.x, 0.0)) + colorAt(vUv - vec2(o.x, 0.0))
-                           + colorAt(vUv + vec2(0.0, o.y)) + colorAt(vUv - vec2(0.0, o.y)));
-        } else {
-          local = texture2D(colorMap, vUv, 3.5).rgb;
-        }
-        float speck = smoothstep(0.03, 0.22, dot(c - local, vec3(0.3, 0.5, 0.2)));
-        float n = hash(floor(vUv * vec2(512.0, 683.0)));
-        float twinkle = 0.25 + 1.5 * (0.5 + 0.5 * sin(time * (1.5 + 2.5 * n) + n * 6.2831));
-        c = mix(c, local + (c - local) * twinkle, speck * sparkle);
+        // Genesis is made of motes, and they move: the glitter in her image drifts in slow little
+        // circles across her (each patch on its own), every mote twinkles as it goes, and a soft
+        // wave of light rises through her. Only the bright specks move; her features stay put.
+        const vec3 W = vec3(0.3, 0.5, 0.2);
+        vec3 local = localAt(vUv, c);
+        float speckHere = smoothstep(0.03, 0.22, dot(c - local, W));
+        float turn = vnoise(vUv * 7.0) * 12.566 + time * (0.5 + 0.4 * vnoise(vUv * 3.0 + 7.0));
+        vec2 at = vUv + 5.0 * vec2(cos(turn), sin(turn)) / texSize;  // where this pixel's mote comes from
+        vec3 there = colorAt(at);
+        vec3 detail = there - localAt(at, there);
+        float speckThere = smoothstep(0.03, 0.22, dot(detail, W));
+        float n = hash(floor(at * texSize / 1.5));                  // each mote keeps its own twinkle
+        float twinkle = 0.3 + 1.4 * (0.5 + 0.5 * sin(time * (1.5 + 2.5 * n) + n * 6.2831));
+        float wave = 0.7 + 0.6 * smoothstep(0.6, 1.0, sin(vUv.y * 14.0 - time * 1.3 + vnoise(vUv * 4.0) * 3.0));
+        vec3 lifted = c - (c - local) * speckHere;                  // her, with the glitter lifted off
+        c = mix(c, lifted + detail * speckThere * twinkle * wave, sparkle);
       }
       gl_FragColor = vec4(c * glow * opacity, 1.0);
     }`;
@@ -585,7 +601,13 @@ let listening = false;          // the Portrait's bottom button (or L)
 // Donny typing to her or talking into the mic in the Choom app at home. Dropped when her turn
 // starts, or after a while if the "stopped" message never comes.
 let appListening = false;
-let toolBoost = 0;             // 1 when she calls a tool, fading over four seconds
+// Local weather from the server (every 10 minutes): a windy day stirs Genesis's hair (her wind
+// clips join her quiet moments), and later rain or snow can drift through the glass.
+let weather = { wind: 0, gust: 0, description: '' };
+const windy = () => Math.max(weather.wind || 0, (weather.gust || 0) * 0.7) >= 15;
+fetch('/status', { cache: 'no-store' }).then((r) => r.json()).then((st) => { if (st.weather) weather = st.weather; }).catch(() => {});
+let toolBoost = 0;
+let sleepAmt = 0;              // 1 while she sleeps: the glass dims and slows             // 1 when she calls a tool, fading over four seconds
 let bandT = 0;                 // the scan/compile band's own clock (it races during tool moments)
 let lastActivity = performance.now(); // the last conversation, listening or button press
 let appListenUntil = 0;
@@ -694,31 +716,64 @@ const poseTo = (c) => c.to || 'main';
 function wantedMood(p) {
   if (portraits[current] !== p) return 'idle';
   if (heard()) return 'listen';
+  if (mood === 'idle' && sleepy()) return 'sleep';
   return mood === 'speaking' ? 'talk' : mood === 'thinking' ? 'think' : 'idle';
+}
+
+// Sleep: late at night, once it has been quiet a while, the Choom on the glass dozes off and the
+// glass dims; she wakes when he types or talks to her, when a reply comes in, or in the morning.
+// Local hours.
+const SLEEP_FROM = 23;
+const SLEEP_UNTIL = 7;
+const SLEEP_AFTER_QUIET_MS = 10 * 60 * 1000;
+function sleepy() {
+  const h = new Date().getHours();
+  const night = SLEEP_FROM > SLEEP_UNTIL ? h >= SLEEP_FROM || h < SLEEP_UNTIL : h >= SLEEP_FROM && h < SLEEP_UNTIL;
+  return night && performance.now() - lastActivity > SLEEP_AFTER_QUIET_MS && mood === 'idle' && !heard() && !speech.busy;
+}
+
+// A clip that gets her into a mood from the pose she's in: one that starts here, or else the pose
+// change that leads to a pose where one starts (Aloy lowers her hand before she waves or sleeps).
+function seekClip(p, pose, wanted, after = -1) {
+  const clips = p.alive.clips;
+  const ks = clips.map((c, k) => k);
+  let here = ks.filter((k) => poseFrom(clips[k]) === pose && clipMoods(clips[k]).includes(wanted));
+  if (here.length > 1) here = here.filter((k) => k !== after);
+  if (here.length) return here[Math.floor(Math.random() * here.length)];
+  const targets = new Set(ks.filter((k) => clipMoods(clips[k]).includes(wanted)).map((k) => poseFrom(clips[k])));
+  const toward = ks.find((k) => poseFrom(clips[k]) === pose && poseTo(clips[k]) !== pose && targets.has(poseTo(clips[k])));
+  return toward ?? -1;
 }
 
 function nextClip(p, after) {
   const clips = p.alive.clips;
   const pose = after >= 0 && clips[after] ? poseTo(clips[after]) : 'main';
-  // A greeting (Aloy's wave) when she takes the glass after a while away; if it starts in another
-  // pose, first the clip that gets her there.
-  if (p.greet) {
-    const greets = clips.map((c, k) => k).filter((k) => clipMoods(clips[k]).includes('greet'));
-    const here = greets.find((k) => poseFrom(clips[k]) === pose);
-    if (here !== undefined) { p.greet = false; return here; }
-    const toward = clips.findIndex((c) => poseFrom(c) === pose && greets.some((k) => poseFrom(clips[k]) === poseTo(c)));
-    if (toward >= 0) return toward;
-    p.greet = false;
-  }
   const want = wantedMood(p);
+  // Asleep: stay asleep, or wake first if anything else is wanted. Sleepy: doze off (via a pose
+  // change if needed).
+  if (pose === 'asleep' && want !== 'sleep') {
+    const wake = seekClip(p, pose, 'wake');
+    if (wake >= 0) return wake;
+  }
+  if (want === 'sleep') {
+    const doze = seekClip(p, pose, 'sleep', after);
+    if (doze >= 0) return doze;
+  }
+  // A greeting (Aloy's wave) when she takes the glass after a while away, via a pose change if needed.
+  if (p.greet && want !== 'sleep') {
+    const greet = seekClip(p, pose, 'greet');
+    if (greet < 0 || clipMoods(clips[greet]).includes('greet')) p.greet = false;
+    if (greet >= 0) return greet;
+  }
   const all = clips.map((c, k) => k).filter((k) => poseFrom(clips[k]) === pose);
-  // Saying something happy, sad, surprised or worried: that expression, once.
-  if (want === 'talk' && p.emotion) {
+  // Saying (or just hearing) something happy, sad, surprised or worried: that expression, once.
+  if ((want === 'talk' || want === 'think') && p.emotion) {
     const felt = all.find((k) => clipMoods(clips[k]).includes(p.emotion));
     p.emotion = null;
     if (felt !== undefined) return felt;
   }
-  const fits = all.filter((k) => clipMoods(clips[k]).includes(want));
+  const breezy = want === 'idle' && windy();
+  const fits = all.filter((k) => clipMoods(clips[k]).includes(want) || (breezy && clipMoods(clips[k]).includes('windy')));
   // Right after a pose change she stays put for at least one clip (no hand up-down-up fidgeting).
   const justMoved = after >= 0 && clips[after] && poseFrom(clips[after]) !== poseTo(clips[after]);
   let pool = fits.filter((k) => k !== after && !(justMoved && poseTo(clips[k]) !== pose));
@@ -736,6 +791,7 @@ function nextClip(p, after) {
   const weights = pool.map((k) => {
     let w = want === 'idle' && (k === main || (pose === 'main' && poseTo(clips[k]) !== pose)) ? 2 : 1;
     if (/longcalm/.test(clips[k].source || '')) w *= 2;
+    if (breezy && clipMoods(clips[k]).includes('windy')) w *= 3;
     if (night && want === 'idle') w *= calmName.test(clips[k].source || '') ? 2 : livelyName.test(clips[k].source || '') ? 0.5 : 1;
     return w;
   });
@@ -752,7 +808,9 @@ function hurryAlive(p) {
   const fits = clipMoods(p.alive.clips[pl.clip]).includes(wantedMood(p));
   // An expression waiting to play: move along a little faster to reach it.
   const waiting = p.emotion && p.alive.clips.some((c) => clipMoods(c).includes(p.emotion));
-  pl.video.playbackRate = !fits ? 2 : waiting ? 1.5 : (pl.baseRate || 1);
+  // Woken from sleep: the sleep clip hurries along even more, so she's awake in a few seconds.
+  const asleep = poseFrom(p.alive.clips[pl.clip]) === 'asleep' && poseTo(p.alive.clips[pl.clip]) === 'asleep';
+  pl.video.playbackRate = !fits ? (asleep ? 3 : 2) : waiting ? 1.5 : (pl.baseRate || 1);
 }
 
 function aliveStart(p) {
@@ -852,6 +910,7 @@ events.onmessage = (e) => {
   if (ev.type === 'button') onButton(ev.button, ev.action);
   if (ev.type === 'control') onControl(ev);
   if (ev.type === 'choom') onChoomEvent(ev);
+  if (ev.type === 'weather') weather = ev;
 };
 
 // Remote control (POST /control): the hook the Choom app will use to show who's talking.
@@ -1107,6 +1166,8 @@ function onChoomEvent(ev) {
       break;
     case 'turn_start':
       appListening = false; // he sent it: her turn now
+      // What he just said: she reacts to its feeling before she starts thinking it over.
+      if (i >= 0) portraits[i].emotion = typeof ev.prompt === 'string' ? feeling(ev.prompt) : null;
       // Back on the glass after more than ten minutes for a real conversation: a greeting is due.
       if (i >= 0 && (ev.source === 'chat' || ev.source === 'group') && performance.now() - (portraits[i].lastShown || 0) > 600000) {
         portraits[i].greet = true;
@@ -1357,11 +1418,17 @@ renderer.setAnimationLoop((now) => {
     });
   }
 
+  // Asleep (or dozing off / waking): the glass dims and her particles slow.
+  const cur = portraits[current];
+  const curClip = cur.alive && cur.players[cur.active].clip >= 0 ? cur.alive.clips[cur.players[cur.active].clip] : null;
+  const asleepNow = curClip && (poseTo(curClip) === 'asleep' || poseFrom(curClip) === 'asleep') ? 1 : 0;
+  sleepAmt += (asleepNow - sleepAmt) * Math.min(dt * 0.6, 1);
+  shared.glow.value *= 1 - 0.45 * sleepAmt;
   // Tool moments: while she works a tool her light surges for a few seconds (Aloy's orbs flare,
   // Optic's scan races, Genesis's motes swirl, Eve's code pours down).
   toolBoost = Math.max(0, toolBoost - dt / 4);
   bandT += (paused ? 0 : dt) * (1 + 3 * toolBoost);
-  updateParticles(paused ? 0 : dt, 1 + 1.5 * listenAmt + 1.4 * thinking + 2.5 * level + 4 * toolBoost);
+  updateParticles(paused ? 0 : dt, (1 + 1.5 * listenAmt + 1.4 * thinking + 2.5 * level + 4 * toolBoost) * (1 - 0.7 * sleepAmt));
   shared.time.value = simTime;
   if (orbGroup.visible) updateOrbs(presence);
   particleMaterial.uniforms.time.value = simTime;
@@ -1418,7 +1485,7 @@ let lastTurnTaken = performance.now();
 setInterval(() => {
   const now = performance.now();
   if (!QUIET_TURN_MS || now - lastActivity < QUIET_TURN_MS || now - lastTurnTaken < QUIET_TURN_MS) return;
-  if (mood !== 'idle' || speech.busy || speech.queue.length || heard() || phase !== 'idle') return;
+  if (mood !== 'idle' || speech.busy || speech.queue.length || heard() || phase !== 'idle' || sleepy()) return;
   const others = portraits.map((q, k) => k).filter((k) => k !== current);
   const next = others[Math.floor(Math.random() * others.length)];
   if (now - (portraits[next].lastShown || 0) > 600000) portraits[next].greet = true;

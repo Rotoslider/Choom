@@ -228,6 +228,23 @@ def voice_heartbeat():
         heartbeat_now.clear()
 
 
+def weather_watch():
+    """Every 10 minutes, the local weather from the Choom app (its OpenWeather settings), passed to
+    the page: windy days stir Genesis's hair, and later rain or snow can drift through the glass."""
+    while True:
+        try:
+            with urllib.request.urlopen(f"{CHOOM_URL}/api/weather", timeout=30) as response:
+                w = json.loads(response.read()).get("weather") or {}
+            entry = {"type": "weather", "wind": w.get("windSpeed") or 0, "gust": w.get("windGust") or 0,
+                     "description": w.get("description") or "", "temperature": w.get("temperature"),
+                     "time": time.strftime("%Y-%m-%dT%H:%M:%S")}
+            latest["weather"] = entry
+            broadcast(entry)
+        except Exception as e:
+            latest["weather_error"] = f"{type(e).__name__}: {e}"
+        time.sleep(600)
+
+
 def synthesize(text, voice):
     """WAV bytes for `text` in `voice`, via the Choom app (which cleans text and calls Chatterbox)."""
     body = json.dumps({"text": text, "voice": voice}).encode()
@@ -357,4 +374,5 @@ if __name__ == "__main__":
     threading.Thread(target=follow_choom, daemon=True).start()
     threading.Thread(target=voice_heartbeat, daemon=True).start()
     threading.Thread(target=display_watchdog, daemon=True).start()
+    threading.Thread(target=weather_watch, daemon=True).start()
     ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()
