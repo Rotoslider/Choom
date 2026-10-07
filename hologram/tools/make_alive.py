@@ -185,6 +185,8 @@ KINDS = {
     "idle": (["idle"], "main", "main"),           # a quiet moment in her picture's pose
     "listen": (["idle", "listen"], "main", "main"),
     "relaxed": (["idle"], "relaxed", "relaxed"),  # a quiet moment with her hand down (Aloy)
+    "talk": (["talk", "listen", "idle"], "main", "main"),            # a calm loop to talk over (lip sync)
+    "relaxedtalk": (["talk", "listen", "idle"], "relaxed", "relaxed"),
     "full": (["idle"], "full", "full"),           # the glass cuts to her whole figure for a moment
     "pose": (["pose"], "main", "main"),           # a "look at me" move for a selfie
     "fullpose": (["pose"], "full", "full"),

@@ -46,8 +46,10 @@ same picture of her, so the page can play them in any order without a visible se
    `image_prompt_type` `SE`, the clean picture as `image_start` and `image_end`, 832x1104, 124 to 243
    frames), run headless with `wgp.py --process QUEUE.zip --output-dir DIR`. About 5 minutes a clip.
    Name each clip `<id>_<action>.mp4`. In prompts, never name an effect you don't want ("no smoke"
-   brings smoke); say "a plain pure black background". Seven-second sleep loops come out cleaner than
-   ten-second ones.
+   brings smoke); say "a plain pure black background". Words about breathing ("a deep breath", "a
+   sigh") can bring a cloud of fog; describe what her face does instead. Seven-second sleep loops come
+   out cleaner than ten-second ones. Check every clip on a contact sheet before using it: now and then
+   the background flashes grey for a moment.
 3. **Cut-outs.** `U2NET_HOME=~/pinokio/api/wan2gp/app/ckpts/rembg ~/pinokio/api/wan2gp/app/venv/bin/python tools/make_alive_masks.py <id> CLIP.mp4 ...`
    (U2-Net per frame, kept per clip as `alive_masks_<clip>.npz`). U2-Net can lose most of her for a
    stretch when something busy moves around her (blowing hair); `make_alive.py` adds back anything
