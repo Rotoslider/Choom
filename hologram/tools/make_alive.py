@@ -136,6 +136,10 @@ ROLES = {
     "giggle": (["idle"], "main", "main"),
     "relaxedgiggle": (["idle"], "relaxed", "relaxed"),
     "relaxedglance": (["idle"], "relaxed", "relaxed"),
+    "picturelook": (["picture"], "main", "main"),               # looking at a picture beside her face
+    "relaxedpicturelook": (["picture"], "relaxed", "relaxed"),
+    "picturedown": (["picturedown"], "main", "main"),           # ... at one floating lower right
+    "relaxedpicturedown": (["picturedown"], "relaxed", "relaxed"),
     "relaxedhum": (["idle"], "relaxed", "relaxed"),
     "relaxedthinkup": (["think", "idle"], "relaxed", "relaxed"),
     "relaxedsmile": (["idle", "listen"], "relaxed", "relaxed"),
@@ -409,7 +413,8 @@ def main():
         enc.stdin.close()
         assert enc.wait() == 0, f"ffmpeg failed on {out.name}"
         part.replace(out)
-        mouths, found = mouth_track(landmarker, frames)
+        # Full-body clips play without lip sync (her face is too small to track, or turned away mid-twirl).
+        mouths, found = (np.zeros((0, 8)), 0) if start == "full" else mouth_track(landmarker, frames)
         del frames, depth
         meta_clips.append({"file": out.name, "frames": c["frames"], "source": name,
                            "moods": moods, "from": start, "to": end, "talk": "talk" in moods,

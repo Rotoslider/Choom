@@ -669,6 +669,12 @@ function showPicture(imageId, kind, p) {
     // Tall pictures float beside her face. Wide and square ones go lower right, below her chin: beside
     // her face they reached across her left eye, and down there a look at them is a glance down.
     picture.low = aspect >= 0.9;
+    // She turns to look at it (a selfie gets a "look at me" move instead), if she has a look for it.
+    if (kind !== 'selfie' && p.alive && p === portraits[current]) {
+      p.lookAt = picture.low ? 'picturedown' : 'picture';
+      const a = p.players[p.active], b = p.players[1 - p.active];
+      if (a.clip >= 0 && !a.video.ended && b.video.paused && !p.moments?.has(b.clip)) aliveLoad(p, b, nextClip(p, a.clip));
+    }
     picture.active = picture.group.visible = true;
     post('picture', { choom: p.name, kind });
   }, undefined, () => post('error', { message: `picture ${imageId} did not load` }));
@@ -1081,6 +1087,17 @@ function nextClip(p, after) {
     if (move < 0 || arrived) p.poseWanted = false;
     if (arrived) (p.moments ||= new Set()).add(move);
     if (move >= 0) return move;
+  }
+  // A picture just floated up beside her: she turns to look at it (or down, at one lower right).
+  if ((want === 'think' || want === 'idle') && p.lookAt) {
+    const look = p.lookAt;
+    p.lookAt = null;
+    const looks = all.filter((k) => clipMoods(clips[k]).includes(look) && poseTo(clips[k]) === pose);
+    if (looks.length) {
+      const k = looks[Math.floor(Math.random() * looks.length)];
+      (p.moments ||= new Set()).add(k);
+      return k;
+    }
   }
   if ((want === 'think' || want === 'idle') && p.toolLook) {
     const look = p.toolLook;
