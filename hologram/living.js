@@ -390,12 +390,16 @@ const LAYER_FRAG = /* glsl */ `
 const frontMaterial = layerMaterial({ segX: 384, segY: 512, edgeThreshold: 0.35, useMask: true });
 const plateMaterial = layerMaterial({ segX: 192, segY: 256, edgeThreshold: 0.22, useMask: false });
 const portrait = new THREE.Group();
-const [plateMesh] = [[plateMaterial, 192, 256], [frontMaterial, 384, 512]].map(([material, segX, segY]) => {
+const [plateMesh, frontMesh] = [[plateMaterial, 192, 256], [frontMaterial, 384, 512]].map(([material, segX, segY]) => {
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 2.0, segX, segY), material);
   mesh.frustumCulled = false;
   portrait.add(mesh);
   return mesh;
 });
+// On the group stage the speaker always stands in front. Her sisters are drawn first (renderOrder -1)
+// and their depth is cleared before her, so no part of a sister can cover her: Eve's dark lower body
+// reached forward past the speaker's shoulders and cut into her.
+frontMesh.onBeforeRender = (renderer) => { if (stage.mix > 0) renderer.clearDepth(); };
 portrait.scale.setScalar(0.94);
 scene.add(portrait);
 
@@ -638,7 +642,7 @@ function updateOrbs(presence) {
 // her face for a few seconds, framed in her color (above the stage when the room is up). A selfie
 // comes with one of her "look at me" moves when she has them.
 const FRAME_COLOR = { aloy: 0xf4b650, optic: 0x57dbe3, genesis: 0xb79bff, eve: 0xe4eeff };
-const picture = { group: new THREE.Group(), mesh: null, frame: null, t: 0, hold: 0, active: false };
+const picture = { group: new THREE.Group(), mesh: null, frame: null, t: 0, hold: 0, active: false, low: false };
 picture.group.visible = false;
 scene.add(picture.group);
 const pictureLoader = new THREE.TextureLoader();
@@ -650,15 +654,21 @@ function showPicture(imageId, kind, p) {
     const w = aspect >= 1 ? 0.6 : 0.62 * aspect; // its longer side about a third of the glass
     const h = w / aspect;
     for (const m of [picture.mesh, picture.frame]) if (m) { picture.group.remove(m); m.geometry.dispose(); m.material.map?.dispose(); m.material.dispose(); }
+    // Always drawn over her (no depth test): a hand or arm reaching forward in her relief cut into it.
     picture.mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h),
-      new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0, depthWrite: false }));
+      new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0, depthWrite: false, depthTest: false }));
     picture.frame = new THREE.Mesh(new THREE.PlaneGeometry(w + 0.024, h + 0.024),
       new THREE.MeshBasicMaterial({ color: FRAME_COLOR[p.id] ?? 0xffffff, transparent: true, opacity: 0,
-        blending: THREE.AdditiveBlending, depthWrite: false }));
+        blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false }));
+    picture.frame.renderOrder = 10;
+    picture.mesh.renderOrder = 11;
     picture.frame.position.z = -0.004;
     picture.group.add(picture.frame, picture.mesh);
     picture.t = 0;
     picture.hold = kind === 'snapshot' || kind === 'looking' ? 8 : 11;
+    // Tall pictures float beside her face. Wide and square ones go lower right, below her chin: beside
+    // her face they reached across her left eye, and down there a look at them is a glance down.
+    picture.low = aspect >= 0.9;
     picture.active = picture.group.visible = true;
     post('picture', { choom: p.name, kind });
   }, undefined, () => post('error', { message: `picture ${imageId} did not load` }));
@@ -668,7 +678,10 @@ function updatePicture(dt) {
   picture.t += dt;
   const shown = ease(Math.min(picture.t / 0.7, 1)) * Math.min(Math.max((picture.hold + 0.9 - picture.t) / 0.9, 0), 1);
   const sm = ease(stage.mix);
-  picture.group.position.set(0.45 * (1 - sm), 0.46 + 0.22 * sm + Math.sin(picture.t * 1.1) * 0.012, 0.05);
+  // On the stage, all go to the top right corner, the one place nobody stands (up top in the middle
+  // covered the sister at the back).
+  const [px, py] = picture.low ? [0.4, -0.42] : [0.5, 0.46];
+  picture.group.position.set(px + (0.5 - px) * sm, py + (0.74 - py) * sm + Math.sin(picture.t * 1.1) * 0.012, 0.05);
   picture.group.rotation.y = -0.16 * (1 - sm) + Math.sin(picture.t * 0.6) * 0.03;
   picture.group.scale.setScalar((0.85 + 0.15 * Math.min(picture.t / 0.7, 1)) * (1 - 0.25 * sm));
   picture.mesh.material.opacity = shown;
@@ -926,6 +939,7 @@ function clipMoods(c) {
 // in the pose the last one ended in. A clip that changes pose comes up less often.
 const poseFrom = (c) => c.from || 'main';
 const poseTo = (c) => c.to || 'main';
+const WAKING_POSES = new Set(['main', 'relaxed']);  // the framings she lives in (not asleep, not full-body)
 
 function wantedMood(p) {
   if (portraits[current] !== p) return 'idle';
@@ -1066,18 +1080,24 @@ function nextClip(p, after) {
   // Right after a pose change she stays put for at least one clip (no hand up-down-up fidgeting).
   const justMoved = after >= 0 && clips[after] && poseFrom(clips[after]) !== poseTo(clips[after]);
   let pool = fits.filter((k) => k !== after && !(justMoved && poseTo(clips[k]) !== pose));
+  // Her home pose is where she spends most of her time. Aloy's is her hand down: her raised finger
+  // looked odd held up most of the time, so it comes up now and then while she talks (about one clip
+  // in eight; an expression raises it too) and rarely while she's quiet, and goes back down after a
+  // clip or two. Her hand moves are idle clips, so while she talks they join the pool here.
+  const home = clips.some((c) => poseFrom(c) === 'relaxed' && clipMoods(c).includes('talk')) ? 'relaxed' : 'main';
+  const handMove = (k) => poseTo(clips[k]) !== pose && WAKING_POSES.has(poseTo(clips[k]));
+  if (want === 'talk' && !justMoved) pool.push(...all.filter((k) => handMove(k) && !pool.includes(k)));
   if (!pool.length) pool = fits.length ? fits : all.filter((k) => k !== after);   // the only fitting clip may repeat
   if (!pool.length) pool = all.length ? all : [0];
-  // The pose's main loop comes up twice as often as each other idle clip; leaving the main pose too,
-  // and coming back to it as often as anything else (so Aloy spends about a third of her quiet time
-  // with her hand down).
+  // The pose's main loop comes up twice as often as each other idle clip.
   const main = all.find((k) => poseTo(clips[k]) === pose && clipMoods(clips[k]).includes('talk'));
   // Late at night (10 pm to 6 am) the calm clips come up more and the laughs and teasing less.
   const night = hour >= 22 || hour < 6;
   const calmName = /longcalm|breath|daydream|hum|base|relaxed\.|loop|heartglow/;
   const livelyName = /amused|eyebrow|smirk|beat|glance|giggle|groove/;
   const weights = pool.map((k) => {
-    let w = want === 'idle' && (k === main || (pose === 'main' && poseTo(clips[k]) !== pose)) ? 2 : 1;
+    let w = want === 'idle' && k === main ? 2 : 1;
+    if (handMove(k)) w = pose === home ? (want === 'talk' ? 0.4 : 0.1) : (want === 'talk' ? 1.5 : 6);
     if (/longcalm/.test(clips[k].source || '')) w *= 2;
     if (breezy && clipMoods(clips[k]).includes('windy')) w *= 6; // on a windy day about one clip in four
     if (clipMoods(clips[k]).includes('yawn')) w *= justWoke ? 6 : 0.5;
@@ -1086,8 +1106,10 @@ function nextClip(p, after) {
     return w;
   });
   let r = Math.random() * weights.reduce((a, b) => a + b, 0);
-  for (let i = 0; i < pool.length; i++) { r -= weights[i]; if (r <= 0) return pool[i]; }
-  return pool[pool.length - 1];
+  let pick = pool[pool.length - 1];
+  for (let i = 0; i < pool.length; i++) { r -= weights[i]; if (r <= 0) { pick = pool[i]; break; } }
+  if (want === 'talk' && handMove(pick)) (p.moments ||= new Set()).add(pick); // a gesture, at its own pace
+  return pick;
 }
 
 // When you start talking with her mid-glance (or mid-laugh), that clip plays out faster, so she
@@ -1212,6 +1234,7 @@ function stageSlot(j) {
     material.uniforms.bottomFade.value = 0.5;
     const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 2.0, 192, 256), material);
     mesh.frustumCulled = false;
+    mesh.renderOrder = -1;  // behind the speaker, whatever their depth (frontMesh)
     mesh.visible = false;
     scene.add(mesh);
     stage.slots[j] = { mesh, material };
