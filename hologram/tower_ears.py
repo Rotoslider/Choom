@@ -38,7 +38,10 @@ CAPTURE_RATE = 16000             # the EMEET's microphone runs at 16 kHz (it pla
 FRAME = 480                      # 30 ms at RATE
 COMMAND_WAIT_S = 8               # after a bare "OK Eve", how long she waits for the words
 FOLLOW_UP_S = 6                  # after her answer, how long the mic stays open for a reply
-SENTENCE_QUIET = 53              # frames of quiet (1.6 s) that end what he's saying to her
+# Frames of quiet (2.5 s) that end what he's saying to her. The EMEET's noise suppression sends exact
+# silence in every pause, and measured at the desk (Oct 6) Donny's pauses between sentences ran past
+# 1.6 s every few sentences, which cut messages off mid-thought; only long thinking stops go past 2.5 s.
+SENTENCE_QUIET = 83
 MAX_SPEECH_S = 45                # the longest single message (the app's speech-to-text splits long ones)
 ROOM = "Chooms"                  # "OK Chooms" / "OK girls" / "OK everyone": the group room
 NAMES = {                        # what Whisper may write for each name
@@ -286,8 +289,9 @@ class Ears:
             choom, rest = heard
             tell_hologram("wake", choom)
             if len(rest.split()) >= 2:
-                # "OK Aloy, how about ..." with a pause: the sentence may go on, so listen for the rest.
-                more = self.utterance(start_within=1.0, quiet_frames=SENTENCE_QUIET)
+                # "OK Aloy, how about ..." with a pause: the sentence may go on, so listen for the rest
+                # (after the same pause that would end it).
+                more = self.utterance(start_within=SENTENCE_QUIET * FRAME / RATE, quiet_frames=SENTENCE_QUIET)
                 self.conversation(choom, pcm + (more or b""), rest)     # "OK Genesis, what's the weather?"
             else:
                 self.conversation(choom)                # "OK Genesis" ... then the question

@@ -113,7 +113,8 @@ start counts:
 | OK Aloy, OK Optic, OK Genesis, OK Eve | her current 1:1 chat (picked as Signal picks it) |
 | OK Chooms, OK girls, OK everyone | the room set as the Signal room on the Rooms page, or else the room you last spoke in |
 
-A sentence ends when 90% of the last 1.6 s was quiet; a message can run 45 s. After her answer the
+A message ends when 90% of the last 2.5 s was quiet (the speakerphone sends exact silence in every
+pause, and pauses between sentences often pass 1.5 s); it can run 45 s. After her answer the
 mic stays open six seconds for a reply (a room: once everyone has finished). Short sounds and clips
 that fail a local speech check are dropped, so Whisper can't turn noise into a sentence. Only the
 wake phrase itself interrupts her. Nothing is kept; events go to `telemetry.log` without the words.
