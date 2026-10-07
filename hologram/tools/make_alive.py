@@ -2,10 +2,12 @@
 """Turn a Choom's idle loop (a video of her on black, first frame = last frame) into a moving relief:
 per-frame depth shaped like the still reliefs, her cut-out, and her mouth position for lip sync.
 
-Writes portraits/<id>/alive_<k>.mp4 per clip (three panels stacked: her color, her depth, her
+Writes portraits/<id>/alive_<clip>.mp4 per clip (three panels stacked: her color, her depth, her
 cut-out) and alive.json (frame rate, size, focus, and per clip its per-frame mouth). Run with Forge
 Neo's Python (Depth Anything V2 + MediaPipe), from the hologram folder, after make_alive_masks.py:
     ~/pinokio/api/forge-neo/app/venv/bin/python tools/make_alive.py aloy MAIN.mp4 [MORE.mp4 ...]
+Only new or changed clips are encoded. After the page has reloaded, `make_alive.py aloy --prune`
+deletes the videos of clips no longer listed.
 """
 import json
 import math
@@ -42,11 +44,18 @@ attention.Attention.forward = fused_attention
 
 
 def circular_smooth(stack, weights=(0.25, 0.5, 0.25)):
-    """Smooth along time with wrap-around, so the loop stays seamless."""
-    out = np.zeros_like(stack)
+    """Smooth along time with wrap-around, so the loop stays seamless. Adds shifted slices in place
+    (np.roll copied the whole clip for every tap: 3 s each, over two minutes a clip)."""
     half = len(weights) // 2
+    out = weights[half] * stack
     for k, w in enumerate(weights):
-        out += w * np.roll(stack, k - half, axis=0)
+        shift = k - half  # out[t] += w * stack[t - shift], wrapping around
+        if shift > 0:
+            out[shift:] += w * stack[:-shift]
+            out[:shift] += w * stack[-shift:]
+        elif shift < 0:
+            out[:shift] += w * stack[-shift:]
+            out[shift:] += w * stack[:-shift]
     return out
 
 
@@ -167,11 +176,31 @@ ROLES = {
 AWAKE_POSE = {"aloy": "relaxed"}  # the pose a Choom falls asleep from and wakes into, if not "main"
 
 
+# Clips named by kind rather than listed one by one: <kind>_<what she does>.
+KINDS = {
+    "idle": (["idle"], "main", "main"),           # a quiet moment in her picture's pose
+    "listen": (["idle", "listen"], "main", "main"),
+    "relaxed": (["idle"], "relaxed", "relaxed"),  # a quiet moment with her hand down (Aloy)
+    "full": (["idle"], "full", "full"),           # the glass cuts to her whole figure for a moment
+    "pose": (["pose"], "main", "main"),           # a "look at me" move for a selfie
+    "fullpose": (["pose"], "full", "full"),
+}
+
+
 def clip_role(cid, src):
+    """(moods, pose it starts in, pose it ends in) from the clip's name, <choom>_[<outfit>-]<action>.
+    Clips in other clothes (evening-relaxed, cold-relaxed_glance) live in poses of their own
+    (relaxed@evening); the page changes her clothes with a camera cut."""
     action = Path(src).stem.removeprefix(f"{cid}_")
-    moods, start, end = ROLES.get(action, ROLES["base"])
+    outfit = None
+    if "-" in action:
+        outfit, action = action.split("-", 1)
+    kind = action.split("_")[0] if "_" in action else None
+    moods, start, end = ROLES.get(action) or KINDS.get(kind) or ROLES["base"]
     if action in ("fallasleep", "wake") and cid in AWAKE_POSE:
         start, end = [AWAKE_POSE[cid] if pose == "main" else pose for pose in (start, end)]
+    if outfit:
+        start, end = [f"{pose}@{outfit}" if pose in ("main", "relaxed") else pose for pose in (start, end)]
     return moods, start, end
 
 
@@ -222,20 +251,53 @@ def mouth_track(landmarker, frames):
     return smooth, len(known)
 
 
+BUILD = 3  # bump when the depth shaping or the video layout changes: every clip is then rebuilt
+
+
+def unpack(packed, i, w):
+    """Frame i of a clip's cut-out, kept bit-packed (an eighth of the memory)."""
+    return np.unpackbits(packed[i], axis=1, count=w).astype(bool)
+
+
+def prune(cid):
+    """make_alive.py <id> --prune: delete her clip videos alive.json no longer lists (run after the page
+    has reloaded, so it never asks for a file that's gone)."""
+    folder = HOLOGRAM / "portraits" / cid
+    keep = {c["file"] for c in json.loads((folder / "alive.json").read_text())["clips"]}
+    for f in folder.glob("alive_*.mp4"):
+        if f.name not in keep:
+            f.unlink()
+            print("removed", f.name)
+
+
 def main():
     """make_alive.py <id> CLIP [CLIP ...]: the first clip is her main idle; every clip must start and
     end on the same picture of her, so the page can play them in any order."""
     cid, sources = sys.argv[1], sys.argv[2:]
+    if sources == ["--prune"]:
+        return prune(cid)
     folder = HOLOGRAM / "portraits" / cid
+    meta_file = folder / "alive.json"
+    old = json.loads(meta_file.read_text()) if meta_file.exists() else {}
+    built_before = {c["source"]: c for c in old.get("clips", []) if "built" in c}
     model = None
-    # Only masks and depth stay in memory (depth as float16); frames are read again when writing,
-    # so a Choom with thirty clips fits. Each clip's raw depth is kept (alive_depth_<clip>.npy, local
-    # only) and reused until the clip changes, so adding clips only runs Depth Anything on the new ones.
-    clips = []
-    for src in sources:
+
+    def files(src):
+        stem = Path(src).stem
+        return folder / f"alive_masks_{stem}.npz", folder / f"alive_depth_{stem}.npy"
+
+    def stamp(src):
+        cut_file, depth_file = files(src)
+        return [round(Path(src).stat().st_mtime), round(depth_file.stat().st_mtime) if depth_file.exists() else 0,
+                round(cut_file.stat().st_mtime) if cut_file.exists() else 0]
+
+    def prepare(src):
+        """Her cut-out (bit-packed) and raw depth (read from disk as needed) for one clip; Depth
+        Anything runs only if the clip is new or changed."""
+        nonlocal model
         fps, frames = read_clip(src)
         h, w = frames[0].shape[:2]
-        cut_file = folder / f"alive_masks_{Path(src).stem}.npz"
+        cut_file, depth_file = files(src)
         if cut_file.exists():
             masks = np.load(cut_file)["masks"].astype(np.float32)
             assert masks.shape == (len(frames), h, w), f"{cut_file.name} {masks.shape} vs frames {(len(frames), h, w)}"
@@ -248,49 +310,65 @@ def main():
         # outline is her and goes back in.
         lit = np.stack([cv2.GaussianBlur(f.max(axis=2).astype(np.float32) / 255.0, (0, 0), 2.0) > BG_LUMA for f in frames])
         masks = np.maximum(masks, ((masks[0] > 0.5)[None] & lit).astype(np.float32))
+        del lit
         # U2-Net now and then bites into an edge for a frame or two (Aloy's sleeve); a vote over
         # seven frames keeps those dropouts from flickering.
         masks = circular_smooth(masks, (1 / 7,) * 7) > 0.5
         masks = circular_smooth(masks.astype(np.float32)) > 0.5
-        depth_file = folder / f"alive_depth_{Path(src).stem}.npy"
         fresh = depth_file.exists() and depth_file.stat().st_mtime >= Path(src).stat().st_mtime
-        raw = np.load(depth_file) if fresh else None
+        raw = np.load(depth_file, mmap_mode="r") if fresh else None
         if raw is None or raw.shape != (len(frames), h, w):
             if model is None:
                 model = DepthAnythingV2(encoder="vitl", features=256, out_channels=[256, 512, 1024, 1024])
                 model.load_state_dict(torch.load(WEIGHTS, map_location="cpu"))
                 model = model.to("cuda").eval()
             with torch.autocast("cuda", dtype=torch.float16):  # half precision: 6x faster with the fused attention
-                raw = np.stack([model.infer_image(f, input_size=1022) for f in frames]).astype(np.float16)
-            np.save(depth_file, raw)
-        clips.append({"src": src, "fps": fps, "frames": len(frames), "masks": masks, "raw": raw})
-        print(f"{cid} clip {len(clips) - 1}: {len(frames)} frames {w}x{h} at {fps:g} fps ({Path(src).name})")
-        del frames
-    del model
-    torch.cuda.empty_cache()
+                np.save(depth_file, np.stack([model.infer_image(f, input_size=1022) for f in frames]).astype(np.float16))
+            raw = np.load(depth_file, mmap_mode="r")
+        return {"src": src, "fps": fps, "frames": len(frames), "w": w, "h": h, "packed": np.packbits(masks, axis=2),
+                "raw": raw, "stamp": stamp(src)}, frames
 
-    # Depth Anything's scale drifts frame to frame: line every frame of every clip up with the main
-    # clip's first frame on the pixels that are her in both, then normalize them all together, so
-    # changing clips never changes her depth.
-    ref, ref_mask = clips[0]["raw"][0].astype(np.float32), clips[0]["masks"][0]
-    for c in clips:
-        # A full-body clip is framed differently, so it lines up with its own first frame instead.
-        own = clip_role(cid, c["src"])[1] == "full"
-        c_ref, c_mask = (c["raw"][0].astype(np.float32), c["masks"][0]) if own else (ref, ref_mask)
-        for i in range(len(c["raw"])):
-            sel = c["masks"][i] & c_mask
-            a, b = np.polyfit(c["raw"][i][sel].astype(np.float32), c_ref[sel], 1)
-            c["raw"][i] = a * c["raw"][i].astype(np.float32) + b
-        if own:  # and its depth range is mapped onto the main clip's, so normalizing them together fits
+    # Her main clip is always read: every other clip's depth is lined up with its first frame.
+    main_clip, _ = prepare(sources[0])
+    w, h = main_clip["w"], main_clip["h"]
+    ref, ref_mask = main_clip["raw"][0].astype(np.float32), unpack(main_clip["packed"], 0, w)
+
+    def line_up(c):
+        """Depth Anything's scale drifts frame to frame: every frame is lined up with the main clip's
+        first frame on the pixels that are her in both (a per-frame scale and offset), so changing
+        clips never changes her depth. A full-body clip is framed differently: it lines up with its
+        own first frame, and its depth range is mapped onto the main clip's."""
+        c["own"] = clip_role(cid, c["src"])[1] == "full"
+        c_ref, c_mask = (c["raw"][0].astype(np.float32), unpack(c["packed"], 0, w)) if c["own"] else (ref, ref_mask)
+        c["fit"] = []
+        for i in range(c["frames"]):
+            sel = unpack(c["packed"], i, w) & c_mask
+            c["fit"].append(np.polyfit(np.asarray(c["raw"][i])[sel].astype(np.float32), c_ref[sel], 1))
+        c["map"] = (1.0, 0.0, 0.0)
+        if c["own"]:
             ref_lo, ref_hi = np.percentile(ref[ref_mask], [2, 99.5])
-            own_lo, own_hi = np.percentile(c["raw"][::2][c["masks"][::2]].astype(np.float32), [2, 99.5])
-            scale = (ref_hi - ref_lo) / max(own_hi - own_lo, 1e-6)
-            c["raw"] = ((c["raw"].astype(np.float32) - own_lo) * scale + ref_lo).astype(np.float16)
-    # Percentiles from every other frame at a quarter of the pixels: the same answer, far less memory.
-    allv = np.concatenate([c["raw"][::2, ::2, ::2][c["masks"][::2, ::2, ::2]].astype(np.float32) for c in clips])
-    lo, hi = np.percentile(allv, [2, 99.5])
-    del allv
-    h, w = clips[0]["masks"][0].shape
+            vals = np.concatenate([(a * np.asarray(c["raw"][i, ::2, ::2]).astype(np.float32) + b)[unpack(c["packed"], i, w)[::2, ::2]]
+                                   for i, (a, b) in enumerate(c["fit"]) if i % 2 == 0])
+            own_lo, own_hi = np.percentile(vals, [2, 99.5])
+            c["map"] = ((ref_hi - ref_lo) / max(own_hi - own_lo, 1e-6), own_lo, ref_lo)
+
+    def aligned(c, i):
+        a, b = c["fit"][i]
+        scale, own_lo, ref_lo = c["map"]
+        d = a * np.asarray(c["raw"][i]).astype(np.float32) + b
+        return (d - own_lo) * scale + ref_lo if c["own"] else d
+
+    # Her depth range comes from her main clip and is kept between builds (alive.json "range"), so a
+    # build that adds clips leaves every existing clip's video as it was, and doesn't even read them.
+    line_up(main_clip)
+    main_stamp = main_clip["stamp"]
+    if old.get("range") and old.get("rangeFrom") == [Path(sources[0]).name, main_stamp, BUILD]:
+        lo, hi = old["range"]
+    else:
+        vals = np.concatenate([aligned(main_clip, i)[::2, ::2][unpack(main_clip["packed"], i, w)[::2, ::2]]
+                               for i in range(0, main_clip["frames"], 2)])
+        lo, hi = (float(v) for v in np.percentile(vals, [2, 99.5]))
+        del vals
     face = np.zeros((h, w), bool)
     face[int(h * 0.12):int(h * 0.42), int(w * 0.32):int(w * 0.68)] = True
     ref_depth = np.clip((ref - lo) / max(hi - lo, 1e-6), 0, 1)
@@ -299,19 +377,32 @@ def main():
     landmarker = vision.FaceLandmarker.create_from_options(
         vision.FaceLandmarkerOptions(base_options=BaseOptions(model_asset_path=str(MODEL)), num_faces=1))
     gray = lambda a: cv2.cvtColor(np.round(np.clip(a, 0, 1) * 255).astype(np.uint8), cv2.COLOR_GRAY2BGR)
-    meta_clips = []
-    for k, c in enumerate(clips):
-        _, frames = read_clip(c["src"])
-        depth = circular_smooth(np.clip((c.pop("raw").astype(np.float32) - lo) / max(hi - lo, 1e-6), 0, 1))
-        out = folder / f"alive_{k}.mp4"
+    meta_clips, encoded = [], 0
+    for k, src in enumerate(sources):
+        name = Path(src).name
+        out = folder / f"alive_{Path(src).stem}.mp4"
+        moods, start, end = clip_role(cid, src)
+        before = built_before.get(name)
+        expect = [BUILD, round(lo, 6), round(hi, 6), round(focus, 6), stamp(src), main_stamp]
+        if before and before.get("built") == expect and out.exists():
+            # Unchanged since it was last built: keep the video and its mouth track (its role may change).
+            meta_clips.append({**before, "file": out.name, "moods": moods, "from": start, "to": end, "talk": "talk" in moods})
+            continue
+        if k == 0:
+            c, frames = main_clip, read_clip(src)[1]
+        else:
+            c, frames = prepare(src)
+            line_up(c)
+        depth = circular_smooth(np.stack([np.clip((aligned(c, i) - lo) / max(hi - lo, 1e-6), 0, 1)
+                                          for i in range(c["frames"])]).astype(np.float32))
         part = out.with_suffix(".part")  # swapped in when done, so a running page never reads half a file
         enc = subprocess.Popen(["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{w}x{h * 3}",
                                 "-r", f"{c['fps']:g}", "-i", "-", "-c:v", "libx264", "-preset", "slow", "-crf", "14",
                                 "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-f", "mp4", str(part)],
                                stdin=subprocess.PIPE)
         for i, bgr in enumerate(frames):
-            d = cv2.bilateralFilter(depth[i].astype(np.float32), 9, 0.04, 5)
-            person = drop_rim(d, c["masks"][i])
+            d = cv2.bilateralFilter(depth[i], 9, 0.04, 5)
+            person = drop_rim(d, unpack(c["packed"], i, w))
             d = extend_edges(shape_depth(d, person, focus, DETAIL), person)
             cut = cv2.GaussianBlur(person.astype(np.float32), (0, 0), 1.2)
             enc.stdin.write(np.vstack([bgr, gray(d), gray(cut)]).tobytes())
@@ -320,16 +411,22 @@ def main():
         part.replace(out)
         mouths, found = mouth_track(landmarker, frames)
         del frames, depth
-        moods, start, end = clip_role(cid, c["src"])
-        meta_clips.append({"file": out.name, "frames": c["frames"], "source": Path(c["src"]).name,
+        meta_clips.append({"file": out.name, "frames": c["frames"], "source": name,
                            "moods": moods, "from": start, "to": end, "talk": "talk" in moods,
+                           "built": [BUILD, round(lo, 6), round(hi, 6), round(focus, 6), c["stamp"], main_stamp],
                            "mouth": [[round(v, 5) for v in m] for m in mouths.tolist()]})
+        encoded += 1
         print(f"  wrote {out.name} ({out.stat().st_size / 1e6:.1f} MB), face found in {found}/{c['frames']} frames")
+    del model
+    torch.cuda.empty_cache()
 
-    meta = {"fps": clips[0]["fps"], "texSize": [w, h], "focus": round(focus, 4), "panels": ["color", "depth", "cut"],
+    meta = {"fps": main_clip["fps"], "texSize": [w, h], "focus": round(focus, 4), "range": [lo, hi],
+            "rangeFrom": [Path(sources[0]).name, main_stamp, BUILD], "panels": ["color", "depth", "cut"],
             "mouthFields": ["u", "v", "halfWidth", "halfHeight", "chin", "tilt", "halfGap", "lift"], "clips": meta_clips}
-    (folder / "alive.json").write_text(json.dumps(meta))
-    print(f"wrote alive.json: {len(meta_clips)} clips, focus {focus:.3f}")
+    part = meta_file.with_suffix(".part")
+    part.write_text(json.dumps(meta))
+    part.replace(meta_file)
+    print(f"wrote alive.json: {len(meta_clips)} clips ({encoded} encoded), focus {focus:.3f}")
 
 
 if __name__ == "__main__":

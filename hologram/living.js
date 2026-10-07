@@ -940,6 +940,21 @@ function clipMoods(c) {
 const poseFrom = (c) => c.from || 'main';
 const poseTo = (c) => c.to || 'main';
 const WAKING_POSES = new Set(['main', 'relaxed']);  // the framings she lives in (not asleep, not full-body)
+const FULL_IDLE_CHANCE = 0.07;
+// Her clothes. Clips in other outfits live in poses of their own (relaxed@evening): cozy clothes in
+// the evening, a jacket when it's cold out. She changes with a camera cut at a quiet moment, and
+// back into her usual clothes before she sleeps.
+const outfitOf = (pose) => pose.split('@')[1] || null;
+const basePose = (pose) => pose.split('@')[0];
+const OUTFITS = [
+  ['cold', () => typeof weather.temperature === 'number' && weather.temperature < 45],  // °F
+  ['evening', () => { const h = hourNow(); return h >= 18 && h < 22.5; }],
+];
+function wantedOutfit(p, want) {
+  if (want === 'sleep') return null;
+  const has = (o) => p.alive.clips.some((c) => outfitOf(poseFrom(c)) === o && clipMoods(c).includes('talk'));
+  return (OUTFITS.find(([o, when]) => has(o) && when()) || [null])[0];
+}  // of her quiet clips, the share that cut to her whole figure (about one a minute)
 
 function wantedMood(p) {
   if (portraits[current] !== p) return 'idle';
@@ -1014,6 +1029,15 @@ function nextClip(p, after) {
   // After a full-body move, cut back to the framing she was in.
   if (pose === 'full') pose = p.cutFrom || 'main';
   const want = wantedMood(p);
+  // Time to change clothes (or back into her usual ones before sleep): a cut to her base loop in the
+  // other outfit, at a quiet moment.
+  const dressed = outfitOf(pose), dress = pose === 'asleep' ? null : wantedOutfit(p, want);
+  if (dress !== dressed && pose !== 'asleep' && (want === 'idle' || want === 'sleep' || want === 'listen')) {
+    const to = dress ? `${basePose(pose)}@${dress}` : basePose(pose);
+    const loops = clips.map((c, k) => k).filter((k) => poseFrom(clips[k]) === to && poseTo(clips[k]) === to &&
+                                                        clipMoods(clips[k]).includes('talk'));
+    if (loops.length) return loops[0];
+  }
   // Asleep: stay asleep, or wake first if anything else is wanted. Sleepy: doze off (via a pose
   // change if needed).
   if (pose === 'asleep' && want !== 'sleep') {
@@ -1045,7 +1069,7 @@ function nextClip(p, after) {
   if (p.poseWanted && want !== 'listen' && want !== 'sleep') {
     const full = clips.map((c, k) => k).filter((k) => poseFrom(clips[k]) === 'full' && clipMoods(clips[k]).includes('pose'));
     const waistUp = clips.some((c) => clipMoods(c).includes('pose') && poseFrom(c) !== 'full');
-    if (full.length && pose !== 'full' && (!waistUp || Math.random() < 0.65)) { // full-body (by a cut) two times in three
+    if (full.length && pose !== 'full' && !outfitOf(pose) && (!waistUp || Math.random() < 0.65)) { // full-body (by a cut) two times in three
       p.poseWanted = false;
       p.cutFrom = pose; // where to cut back to after the move
       const move = full[Math.floor(Math.random() * full.length)];
@@ -1066,6 +1090,17 @@ function nextClip(p, after) {
       const k = moments[Math.floor(Math.random() * moments.length)];
       (p.moments ||= new Set()).add(k);
       return k;
+    }
+  }
+  // Now and then while she's quiet, the glass cuts to her whole figure for a few seconds and back,
+  // like a camera changing shots (her full-body quiet clips). Only the Choom on the glass, never on
+  // the stage, and not twice running.
+  const cameFromWide = after >= 0 && clips[after] && poseFrom(clips[after]) === 'full';
+  if (want === 'idle' && !stage.on && p === portraits[current] && !cameFromWide && !outfitOf(pose) && Math.random() < FULL_IDLE_CHANCE) {
+    const wide = clips.map((c, k) => k).filter((k) => poseFrom(clips[k]) === 'full' && clipMoods(clips[k]).includes('idle'));
+    if (wide.length) {
+      p.cutFrom = pose;
+      return wide[Math.floor(Math.random() * wide.length)];
     }
   }
   const breezy = want === 'idle' && windy();
@@ -1091,6 +1126,14 @@ function nextClip(p, after) {
   if (!pool.length) pool = all.length ? all : [0];
   // The pose's main loop comes up twice as often as each other idle clip.
   const main = all.find((k) => poseTo(clips[k]) === pose && clipMoods(clips[k]).includes('talk'));
+  // Quiet clips play like a shuffled deck: one that played lately waits until most of the others
+  // have had their turn (pure chance brought some back within a minute and left others unseen).
+  // Her main loop is exempt; it's her resting state.
+  const recent = (p.recentClips ||= []);
+  if (want === 'idle') {
+    const fresh = pool.filter((k) => k === main || !recent.includes(k));
+    if (fresh.length) pool = fresh;
+  }
   // Late at night (10 pm to 6 am) the calm clips come up more and the laughs and teasing less.
   const night = hour >= 22 || hour < 6;
   const calmName = /longcalm|breath|daydream|hum|base|relaxed\.|loop|heartglow/;
@@ -1109,6 +1152,11 @@ function nextClip(p, after) {
   let pick = pool[pool.length - 1];
   for (let i = 0; i < pool.length; i++) { r -= weights[i]; if (r <= 0) { pick = pool[i]; break; } }
   if (want === 'talk' && handMove(pick)) (p.moments ||= new Set()).add(pick); // a gesture, at its own pace
+  if (want === 'idle' && pick !== main) {
+    recent.push(pick);
+    const quiet = clips.filter((c) => clipMoods(c).includes('idle')).length;
+    while (recent.length > Math.max(1, Math.floor(quiet * 0.7))) recent.shift();
+  }
   return pick;
 }
 

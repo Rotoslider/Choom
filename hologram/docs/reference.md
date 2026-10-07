@@ -54,15 +54,22 @@ same picture of her, so the page can play them in any order without a visible se
    lit inside her first frame's outline, since every clip starts on her picture.
 4. **Reliefs.** `~/pinokio/api/forge-neo/app/venv/bin/python tools/make_alive.py <id> MAIN.mp4 CLIP.mp4 ...`
    (main clip first): Depth Anything V2 Large per frame (fused attention, half precision, about 0.2 s a
-   frame; raw depth cached per clip as `alive_depth_<clip>.npy`), lined up with the main clip and
-   normalized across all of them, smoothed in time, shaped for the panel, plus MediaPipe mouth tracking
-   per frame. It writes `portraits/<id>/alive_<k>.mp4` (color, depth and cut-out stacked) and
-   `alive.json`. Don't run it while a Wan2GP queue renders: sharing the GPU slows it more than tenfold.
+   frame; raw depth cached per clip as `alive_depth_<clip>.npy` and read from disk as needed, so
+   memory stays around 2 GB however many clips she has), lined up with the main clip, normalized to
+   the main clip's depth range (kept in `alive.json`), smoothed in time, shaped for the panel, plus
+   MediaPipe mouth tracking per frame. It writes `portraits/<id>/alive_<clip>.mp4` (color, depth and
+   cut-out stacked) and `alive.json`, and only encodes clips that are new or changed, so adding clips
+   costs only the new ones. After the page reloads, `make_alive.py <id> --prune` deletes videos of
+   clips no longer listed. Depth Anything shares the GPU badly with a Wan2GP queue (more than tenfold
+   slower), so new clips are built between queues; a rebuild with every depth cached needs no GPU.
 
 The clip videos and caches stay local (`.gitignore`); without them a Choom shows her still relief.
 
 **Roles.** A clip's action name gives its moods and the pose it starts and ends in (`ROLES` in
-`tools/make_alive.py`). The page picks clips by what she is doing:
+`tools/make_alive.py`), or its kind prefix does: `idle_…` (a quiet moment), `relaxed_…` (one with
+Aloy's hand down), `full_…` (a full-body quiet moment), `pose_…` / `fullpose_…` (selfie moves). An
+outfit prefix puts it in other clothes: `evening-relaxed`, `cold-relaxed_glance`. The page picks clips
+by what she is doing:
 
 | Mood | Examples | When |
 |---|---|---|
@@ -74,9 +81,15 @@ The clip videos and caches stay local (`.gitignore`); without them a Choom shows
 | windy | windy | Genesis, on windy days |
 | pose | relaxedturn, poseheart, fulltwirl | a selfie she just made |
 
-Poses: `main` (her picture), `relaxed` (Aloy with her hand down, reached by `lower`/`raise`),
-`asleep`, and `full` (full-body clips made from a full-body picture built from her reference sheet;
-reached and left with a quick camera-cut fade, no lip sync).
+Poses: `main` (her picture), `relaxed` (Aloy with her hand down, reached by `lower`/`raise`; her
+home pose, the raised finger comes up now and then while she talks), `asleep`, and `full` (full-body
+clips made from a full-body picture built from her reference sheet; reached and left with a quick
+camera-cut fade, no lip sync). About one quiet clip in fourteen cuts to a full-body one and back.
+
+Outfits: clips in other clothes live in poses of their own (`relaxed@evening`), made from a Klein edit
+of her clean picture. The page dresses her by the hour and the weather (`OUTFITS` in `living.js`:
+evening 6 to 11 pm, cold under 45°F) with a camera cut at a quiet moment, and back into her usual
+clothes before she sleeps. An outfit needs at least a base loop with the `talk` mood.
 
 ## Lip sync
 
