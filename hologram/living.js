@@ -945,6 +945,9 @@ function clipMoods(c) {
 // in the pose the last one ended in. A clip that changes pose comes up less often.
 const poseFrom = (c) => c.from || 'main';
 const poseTo = (c) => c.to || 'main';
+// A play() cut short because the waiting clip was swapped for a moment (a tool look, a picture
+// look) is expected, not an error.
+const videoError = (e) => { if (e.name !== 'AbortError') post('error', { message: `alive video: ${e.message}` }); };
 const WAKING_POSES = new Set(['main', 'relaxed']);  // the framings she lives in (not asleep, not full-body)
 const FULL_IDLE_CHANCE = 0.07;
 // Her clothes. Clips in other outfits live in poses of their own (relaxed@evening): cozy clothes in
@@ -1195,7 +1198,7 @@ function hurryAlive(p) {
 function aliveStart(p) {
   const a = p.players[p.active];
   if (a.clip < 0) aliveLoad(p, a, 0);
-  a.video.play().catch((e) => post('error', { message: `alive video: ${e.message}` }));
+  a.video.play().catch(videoError);
   const b = p.players[1 - p.active];
   if (p.alive.clips.length > 1 && b.clip < 0) aliveLoad(p, b, nextClip(p, a.clip));
 }
@@ -1236,7 +1239,7 @@ for (const p of portraits) {
       setTimeout(() => {
         // Not if she left the glass meanwhile (her players were paused).
         if (portraits[current] !== p && !stage.on && stage.mix === 0) return;
-        next.video.play().catch((e) => post('error', { message: `alive video: ${e.message}` }));
+        next.video.play().catch(videoError);
       }, rest);
       // Hand over on the next clip's first frame; until then the last frame (the same picture) holds.
       next.video.requestVideoFrameCallback(() => {
