@@ -950,19 +950,30 @@ const poseTo = (c) => c.to || 'main';
 const videoError = (e) => { if (e.name !== 'AbortError') post('error', { message: `alive video: ${e.message}` }); };
 const WAKING_POSES = new Set(['main', 'relaxed']);  // the framings she lives in (not asleep, not full-body)
 const FULL_IDLE_CHANCE = 0.07;
-// Her clothes. Clips in other outfits live in poses of their own (relaxed@evening): cozy clothes in
-// the evening, a jacket when it's cold out. She changes with a camera cut at a quiet moment, and
-// back into her usual clothes before she sleeps.
+// Her clothes. Clips in other outfits live in poses of their own (relaxed@evening), and an outfit's
+// name says when she wears it: cold… under 45°F, hot… over 85°F, evening… from 6 to 11 pm, and day…
+// outfits take turns with her usual clothes, a different one each day (picked from the date, so it
+// holds all day). She changes with a camera cut at a quiet moment, and back into her usual clothes
+// before she sleeps.
 const outfitOf = (pose) => pose.split('@')[1] || null;
 const basePose = (pose) => pose.split('@')[0];
-const OUTFITS = [
-  ['cold', () => typeof weather.temperature === 'number' && weather.temperature < 45],  // °F
-  ['evening', () => { const h = hourNow(); return h >= 18 && h < 22.5; }],
+const OUTFIT_RULES = [
+  [/^cold/, () => typeof weather.temperature === 'number' && weather.temperature < 45],  // °F
+  [/^hot/, () => typeof weather.temperature === 'number' && weather.temperature > 85],
+  [/^evening/, () => { const h = hourNow(); return h >= 18 && h < 23; }],
 ];
 function wantedOutfit(p, want) {
   if (want === 'sleep') return null;
-  const has = (o) => p.alive.clips.some((c) => outfitOf(poseFrom(c)) === o && clipMoods(c).includes('talk'));
-  return (OUTFITS.find(([o, when]) => has(o) && when()) || [null])[0];
+  const outfits = [...new Set(p.alive.clips.filter((c) => clipMoods(c).includes('talk')).map((c) => outfitOf(poseFrom(c))).filter(Boolean))];
+  for (const [rule, when] of OUTFIT_RULES) {
+    const o = outfits.find((x) => rule.test(x));
+    if (o && when()) return o;
+  }
+  const days = [null, ...outfits.filter((x) => /^day/.test(x)).sort()];
+  const d = new Date();
+  let seed = d.getFullYear() * 400 + d.getMonth() * 32 + d.getDate();
+  for (const ch of p.id) seed = (seed * 31 + ch.charCodeAt(0)) % 1000003;
+  return days[seed % days.length];
 }  // of her quiet clips, the share that cut to her whole figure (about one a minute)
 
 function wantedMood(p) {
@@ -1091,7 +1102,9 @@ function nextClip(p, after) {
     if (arrived) (p.moments ||= new Set()).add(move);
     if (move >= 0) return move;
   }
-  // A picture just floated up beside her: she turns to look at it (or down, at one lower right).
+  // A picture just floated up beside her: she turns to look at it (or down, at one lower right). One
+  // that comes up while she talks waits until she's done, if the picture is still showing.
+  if (p.lookAt && !picture.active) p.lookAt = null;
   if ((want === 'think' || want === 'idle') && p.lookAt) {
     const look = p.lookAt;
     p.lookAt = null;

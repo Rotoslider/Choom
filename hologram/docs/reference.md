@@ -89,9 +89,11 @@ clips made from a full-body picture built from her reference sheet; reached and 
 camera-cut fade, no lip sync). About one quiet clip in fourteen cuts to a full-body one and back.
 
 Outfits: clips in other clothes live in poses of their own (`relaxed@evening`), made from a Klein edit
-of her clean picture. The page dresses her by the hour and the weather (`OUTFITS` in `living.js`:
-evening 6 to 11 pm, cold under 45°F) with a camera cut at a quiet moment, and back into her usual
-clothes before she sleeps. An outfit needs at least a base loop with the `talk` mood.
+of her clean picture. The outfit's name says when she wears it (`OUTFIT_RULES` in `living.js`):
+`cold…` under 45°F, `hot…` over 85°F, `evening…` from 6 to 11 pm, and `day…` outfits take turns with
+her usual clothes, a different one each day. She changes with a camera cut at a quiet moment, and back
+into her usual clothes before she sleeps. An outfit needs at least a base loop with the `talk` mood.
+The Chooms aren't told what they're wearing in the glass, so it doesn't steer their selfies.
 
 ## Lip sync
 

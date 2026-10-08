@@ -11,8 +11,9 @@ app: listening, thinking, using tools, sleeping at night.
 
 ## What it does
 
-- **Moving reliefs.** Each Choom is 26 to 38 short clips made from her own render, with depth on
-  every frame, played in shuffled order so she never loops.
+- **Moving reliefs.** Each Choom is dozens of short clips made from her own render, with depth on
+  every frame, played like a shuffled deck so nothing repeats soon. Now and then the glass cuts to
+  her whole figure for a few seconds and back.
 - **Voice and lip sync.** Replies are spoken in her voice from the speaker on the tower, with her
   lips following the words.
 - **Talking at the tower.** Say "OK Aloy" (or Optic, Genesis, Eve) and she turns to listen; "OK
@@ -21,6 +22,8 @@ app: listening, thinking, using tools, sleeping at night.
 - **Expressions and moments.** Happy, surprised, sad or concerned when the conversation calls for it;
   a look that fits each tool she uses; pictures she makes float beside her.
 - **Selfies.** A selfie she makes comes with a "look at me" move, sometimes a full-body twirl.
+- **Outfits.** Clothes by the hour and the weather (Aloy: a sweater in the evening, a jacket when
+  it's cold), changed with a camera cut.
 - **Group stage.** In a group room all four stand together, the speaker in front.
 - **Days and nights.** She dozes off late at night and wakes in the morning; with Home Assistant she
   greets you when you get home or sit down, and sleeps when you go to bed. Wind, rain and snow
