@@ -84,6 +84,7 @@ by what she is doing:
 | idle | base, glance, breath, hum, daydream, giggle, groove | quiet moments, shuffled |
 | talk, think, listen | base, listen, thinkup, longcalm | while she talks, writes, or hears you |
 | happy, surprised, sad, concerned | happy, sad | once, when what you said (or, after she finishes, what she said) feels that way |
+| oops | oops_wince, relaxedoops_jaw | once, after one of her tools fails or she says it didn't come out right (a wince, a frown at herself, an eye roll at the tool; not her sad face) |
 | greet | wave | taking the glass after a while away |
 | sleep, wake, yawn | fallasleep, sleep2, wake, yawn | 11 pm to 7 am after ten quiet minutes; yawns near bedtime |
 | windy | windy | Genesis, on windy days |

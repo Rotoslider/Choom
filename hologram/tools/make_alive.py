@@ -193,6 +193,8 @@ KINDS = {
     "relaxedtalk": (["talk", "listen", "idle"], "relaxed", "relaxed"),
     "full": (["idle"], "full", "full"),           # the glass cuts to her whole figure for a moment
     "pose": (["pose"], "main", "main"),           # a "look at me" move for a selfie
+    "oops": (["oops"], "main", "main"),           # a face at her own mishap (a tool failed)
+    "relaxedoops": (["oops"], "relaxed", "relaxed"),
     "fullpose": (["pose"], "full", "full"),
 }
 

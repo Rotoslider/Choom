@@ -1109,6 +1109,10 @@ function nextClip(p, after) {
   // Saying (or just hearing) something happy, sad, surprised or worried: that expression, once.
   // From another pose she gets there first (Aloy raises her hand, then smiles). Never mid-sentence:
   // a laughing face fights her lip sync, so a feeling from her own words waits until she's done.
+  if ((want === 'think' || want === 'idle') && p.mishapPending && !p.emotion) {
+    p.mishapPending = false;
+    p.emotion = 'oops';
+  }
   if ((want === 'think' || want === 'idle') && p.emotion) {
     const felt = seekClip(p, pose, p.emotion, after);
     const arrived = felt >= 0 && clipMoods(clips[felt]).includes(p.emotion);
@@ -1778,6 +1782,15 @@ function onGaze(ev) {
 // stage, floated her pictures in the middle of the room's talk, and pulled the glass back to her
 // after each sister's reply.
 const unseenTurns = new Set();
+// Her own mishaps (a tool that failed, a picture that didn't come out right) get their own look, not
+// her sad one: a wince, a frown at herself, an eye roll at the tool. Once, after she finishes talking,
+// and not more than every two minutes.
+const MISHAP_WORDS = /\b(didn['’]?t (come out|turn out|work)|not (quite )?(what|how) I (wanted|meant|pictured|hoped)|let me (try|redo|fix) (that|it|this)|try (that|it) again|that (failed|errored)|something went wrong|it (failed|errored|timed out)|oops|whoops|my bad|ugh)\b/i;
+function mishap(p) {
+  if (performance.now() - (p.lastMishap || -1e9) < 120000) return;
+  p.lastMishap = performance.now();
+  p.mishapPending = true;
+}
 const CONVERSATION_MS = 3 * 60 * 1000;
 let lastConversation = -Infinity;  // the last chat or room event, or Donny typing or talking to them
 
@@ -1810,6 +1823,10 @@ function onChoomEvent(ev) {
           if (i === current && a.clip >= 0 && !a.video.ended && b.video.paused && !p.moments?.has(b.clip)) aliveLoad(p, b, nextClip(p, a.clip));
         }
       }
+      break;
+    case 'tool_failed':
+      // One of her own tools failed: a face at her own mishap, once she's done talking.
+      if (i >= 0) mishap(portraits[i]);
       break;
     case 'tool':
       // Aloy hands a task to a sister: that sister's orb in her atom flares.
@@ -1886,6 +1903,7 @@ function onChoomEvent(ev) {
     case 'content': {
       // The Choom app sends whole sentences (gathered from the stream like its own web voice).
       const texts = typeof ev.text === 'string' ? [ev.text] : Array.isArray(ev.sentences) ? chunkSentences(ev.sentences) : [];
+      if (i >= 0 && texts.some((t) => MISHAP_WORDS.test(t))) mishap(portraits[i]);  // "that didn't come out right"
       if (voiceOn && ev.speak === true && i >= 0 && texts.length) {
         const c = clocks.get(ev.choom);
         if (c && !c.firstText) {
