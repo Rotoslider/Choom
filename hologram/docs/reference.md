@@ -59,7 +59,9 @@ same picture of her, so the page can play them in any order without a visible se
 3. **Cut-outs.** `U2NET_HOME=~/pinokio/api/wan2gp/app/ckpts/rembg ~/pinokio/api/wan2gp/app/venv/bin/python tools/make_alive_masks.py <id> CLIP.mp4 ...`
    (U2-Net per frame, kept per clip as `alive_masks_<clip>.npz`). U2-Net can lose most of her for a
    stretch when something busy moves around her (blowing hair); `make_alive.py` adds back anything
-   lit inside her first frame's outline, since every clip starts on her picture.
+   lit inside her first frame's outline, since every clip starts on her picture. Clips about her
+   particles (`motes`, `windy`, `sparkle` in the name) keep everything lit around her too, frame by
+   frame, so motes that drift off Genesis aren't clipped away.
 4. **Reliefs.** `~/pinokio/api/forge-neo/app/venv/bin/python tools/make_alive.py <id> MAIN.mp4 CLIP.mp4 ...`
    (main clip first): Depth Anything V2 Large per frame (fused attention, half precision, about 0.2 s a
    frame; raw depth cached per clip as `alive_depth_<clip>.npy` and read from disk as needed, so

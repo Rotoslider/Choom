@@ -11,6 +11,7 @@ deletes the videos of clips no longer listed.
 """
 import json
 import math
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -266,6 +267,11 @@ def mouth_track(landmarker, frames):
 BUILD = 3  # bump when the depth shaping or the video layout changes: every clip is then rebuilt
 
 
+def particles(src):
+    """Whether a clip is about her particles flying free (kept by brightness, not just her outline)."""
+    return bool(re.search(r"motes|windy|sparkle", Path(src).stem))
+
+
 def unpack(packed, i, w):
     """Frame i of a clip's cut-out, kept bit-packed (an eighth of the memory)."""
     return np.unpackbits(packed[i], axis=1, count=w).astype(bool)
@@ -322,11 +328,16 @@ def main():
         # outline is her and goes back in.
         lit = np.stack([cv2.GaussianBlur(f.max(axis=2).astype(np.float32) / 255.0, (0, 0), 2.0) > BG_LUMA for f in frames])
         masks = np.maximum(masks, ((masks[0] > 0.5)[None] & lit).astype(np.float32))
-        del lit
         # U2-Net now and then bites into an edge for a frame or two (Aloy's sleeve); a vote over
         # seven frames keeps those dropouts from flickering.
         masks = circular_smooth(masks, (1 / 7,) * 7) > 0.5
         masks = circular_smooth(masks.astype(np.float32)) > 0.5
+        # Clips about her particles (Genesis's motes drifting off her, the wind) keep everything lit
+        # around her, frame by frame: on pure black the only lit things are her and her motes, and the
+        # cut-out alone clipped away the motes that drift beyond her outline.
+        if particles(src):
+            masks |= lit
+        del lit
         fresh = depth_file.exists() and depth_file.stat().st_mtime >= Path(src).stat().st_mtime
         raw = np.load(depth_file, mmap_mode="r") if fresh else None
         if raw is None or raw.shape != (len(frames), h, w):
@@ -395,7 +406,7 @@ def main():
         out = folder / f"alive_{Path(src).stem}.mp4"
         moods, start, end = clip_role(cid, src)
         before = built_before.get(name)
-        expect = [BUILD, round(lo, 6), round(hi, 6), round(focus, 6), stamp(src), main_stamp]
+        expect = [BUILD, round(lo, 6), round(hi, 6), round(focus, 6), stamp(src), main_stamp] + (["lit"] if particles(src) else [])
         if before and before.get("built") == expect and out.exists():
             # Unchanged since it was last built: keep the video and its mouth track (its role may change).
             meta_clips.append({**before, "file": out.name, "moods": moods, "from": start, "to": end, "talk": "talk" in moods})
@@ -426,7 +437,7 @@ def main():
         del frames, depth
         meta_clips.append({"file": out.name, "frames": c["frames"], "source": name,
                            "moods": moods, "from": start, "to": end, "talk": "talk" in moods,
-                           "built": [BUILD, round(lo, 6), round(hi, 6), round(focus, 6), c["stamp"], main_stamp],
+                           "built": [BUILD, round(lo, 6), round(hi, 6), round(focus, 6), c["stamp"], main_stamp] + (["lit"] if particles(src) else []),
                            "mouth": [[round(v, 5) for v in m] for m in mouths.tolist()]})
         encoded += 1
         print(f"  wrote {out.name} ({out.stat().st_size / 1e6:.1f} MB), face found in {found}/{c['frames']} frames")
