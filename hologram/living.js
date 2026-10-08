@@ -984,7 +984,15 @@ function wantedOutfit(p, want) {
   const d = new Date();
   let seed = d.getFullYear() * 400 + d.getMonth() * 32 + d.getDate();
   for (const ch of p.id) seed = (seed * 31 + ch.charCodeAt(0)) % 1000003;
-  return days[seed % days.length];
+  const pick = days[seed % days.length];
+  // Genesis without her glow: in her usual clothes, about a third of the time, decided every twenty
+  // minutes (her motes fade away and sparkle back on with clips made for the change).
+  if (pick === null && outfits.includes('plain')) {
+    let h = Math.floor(Date.now() / (20 * 60000));
+    for (const ch of p.id) h = (h * 31 + ch.charCodeAt(0)) % 1000003;
+    if (h % 10 < 3) return 'plain';
+  }
+  return pick;
 }  // of her quiet clips, the share that cut to her whole figure (about one a minute)
 
 function wantedMood(p) {
@@ -1070,6 +1078,13 @@ function nextClip(p, after) {
   const dressed = outfitOf(pose), dress = pose === 'asleep' ? null : wantedOutfit(p, want);
   if (dress !== dressed && pose !== 'asleep' && (want === 'idle' || want === 'sleep' || want === 'listen')) {
     const to = dress ? `${basePose(pose)}@${dress}` : basePose(pose);
+    // A clip that makes the change on screen (Genesis's motes fading away or sparkling back), else a cut.
+    const change = clips.map((c, k) => k).filter((k) => poseFrom(clips[k]) === pose && poseTo(clips[k]) === to);
+    if (change.length) {
+      const k = change[Math.floor(Math.random() * change.length)];
+      (p.moments ||= new Set()).add(k);
+      return k;
+    }
     const loops = clips.map((c, k) => k).filter((k) => poseFrom(clips[k]) === to && poseTo(clips[k]) === to &&
                                                         clipMoods(clips[k]).includes('talk'));
     if (loops.length) return loops[0];

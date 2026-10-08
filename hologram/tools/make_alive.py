@@ -136,6 +136,10 @@ ROLES = {
     "giggle": (["idle"], "main", "main"),
     "relaxedgiggle": (["idle"], "relaxed", "relaxed"),
     "relaxedglance": (["idle"], "relaxed", "relaxed"),
+    "fadeout": (["change"], "main", "main@plain"),              # Genesis's motes fade away (her plain look)
+    "fadeout2": (["change"], "main", "main@plain"),
+    "fadein": (["change"], "main@plain", "main"),               # ... and sparkle back on
+    "fadein2": (["change"], "main@plain", "main"),
     "picturelook": (["picture"], "main", "main"),               # looking at a picture beside her face
     "relaxedpicturelook": (["picture"], "relaxed", "relaxed"),
     "picturedown": (["picturedown"], "main", "main"),           # ... at one floating lower right

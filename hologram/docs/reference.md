@@ -47,9 +47,15 @@ same picture of her, so the page can play them in any order without a visible se
    frames), run headless with `wgp.py --process QUEUE.zip --output-dir DIR`. About 5 minutes a clip.
    Name each clip `<id>_<action>.mp4`. In prompts, never name an effect you don't want ("no smoke"
    brings smoke); say "a plain pure black background". Words about breathing ("a deep breath", "a
-   sigh") can bring a cloud of fog; describe what her face does instead. Seven-second sleep loops come
-   out cleaner than ten-second ones. Check every clip on a contact sheet before using it: now and then
-   the background flashes grey for a moment.
+   sigh") can bring a cloud of fog; describe what her face does instead. Wording that draws the eye to
+   her face ("leans in", "studies the viewer closely", "scrunches her nose at the viewer") makes the
+   camera push in; end every prompt with "The camera stays locked off, framed exactly as at the start,
+   and never zooms or pushes in." Genesis's motes sometimes fade out for a few seconds and come back
+   (closing her eyes, a pout); Donny likes that as an occasional moment, so her prompts say the motes
+   stay on her, and a few clips ask for the fade on purpose. Five-second clips
+   fail less than seven-second "she stands quietly" loops, which drift into new shots, halos or
+   colour shifts. Seven-second sleep loops come out cleaner than ten-second ones. About one clip in six
+   fails; check every clip on a contact sheet (`idle_sheet.py`: eight frames a row) before using it.
 3. **Cut-outs.** `U2NET_HOME=~/pinokio/api/wan2gp/app/ckpts/rembg ~/pinokio/api/wan2gp/app/venv/bin/python tools/make_alive_masks.py <id> CLIP.mp4 ...`
    (U2-Net per frame, kept per clip as `alive_masks_<clip>.npz`). U2-Net can lose most of her for a
    stretch when something busy moves around her (blowing hair); `make_alive.py` adds back anything
@@ -96,6 +102,10 @@ into her usual clothes before she sleeps. An outfit needs at least a base loop w
 So a few clips don't loop for hours, she wears an outfit for about four minutes per clip it has each
 day (`OUTFIT_MIN_PER_CLIP`), then changes back; outfits grow into longer stretches as clips are added.
 The Chooms aren't told what they're wearing in the glass, so it doesn't steer their selfies.
+An outfit change can also happen on screen instead of by a cut: a clip that starts in one look and
+ends in the other (Wan2GP's start and end pictures differ) is played for the change. Genesis's plain
+look (`main@plain`, no glowing motes) works this way: `fadeout` / `fadein` clips fade her motes away
+and back, and in her usual clothes she is plain about a third of the time, decided every 20 minutes.
 
 ## Lip sync
 
