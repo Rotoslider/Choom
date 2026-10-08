@@ -260,6 +260,15 @@ export function startHologramTurn(
           }
           break;
         }
+        case 'tool_result': {
+          // A tool that failed (an error, or success: false): she makes a face at her own mishap.
+          const r = data.toolResult as { name?: unknown; error?: unknown; result?: unknown } | undefined;
+          const body = r?.result && typeof r.result === 'object' ? r.result as Record<string, unknown> : null;
+          if (r && (r.error || body?.success === false)) {
+            publishHologram({ type: 'tool_failed', ...turn, tool: typeof r.name === 'string' ? r.name : null });
+          }
+          break;
+        }
         case 'image_generated':
           if (typeof data.imageId === 'string') {
             const kind = lastTool === 'ha_get_camera_snapshot' ? 'snapshot' : selfPortrait ? 'selfie' : 'picture';

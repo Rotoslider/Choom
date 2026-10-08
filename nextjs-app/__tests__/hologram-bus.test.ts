@@ -115,3 +115,14 @@ test('pictures and delegation reach the hologram with what it needs to show them
   expect(events.some((e) => 'imageUrl' in e)).toBe(false); // never the multi-MB image itself
   expect(events.find((e) => e.tool === 'delegate_to_choom')?.target).toBe('Genesis');
 });
+
+test("a failed tool reaches the hologram, a working one does not", () => {
+  const { events, off } = capture();
+  const t = startHologramTurn({ ...turn("chat", "c1"), choom: "Optic", choomId: "o" });
+  t.event({ type: "tool_result", toolResult: { toolCallId: "1", name: "generate_image", result: null, error: "ComfyUI timed out" } });
+  t.event({ type: "tool_result", toolResult: { toolCallId: "2", name: "ha_get_home_status", result: { success: false, error: "unreachable" } } });
+  t.event({ type: "tool_result", toolResult: { toolCallId: "3", name: "get_weather", result: { success: true, temp: 66 } } });
+  t.end();
+  off();
+  expect(events.filter((e) => e.type === "tool_failed").map((e) => e.tool)).toEqual(["generate_image", "ha_get_home_status"]);
+});
