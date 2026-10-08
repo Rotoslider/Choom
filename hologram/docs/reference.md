@@ -93,6 +93,8 @@ of her clean picture. The outfit's name says when she wears it (`OUTFIT_RULES` i
 `cold…` under 45°F, `hot…` over 85°F, `evening…` from 6 to 11 pm, and `day…` outfits take turns with
 her usual clothes, a different one each day. She changes with a camera cut at a quiet moment, and back
 into her usual clothes before she sleeps. An outfit needs at least a base loop with the `talk` mood.
+So a few clips don't loop for hours, she wears an outfit for about four minutes per clip it has each
+day (`OUTFIT_MIN_PER_CLIP`), then changes back; outfits grow into longer stretches as clips are added.
 The Chooms aren't told what they're wearing in the glass, so it doesn't steer their selfies.
 
 ## Lip sync

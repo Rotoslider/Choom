@@ -962,9 +962,20 @@ const OUTFIT_RULES = [
   [/^hot/, () => typeof weather.temperature === 'number' && weather.temperature > 85],
   [/^evening/, () => { const h = hourNow(); return h >= 18 && h < 23; }],
 ];
+// An outfit with only a few clips would loop them all evening (the clock look), so each day she
+// wears one for about OUTFIT_MIN_PER_CLIP minutes per clip it has, then changes back; outfits with
+// more clips are worn longer. Time worn is counted per day (p.worn).
+const OUTFIT_MIN_PER_CLIP = 4;
+function outfitLeft(p, o) {
+  const today = new Date().toDateString();
+  if (!p.worn || p.worn.day !== today) p.worn = { day: today };
+  const clips = p.alive.clips.filter((c) => outfitOf(poseFrom(c)) === o).length;
+  return clips * OUTFIT_MIN_PER_CLIP * 60000 - (p.worn[o] || 0);
+}
 function wantedOutfit(p, want) {
   if (want === 'sleep') return null;
-  const outfits = [...new Set(p.alive.clips.filter((c) => clipMoods(c).includes('talk')).map((c) => outfitOf(poseFrom(c))).filter(Boolean))];
+  const outfits = [...new Set(p.alive.clips.filter((c) => clipMoods(c).includes('talk')).map((c) => outfitOf(poseFrom(c))).filter(Boolean))]
+    .filter((o) => outfitLeft(p, o) > 0);
   for (const [rule, when] of OUTFIT_RULES) {
     const o = outfits.find((x) => rule.test(x));
     if (o && when()) return o;
@@ -1049,6 +1060,11 @@ function nextClip(p, after) {
   // After a full-body move, cut back to the framing she was in.
   if (pose === 'full') pose = p.cutFrom || 'main';
   const want = wantedMood(p);
+  const wore = after >= 0 && clips[after] ? outfitOf(poseTo(clips[after])) : null;
+  if (wore) {  // time worn in that outfit today
+    outfitLeft(p, wore);
+    p.worn[wore] = (p.worn[wore] || 0) + clips[after].frames / (p.alive.fps || 24) * 1000;
+  }
   // Time to change clothes (or back into her usual ones before sleep): a cut to her base loop in the
   // other outfit, at a quiet moment.
   const dressed = outfitOf(pose), dress = pose === 'asleep' ? null : wantedOutfit(p, want);
