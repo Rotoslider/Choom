@@ -224,12 +224,15 @@ def follow_choom():
                         last_conversation[0] = time.time()
                     # Which Chooms are mid-turn in a conversation (not a heartbeat): tower_ears waits for
                     # her turn to end before it opens the reply window.
+                    # Per conversation: Genesis can be mid-turn in her chat and in the room at once, and
+                    # the end of one is not the end of the other.
                     if event.get("source") in ("chat", "group") and event.get("choom"):
+                        turn = (event["choom"], event.get("chatId") or event.get("roomId") or event["source"])
                         if event.get("type") == "turn_start":
-                            chat_turns[event["choom"]] = time.time()
+                            chat_turns[turn] = time.time()
                         elif event.get("type") in ("turn_end", "error"):
-                            chat_turns.pop(event["choom"], None)
-                        latest["chat_turns"] = sorted(c for c, at in chat_turns.items() if time.time() - at < 600)
+                            chat_turns.pop(turn, None)
+                        latest["chat_turns"] = sorted({c for (c, _), at in chat_turns.items() if time.time() - at < 600})
                     broadcast({**event, "type": "choom", "event": event.get("type")})
         except Exception as e:  # network drop, app restart, timeout
             choom_feed.update(state=f"disconnected ({type(e).__name__})")
@@ -285,7 +288,7 @@ WELCOME_AFTER_S = float(os.environ.get("HOLOGRAM_WELCOME_AFTER_S", 20 * 60))  # 
 WELCOME_EVERY_S = 2 * 60 * 60    # at most one welcome back every two hours
 WELCOME_HOURS = (7, 23)          # not at night
 last_conversation = [0.0]        # when Donny last typed, talked or was answered (from the Choom feed)
-chat_turns = {}                  # Choom -> when her current chat or room turn started
+chat_turns = {}                  # (Choom, chat or room) -> when her turn there started
 
 
 def idle_seconds():

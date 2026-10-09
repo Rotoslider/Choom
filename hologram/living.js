@@ -1380,6 +1380,17 @@ function stageEnter(i) {
   if (stage.on) return;
   stage.on = true;
   const front = i >= 0 ? i : current;
+  // The one in front is the one on the glass (drawn last, over her sisters): Genesis stayed "on the
+  // glass" from a back place while Optic stood in front, and was drawn over her.
+  if (front !== current) {
+    if (phase === 'out') pending = front;
+    else {
+      current = front;
+      applyPortrait(front);
+      labelT = 0;
+      post('choom', { choom: portraits[front].name, stage: true });
+    }
+  }
   portraits.map((q, k) => k).filter((k) => k !== front).forEach((k, n) => { stage.place[k] = STAGE_BACK[n]; });
   stage.place[front] = STAGE_FRONT;
   portraits.forEach((q, k) => {
@@ -1390,6 +1401,12 @@ function stageEnter(i) {
   orbGroup.visible = band.visible = false;
   post('stage', { on: true, front: portraits[front].name });
 }
+
+// The room is still talking (a room turn in the last two minutes): a Choom's 1:1 reply joins the stage
+// rather than folding it away (it folded and came back with every turn when Genesis answered Donny
+// while she and her sisters were talking in the room).
+let lastGroupAt = -Infinity;
+const roomActive = () => performance.now() - lastGroupAt < 120000;
 
 function stageExit() {
   if (!stage.on) return;
@@ -1833,8 +1850,9 @@ function onChoomEvent(ev) {
     if (ev.event === 'turn_end' || ev.event === 'error') unseenTurns.delete(ev.choom);
     return;
   }
+  if (ev.source === 'group') lastGroupAt = performance.now();
   if (stage.on && (ev.source === 'group' || (ev.event === 'listening' && ev.roomId))) stage.until = performance.now() + STAGE_LINGER_MS;
-  if (stage.on && ev.event === 'listening' && ev.listening === true && ev.chatId && !ev.roomId) stageExit();
+  if (stage.on && ev.event === 'listening' && ev.listening === true && ev.chatId && !ev.roomId && !roomActive()) stageExit();
   switch (ev.event) {
     case 'image':
       // A picture she made, a camera snapshot, or an image she's looking at.
@@ -1894,7 +1912,7 @@ function onChoomEvent(ev) {
     case 'turn_start':
       appListening = false; // he sent it: her turn now
       if (ev.source === 'group') stageEnter(i);
-      else if (ev.source === 'chat') stageExit();
+      else if (ev.source === 'chat' && !roomActive()) stageExit(); // a 1:1 reply mid-room comes to the front instead
       // What he just said: she reacts to its feeling before she starts thinking it over.
       // A chat turn is Donny talking only if he typed or used the mic in that chat just before;
       // scheduled routines and Signal messages arrive as chat turns too. (Room messages count;

@@ -155,7 +155,9 @@ A message ends when 90% of the last 2.5 s was quiet (the speakerphone sends exac
 pause, and pauses between sentences often pass 1.5 s); it can run 45 s. After her answer the
 mic opens for a reply: once her conversation turn has ended and her voice has stopped (a heartbeat
 running beside it doesn't hold it up; a room waits until everyone has finished), a soft rising chime
-plays and the mic listens for 8 s, with a soft low note if it closes unheard. Short sounds and clips
+plays and the mic listens for 8 s, with a soft low note if it closes unheard. If any Choom starts
+speaking while it's open (her next thought, a sister in the room), the window closes without sending
+anything and opens again with a fresh chime once it's quiet, so a Choom's voice is never sent as his. Short sounds and clips
 that fail a local speech check are dropped, so Whisper can't turn noise into a sentence. Only the
 wake phrase itself interrupts her. Nothing is kept; events go to `telemetry.log` without the words.
 
@@ -214,7 +216,9 @@ can answer without "OK" and her name.
 
 ## Everything else on the page
 
-- **Group stage:** a group-room turn brings all four into the glass, the speaker in front, her
+- **Group stage:** a group-room turn brings all four into the glass, the speaker in front (always the
+  one on the glass, drawn over her sisters); while the room is talking, a Choom's 1:1 reply comes to
+  the front of the stage instead of folding it away. Her
   sisters behind her turned toward her; the turn passes by trading places. It folds back after three
   quiet minutes or a 1:1 chat.
 - **Tool moments:** the glass flares and she plays a clip that fits the tool (`TOOL_LOOKS`): looking
