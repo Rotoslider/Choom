@@ -51,6 +51,7 @@ NAMES = {                        # what Whisper may write for each name
     "Eve": r"eve|eva|eave|evie",
     ROOM: r"chooms?|choom's|chums|chumps|girls|gals|everyone|everybody",   # all of them: the group room
 }
+INVITED = object()               # utterance(): a Choom spoke to him unasked; open a reply window
 WAKE = re.compile(r"^\W*(?:ok|okay|o\.k\.|hey)\W+(" + "|".join(NAMES.values()) + r")\b\W*(.*)$", re.I | re.S)
 
 
@@ -78,11 +79,12 @@ def tell_hologram(event, choom=None, **extra):
         pass
 
 
-def hologram_status():
-    """The page's latest status, or None if it couldn't be read (never mistaken for "idle")."""
+def hologram_status(key="status"):
+    """The page's latest status (or another entry of the server's /status), or None if it couldn't be
+    read (never mistaken for "idle")."""
     try:
         with urllib.request.urlopen(f"{HOLOGRAM_URL}/status", timeout=3) as response:
-            return json.loads(response.read()).get("status") or None
+            return json.loads(response.read()).get(key) or None
     except Exception:
         return None
 
@@ -117,6 +119,8 @@ class Ears:
         self.model = WhisperModel("small.en", device="cuda", compute_type="float16")
         list(self.model.transcribe(np.zeros(RATE, np.float32), language="en")[0])  # the first call takes seconds
         self.frames = queue.Queue()
+        self.invite = None                   # a Choom who just spoke to him unasked (a welcome back)
+        self.invite_seen = time.time()
 
     def capture(self):
         """Mono from the default PipeWire source, restarted if it ever stops. The recorder dies with
@@ -139,6 +143,16 @@ class Ears:
             proc.kill()
             time.sleep(2)
 
+    def watch_invites(self):
+        """A welcome back (the server's "welcome") opens a reply window like one after a conversation
+        he started: he can answer her without "OK Genesis"."""
+        while True:
+            welcome = hologram_status("welcome")
+            if welcome and welcome.get("at", 0) > self.invite_seen:
+                self.invite_seen = welcome["at"]
+                self.invite = welcome.get("choom")
+            time.sleep(2)
+
     def utterance(self, start_within=None, quiet_frames=25):
         """The next stretch of speech (with 300 ms before it), or None if none starts in time. It ends
         after quiet_frames of silence (25 = 750 ms, enough for "OK Aloy"; 40 for whole sentences)."""
@@ -150,6 +164,8 @@ class Ears:
                 frame = self.frames.get(timeout=0.5)
             except queue.Empty:
                 frame = None
+            if speech is None and self.invite and not deadline:
+                return INVITED  # waiting for a wake phrase: a Choom just spoke to him unasked
             if frame is None:
                 if speech is None and deadline and time.time() > deadline:
                     return None
@@ -242,9 +258,10 @@ class Ears:
             time.sleep(1)
         return False
 
-    def conversation(self, choom, pcm=None, rest=""):
-        """A wake phrase was heard: listen, send, and keep listening for replies."""
-        follow_up, empty = False, 0
+    def conversation(self, choom, pcm=None, rest="", follow_up=False):
+        """A wake phrase was heard: listen, send, and keep listening for replies. follow_up: start in
+        the reply window (she spoke first)."""
+        empty = 0
         while True:
             tell_hologram("listen", choom, listening=True)
             if pcm is None:
@@ -280,9 +297,19 @@ class Ears:
 
     def run(self):
         threading.Thread(target=self.capture, daemon=True).start()
+        threading.Thread(target=self.watch_invites, daemon=True).start()
         tell_hologram("ready")
         while True:
             pcm = self.utterance()
+            if pcm is INVITED:
+                # Her welcome back: wait until she has spoken, then the usual reply window.
+                choom, self.invite = self.invite, None
+                tell_hologram("invited", choom)
+                self.wait_for_answer(2)
+                while not self.frames.empty():
+                    self.frames.get_nowait()
+                self.conversation(choom, follow_up=True)
+                continue
             heard = self.wake(pcm)
             if not heard:
                 continue

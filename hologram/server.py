@@ -306,6 +306,8 @@ def send_welcome(seconds, place):
             answer = json.loads(response.read())
         log_entry({"kind": "welcome", "minutes": body["awayMinutes"], "place": place, "choom": answer.get("choom"),
                    "ok": answer.get("ok"), "skipped": answer.get("skipped")})
+        if answer.get("ok") and answer.get("choom"):  # tower_ears opens a reply window once she's done
+            latest["welcome"] = {"choom": answer["choom"], "at": time.time()}
     except Exception as e:
         log_entry({"kind": "welcome", "minutes": round(seconds / 60), "error": type(e).__name__})
 
@@ -557,6 +559,12 @@ class Handler(SimpleHTTPRequestHandler):
                 latest["gaze"] = gaze
                 broadcast({"type": "gaze", **gaze})
                 self._log({"kind": "eyes", **gaze})
+            self.send_response(204)
+            self.end_headers()
+            return
+        if self.path == "/control" and isinstance(entry.get("welcomeTest"), (int, float)):
+            # {"welcomeTest": 30}: send a real welcome back now, as if he'd been away that many minutes
+            threading.Thread(target=send_welcome, args=(entry["welcomeTest"] * 60, None), daemon=True).start()
             self.send_response(204)
             self.end_headers()
             return

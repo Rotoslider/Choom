@@ -206,7 +206,9 @@ as his words. She knows from their conversation where he went ("how did the shop
 night (11 pm to 7 am), at most every two hours, not while he's already talking, not in bed. A Home
 Assistant role he was in while away (a shop or truck sensor) is passed on as `place`. Every leaving
 and coming back is logged as `desk` in `telemetry.log`; `HOLOGRAM_WELCOME_AFTER_S` changes the 20
-minutes (for testing).
+minutes (for testing); `POST /control {"welcomeTest": 30}` sends one now. After her welcome, the
+tower's mic opens its six-second reply window for her (`tower_ears.py` watches `/status` for it), so he
+can answer without "OK" and her name.
 
 ## Everything else on the page
 
