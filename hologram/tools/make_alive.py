@@ -141,6 +141,10 @@ ROLES = {
     "fadeout2": (["change"], "main", "main@plain"),
     "fadein": (["change"], "main@plain", "main"),               # ... and sparkle back on
     "fadein2": (["change"], "main@plain", "main"),
+    "heartaway": (["change"], "main", "main@noheart"),          # Optic's heart dissolves away
+    "heartaway2": (["change"], "main", "main@noheart"),
+    "heartback": (["change"], "main@noheart", "main"),          # ... and glows back into her hands
+    "heartback2": (["change"], "main@noheart", "main"),
     "picturelook": (["picture"], "main", "main"),               # looking at a picture beside her face
     "relaxedpicturelook": (["picture"], "relaxed", "relaxed"),
     "picturedown": (["picturedown"], "main", "main"),           # ... at one floating lower right

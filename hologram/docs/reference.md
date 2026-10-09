@@ -165,8 +165,12 @@ Keep the microphone's input level up (`wpctl set-volume @DEFAULT_AUDIO_SOURCE@ 1
 `tower_eyes.py` (same venv; started by `launch.sh`, `HOLOGRAM_EYES=0` to leave it off) watches a USB
 camera mounted at the Portrait's top edge, found by name (a Logitech Brio first; virtual cameras are
 skipped), and waits quietly until one is plugged in. MediaPipe's face landmarker gives his head's
-turn and tilt and where his irises sit; turn plus eyes within 15° of straight on, with his usual tilt
+turn and tilt and where his irises sit; turn plus eyes within 6° of straight on, with his usual tilt
 (learned while he faces the camera), counts as looking at the glass (after 0.5 s; away after 1.5 s).
+Measured at the desk: on the glass his gaze sits within about 3°, the monitors start 9° and 15° out.
+At two feet his face is only a tenth of the Brio's wide frame, too small for MediaPipe (which shrinks
+its input to a small square), so the watcher looks at a square crop: around his face once it has
+found it, else the middle of the frame and each side in turn.
 While he looks, the Choom keeps to her facing-you clips and leans in a little, sometimes with a smile
 as he first looks, and the screensaver waits. Frames are never kept; only changes are sent and logged.
 Test on a video: `.venv-ears/bin/python tower_eyes.py --source clip.mp4 --print`. Setup:

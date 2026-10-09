@@ -28,7 +28,8 @@ from mediapipe.tasks.python import BaseOptions, vision
 HOLOGRAM_URL = os.environ.get("HOLOGRAM_URL", "http://127.0.0.1:8765")
 MODEL = Path.home() / ".cache" / "mediapipe" / "face_landmarker.task"
 FPS = 12                  # frames looked at per second
-YAW_LIMIT = 15.0          # degrees either side of straight on that still count as looking at her
+YAW_LIMIT = 6.0           # degrees either side of straight on that still count as looking at her. Measured at
+                          # the desk (Oct 9): on the glass within about 3°, the monitors from 9° and 15° out
 PITCH_LIMIT = 18.0        # degrees from his usual head tilt
 EYE_DEGREES = 50.0        # how far a fully turned iris (offset 1) turns his gaze
 LOOK_AFTER = 0.5          # seconds of looking before it counts
@@ -88,16 +89,37 @@ class Eyes:
         self.face = False
         self.since = {"look": None, "away": None, "face": None}
         self.started = time.monotonic()
+        self.roi, self.roi_seen, self.search, self.clock = None, 0.0, 0, -1   # where his face is in the frame
 
     def gaze(self, frame, now):
-        """(gaze yaw, head pitch) of the face in this frame, or None."""
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        result = self.landmarker.detect_for_video(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb),
-                                                  int((now - self.started) * 1000))
+        """(gaze yaw, head pitch) of the face in this frame, or None. MediaPipe shrinks its input to a
+        small square before it looks for a face, and at the desk his face is a tenth of a wide camera's
+        frame: too small to find. So it looks at a square crop: around his face once found (about three
+        and a half faces wide), else the middle of the frame, then each side in turn."""
+        h, w = frame.shape[:2]
+        if self.roi is None:
+            side = min(h, w)
+            spots = [(w - side) // 2, 0, w - side]
+            x0, y0, size = spots[self.search % len(spots)], 0, side
+            self.search += 1
+        else:
+            x0, y0, size = self.roi
+        crop = np.ascontiguousarray(frame[y0:y0 + size, x0:x0 + size])
+        rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+        self.clock = max(self.clock + 1, int((now - self.started) * 1000))  # VIDEO mode wants rising times
+        result = self.landmarker.detect_for_video(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb), self.clock)
         if not result.face_landmarks:
+            if self.roi is not None and now - self.roi_seen > 1.0:
+                self.roi = None  # lost him: search the whole frame again
             return None
-        yaw, pitch = head_angles(result.facial_transformation_matrixes[0])
         points = [(p.x, p.y) for p in result.face_landmarks[0]]
+        xs, ys = [x for x, _ in points], [y for _, y in points]
+        cx, cy = x0 + size * (min(xs) + max(xs)) / 2, y0 + size * (min(ys) + max(ys)) / 2
+        face = size * (max(xs) - min(xs))
+        new = int(min(min(h, w), max(320, 3.5 * face)))
+        self.roi = (int(min(max(cx - new / 2, 0), w - new)), int(min(max(cy - new / 2, 0), h - new)), new)
+        self.roi_seen = now
+        yaw, pitch = head_angles(result.facial_transformation_matrixes[0])
         return yaw + EYE_DEGREES * iris_offset(points), pitch
 
     def update(self, seen, now):

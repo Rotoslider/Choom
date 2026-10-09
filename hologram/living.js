@@ -966,6 +966,7 @@ const OUTFIT_RULES = [
 // wears one for about OUTFIT_MIN_PER_CLIP minutes per clip it has, then changes back; outfits with
 // more clips are worn longer. Time worn is counted per day (p.worn).
 const OUTFIT_MIN_PER_CLIP = 4;
+const ALT_LOOKS = new Set(['plain', 'noheart']);  // looks in her usual clothes, not outfits: no time limit
 function outfitLeft(p, o) {
   const today = new Date().toDateString();
   if (!p.worn || p.worn.day !== today) p.worn = { day: today };
@@ -975,7 +976,7 @@ function outfitLeft(p, o) {
 function wantedOutfit(p, want) {
   if (want === 'sleep') return null;
   const outfits = [...new Set(p.alive.clips.filter((c) => clipMoods(c).includes('talk')).map((c) => outfitOf(poseFrom(c))).filter(Boolean))]
-    .filter((o) => outfitLeft(p, o) > 0);
+    .filter((o) => ALT_LOOKS.has(o) || outfitLeft(p, o) > 0);
   for (const [rule, when] of OUTFIT_RULES) {
     const o = outfits.find((x) => rule.test(x));
     if (o && when()) return o;
@@ -985,12 +986,13 @@ function wantedOutfit(p, want) {
   let seed = d.getFullYear() * 400 + d.getMonth() * 32 + d.getDate();
   for (const ch of p.id) seed = (seed * 31 + ch.charCodeAt(0)) % 1000003;
   const pick = days[seed % days.length];
-  // Genesis without her glow: in her usual clothes, about a third of the time, decided every twenty
-  // minutes (her motes fade away and sparkle back on with clips made for the change).
-  if (pick === null && outfits.includes('plain')) {
+  // Her other looks in her usual clothes (Genesis without her glow, Optic without her heart): about a
+  // third of the time, decided every twenty minutes, changed on screen with clips made for it.
+  const alt = pick === null && outfits.find((o) => ALT_LOOKS.has(o));
+  if (alt) {
     let h = Math.floor(Date.now() / (20 * 60000));
     for (const ch of p.id) h = (h * 31 + ch.charCodeAt(0)) % 1000003;
-    if (h % 10 < 3) return 'plain';
+    if (h % 10 < 3) return alt;
   }
   return pick;
 }  // of her quiet clips, the share that cut to her whole figure (about one a minute)
