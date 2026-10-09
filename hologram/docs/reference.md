@@ -194,6 +194,20 @@ Test on a video: `.venv-ears/bin/python tower_eyes.py --source clip.mp4 --print`
 Coming home or sitting at the desk wakes the Choom on the glass and she greets you; getting into bed
 puts the glass to sleep at any hour, getting up wakes it. Leaving counts only after two minutes away.
 
+## Welcome back
+
+When Donny sits back down after 20 minutes or more away, the Choom he last talked with one to one
+welcomes him back. `server.py` counts him at the desk while the camera sees his face or the NUC's
+keyboard or mouse was used in the last 30 seconds (GNOME's idle time), and on his return asks the
+Choom app's `POST /api/hologram/welcome {awayMinutes, place?}`. The app picks his most recent genuine
+conversation (`lastUserMessageAt`, skipped if older than 12 hours) and runs her turn there with a note
+(`note: true` on `/api/chat`): saved as a system message the chat window doesn't show, never counted
+as his words. She knows from their conversation where he went ("how did the shop check go?"). Not at
+night (11 pm to 7 am), at most every two hours, not while he's already talking, not in bed. A Home
+Assistant role he was in while away (a shop or truck sensor) is passed on as `place`. Every leaving
+and coming back is logged as `desk` in `telemetry.log`; `HOLOGRAM_WELCOME_AFTER_S` changes the 20
+minutes (for testing).
+
 ## Everything else on the page
 
 - **Group stage:** a group-room turn brings all four into the glass, the speaker in front, her
