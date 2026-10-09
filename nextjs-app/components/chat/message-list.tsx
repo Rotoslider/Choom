@@ -103,11 +103,11 @@ export function MessageList({ messages, isLoading = false, streamingImage, agent
           </div>
         )}
 
-        {messages.map((message, index) => {
+        {messages.filter((m) => m.role !== 'system').map((message, index, shown) => {
           // Check if this is the last assistant message and we're streaming
           const isLastAssistant =
             message.role === 'assistant' &&
-            index === messages.length - 1 &&
+            index === shown.length - 1 &&
             isStreaming;
 
           return (

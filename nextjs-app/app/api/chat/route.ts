@@ -114,6 +114,10 @@ export async function POST(request: NextRequest) {
     // goes to whichever Choom the owner last genuinely talked to (see
     // /api/chooms/recent-user — it reads Chat.lastUserMessageAt stamped below).
     const userInitiated: boolean = !!body.userInitiated;
+    // A note from the house, not words from Donny (the hologram's "he just sat back down"): saved as a
+    // system message the chat window doesn't show, sent to her as a bracketed note in his place, and
+    // never stamped as his latest message.
+    const isNote: boolean = body.note === true;
     // Autonomous fires (heartbeats, self-followups, briefings, cron automations)
     // now share ONE persistent per-Choom "[Autonomous]" chat instead of minting a
     // new Chat row per fire. freshContext preserves their original semantics:
@@ -192,7 +196,7 @@ export async function POST(request: NextRequest) {
     // Stamp this chat as the owner's most-recent genuine conversation, so an
     // un-addressed Signal message routes back to this Choom (cross-surface
     // continuity). Fire-and-forget; never block the turn on it.
-    if (userInitiated && !isHeartbeat && !isGroupTurn && !isDelegation) {
+    if (userInitiated && !isNote && !isHeartbeat && !isGroupTurn && !isDelegation) {
       prisma.chat
         .update({ where: { id: chatId }, data: { lastUserMessageAt: new Date() } })
         .catch((e) => console.warn('lastUserMessageAt stamp failed:', e));
@@ -205,13 +209,13 @@ export async function POST(request: NextRequest) {
       await prisma.message.create({
         data: {
           chatId,
-          role: 'user',
+          role: isNote ? 'system' : 'user',
           content: message,
         },
       });
 
       // Update chat title if needed
-      if (!chat.title) {
+      if (!chat.title && !isNote) {
         const title = message.slice(0, 30) + (message.length > 30 ? '...' : '');
         await prisma.chat.update({ where: { id: chatId }, data: { title } });
       }
@@ -535,6 +539,8 @@ export async function POST(request: NextRequest) {
     const rawHistory: Array<{ role: string; content: string }> = [];
     for (const msg of historySource) {
       if (msg.role === 'tool') continue;
+      // A house note (role system) stands where Donny's line would, so the turns still alternate.
+      if (msg.role === 'system') { rawHistory.push({ role: 'user', content: msg.content }); continue; }
       // Skip empty assistant messages (timeout leftovers with no content and no tool calls)
       if (msg.role === 'assistant' && (!msg.content || msg.content.trim() === '')) continue;
       rawHistory.push({ role: msg.role, content: msg.content });
