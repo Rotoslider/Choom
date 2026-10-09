@@ -91,6 +91,12 @@ by what she is doing:
 | sleep, wake, yawn | fallasleep, sleep2, wake, yawn | 11 pm to 7 am after ten quiet minutes; yawns near bedtime |
 | windy | windy | Genesis, on windy days |
 | pose | relaxedturn, poseheart, fulltwirl | a selfie she just made |
+| picture, picturedown | picturelook, relaxedpicturedown | a picture floats up: she turns to it beside her, or glances down at one lower right |
+| change | fadeout, fadein | an outfit change made on screen (Genesis's motes fading away and back) |
+
+Quiet clips play like a shuffled deck: one that played lately waits until most of the others have had
+their turn. As of October 9 each Choom has 135 to 158 clips, about five to six minutes of distinct
+quiet moments in her usual clothes before anything repeats, plus her outfits.
 
 Poses: `main` (her picture), `relaxed` (Aloy with her hand down, reached by `lower`/`raise`; her
 home pose, the raised finger comes up now and then while she talks), `asleep`, and `full` (full-body
