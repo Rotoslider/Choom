@@ -63,7 +63,7 @@ app: listening, thinking, using tools, sleeping at night.
 |---|---|
 | "OK Aloy", "OK Optic", "OK Genesis", "OK Eve" | that Choom listens; your words go to her chat |
 | "OK Chooms", "OK girls", "OK everyone" | the group room (the Signal room) |
-| keep talking after she answers | the mic stays open six seconds for a reply (after a welcome back too) |
+| wait for the chime after she answers | the mic is open eight seconds for your reply, no name needed (after a welcome back too) |
 | look at the glass | she turns to you (with the camera on top) |
 | Portrait buttons | previous Choom, next Choom, hold to talk over her |
 

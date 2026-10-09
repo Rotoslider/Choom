@@ -1502,6 +1502,7 @@ function onControl(ev) {
   if (typeof ev.hour === 'number' || ev.hour === null) debugHour = ev.hour;
   if (typeof ev.sleep === 'boolean') debugSleep = ev.sleep;
   if (ev.activity === true) lastActivity = performance.now(); // someone talking near the tower (tower_ears)
+  if (ev.chime === 'open' || ev.chime === 'close') chime(ev.chime);  // the tower's reply window
   if (typeof ev.gaze === 'boolean') onGaze({ looking: ev.gaze, face: true }); // debug: pretend he's looking
   if (typeof ev.mouthStyle === 'number') frontMaterial.uniforms.mouthStyle.value = ev.mouthStyle; // try a mouth
   if (typeof ev.jaw === 'number' || ev.jaw === null) debugJaw = ev.jaw; // hold the mouth open this far (null: off)
@@ -1561,6 +1562,27 @@ const audioReady = (async () => {
 
 function ensureAudio() {
   if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+}
+
+// The tower's mic opening for his reply: a soft rising two-note chime (and a soft low note when it
+// closes without hearing him), so he knows when it's his turn. Straight to the speakers, not through
+// her voice's analyser (no glow, no lip movement).
+function chime(kind) {
+  if (!audioCtx) return;
+  ensureAudio();
+  const notes = kind === 'open' ? [[880, 0], [1318.5, 0.11]] : [[587.3, 0]];
+  for (const [hz, at] of notes) {
+    const t = audioCtx.currentTime + at;
+    const osc = new OscillatorNode(audioCtx, { type: 'sine', frequency: hz });
+    const gain = new GainNode(audioCtx, { gain: 0 });
+    gain.gain.setValueAtTime(0, t);
+    gain.gain.linearRampToValueAtTime(kind === 'open' ? 0.16 : 0.09, t + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.35);
+    osc.connect(gain).connect(audioCtx.destination);
+    osc.start(t);
+    osc.stop(t + 0.4);
+  }
+  post('chime', { kind });
 }
 
 // Each viseme as [jaw open, lips round, lips wide]; HeadAudio's weights blend them.

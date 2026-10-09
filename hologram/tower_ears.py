@@ -37,7 +37,7 @@ RATE = 16000                     # what VAD and Whisper get
 CAPTURE_RATE = 16000             # the EMEET's microphone runs at 16 kHz (it plays at 48 kHz)
 FRAME = 480                      # 30 ms at RATE
 COMMAND_WAIT_S = 8               # after a bare "OK Eve", how long she waits for the words
-FOLLOW_UP_S = 6                  # after her answer, how long the mic stays open for a reply
+FOLLOW_UP_S = 8                  # after her answer, how long the mic stays open for a reply (a chime opens it)
 # Frames of quiet (2.5 s) that end what he's saying to her. The EMEET's noise suppression sends exact
 # silence in every pause, and measured at the desk (Oct 6) Donny's pauses between sentences ran past
 # 1.6 s every few sentences, which cut messages off mid-thought; only long thinking stops go past 2.5 s.
@@ -240,18 +240,23 @@ class Ears:
             tell_hologram("listen", choom, listening=False)
             return False
 
-    def wait_for_answer(self, quiet_polls=2):
+    def wait_for_answer(self, quiet_polls=2, choom=None):
         """Until her turn has started and she has finished speaking: idle quiet_polls times in a row
         (an unread status is never taken for idle; that once opened the reply window mid-answer).
-        A room needs longer: there are pauses between one Choom and the next."""
+        A room needs longer: there are pauses between one Choom and the next. With choom, only her
+        conversation turn and the voice count: a heartbeat running beside it kept the page "thinking"
+        and opened the window 13 s after she'd finished."""
         started, idle_polls, deadline = False, 0, time.time() + 300
         while time.time() < deadline:
             status = hologram_status()
             if status is not None:
-                busy = status.get("mood") in ("thinking", "speaking") or status.get("queued")
+                if choom and choom != ROOM:
+                    busy = choom in (hologram_status("chat_turns") or []) or status.get("mood") == "speaking" or status.get("queued")
+                else:
+                    busy = status.get("mood") in ("thinking", "speaking") or status.get("queued")
                 if busy:
                     started, idle_polls = True, 0
-                elif started:
+                elif started or time.time() > deadline - 285:  # (her turn may have ended before we looked)
                     idle_polls += 1
                     if idle_polls >= quiet_polls:
                         return True
@@ -265,8 +270,16 @@ class Ears:
         while True:
             tell_hologram("listen", choom, listening=True)
             if pcm is None:
+                if follow_up:
+                    # His turn: a soft chime from the speaker, then the mic (not hearing the chime).
+                    tell_hologram("window", choom)
+                    time.sleep(0.6)
+                    while not self.frames.empty():
+                        self.frames.get_nowait()
                 pcm = self.utterance(start_within=FOLLOW_UP_S if follow_up else COMMAND_WAIT_S, quiet_frames=SENTENCE_QUIET)
                 if pcm is None:
+                    if follow_up:
+                        tell_hologram("window_closed", choom)
                     tell_hologram("listen", choom, listening=False)
                     return
                 other = self.wake(pcm)
@@ -290,7 +303,7 @@ class Ears:
             if not sent:
                 return
             # Ignore what the mic hears while she thinks and talks (mostly her own voice).
-            self.wait_for_answer(10 if choom == ROOM else 2)
+            self.wait_for_answer(10 if choom == ROOM else 2, choom)
             while not self.frames.empty():
                 self.frames.get_nowait()
             pcm, rest, follow_up = None, "", True
@@ -305,7 +318,7 @@ class Ears:
                 # Her welcome back: wait until she has spoken, then the usual reply window.
                 choom, self.invite = self.invite, None
                 tell_hologram("invited", choom)
-                self.wait_for_answer(2)
+                self.wait_for_answer(2, choom)
                 while not self.frames.empty():
                     self.frames.get_nowait()
                 self.conversation(choom, follow_up=True)

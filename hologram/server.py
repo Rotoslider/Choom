@@ -222,6 +222,14 @@ def follow_choom():
                         wake_screen()  # Donny started typing or talking to them
                     if event.get("source") in ("chat", "group", "mic", "tower") or event.get("type") == "listening":
                         last_conversation[0] = time.time()
+                    # Which Chooms are mid-turn in a conversation (not a heartbeat): tower_ears waits for
+                    # her turn to end before it opens the reply window.
+                    if event.get("source") in ("chat", "group") and event.get("choom"):
+                        if event.get("type") == "turn_start":
+                            chat_turns[event["choom"]] = time.time()
+                        elif event.get("type") in ("turn_end", "error"):
+                            chat_turns.pop(event["choom"], None)
+                        latest["chat_turns"] = sorted(c for c, at in chat_turns.items() if time.time() - at < 600)
                     broadcast({**event, "type": "choom", "event": event.get("type")})
         except Exception as e:  # network drop, app restart, timeout
             choom_feed.update(state=f"disconnected ({type(e).__name__})")
@@ -277,6 +285,7 @@ WELCOME_AFTER_S = float(os.environ.get("HOLOGRAM_WELCOME_AFTER_S", 20 * 60))  # 
 WELCOME_EVERY_S = 2 * 60 * 60    # at most one welcome back every two hours
 WELCOME_HOURS = (7, 23)          # not at night
 last_conversation = [0.0]        # when Donny last typed, talked or was answered (from the Choom feed)
+chat_turns = {}                  # Choom -> when her current chat or room turn started
 
 
 def idle_seconds():
@@ -532,6 +541,8 @@ class Handler(SimpleHTTPRequestHandler):
             event, choom = entry.get("event"), entry.get("choom")
             if event == "wake":
                 wake_screen()
+            if event in ("window", "window_closed"):  # the reply window opening, or closing unheard
+                broadcast({"type": "control", "chime": "open" if event == "window" else "close"})
             if event == "voice":  # someone is talking near the tower: no screensaver turn now (not logged)
                 broadcast({"type": "control", "activity": True})
                 self.send_response(204)

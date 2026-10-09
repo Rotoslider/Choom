@@ -153,7 +153,9 @@ start counts:
 
 A message ends when 90% of the last 2.5 s was quiet (the speakerphone sends exact silence in every
 pause, and pauses between sentences often pass 1.5 s); it can run 45 s. After her answer the
-mic stays open six seconds for a reply (a room: once everyone has finished). Short sounds and clips
+mic opens for a reply: once her conversation turn has ended and her voice has stopped (a heartbeat
+running beside it doesn't hold it up; a room waits until everyone has finished), a soft rising chime
+plays and the mic listens for 8 s, with a soft low note if it closes unheard. Short sounds and clips
 that fail a local speech check are dropped, so Whisper can't turn noise into a sentence. Only the
 wake phrase itself interrupts her. Nothing is kept; events go to `telemetry.log` without the words.
 
@@ -207,7 +209,7 @@ night (11 pm to 7 am), at most every two hours, not while he's already talking, 
 Assistant role he was in while away (a shop or truck sensor) is passed on as `place`. Every leaving
 and coming back is logged as `desk` in `telemetry.log`; `HOLOGRAM_WELCOME_AFTER_S` changes the 20
 minutes (for testing); `POST /control {"welcomeTest": 30}` sends one now. After her welcome, the
-tower's mic opens its six-second reply window for her (`tower_ears.py` watches `/status` for it), so he
+tower's mic opens its reply window for her (`tower_ears.py` watches `/status` for it), so he
 can answer without "OK" and her name.
 
 ## Everything else on the page
