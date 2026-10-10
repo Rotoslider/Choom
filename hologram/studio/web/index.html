@@ -16,6 +16,7 @@
     </div>
   </div>
   <nav id="chooms" class="chooms" aria-label="Chooms"></nav>
+  <button id="newChoomButton" class="ghost" type="button">+ New Choom</button>
   <button id="jobsButton" class="jobs-pill" type="button" aria-controls="jobsPanel">
     <span class="dot"></span><span id="jobsText">Idle</span>
   </button>
@@ -133,6 +134,30 @@
 <dialog id="player">
   <video id="playerVideo" controls loop muted playsinline></video>
   <div class="player-foot"><span id="playerName"></span><button id="playerClose" class="ghost" type="button">Close</button></div>
+</dialog>
+
+<dialog id="newChoom">
+  <form method="dialog" class="new-choom">
+    <h2>A new Choom on the glass</h2>
+    <p class="hint">Start from a picture of her: a render, a portrait, her Choom avatar. Klein cleans it up into a picture of her on black (pick the best of a few), then the Studio makes her still relief so the glass knows her, and her clips come from the library like everyone else's. Her name should match her name in the Choom app, so the glass knows when she talks.</p>
+    <div class="custom-form">
+      <label>Name <input id="ncName" required placeholder="Lissa"></label>
+      <label>Her colour <input id="ncColor" type="color" value="#7fd4ff"></label>
+      <label>Particles
+        <select id="ncStyle">
+          <option value="motes">drifting motes (like Genesis)</option>
+          <option value="embers">warm embers (like Aloy)</option>
+          <option value="scan">a scan band (like Optic)</option>
+          <option value="code">a code band (like Eve)</option>
+        </select></label>
+      <label class="wide">Her picture <input id="ncPicture" type="file" accept="image/png,image/jpeg,image/webp" required></label>
+      <label class="wide">Who she is (the start of every prompt; leave out the background)
+        <textarea id="ncWho" rows="2" placeholder="A young woman with short black hair, green eyes and freckles, wearing a red bomber jacket"></textarea></label>
+      <label class="wide check"><input id="ncClean" type="checkbox" checked> Clean it up with Klein (recommended unless she's already on plain black, facing you)</label>
+      <label class="wide">Instruction for Klein <textarea id="ncPrompt" rows="3"></textarea></label>
+      <div class="wide row-end"><button value="cancel" class="ghost">Cancel</button><button id="ncCreate" type="button" class="primary">Create her</button></div>
+    </div>
+  </form>
 </dialog>
 
 <dialog id="zoom"><img id="zoomImg" alt=""></dialog>

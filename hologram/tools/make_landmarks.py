@@ -8,6 +8,7 @@ Run with Forge Neo's Python (it has mediapipe); the landmarker model is download
 """
 import json
 import math
+import sys
 import urllib.request
 from pathlib import Path
 
@@ -34,7 +35,10 @@ def main():
     landmarker = vision.FaceLandmarker.create_from_options(
         vision.FaceLandmarkerOptions(base_options=BaseOptions(model_asset_path=str(MODEL)), num_faces=1))
 
+    only = sys.argv[1:]  # make_landmarks.py <id>: just her (a new Choom)
     for entry in json.loads((PORTRAITS / "manifest.json").read_text()):
+        if only and entry["id"] not in only:
+            continue
         folder = PORTRAITS / entry["id"]
         bgr = cv2.imread(str(folder / "color.jpg"))
         h, w = bgr.shape[:2]

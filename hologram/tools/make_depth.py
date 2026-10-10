@@ -203,17 +203,28 @@ def background_plate(bgr, d, person, orbs=()):
 
 
 def main():
+    """No arguments: the four Chooms below. `make_depth.py <id> <picture> <name> <#color> [style]`:
+    one Choom added in Glass Studio, from her clean picture (after `make_masks.py <id> <picture>`).
+    Either way the manifest keeps every other Choom in it."""
+    import sys
     OUT.mkdir(parents=True, exist_ok=True)
     model = DepthAnythingV2(encoder="vitl", features=256, out_channels=[256, 512, 1024, 1024])
     model.load_state_dict(torch.load(WEIGHTS, map_location="cpu"))
     model = model.to("cuda").eval()
 
-    manifest = []
-    for c in CHOOMS:
-        bgr = cv2.imread(str(RENDERS / c["file"]), cv2.IMREAD_COLOR)
+    chooms = CHOOMS
+    if len(sys.argv) >= 5:
+        cid, picture, name, color = sys.argv[1:5]
+        chooms = [{"name": name, "id": cid, "path": picture, "file": Path(picture).name, "color": color,
+                   "style": sys.argv[5] if len(sys.argv) > 5 else "motes"}]
+    manifest_file = OUT / "manifest.json"
+    manifest = json.loads(manifest_file.read_text()) if manifest_file.exists() else []
+    for c in chooms:
+        c.setdefault("id", c["name"].lower())
+        bgr = cv2.imread(str(c.get("path") or RENDERS / c["file"]), cv2.IMREAD_COLOR)
         h, w = bgr.shape[:2]
         if c.get("threads"):
-            cut = cv2.imread(str(OUT / "masks" / f"{c['name'].lower()}.png"), cv2.IMREAD_GRAYSCALE)
+            cut = cv2.imread(str(OUT / "masks" / f"{c['id']}.png"), cv2.IMREAD_GRAYSCALE)
             bgr = remove_threads(bgr, cut > 0)
             if c.get("streak_boxes"):
                 bgr = clean_streak_boxes(bgr, cut > 0, c["streak_boxes"])
@@ -237,12 +248,12 @@ def main():
         sel = face & mask
         focus = float(np.median(d[sel])) if sel.any() else float(np.median(d[mask]))
 
-        person = person_mask(d, mask, c["name"].lower(), c.get("cut_far", False))
+        person = person_mask(d, mask, c["id"], c.get("cut_far", False))
         d = shape_depth(d, person, focus, c.get("detail", DETAIL))
         orbs = find_orbs(bgr, person) if c.get("orbit") else []
         plate, plate_depth = background_plate(bgr, d, person, orbs)
 
-        folder = OUT / c["name"].lower()
+        folder = OUT / c["id"]
         folder.mkdir(exist_ok=True)
         cv2.imwrite(str(folder / "color.jpg"), bgr, [cv2.IMWRITE_JPEG_QUALITY, 93])
         small = cv2.resize(d, DEPTH_SIZE, interpolation=cv2.INTER_AREA)
@@ -254,9 +265,13 @@ def main():
         cv2.imwrite(str(folder / "plate_depth.png"),
                     np.round(cv2.resize(plate_depth, DEPTH_SIZE, interpolation=cv2.INTER_AREA) * 255).astype(np.uint8))
 
-        entry = {k: v for k, v in c.items() if k not in ("file", "cut_far", "detail", "streak_boxes", "dark_line_boxes")}
-        entry.update({"id": c["name"].lower(), "focus": round(focus, 4), "source": c["file"]})
-        manifest.append(entry)
+        entry = {k: v for k, v in c.items() if k not in ("file", "path", "cut_far", "detail", "streak_boxes", "dark_line_boxes")}
+        entry.update({"id": c["id"], "focus": round(focus, 4), "source": c["file"]})
+        old = next((i for i, m in enumerate(manifest) if m["id"] == entry["id"]), None)
+        if old is None:
+            manifest.append(entry)
+        else:
+            manifest[old] = {**manifest[old], **entry}
         print(f"{c['name']:8s} focus={focus:.3f} subject={mask.mean():.2%}"
               + (f" orbs painted out={len(orbs)}" if c.get("orbit") else ""))
 

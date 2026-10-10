@@ -58,6 +58,7 @@ async function loadChooms() {
   const data = await api('/api/chooms');
   state.chooms = data.chooms;
   state.minutesPerClip = data.minutesPerClip;
+  state.cleanPrompt = data.cleanPrompt;
   const nav = $('#chooms');
   nav.replaceChildren(...state.chooms.map((c) => {
     const b = el('button', { type: 'button', onclick: () => openChoom(c.id) },
@@ -134,7 +135,7 @@ function renderReview() {
   $('#reviewMore').replaceChildren(names.length > state.reviewShown
     ? el('button', { className: 'ghost', type: 'button', onclick: () => { state.reviewShown += 40; renderReview(); } },
       `Show more (${names.length - state.reviewShown} left)`)
-    : el('span', {}, `${names.length} clips`));
+    : el('span', {}, `${names.length} clip${names.length === 1 ? '' : 's'}`));
 }
 
 function reviewCard(name) {
@@ -232,7 +233,24 @@ function renderGlass() {
     toast('Building: cut-outs, depth and reliefs for the new clips, then the glass reloads when she is quiet');
     pollJobs();
   }));
-  bar.replaceChildren(
+  if (!c.inManifest) {
+    const hasMain = !!c.looks.main?.picture;
+    const kept = c.sequence.length;
+    const still = el('button', { className: 'primary', type: 'button', disabled: !hasMain }, 'Put her on the glass');
+    still.addEventListener('click', attempt(async () => {
+      await api('/api/still', { choom: state.cid });
+      toast('Making her still relief (cut-out, depth, mouth); the glass reloads with her when it is quiet');
+      pollJobs();
+    }));
+    bar.replaceChildren(el('div', { className: 'changes' }, el('div', {}, `${c.name} isn't on the glass yet.`),
+      el('ol', { className: 'steps' },
+        el('li', { className: hasMain ? 'done' : '' }, 'Pick her main picture (Looks).'),
+        el('li', {}, 'Put her on the glass: her still relief, so the glass knows her.'),
+        el('li', { className: kept ? 'done' : '' }, 'Plan Essentials and quiet moments for her main look, render, keep the good ones.'),
+        el('li', {}, 'Build: her clips replace the still picture.'))), still);
+    $('#glassLooks').replaceChildren();
+    if (!Object.keys(c.clips).length) return;
+  } else bar.replaceChildren(
     el('div', { className: 'changes' }, el('div', {}, changes),
       ...c.problems.map((p) => el('div', { className: 'problem' }, p)),
       c.built ? el('div', { className: 'muted' }, `Last built ${c.built.time.replace('T', ' ')} (${c.built.clips} clips, ${c.built.minutes} min)`) : null),
@@ -558,6 +576,35 @@ function renderDrafts() {
     }, 'Discard')))));
 }
 $('#zoom').addEventListener('click', () => $('#zoom').close());
+
+// --- A new Choom -----------------------------------------------------------------------------------
+$('#newChoomButton').addEventListener('click', () => {
+  if (!$('#ncPrompt').value) $('#ncPrompt').value = state.cleanPrompt || '';
+  $('#newChoom').showModal();
+});
+$('#ncClean').addEventListener('change', () => { $('#ncPrompt').disabled = !$('#ncClean').checked; });
+$('#ncCreate').addEventListener('click', attempt(async () => {
+  const name = $('#ncName').value.trim();
+  const file = $('#ncPicture').files[0];
+  if (!name || !file) return toast('Give her name and a picture', true);
+  const picture = await new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = () => reject(new Error('could not read the picture'));
+    r.readAsDataURL(file);
+  });
+  const id = name.toLowerCase().replace(/[^a-z0-9]/g, '');
+  await api('/api/new-choom', {
+    id, name, color: $('#ncColor').value, style: $('#ncStyle').value, picture, who: $('#ncWho').value,
+    clean: $('#ncClean').checked, prompt: $('#ncPrompt').value,
+  });
+  $('#newChoom').close();
+  state.tab = 'looks';
+  state.cid = id;
+  await loadChooms();
+  toast($('#ncClean').checked ? `Klein is cleaning up ${name}'s picture; pick one under Looks` : `${name} is in the Studio`);
+  pollJobs();
+}));
 
 // --- Jobs -----------------------------------------------------------------------------------------
 const STATE_WORDS = { waiting: 'waiting', running: 'running', done: 'done', failed: 'failed', cancelled: 'cancelled' };

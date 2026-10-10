@@ -50,14 +50,16 @@ def make_queue(name, picks):
 
 
 def unqueue(name):
-    """Put a queue's clips that didn't render back to planned (a queue cancelled or failed)."""
+    """Put a queue's clips that didn't render back to planned (a queue cancelled or failed); returns them."""
     plan = json.loads((QUEUES / f"{name}_plan.json").read_text())
-    names = set(plan.values())
+    names, back = set(plan.values()), []
     for cid in Project.ids():
         with editing(cid) as proj:
             for n in names & set(proj.clips):
                 if proj.clips[n]["status"] == "queued" and proj.clips[n].get("queue") == name:
                     proj.clips[n]["status"] = "planned"
+                    back.append(n)
+    return back
 
 
 def start(name):
@@ -77,6 +79,9 @@ def progress(name):
     text = log.read_text(errors="replace")
     total = max([int(t) for t in re.findall(r"Task \d+/(\d+) ready", text)] or [0])
     done = len(re.findall(r"Task \d+ completed", text))
+    # The clip it's on ("Prompt 3/6"): those before it are done, even one whose last step failed.
+    current = max([int(k) for k in re.findall(r"Prompt (\d+)/\d+", text)] or [0])
+    done = max(done, current - 1)
     steps = re.findall(r"(\d+)%\|", text[-4000:])
     return {"total": total, "done": done, "finished": "Queue completed" in text,
             "step": f"{steps[-1]}%" if steps else ""}
@@ -93,7 +98,9 @@ def collect():
     done = []
     for f in sorted(CLIPS.glob("*.mp4")):
         m = OUTPUT.match(f.name)
-        if not m or int(m.group(1)) not in seeds:
+        # Wan2GP writes the video as <name>_tmp.mp4, then adds the sound track into <name>.mp4: leave
+        # its temporary file alone, and anything still being written.
+        if not m or int(m.group(1)) not in seeds or f.stem.endswith("_tmp") or time.time() - f.stat().st_mtime < 30:
             continue
         cid, n = seeds[int(m.group(1))]
         target = CLIPS / f"{n}.mp4"

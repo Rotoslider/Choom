@@ -19,6 +19,9 @@ DRAFTS = PICTURES / "drafts"
 WHEN = {"cold": "cold days (under 45°F)", "hot": "hot days (over 85°F)", "evening": "evenings, 6 to 11 pm",
         "day": "daytime, taking turns with her usual clothes"}
 BACKGROUND = "the lighting, the framing, and the pure black background"
+CLEAN_PROMPT = ("Clean up this picture of her: the same young woman with exactly the same face, hair, expression "
+                "and clothes, facing the viewer, framed from the waist up with a little black space above her head, "
+                "softly lit and glowing gently, on a plain pure black background. Remove everything around her.")
 
 
 def outfit_prompt(wearing, keep):
@@ -74,6 +77,15 @@ def run(choom, look_id, source, prompt, count=3, seed=31, log=print):
 def adopt(proj, look_id, draft, wearing=None, prompt=None):
     """Make a draft picture a look: copied into clean/ as <choom>_<outfit>_1.png, with its subject line
     in the new clothes and the base look's keep line and ending."""
+    if look_id in proj.looks and not proj.looks[look_id].get("picture"):
+        # A look waiting for its picture (a new Choom's main): just give it the chosen one.
+        target = PICTURES / f"{proj.id}_{look_id}_1.png"
+        shutil.copy2(PICTURES / draft, target)
+        proj.looks[look_id]["picture"] = target.name
+        if prompt:
+            proj.looks[look_id]["klein"] = prompt
+        proj.data.get("drafts", {}).pop(look_id, None)
+        return proj.looks[look_id]
     base = proj.looks.get(base_of(look_id), {})
     outfit = outfit_of(look_id) or look_id
     n = 1

@@ -23,7 +23,7 @@ from config import PROJECTS, WAN2GP_PYTHON
 from project import editing
 
 JOBS_FILE = PROJECTS / "jobs.json"
-LANES = {"render": "gpu", "build": "gpu", "picture": "gpu", "review": "cpu"}
+LANES = {"render": "gpu", "build": "gpu", "picture": "gpu", "still": "gpu", "review": "cpu"}
 lock = threading.RLock()
 jobs = []
 
@@ -107,14 +107,21 @@ def do_render(job):
         if not running:
             break
         time.sleep(10)
-    p = render.progress(name)
-    render.unqueue(name)  # anything that didn't render goes back to planned
-    if not p["finished"]:
-        raise RuntimeError(f"Wan2GP stopped after {p['done']} of {p['total']} clips (see queue/{name}.log)")
+    time.sleep(35)  # the last clip settles before it's collected
+    for cid, n in render.collect():
+        add("review", {"choom": cid, "clips": [n]})
+    missing = render.unqueue(name)  # anything that didn't render goes back to planned
+    if missing:
+        raise RuntimeError(f"{len(missing)} clips didn't render and are planned again: {', '.join(missing)} (see queue/{name}.log)")
 
 
 def do_build(job):
     build.build(job["args"]["choom"], log=lambda line: note(job, line), relaunch=job["args"].get("relaunch", True))
+
+
+def do_still(job):
+    a = job["args"]
+    build.still(a["choom"], a["color"], a.get("style", "motes"), log=lambda line: note(job, line))
 
 
 def do_review(job):
@@ -142,7 +149,7 @@ def do_picture(job):
         draft["status"] = "ready"
 
 
-WORK = {"render": do_render, "build": do_build, "picture": do_picture, "review": do_review}
+WORK = {"render": do_render, "build": do_build, "picture": do_picture, "still": do_still, "review": do_review}
 
 
 def worker(lane):

@@ -2,6 +2,7 @@
 """Glass Studio's local server: the Studio page (web/) and its API over the Chooms' project files.
 Started by `studio.py serve`; listens on 127.0.0.1:8767 unless studio.json says otherwise.
 Standard library only, like the hologram's own server."""
+import base64
 import json
 import mimetypes
 import re
@@ -39,7 +40,8 @@ def details(proj):
     alive = PORTRAITS / proj.id / "alive.json"
     built = [c["source"].removesuffix(".mp4") for c in json.loads(alive.read_text())["clips"]] if alive.exists() else []
     glass = {"added": [n for n in proj.sequence if n not in built], "removed": [n for n in built if n not in proj.sequence]}
-    return {**proj.data, "stats": looks, "problems": build.problems(proj), "glass": glass, "color": colors().get(proj.id),
+    return {**proj.data, "stats": looks, "problems": build.problems(proj), "glass": glass, "inManifest": build.in_manifest(proj.id),
+            "color": colors().get(proj.id) or proj.data.get("color"),
             "plannedMinutes": round(sum(render.minutes(c.get("frames") or 124) for c in planned))}
 
 
@@ -115,8 +117,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_file(folder / parts[2], cache=parts[1] != "sheet") if folder else self.send_error(404)
         if parts[:2] == ["api", "chooms"]:
             tint = colors()
-            return self.send_json({"chooms": [{**Project.load(c).summary(), "color": tint.get(c)} for c in Project.ids()],
-                                   "workspace": str(WORKSPACE), "minutesPerClip": CFG["minutes_per_clip"]})
+            chooms = [Project.load(c) for c in Project.ids()]
+            return self.send_json({"chooms": [{**p.summary(), "color": tint.get(p.id) or p.data.get("color")} for p in chooms],
+                                   "workspace": str(WORKSPACE), "minutesPerClip": CFG["minutes_per_clip"],
+                                   "cleanPrompt": pictures.CLEAN_PROMPT})
         if parts[:2] == ["api", "choom"] and len(parts) == 3 and NAME.match(parts[2]):
             if not Project.file(parts[2]).exists():
                 return self.fail("no such Choom", 404)
@@ -148,6 +152,14 @@ class Handler(BaseHTTPRequestHandler):
                 if trouble:
                     return self.fail("; ".join(trouble))
                 return self.send_json({"job": jobs.add("build", {"choom": proj.id, "relaunch": data.get("relaunch", True)})})
+            if parts == ["api", "new-choom"]:
+                return self.new_choom(data)
+            if parts == ["api", "still"]:
+                proj = Project.load(data["choom"])
+                if not proj.looks.get("main", {}).get("picture"):
+                    return self.fail("pick her main picture first (Looks)")
+                color = data.get("color") or proj.data.get("color") or "#9fb4ff"
+                return self.send_json({"job": jobs.add("still", {"choom": proj.id, "color": color, "style": data.get("style") or proj.data.get("style", "motes")})})
             if parts == ["api", "review"]:
                 return self.send_json({"job": jobs.add("review", {"choom": data["choom"], "clips": data.get("clips", [])})})
             if parts[:2] == ["api", "jobs"] and len(parts) == 4 and parts[3] == "cancel":
@@ -224,6 +236,36 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 return self.fail("unknown action", 404)
         return self.send_json({"choom": details(Project.load(cid))})
+
+    def new_choom(self, data):
+        """A new Choom: her project, her picture, and either Klein clean-ups of it to pick her main
+        picture from, or the picture itself as her main look."""
+        cid = data.get("id", "").strip().lower()
+        if not re.fullmatch(r"[a-z][a-z0-9]{1,23}", cid):
+            return self.fail("her id is her name in lower case, letters and digits (as the Choom app calls her)")
+        if Project.file(cid).exists():
+            return self.fail(f"there is already a Choom called {cid}")
+        raw = base64.b64decode(data["picture"].split(",", 1)[-1])
+        ext = ".jpg" if raw[:3] == b"\xff\xd8\xff" else ".png" if raw[:8] == b"\x89PNG\r\n\x1a\n" else ".webp" if raw[8:12] == b"WEBP" else None
+        if not ext:
+            return self.fail("the picture should be a PNG, JPEG or WebP")
+        source = f"{cid}_source{ext}"
+        (PICTURES / source).write_bytes(raw)
+        who = data.get("who", "").strip().rstrip(".")
+        proj = Project.new(cid, data.get("name") or cid.title())
+        proj.data.update(color=data.get("color") or "#9fb4ff", style=data.get("style") or "motes")
+        main = {"subject": f"{who}, glowing softly against a plain pure black background" if who else "",
+                "ending": "She stays in the same place and ends exactly as she began, facing the viewer.",
+                "wardrobe": f"{who.split(', wearing')[0]}, wearing {{wearing}}, glowing softly against a plain pure black background" if who else ""}
+        if data.get("clean", True):
+            prompt = data.get("prompt") or pictures.CLEAN_PROMPT
+            proj.looks["main"] = {**main, "picture": None}
+            proj.data["drafts"] = {"main": {"base": None, "prompt": prompt, "pictures": [], "status": "making", "clean": True}}
+            jobs.add("picture", {"choom": cid, "look": "main", "source": source, "prompt": prompt, "count": int(data.get("count", 3))})
+        else:
+            proj.looks["main"] = {**main, "picture": source}
+        proj.save()
+        return self.send_json({"choom": details(proj)})
 
     def start_render(self, data):
         """Queue planned clips ([[choom, clip], ...], or every planned clip of the Chooms named) and

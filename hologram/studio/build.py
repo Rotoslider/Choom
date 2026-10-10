@@ -11,15 +11,22 @@ import os
 import subprocess
 import time
 
-from config import CLIPS, FORGE_PYTHON, HOLOGRAM, TOOLS, WAN2GP, WAN2GP_PYTHON
+import json
+
+from config import CLIPS, FORGE_PYTHON, HOLOGRAM, PICTURES, PORTRAITS, TOOLS, WAN2GP, WAN2GP_PYTHON
 from project import Project, editing
+
+
+def in_manifest(cid):
+    manifest = PORTRAITS / "manifest.json"
+    return manifest.exists() and any(m["id"] == cid for m in json.loads(manifest.read_text()))
 
 
 def problems(proj):
     """Why her sequence can't be built yet, if anything."""
-    out = []
+    out = [] if in_manifest(proj.id) else ["she isn't on the glass yet: make her still relief first (On the glass)"]
     if not proj.sequence:
-        return ["her sequence is empty"]
+        return out + ["her sequence is empty"]
     main = proj.clips.get(proj.sequence[0], {})
     if "talk" not in main.get("moods", []):
         out.append(f"{proj.sequence[0]} comes first but isn't a loop she can talk over (base)")
@@ -42,6 +49,19 @@ def run(cmd, log, env=None):
         log(line.rstrip())
     if proc.wait() != 0:
         raise RuntimeError(f"{cmd[1]} failed (exit {proc.returncode})")
+
+
+def still(cid, color, style="motes", log=print, relaunch=True):
+    """A new Choom's still relief from her main picture (cut-out, depth, plate, mouth) and her entry
+    in portraits/manifest.json, so the glass knows her; she shows it until her clips are built."""
+    proj = Project.load(cid)
+    picture = PICTURES / proj.looks["main"]["picture"]
+    run([WAN2GP_PYTHON, TOOLS / "make_masks.py", cid, picture], log, env={"U2NET_HOME": str(WAN2GP / "ckpts" / "rembg")})
+    run([FORGE_PYTHON, TOOLS / "make_depth.py", cid, picture, proj.data.get("name", cid.title()), color, style], log)
+    run([FORGE_PYTHON, TOOLS / "make_landmarks.py", cid], log)
+    if relaunch:
+        run([TOOLS / "relaunch_when_quiet.sh"], log)
+    log(f"{cid} is on the glass (her still relief until her clips are built)")
 
 
 def build(cid, log=print, relaunch=True):

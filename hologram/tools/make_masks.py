@@ -23,10 +23,14 @@ FILES = {
 
 
 def main():
+    """No arguments: the four Chooms' renders. `make_masks.py <id> <picture>`: one Choom (a new one
+    added in Glass Studio) from her picture."""
+    import sys
     OUT.mkdir(parents=True, exist_ok=True)
     session = new_session("u2net", providers=["CUDAExecutionProvider", "CPUExecutionProvider"])
-    for cid, name in FILES.items():
-        image = Image.open(RENDERS / name).convert("RGB")
+    files = {sys.argv[1]: Path(sys.argv[2])} if len(sys.argv) == 3 else {cid: RENDERS / name for cid, name in FILES.items()}
+    for cid, path in files.items():
+        image = Image.open(path).convert("RGB")
         alpha = np.asarray(remove(image, session=session, only_mask=True).convert("L"))
         mask = (alpha > 110).astype(np.uint8)
         count, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)

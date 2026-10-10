@@ -239,3 +239,15 @@ dialog#player::backdrop { background: #000c; }
 dialog#zoom { padding: 0; border: 1px solid var(--line-2); border-radius: 12px; background: #000; }
 dialog#zoom img { display: block; max-height: 88vh; max-width: 92vw; }
 dialog#zoom::backdrop { background: #000c; }
+
+/* --- a new Choom ------------------------------------------------------------------------------- */
+#newChoomButton { border-style: dashed; border-radius: 999px; }
+dialog#newChoom { width: min(720px, calc(100vw - 32px)); padding: 0; border: 1px solid var(--line-2); border-radius: 14px; background: var(--panel-2); color: var(--fg); }
+dialog#newChoom::backdrop { background: #000b; }
+.new-choom { padding: 20px; }
+.new-choom h2 { font-size: 20px; margin-bottom: 6px; }
+.custom-form .check { display: flex; gap: 8px; align-items: center; color: var(--fg); font-size: 13px; }
+.custom-form input[type="color"] { height: 36px; padding: 2px; }
+.custom-form input[type="file"] { padding: 6px; }
+.steps { margin: 6px 0 0; padding-left: 20px; color: var(--muted); }
+.steps li.done { color: var(--good); }

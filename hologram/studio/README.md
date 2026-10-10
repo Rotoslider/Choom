@@ -126,9 +126,30 @@ queues (`queue/<name>.zip` with `<name>_plan.json`) for each clip's prompt and s
 | `jobs.py` | the GPU and CPU work lists |
 | `web/` | the page |
 
+## A new Choom
+
+*+ New Choom* starts one from a picture of her: a render, a portrait, or her Choom avatar.
+
+1. Give her name (as the Choom app calls her, so the glass knows when she talks), her colour, her
+   particles, and a line saying who she is. That line starts every prompt.
+2. Flux.2 Klein cleans the picture up into a picture of her on black, facing you. Pick the best one
+   under Looks; it becomes her `main` look.
+3. *On the glass → Put her on the glass* makes her still relief and adds her to
+   `portraits/manifest.json`:
+   - her cut-out (`tools/make_masks.py <id> <picture>`)
+   - depth and plate (`tools/make_depth.py <id> <picture> <name> <colour> <style>`)
+   - her mouth (`tools/make_landmarks.py <id>`)
+
+   The glass reloads with her when it's quiet, and "OK <name>" at the tower reaches her. A wake
+   word Whisper mishears can take other spellings in her manifest entry's `wake`.
+4. Plan Essentials and quiet moments for her main look, render them, keep the good ones, and build.
+   Her clips replace the still picture. Outfits, a full-body picture and sleep come after, the same
+   way as for the others.
+
 ## Not yet
 
-- A new Choom from a picture (her clean picture, still relief and manifest entry) is the next part.
 - Looks that change more than clothes on screen (Genesis's motes fading, Optic's heart) need change
-  clips and an entry in `ALT_LOOKS` in `living.js`; the Studio can render the clips but not yet wire
-  the look.
+  clips and an entry in `ALT_LOOKS` in `living.js`. The Studio can render the clips but can't yet
+  wire up the look.
+- A full-body picture or an asleep picture for a new Choom is a Klein edit with its own instruction.
+  For now, make it in Wan2GP and add it to her project's looks as `full` or `asleep`.
