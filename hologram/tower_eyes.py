@@ -158,18 +158,23 @@ class Eyes:
             if not cap.isOpened():
                 time.sleep(30)
                 continue
+            # 720p at 15 frames a second is plenty (it follows his face with a crop), and frames it
+            # skips are only grabbed, never decoded: decoding every 1080p frame took most of a core.
             cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+            cap.set(cv2.CAP_PROP_FPS, 15)
             post({"camera": name})
             last = 0.0
             while cap.isOpened():
-                ok, frame = cap.read()
-                if not ok:
+                if not cap.grab():
                     break
                 now = time.monotonic()
                 if now - last < 1 / FPS:
                     continue
+                ok, frame = cap.retrieve()
+                if not ok:
+                    break
                 last = now
                 self.update(self.gaze(frame, now), now)
             cap.release()

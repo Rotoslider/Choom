@@ -252,7 +252,7 @@ class Ears:
             tell_hologram("listen", choom, listening=False)
             return False
 
-    def wait_for_answer(self, quiet_polls=2, choom=None):
+    def wait_for_answer(self, quiet_polls=3, choom=None):
         """Until her turn has started and she has finished speaking: idle quiet_polls times in a row
         (an unread status is never taken for idle; that once opened the reply window mid-answer).
         A room needs longer: there are pauses between one Choom and the next. With choom, only her
@@ -263,7 +263,10 @@ class Ears:
             status = hologram_status()
             if status is not None:
                 if choom and choom != ROOM:
-                    busy = choom in (hologram_status("chat_turns") or []) or status.get("mood") == "speaking" or status.get("queued")
+                    # Her conversation turn, her voice, or her thinking on the glass (a heartbeat of
+                    # someone else doesn't count; one of hers during a conversation runs unseen).
+                    busy = (choom in (hologram_status("chat_turns") or []) or status.get("mood") == "speaking"
+                            or status.get("queued") or (status.get("mood") == "thinking" and status.get("choom") == choom))
                 else:
                     busy = status.get("mood") in ("thinking", "speaking") or status.get("queued")
                 if busy:
@@ -278,24 +281,37 @@ class Ears:
     def conversation(self, choom, pcm=None, rest="", follow_up=False):
         """A wake phrase was heard: listen, send, and keep listening for replies. follow_up: start in
         the reply window (she spoke first)."""
-        empty = 0
+        empty, window_until = 0, None
         while True:
             tell_hologram("listen", choom, listening=True)
             if pcm is None:
-                if follow_up:
-                    # His turn: a soft chime from the speaker, then the mic (not hearing the chime).
+                if follow_up and window_until is None:
+                    # His turn: once every voice has been quiet a moment, a soft chime, then the mic
+                    # (not hearing the chime). One chime per window: a cough or a short sound doesn't
+                    # chime again, the window just runs on.
+                    quiet_since = None
+                    for _ in range(600):
+                        if self.someone_speaking:
+                            quiet_since = None
+                        elif quiet_since is None:
+                            quiet_since = time.time()
+                        elif time.time() - quiet_since >= 1.5:
+                            break
+                        time.sleep(0.25)
                     tell_hologram("window", choom)
                     time.sleep(0.6)
                     while not self.frames.empty():
                         self.frames.get_nowait()
-                pcm = self.utterance(start_within=FOLLOW_UP_S if follow_up else COMMAND_WAIT_S, quiet_frames=SENTENCE_QUIET,
-                                     close_if_speaking=follow_up)
+                    window_until = time.time() + FOLLOW_UP_S
+                left = (window_until - time.time()) if follow_up else COMMAND_WAIT_S
+                pcm = None if left <= 0 else self.utterance(start_within=left, quiet_frames=SENTENCE_QUIET,
+                                                            close_if_speaking=follow_up)
                 if pcm is INTERRUPTED:
                     # Someone started talking (her next thought, a sister in the room): wait until it's
                     # quiet again, then a fresh chime.
                     tell_hologram("window_interrupted", choom)
-                    self.wait_for_answer(2, choom)
-                    pcm = None
+                    self.wait_for_answer(3, choom)
+                    pcm, window_until = None, None
                     continue
                 if pcm is None:
                     if follow_up:
@@ -319,7 +335,7 @@ class Ears:
                     return
                 pcm, rest = None, ""
                 continue
-            empty = 0
+            empty, window_until = 0, None
             if not sent:
                 return
             # Ignore what the mic hears while she thinks and talks (mostly her own voice).

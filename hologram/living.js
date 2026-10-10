@@ -1356,10 +1356,11 @@ function followAliveMouth(p) {
   if (clip < 0) return;
   const track = p.alive.clips[clip].mouth;
   const m = track[Math.min(p.aliveFrame, track.length - 1)]; // a clip jumped to by hand can start past the last frame
-  if (!m) return;
   const fu = frontMaterial.uniforms;
-  // In a full-body move her face is small and turning: no lip sync there (the track is mostly guessed).
-  fu.mouthOn.value = poseFrom(p.alive.clips[clip]) === 'full' ? 0 : 1;
+  // In a full-body move her face is small and turning: no lip sync there. Its track is empty, which
+  // used to return before this and left the mouth on from the clip before (a mouth over a twirl).
+  fu.mouthOn.value = poseFrom(p.alive.clips[clip]) === 'full' || !m ? 0 : 1;
+  if (!m) return;
   fu.mouthC.value.set(m[0], m[1]);
   fu.mouthSize.value.set(m[2], m[3], m[4]);
   fu.mouthTilt.value = m[5];
@@ -1636,7 +1637,7 @@ function chime(kind) {
     osc.start(t);
     osc.stop(t + 0.4);
   }
-  post('chime', { kind });
+  post('chime', { chime: kind });
 }
 
 // Each viseme as [jaw open, lips round, lips wide]; HeadAudio's weights blend them.
@@ -2165,7 +2166,13 @@ let last = performance.now();
 for (const p of portraits) if (p.hasBody) bodyFor(p); // real bodies load up front
 applyPortrait(current);
 
+// 30 frames a second: the clips are 24 and her motion reads the same, while drawing all 48 views at the
+// screen's 60 kept two of the NUC's cores busy (Chrome, and GNOME compositing it) around the clock.
+const RENDER_FPS = 30;
+let lastRender = 0;
 renderer.setAnimationLoop((now) => {
+  if (now - lastRender < 1000 / RENDER_FPS - 2) return;
+  lastRender = now;
   const dt = Math.min((now - last) / 1000, 0.1);
   last = now;
   if (!paused) simTime += dt;
