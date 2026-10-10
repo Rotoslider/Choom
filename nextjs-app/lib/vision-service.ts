@@ -7,6 +7,8 @@
 import { readFile } from 'fs/promises';
 import path from 'path';
 import sharp from 'sharp';
+import { visionInputSize } from '@/lib/vision-input-size';
+import { parseRegion, REGION_EXAMPLES, type Region } from '@/lib/vision-region';
 
 export interface VisionRequest {
   prompt: string;
@@ -18,6 +20,8 @@ export interface VisionRequest {
   imageBase64?: string;
   /** MIME type (default: image/png) */
   mimeType?: string;
+  /** Look closer at part of the image: "lower left", "top half", "lower left > top right", "x,y,w,h". */
+  region?: string;
 }
 
 export interface VisionResponse {
@@ -31,12 +35,13 @@ export interface VisionServiceConfig {
   maxTokens: number;
   temperature: number;
   apiKey?: string;
-  maxImageDimension?: number;      // default: 768
+  /** A custom longest side (Settings > Optic > profile, "custom image size"); otherwise the model's own size. */
+  maxImageDimension?: number;
   maxImageSizeBytes?: number;      // default: 10MB
 }
 
 const DEFAULT_MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024; // 10MB
-const DEFAULT_MAX_IMAGE_DIMENSION = 768; // Max width/height for vision model input
+const FALLBACK_MAX_IMAGE_DIMENSION = 1024; // when the model's own size can't be read (a remote model)
 
 /**
  * Resize an image buffer to fit within maxDimension, preserving aspect ratio.
@@ -47,24 +52,42 @@ const DEFAULT_MAX_IMAGE_DIMENSION = 768; // Max width/height for vision model in
 // vision limit (maxImageSizeBytes) applies to the shrunk image, not the original.
 const MAX_ORIGINAL_BYTES = 100 * 1024 * 1024;
 
-async function resizeForVision(input: Buffer, maxDimension: number): Promise<{ buffer: Buffer; mime: string }> {
-  const image = sharp(input, { limitInputPixels: false }).rotate(); // upright, per the photo's EXIF
-  const metadata = await image.metadata();
-  const width = metadata.width || 0;
-  const height = metadata.height || 0;
-
-  if (width <= maxDimension && height <= maxDimension) {
-    // Already small enough — just ensure it's PNG for consistency
-    const buf = await image.png().toBuffer();
-    return { buffer: buf, mime: 'image/png' };
+/**
+ * The image as the vision model should get it: upright (EXIF), cropped to a region if one was named
+ * (from the full-resolution original, so a close look keeps its detail), and scaled to the model's
+ * pixel budget (or a custom longest side). A cropped region is enlarged up to the budget (at most 4×)
+ * so the model spends its full attention on it; a whole image is never enlarged. Photos go as JPEG,
+ * screenshots and drawings as PNG.
+ */
+async function prepareForVision(
+  input: Buffer,
+  fit: { maxPixels?: number; maxDimension?: number; region?: Region | null },
+): Promise<{ buffer: Buffer; mime: string; width: number; height: number }> {
+  const upright = await sharp(input, { limitInputPixels: false }).rotate().toBuffer({ resolveWithObject: true });
+  const format = (await sharp(input, { limitInputPixels: false }).metadata()).format;
+  let img = sharp(upright.data, { limitInputPixels: false });
+  let w = upright.info.width, h = upright.info.height;
+  if (fit.region) {
+    const left = Math.min(w - 1, Math.max(0, Math.round(fit.region.x * w)));
+    const top = Math.min(h - 1, Math.max(0, Math.round(fit.region.y * h)));
+    const cw = Math.max(1, Math.min(w - left, Math.round(fit.region.w * w)));
+    const ch = Math.max(1, Math.min(h - top, Math.round(fit.region.h * h)));
+    img = img.extract({ left, top, width: cw, height: ch });
+    w = cw; h = ch;
   }
-
-  // Resize to fit within maxDimension x maxDimension. A big photo goes to JPEG (a PNG of it can still
-  // be several MB); a big screenshot or drawing stays PNG.
-  const photo = metadata.format === 'jpeg' || metadata.format === 'heif' || metadata.format === 'webp';
-  const fitted = image.resize(maxDimension, maxDimension, { fit: 'inside', withoutEnlargement: true });
-  const resized = photo ? await fitted.jpeg({ quality: 90 }).toBuffer() : await fitted.png().toBuffer();
-  return { buffer: resized, mime: photo ? 'image/jpeg' : 'image/png' };
+  const limits: number[] = [];
+  if (fit.maxPixels) limits.push(Math.sqrt(fit.maxPixels / (w * h)));
+  if (fit.maxDimension) limits.push(fit.maxDimension / Math.max(w, h));
+  let scale = limits.length ? Math.min(...limits) : 1;
+  scale = fit.region ? Math.min(scale, 4) : Math.min(scale, 1);
+  if (Math.abs(scale - 1) > 0.01) {
+    w = Math.max(1, Math.round(w * scale));
+    h = Math.max(1, Math.round(h * scale));
+    img = img.resize(w, h, { kernel: 'lanczos3' });
+  }
+  const photo = format === 'jpeg' || format === 'heif' || format === 'webp';
+  const buffer = photo ? await img.jpeg({ quality: 90 }).toBuffer() : await img.png().toBuffer();
+  return { buffer, mime: photo ? 'image/jpeg' : 'image/png', width: w, height: h };
 }
 
 export class VisionService {
@@ -73,8 +96,10 @@ export class VisionService {
   private maxTokens: number;
   private temperature: number;
   private apiKey?: string;
-  private maxImageDimension: number;
+  private customImageDimension?: number;
   private maxImageSizeBytes: number;
+  /** What the last analysis sent, for the tool's result and the logs. */
+  lastSent?: { width: number; height: number; region?: Region | null; sizing: string };
 
   /** A huge original is refused before it is decoded; anything under that is shrunk first. */
   private checkOriginal(bytes: number): void {
@@ -84,7 +109,7 @@ export class VisionService {
   }
 
   /** The vision limit applies to the shrunk image. */
-  private checkShrunk(resized: { buffer: Buffer; mime: string }): { buffer: Buffer; mime: string } {
+  private checkShrunk<T extends { buffer: Buffer; mime: string }>(resized: T): T {
     if (resized.buffer.length > this.maxImageSizeBytes) {
       throw new Error(`Image too large even after shrinking (${(resized.buffer.length / 1024 / 1024).toFixed(1)}MB). Maximum: ${Math.round(this.maxImageSizeBytes / 1024 / 1024)}MB`);
     }
@@ -97,7 +122,7 @@ export class VisionService {
     this.maxTokens = config.maxTokens;
     this.temperature = config.temperature;
     this.apiKey = config.apiKey;
-    this.maxImageDimension = config.maxImageDimension || DEFAULT_MAX_IMAGE_DIMENSION;
+    this.customImageDimension = config.maxImageDimension || undefined;
     this.maxImageSizeBytes = config.maxImageSizeBytes || DEFAULT_MAX_IMAGE_SIZE_BYTES;
   }
 
@@ -107,6 +132,17 @@ export class VisionService {
    */
   async analyzeImage(request: VisionRequest, workspaceRoot?: string): Promise<VisionResponse> {
     const { prompt, imagePath, imageUrl, imageBase64, mimeType } = request;
+    const region = request.region ? parseRegion(request.region) : null;
+    if (request.region && !region) {
+      throw new Error(`Could not read the region "${request.region}". Use ${REGION_EXAMPLES}.`);
+    }
+    // Sized for this model: its own pixel budget (read from its files), unless a custom size is set.
+    const auto = this.customImageDimension ? null : await visionInputSize(this.model);
+    const fit = this.customImageDimension
+      ? { maxDimension: this.customImageDimension, region, sizing: `custom ${this.customImageDimension}px` }
+      : auto
+        ? { maxPixels: auto.maxPixels, region, sizing: `model ${Math.round(auto.maxPixels / 1000)}k px (${auto.source})` }
+        : { maxDimension: FALLBACK_MAX_IMAGE_DIMENSION, region, sizing: `fallback ${FALLBACK_MAX_IMAGE_DIMENSION}px` };
 
     let base64Data: string;
     let resolvedMime = mimeType || 'image/png';
@@ -129,9 +165,10 @@ export class VisionService {
       }
       const rawBuffer = await readFile(fullPath);
       this.checkOriginal(rawBuffer.length);
-      const resized = this.checkShrunk(await resizeForVision(rawBuffer, this.maxImageDimension));
+      const resized = this.checkShrunk(await prepareForVision(rawBuffer, fit));
       base64Data = resized.buffer.toString('base64');
       resolvedMime = resized.mime;
+      this.lastSent = { width: resized.width, height: resized.height, region, sizing: fit.sizing };
     } else if (imageUrl) {
       // Fetch from URL
       const response = await fetch(imageUrl);
@@ -140,16 +177,18 @@ export class VisionService {
       }
       const arrayBuffer = await response.arrayBuffer();
       this.checkOriginal(arrayBuffer.byteLength);
-      const resized = this.checkShrunk(await resizeForVision(Buffer.from(arrayBuffer), this.maxImageDimension));
+      const resized = this.checkShrunk(await prepareForVision(Buffer.from(arrayBuffer), fit));
       base64Data = resized.buffer.toString('base64');
       resolvedMime = resized.mime;
+      this.lastSent = { width: resized.width, height: resized.height, region, sizing: fit.sizing };
     } else if (imageBase64) {
       // Use raw base64
       this.checkOriginal(Math.ceil(imageBase64.length * 0.75));
       const rawBuffer = Buffer.from(imageBase64, 'base64');
-      const resized = this.checkShrunk(await resizeForVision(rawBuffer, this.maxImageDimension));
+      const resized = this.checkShrunk(await prepareForVision(rawBuffer, fit));
       base64Data = resized.buffer.toString('base64');
       resolvedMime = resized.mime;
+      this.lastSent = { width: resized.width, height: resized.height, region, sizing: fit.sizing };
     } else {
       throw new Error('One of imagePath, imageUrl, or imageBase64 is required');
     }

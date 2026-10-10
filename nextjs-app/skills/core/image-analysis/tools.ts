@@ -4,7 +4,7 @@ export const tools: ToolDefinition[] = [
   {
     name: 'analyze_image',
     description:
-      'Analyze an image using a vision-capable LLM. Use when the user asks you to look at, describe, analyze, or answer questions about an image. Can read images from the workspace, a URL, raw base64 data, or a previously generated image by ID.',
+      'Analyze an image using a vision-capable LLM. Use when the user asks you to look at, describe, analyze, or answer questions about an image. Can read images from the workspace, a URL, raw base64 data, or a previously generated image by ID. To look closer at a detail, call it again with region (e.g. "lower left"), which zooms into that part of the original.',
     parameters: {
       type: 'object',
       properties: {
@@ -31,6 +31,10 @@ export const tools: ToolDefinition[] = [
         mime_type: {
           type: 'string',
           description: 'MIME type of the image (default: auto-detected or image/png)',
+        },
+        region: {
+          type: 'string',
+          description: 'Look closer at part of the image, cut from the full-resolution original: "top half", "lower left", "right third", "center", "top left quarter"; nest with ">" to zoom further ("lower left > top right"); or "x,y,w,h" fractions ("0.1,0.6,0.3,0.3"). When Donny says something is in the lower left, look there. Do NOT make enlarged or cropped copies yourself; use this.',
         },
       },
       required: ['prompt'],

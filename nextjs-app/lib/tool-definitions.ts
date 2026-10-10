@@ -1038,6 +1038,10 @@ export const visionTools: ToolDefinition[] = [
           type: 'string',
           description: 'MIME type of the image (default: auto-detected or image/png)',
         },
+        region: {
+          type: 'string',
+          description: 'Look closer at part of the image, cut from the full-resolution original: "top half", "lower left", "right third", "center", "top left quarter"; nest with ">" to zoom further ("lower left > top right"); or "x,y,w,h" fractions ("0.1,0.6,0.3,0.3"). When Donny says something is in the lower left, look there. Do NOT make enlarged or cropped copies yourself; use this.',
+        },
       },
       required: ['prompt'],
     },

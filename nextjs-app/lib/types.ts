@@ -139,7 +139,9 @@ export interface VisionModelProfile {
   builtIn?: boolean;
   maxTokens?: number;
   temperature?: number;
-  maxImageDimension?: number;      // replaces hardcoded 768
+  /** Use maxImageDimension instead of the model's own image size (read from its files). */
+  customImageSize?: boolean;
+  maxImageDimension?: number;      // only with customImageSize
   maxImageSizeBytes?: number;      // replaces hardcoded 10MB
   supportedFormats?: string[];     // e.g. ['png', 'jpeg', 'webp']
   outputFormat?: string;           // convert to before sending

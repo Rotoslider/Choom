@@ -91,7 +91,7 @@ export default class ImageAnalysisHandler extends BaseSkillHandler {
       if (visionProfile) {
         if (visionProfile.maxTokens !== undefined) visionSettings.maxTokens = visionProfile.maxTokens;
         if (visionProfile.temperature !== undefined) visionSettings.temperature = visionProfile.temperature;
-        visionMaxDimension = visionProfile.maxImageDimension;
+        visionMaxDimension = visionProfile.customImageSize ? visionProfile.maxImageDimension : undefined; // else the model's own size
         visionMaxSizeBytes = visionProfile.maxImageSizeBytes;
         console.log(`   👁️  Vision profile applied: "${visionProfile.label || visionProfile.modelId}" (maxDim=${visionMaxDimension}, maxSize=${visionMaxSizeBytes ? Math.round(visionMaxSizeBytes / 1024 / 1024) + 'MB' : 'default'})`);
       }
@@ -175,14 +175,18 @@ export default class ImageAnalysisHandler extends BaseSkillHandler {
         imageUrl: toolCall.arguments.image_url as string | undefined,
         imageBase64: imageBase64,
         mimeType: toolCall.arguments.mime_type as string | undefined,
+        region: typeof toolCall.arguments.region === 'string' ? toolCall.arguments.region : undefined,
       }, WORKSPACE_ROOT);
 
       console.log(`   👁️  Vision analysis complete (${result.model}): ${result.analysis.slice(0, 100)}...`);
 
+      const sent = visionService.lastSent;
+      if (sent) console.log(`   👁️  Sent ${sent.width}×${sent.height}${sent.region ? ` (region "${toolCall.arguments.region}")` : ''}, ${sent.sizing}`);
       return this.success(toolCall, {
         success: true,
         analysis: result.analysis,
         model: result.model,
+        ...(sent && { looked_at: `${sent.region ? `the region "${toolCall.arguments.region}", ` : 'the whole image, '}${sent.width}×${sent.height} px` }),
       });
     } catch (err) {
       const raw = err instanceof Error ? err.message : 'Unknown error';

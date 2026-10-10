@@ -5,6 +5,7 @@ import { Eye, RefreshCw, Check, X, ChevronDown, ChevronRight, Plus, RotateCcw, P
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
+import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
 import {
   Select,
@@ -150,7 +151,6 @@ export function VisionSettings() {
       label: newProfileId.trim().split('/').pop() || newProfileId.trim(),
       maxTokens: 1024,
       temperature: 0.3,
-      maxImageDimension: 768,
       maxImageSizeBytes: 10 * 1024 * 1024,
       supportedFormats: ['png', 'jpeg'],
     };
@@ -474,7 +474,7 @@ export function VisionSettings() {
                   <VisionProfileEditor draft={editDraft} setDraft={setEditDraft} />
                 ) : (
                   <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                    {profile.maxImageDimension !== undefined && <span>maxDim={profile.maxImageDimension}px</span>}
+                    {profile.customImageSize && profile.maxImageDimension !== undefined ? <span>maxDim={profile.maxImageDimension}px</span> : <span>image size: model&apos;s own</span>}
                     {profile.maxImageSizeBytes !== undefined && <span>maxSize={Math.round(profile.maxImageSizeBytes / 1024 / 1024)}MB</span>}
                     {profile.maxTokens !== undefined && <span>maxTokens={profile.maxTokens}</span>}
                     {profile.temperature !== undefined && <span>temp={profile.temperature}</span>}
@@ -503,6 +503,14 @@ function VisionProfileEditor({
   setDraft: React.Dispatch<React.SetStateAction<Partial<VisionModelProfile>>>;
 }) {
   const formatOptions = ['png', 'jpeg', 'webp', 'gif', 'bmp'];
+  // The model's own image size, read from its files (what's used unless a custom size is set).
+  const [nativeSize, setNativeSize] = useState<{ maxPixels: number; nativePixels: number; source: string } | null | undefined>(undefined);
+  useEffect(() => {
+    if (!draft.modelId) return;
+    fetch(`/api/vision/input-size?model=${encodeURIComponent(draft.modelId)}`)
+      .then((r) => r.json()).then((d) => setNativeSize(d.size ?? null)).catch(() => setNativeSize(null));
+  }, [draft.modelId]);
+  const sideAt43 = (px: number) => `${Math.round(Math.sqrt(px * 4 / 3))}×${Math.round(Math.sqrt(px * 3 / 4))}`;
 
   return (
     <div className="space-y-3 pt-2 border-t">
@@ -517,19 +525,36 @@ function VisionProfileEditor({
         />
       </div>
 
-      {/* Max Image Dimension */}
+      {/* Image size: the model's own unless overridden */}
       <div className="space-y-1">
-        <div className="flex justify-between">
-          <label className="text-xs font-medium">Max Image Dimension</label>
-          <span className="text-xs text-muted-foreground">{draft.maxImageDimension ?? 768}px</span>
+        <div className="flex items-center justify-between">
+          <label className="text-xs font-medium">Custom image size</label>
+          <Switch
+            checked={!!draft.customImageSize}
+            onCheckedChange={(v) => setDraft(d => ({ ...d, customImageSize: v, maxImageDimension: v ? (d.maxImageDimension ?? 1024) : d.maxImageDimension }))}
+          />
         </div>
-        <Slider
-          value={[draft.maxImageDimension ?? 768]}
-          onValueChange={([v]) => setDraft(d => ({ ...d, maxImageDimension: v }))}
-          min={256} max={4096} step={64}
-          className="hover:cursor-pointer"
-        />
-        <p className="text-[10px] text-muted-foreground">Images will be resized to fit within this dimension</p>
+        {!draft.customImageSize ? (
+          <p className="text-[10px] text-muted-foreground">
+            {nativeSize === undefined ? 'Reading the model\'s image size…'
+              : nativeSize
+                ? `Uses the model's own size: ${nativeSize.maxPixels.toLocaleString()} px (about ${sideAt43(nativeSize.maxPixels)} for a 4:3 photo)${nativeSize.nativePixels > nativeSize.maxPixels ? `, capped from ${nativeSize.nativePixels.toLocaleString()} px for speed` : ''}. From ${nativeSize.source}. Changes with the model.`
+                : 'This model\'s image size couldn\'t be read (not in LM Studio on this machine), so images are sent at up to 1024 px.'}
+          </p>
+        ) : (
+          <>
+            <div className="flex justify-between">
+              <span className="text-[10px] text-muted-foreground">Longest side</span>
+              <span className="text-xs text-muted-foreground">{draft.maxImageDimension ?? 1024}px</span>
+            </div>
+            <Slider
+              value={[draft.maxImageDimension ?? 1024]}
+              onValueChange={([v]) => setDraft(d => ({ ...d, maxImageDimension: v }))}
+              min={256} max={4096} step={64}
+              className="hover:cursor-pointer"
+            />
+          </>
+        )}
       </div>
 
       {/* Max Image Size */}
