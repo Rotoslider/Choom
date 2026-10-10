@@ -77,10 +77,20 @@ def cancel(job_id):
 
 
 def alive(pid):
+    """Whether a job's process still runs. One the Studio started itself is reaped here when it ends
+    (otherwise it lingers as a zombie, which still answers a signal); one started by an earlier
+    Studio belongs to init and is only checked."""
+    if not pid:
+        return False
+    try:
+        done, _ = os.waitpid(pid, os.WNOHANG)
+        return done == 0
+    except ChildProcessError:
+        pass
     try:
         os.kill(pid, 0)
         return True
-    except (ProcessLookupError, TypeError):
+    except ProcessLookupError:
         return False
 
 
@@ -191,14 +201,19 @@ def start_workers():
     with lock:
         for j in jobs:
             if j["status"] == "running" and not (j["kind"] == "render" and alive(j.get("pid"))):
+                status = "failed"
                 if j["kind"] == "render":
                     # Its Wan2GP is gone too: keep what it finished, the rest goes back to planned.
-                    landed = render.collect()
-                    render.unqueue(j["args"]["queue"])
-                    j["error"] = f"stopped while the Studio was down; {len(landed)} more clips collected, the rest are planned again"
+                    for cid, n in render.collect():
+                        add("review", {"choom": cid, "clips": [n]})
+                    missing = render.unqueue(j["args"]["queue"])
+                    if missing:
+                        j["error"] = f"stopped while the Studio was down; planned again: {', '.join(missing)}"
+                    else:
+                        status = "done"
                 else:
                     j["error"] = "the Studio stopped while this ran"
-                j.update(status="failed", ended=time.time())
+                j.update(status=status, ended=time.time())
         save()
     resumed = [j for j in jobs if j["status"] == "running"]
     for j in resumed:
