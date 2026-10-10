@@ -99,7 +99,9 @@ function render() {
   const counts = Object.values(c.clips).reduce((a, k) => ({ ...a, [k.status]: (a[k.status] || 0) + 1 }), {});
   $('#choomName').textContent = c.name;
   $('#choomLine').textContent = [
-    `${c.sequence.length} clips on the glass`, `${Object.keys(c.looks).length} looks`,
+    c.glass.added.length || c.glass.removed.length
+      ? `${c.sequence.length - c.glass.added.length + c.glass.removed.length} clips on the glass (${c.sequence.length} once built)`
+      : `${c.sequence.length} clips on the glass`, `${Object.keys(c.looks).length} looks`,
     counts.rendered ? `${counts.rendered} to review` : null, counts.planned ? `${counts.planned} planned` : null,
     counts.queued ? `${counts.queued} rendering` : null,
   ].filter(Boolean).join(' · ');

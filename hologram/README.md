@@ -101,3 +101,8 @@ usual failures (fog, a camera push-in, a colour shift, a seam, a cut), and lets 
 re-roll it. Her clips on the glass are arranged by drag and drop, look by look, with how many
 minutes of quiet moments she has before one repeats; *Build* puts them on the glass when she's
 quiet. Every clip's prompt, seed and decision is kept in her project file.
+
+Start with [your first Choom on the glass](studio/docs/tutorial-new-choom.md) on a fresh install, or
+[a new outfit for a Choom you have](studio/docs/tutorial-outfit.md).
+
+![Glass Studio: Optic's clips on the glass](studio/docs/images/glass.jpg)
