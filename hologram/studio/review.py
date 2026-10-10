@@ -92,8 +92,20 @@ def sheet(src, out, count=8, w=208, h=276):
 
 
 def check(cid, names, force=False):
+    """Sheets and checks for clips, saved to her project every 20 clips (a long run that gets stopped
+    keeps what it did)."""
     proj = Project.load(cid)
-    results = {}
+    results, pending = {}, {}
+
+    def save():
+        if pending:
+            with editing(cid) as p:
+                for name, (m, flags) in pending.items():
+                    if name in p.clips:
+                        p.clips[name]["checks"] = m
+                        p.clips[name]["flags"] = flags
+            pending.clear()
+
     for name in names:
         clip = proj.clips.get(name)
         src = CLIPS / f"{name}.mp4"
@@ -106,13 +118,11 @@ def check(cid, names, force=False):
         if not fresh or force:
             sheet(src, out)
         m, flags = measure(src, loop=clip["from"] == clip["to"], lenient=loose(name, clip))
-        results[name] = (m, flags)
-        print(f"{name}: {', '.join(flags) or 'clean'}  {m}")
-    if results:
-        with editing(cid) as proj:
-            for name, (m, flags) in results.items():
-                proj.clips[name]["checks"] = m
-                proj.clips[name]["flags"] = flags
+        results[name] = pending[name] = (m, flags)
+        print(f"{name}: {', '.join(flags) or 'clean'}  {m}", flush=True)
+        if len(pending) >= 20:
+            save()
+    save()
     return results
 
 

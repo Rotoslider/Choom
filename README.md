@@ -647,7 +647,9 @@ Every saved Choom response — assistant messages in 1:1 chats and Choom-authore
 The Chooms can live in a [Looking Glass Portrait](https://lookingglassfactory.com) holographic display
 as moving 3D reliefs: whoever is talking comes to the glass and speaks in her own voice, and you can
 talk to them at the tower ("OK Aloy", "OK Chooms"). The client lives in `hologram/` and runs on the
-machine the Portrait is plugged into: see [hologram/README.md](hologram/README.md).
+machine the Portrait is plugged into: see [hologram/README.md](hologram/README.md). Their clips, outfits
+and sequences are made in [Glass Studio](hologram/studio/README.md), a page on the GPU machine that plans,
+renders, checks and arranges them, so a new outfit or a new Choom can be brought to the glass.
 
 On the app side:
 

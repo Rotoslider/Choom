@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Glass Studio</title>
+<link rel="stylesheet" href="/web/studio.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <span class="mark" aria-hidden="true"></span>
+    <div>
+      <h1>Glass Studio</h1>
+      <p class="sub">Clips, looks and sequences for the Chooms on the Looking Glass</p>
+    </div>
+  </div>
+  <nav id="chooms" class="chooms" aria-label="Chooms"></nav>
+  <button id="jobsButton" class="jobs-pill" type="button" aria-controls="jobsPanel">
+    <span class="dot"></span><span id="jobsText">Idle</span>
+  </button>
+</header>
+
+<main id="main">
+  <section class="intro" id="intro">
+    <p>Loading the Chooms…</p>
+  </section>
+
+  <div id="choom" hidden>
+    <div class="choom-head">
+      <div>
+        <h2 id="choomName"></h2>
+        <p id="choomLine" class="muted"></p>
+      </div>
+      <div id="tabs" class="tabs" role="tablist">
+        <button role="tab" data-tab="review">Review</button>
+        <button role="tab" data-tab="glass">On the glass</button>
+        <button role="tab" data-tab="plan">Plan &amp; render</button>
+        <button role="tab" data-tab="looks">Looks</button>
+      </div>
+    </div>
+
+    <!-- Review: rendered clips waiting for a decision, with their contact sheets and checks -->
+    <section data-pane="review" class="pane">
+      <div class="toolbar">
+        <div class="chips" id="reviewFilter">
+          <button data-f="rendered" class="on">To review</button>
+          <button data-f="flagged">Flagged</button>
+          <button data-f="kept">Kept</button>
+          <button data-f="dropped">Dropped</button>
+          <button data-f="all">All</button>
+        </div>
+        <label class="select">Look <select id="reviewLook"></select></label>
+        <button id="makeSheets" class="ghost" type="button">Make missing sheets</button>
+      </div>
+      <p class="hint">Eight frames from first to last. Flags are hints from the automatic checks: <b>background</b> (the black lifts: fog, a glow, a flash), <b>push-in</b> (she grows: the camera moved), <b>color</b>, <b>seam</b> (the loop doesn't close), <b>cut</b> (a new shot). Keys on a card: <kbd>K</kbd> keep, <kbd>D</kbd> drop, <kbd>R</kbd> re-roll, <kbd>Space</kbd> play.</p>
+      <div id="reviewGrid" class="review-grid"></div>
+      <div id="reviewMore" class="more"></div>
+    </section>
+
+    <!-- On the glass: her sequence per look; drag clips on, off, or onto another to replace it -->
+    <section data-pane="glass" class="pane">
+      <div class="build-bar" id="buildBar"></div>
+      <p class="hint">Drag a clip into <b>On the glass</b> to add it, out to take it off, or onto another clip to swap them. Hover to play. Changes reach the glass when you build.</p>
+      <div id="glassLooks"></div>
+    </section>
+
+    <!-- Plan & render: pick actions from the library for a look, check the prompts, render -->
+    <section data-pane="plan" class="pane">
+      <div class="plan-cols">
+        <div class="plan-library">
+          <div class="toolbar">
+            <label class="select">Look <select id="planLook"></select></label>
+            <span id="planLookInfo" class="muted"></span>
+          </div>
+          <div id="library"></div>
+          <details class="custom">
+            <summary>Write your own clip</summary>
+            <div class="custom-form">
+              <label>Kind
+                <select id="customKind">
+                  <option value="moment">Quiet moment</option>
+                  <option value="talk">Talking loop</option>
+                  <option value="oops">Oops face</option>
+                  <option value="pose">Selfie move</option>
+                </select></label>
+              <label>Short name <input id="customKey" placeholder="adjustglasses" pattern="[a-z0-9]+"></label>
+              <label>Length
+                <select id="customSeconds"><option value="5">5 s</option><option value="7">7 s</option></select></label>
+              <label class="wide">What she does
+                <textarea id="customText" rows="3" placeholder="She pushes her glasses up her nose with one finger, then smiles at the viewer."></textarea></label>
+              <button id="customAdd" type="button">Add to the plan</button>
+            </div>
+          </details>
+        </div>
+        <aside class="plan-queue">
+          <h3>Planned</h3>
+          <div id="planned"></div>
+          <div class="render-box" id="renderBox"></div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- Looks: her pictures and the lines every prompt in that look starts with -->
+    <section data-pane="looks" class="pane">
+      <p class="hint">Each look is a clean picture of her and the line that describes her in it. Every clip in the look starts and ends on that picture; the <b>subject</b> starts every prompt (say “a plain pure black background”), the <b>keep</b> line follows it in every clip (Genesis: her motes stay on her), and loops finish with the <b>ending</b>.</p>
+      <div id="looksGrid" class="looks-grid"></div>
+    </section>
+  </div>
+</main>
+
+<aside id="jobsPanel" class="jobs-panel" hidden>
+  <div class="jobs-head"><h3>Work</h3><button id="jobsClose" class="ghost" type="button" aria-label="Close">✕</button></div>
+  <div id="jobsList"></div>
+</aside>
+
+<dialog id="player">
+  <video id="playerVideo" controls loop muted playsinline></video>
+  <div class="player-foot"><span id="playerName"></span><button id="playerClose" class="ghost" type="button">Close</button></div>
+</dialog>
+
+<div id="toast" class="toast" role="status" hidden></div>
+<script src="/web/studio.js"></script>
+</body>
+</html>

@@ -16,7 +16,7 @@ import jobs
 import plan
 import prompts
 import render
-from config import CFG, CLIPS, PICTURES, SHEETS, WORKSPACE, ensure_workspace
+from config import CFG, CLIPS, PICTURES, PORTRAITS, SHEETS, WORKSPACE, ensure_workspace
 from project import STATUSES, Project, editing, next_seeds
 
 WEB = Path(__file__).resolve().parent / "web"
@@ -34,8 +34,17 @@ def details(proj):
         seconds = sum(prompts.FRAMES_SECONDS.get(proj.clips[n].get("frames") or 124, 5) for n in quiet)
         looks[look] = {"onGlass": len(on), "quiet": len(quiet), "minutes": round(seconds / 60, 1)}
     planned = [c for c in proj.clips.values() if c["status"] == "planned"]
-    return {**proj.data, "stats": looks, "problems": build.problems(proj),
+    # What the glass shows now (her alive.json) against her sequence: changes not built yet.
+    alive = PORTRAITS / proj.id / "alive.json"
+    built = [c["source"].removesuffix(".mp4") for c in json.loads(alive.read_text())["clips"]] if alive.exists() else []
+    glass = {"added": [n for n in proj.sequence if n not in built], "removed": [n for n in built if n not in proj.sequence]}
+    return {**proj.data, "stats": looks, "problems": build.problems(proj), "glass": glass, "color": colors().get(proj.id),
             "plannedMinutes": round(sum(render.minutes(c.get("frames") or 124) for c in planned))}
+
+
+def colors():
+    manifest = PORTRAITS / "manifest.json"
+    return {m["id"]: m.get("color") for m in json.loads(manifest.read_text())} if manifest.exists() else {}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -104,7 +113,8 @@ class Handler(BaseHTTPRequestHandler):
             folder = {"clip": CLIPS, "sheet": SHEETS, "picture": PICTURES}.get(parts[1])
             return self.send_file(folder / parts[2], cache=parts[1] != "sheet") if folder else self.send_error(404)
         if parts[:2] == ["api", "chooms"]:
-            return self.send_json({"chooms": [Project.load(c).summary() for c in Project.ids()],
+            tint = colors()
+            return self.send_json({"chooms": [{**Project.load(c).summary(), "color": tint.get(c)} for c in Project.ids()],
                                    "workspace": str(WORKSPACE), "minutesPerClip": CFG["minutes_per_clip"]})
         if parts[:2] == ["api", "choom"] and len(parts) == 3 and NAME.match(parts[2]):
             if not Project.file(parts[2]).exists():
@@ -171,15 +181,17 @@ class Handler(BaseHTTPRequestHandler):
                 for n, seed in zip(names, next_seeds(len(names))):
                     proj.reroll(n, seed)
             elif action == "plan":
-                results = plan.add(proj, data["look"], data["items"])
+                library = {(a["pack"], a["key"]): a for a in plan.library()["actions"]}
+                items = [library[(i["pack"], i["key"])] if "pack" in i else i for i in data["items"]]
+                results = plan.add(proj, data["look"], items)
                 return self.send_json({"results": results, "choom": details(proj)})
             elif action == "rewrite":
                 warnings = plan.rewrite(proj, data["name"], data.get("text"), data.get("seconds"))
                 return self.send_json({"warnings": warnings, "choom": details(proj)})
             elif action == "unplan":
                 for n in names:
-                    if proj.clips[n]["status"] == "planned" and not proj.clips[n].get("history"):
-                        del proj.clips[n]
+                    if proj.clips[n]["status"] == "planned":
+                        proj.unplan(n)
             elif action == "look":
                 look = proj.looks.setdefault(data["look"], {})
                 for key in ("subject", "ending", "keep", "picture"):
@@ -208,10 +220,11 @@ class Handler(BaseHTTPRequestHandler):
 
 def serve():
     ensure_workspace()
-    jobs.start_workers()
     host, port = CFG.get("host", "127.0.0.1"), int(CFG["port"])
-    print(f"Glass Studio on http://{host}:{port}  (workspace {WORKSPACE})")
-    ThreadingHTTPServer((host, port), Handler).serve_forever()
+    httpd = ThreadingHTTPServer((host, port), Handler)  # first, so a second Studio stops here, before any work
+    jobs.start_workers()
+    print(f"Glass Studio on http://{host}:{port}  (workspace {WORKSPACE})", flush=True)
+    httpd.serve_forever()
 
 
 if __name__ == "__main__":

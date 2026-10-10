@@ -18,3 +18,5 @@ telemetry.log.1
 .venv-ears/
 ears.log
 eyes.log
+# Glass Studio's log
+studio/studio.log

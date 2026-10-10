@@ -55,6 +55,11 @@ fi
 if [[ -x "$DIR/.venv-ears/bin/python" && "${HOLOGRAM_EYES:-1}" != 0 ]]; then
   nohup "$DIR/.venv-ears/bin/python" "$DIR/tower_eyes.py" > "$DIR/eyes.log" 2>&1 &
 fi
+# Glass Studio (studio/README.md) on port 8767, if it isn't already up. Relaunches leave it running,
+# so a render it started keeps its watcher; HOLOGRAM_STUDIO=0 turns it off.
+if [[ "${HOLOGRAM_STUDIO:-1}" != 0 ]] && ! pgrep -f -- "studio/studio.py serve" > /dev/null; then
+  setsid nohup python3 "$DIR/studio/studio.py" serve > "$DIR/studio/studio.log" 2>&1 < /dev/null &
+fi
 
 nohup google-chrome \
   --user-data-dir="$PROFILE" \

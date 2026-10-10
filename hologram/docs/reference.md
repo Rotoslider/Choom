@@ -76,8 +76,18 @@ same picture of her, so the page can play them in any order without a visible se
 
 The clip videos and caches stay local (`.gitignore`); without them a Choom shows her still relief.
 
+**Glass Studio** (`studio/`, [README](../studio/README.md)) runs these steps from a page at
+http://127.0.0.1:8767. It keeps one project file per Choom in the workspace's `studio/` folder (her
+looks, every clip with its prompt, seed and status, and her sequence, the list `make_alive.py` is
+given). It plans clips from `studio/packs.json` with the prompt lessons above built in
+(`studio/prompts.py`), writes Wan2GP queues and renames their outputs by seed, makes each clip's
+contact sheet with automatic checks (`studio/review.py`), and builds a sequence: cut-outs, then
+`make_alive.py`, then `tools/relaunch_when_quiet.sh`, then `--prune`. Renders and builds take turns
+on the GPU. The four Chooms' first 784 clips were adopted with `studio/import_existing.py` from the
+old queues and their seed plans.
+
 **Roles.** A clip's action name gives its moods and the pose it starts and ends in (`ROLES` in
-`tools/make_alive.py`), or its kind prefix does: `idle_…` (a quiet moment), `relaxed_…` (one with
+`tools/clip_roles.py`, shared by `make_alive.py` and Glass Studio), or its kind prefix does: `idle_…` (a quiet moment), `relaxed_…` (one with
 Aloy's hand down), `full_…` (a full-body quiet moment), `pose_…` / `fullpose_…` (selfie moves). An
 outfit prefix puts it in other clothes: `evening-relaxed`, `cold-relaxed_glance`. The page picks clips
 by what she is doing:

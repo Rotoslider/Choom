@@ -57,7 +57,7 @@ class Project:
 
     @classmethod
     def ids(cls):
-        return sorted(p.stem for p in PROJECTS.glob("*.json"))
+        return sorted(p.stem for p in PROJECTS.glob("*.json") if p.stem != "jobs")  # jobs.json is the work list
 
     @classmethod
     def load(cls, cid):
@@ -118,10 +118,27 @@ class Project:
     def reroll(self, name, seed):
         """Plan the clip again under the same name with a new seed; the old take goes in its history."""
         clip = self.clips[name]
-        clip.setdefault("history", []).append({k: clip.get(k) for k in ("seed", "status", "note", "flags", "queue")})
+        old = {k: clip.get(k) for k in ("seed", "status", "note", "flags", "checks", "queue", "rendered")}
+        old["onGlass"] = name in self.sequence
+        clip.setdefault("history", []).append(old)
         clip.update({"seed": seed, "status": "planned", "flags": [], "note": "", "queue": None})
+        clip.pop("checks", None)
         if name in self.sequence and name != self.sequence[0]:
             self.sequence.remove(name)
+
+    def unplan(self, name):
+        """Take a planned clip back out: a new one is forgotten, a re-roll goes back to its old take."""
+        clip = self.clips[name]
+        if not clip.get("history"):
+            del self.clips[name]
+            return
+        old = clip["history"].pop()
+        on_glass = old.pop("onGlass", False)
+        clip.update({k: v for k, v in old.items() if v is not None})
+        if not clip["history"]:
+            del clip["history"]
+        if on_glass and clip["status"] == "kept" and name not in self.sequence:
+            self.sequence.append(name)
 
     def place(self, name, on=True):
         """Put a kept clip on the glass, or take it off (her main idle always stays, first)."""

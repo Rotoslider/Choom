@@ -58,6 +58,8 @@ app: listening, thinking, using tools, sleeping at night.
 5. Optional, Home Assistant: put `ha_url`, `ha_token` and `presence.json` in `~/.config/choom-hologram`
    (see the [reference](docs/reference.md#presence-home-assistant)).
 6. Run `./launch.sh` (and `./launch.sh stop` to close it).
+7. To make clips, looks and sequences: set paths in `~/.config/choom-hologram/studio.json` and open
+   Glass Studio at http://127.0.0.1:8767 (see [studio/README.md](studio/README.md)).
 
 ## Using it
 
@@ -89,3 +91,13 @@ Choom app (Mac)  --events, voice-->  server.py  -->  living.js (Chrome, full-scr
 The moving reliefs are made with Wan2GP (MiniMax H3 clips from each Choom's cleaned render),
 U2-Net cut-outs, Depth Anything V2 depth and MediaPipe mouth tracking: see the
 [technical reference](docs/reference.md) for the pipeline, configuration and debugging.
+
+## Glass Studio
+
+[Glass Studio](studio/README.md) is the workshop for all of this, at http://127.0.0.1:8767 on the GPU
+machine. It plans clips for a Choom from a library of actions that have worked on the glass, renders
+them with Wan2GP (now, or tonight), shows each one as a contact sheet with automatic checks for the
+usual failures (fog, a camera push-in, a colour shift, a seam, a cut), and lets you keep, drop or
+re-roll it. Her clips on the glass are arranged by drag and drop, look by look, with how many
+minutes of quiet moments she has before one repeats; *Build* puts them on the glass when she's
+quiet. Every clip's prompt, seed and decision is kept in her project file.
