@@ -149,13 +149,13 @@ export const tools: ToolDefinition[] = [
   },
   {
     name: 'ha_get_camera_snapshot',
-    description: 'Fetch a JPEG frame from a Home Assistant camera and save it to the workspace. Use this for camera.* entities (Reolink, generic MJPEG, etc.) — do NOT use ha_call_service with camera.snapshot. You can pass a loose camera name (e.g. "garage", "tower") — it resolves to the real camera, or returns the camera list if unclear, so do NOT guess ids. For PTZ cameras the result also lists THAT camera\'s presets plus the exact call to move it. Returns a workspace path usable with analyze_image, send_notification(file_paths=...), or inline display in chat.',
+    description: 'Fetch a JPEG frame from a Home Assistant camera and save it to the workspace. Use this for camera.* entities (Reolink, generic MJPEG, etc.) — do NOT use ha_call_service with camera.snapshot. You can pass a loose camera name (e.g. "garage", "tower") — it resolves to the real camera, or returns the camera list if unclear, so do NOT guess ids. Pass "glass" for the camera on top of the Looking Glass at Donny's desk (it looks at him in his chair; Donny can turn your access to it off, and then it says so). For PTZ cameras the result also lists THAT camera\'s presets plus the exact call to move it. Returns a workspace path usable with analyze_image, send_notification(file_paths=...), or inline display in chat.',
     parameters: {
       type: 'object',
       properties: {
         entity_id: {
           type: 'string',
-          description: 'Camera id (e.g. "camera.garage") OR a loose camera name (e.g. "garage", "tower"). A wrong/loose value returns the real camera list instead of failing.',
+          description: 'Camera id (e.g. "camera.garage") OR a loose camera name (e.g. "garage", "tower"), or "glass" for the camera at Donny\'s desk. A wrong/loose value returns the real camera list instead of failing.',
         },
         save_path: {
           type: 'string',

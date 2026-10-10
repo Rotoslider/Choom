@@ -23,6 +23,7 @@ import {
   FileText,
   Menu,
   History,
+  Camera,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -46,6 +47,7 @@ import { HomeAssistantSettings } from '@/components/settings/homeassistant-setti
 import { SelfFollowupsSettings } from '@/components/settings/self-followups-settings';
 import { BridgeLogSettings } from '@/components/settings/bridge-log-settings';
 import { BackupSettings } from '@/components/settings/backup-settings';
+import { CameraSettings } from '@/components/settings/camera-settings';
 import { cn } from '@/lib/utils';
 import { useAppStore } from '@/lib/store';
 
@@ -66,6 +68,7 @@ type Section =
   | 'yt-downloader'
   | 'automations'
   | 'home-assistant'
+  | 'camera'
   | 'bridge-log'
   | 'backup'
   | 'appearance';
@@ -87,6 +90,7 @@ const sections: { id: Section; label: string; icon: React.ReactNode }[] = [
   { id: 'yt-downloader', label: 'YouTube DL', icon: <Music className="h-4 w-4" /> },
   { id: 'automations', label: 'Automations', icon: <Workflow className="h-4 w-4" /> },
   { id: 'home-assistant', label: 'Smart Home', icon: <Home className="h-4 w-4" /> },
+  { id: 'camera', label: 'Camera', icon: <Camera className="h-4 w-4" /> },
   { id: 'bridge-log', label: 'Logs', icon: <FileText className="h-4 w-4" /> },
   { id: 'backup', label: 'Backup', icon: <History className="h-4 w-4" /> },
   { id: 'appearance', label: 'Theme', icon: <Palette className="h-4 w-4" /> },
@@ -207,6 +211,7 @@ export default function SettingsPage() {
             {activeSection === 'yt-downloader' && <YTDownloaderSettings />}
             {activeSection === 'automations' && <AutomationsSettings />}
             {activeSection === 'home-assistant' && <HomeAssistantSettings />}
+            {activeSection === 'camera' && <CameraSettings />}
             {activeSection === 'bridge-log' && <BridgeLogSettings />}
             {activeSection === 'backup' && <BackupSettings />}
             {activeSection === 'appearance' && <AppearanceSettings />}

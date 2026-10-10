@@ -48,6 +48,11 @@ export function subscribeHologram(listener: Listener): () => void {
   };
 }
 
+/** Whether a hologram is following the feed (the glass is running). */
+export function hologramConnected(): boolean {
+  return listeners.size > 0;
+}
+
 export function publishHologram(event: HologramEvent): void {
   if (listeners.size === 0) return;
   const stamped = { ...event, time: Date.now() };

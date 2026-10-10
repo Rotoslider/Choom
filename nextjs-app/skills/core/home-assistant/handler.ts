@@ -6,6 +6,7 @@ import { WORKSPACE_ROOT } from '@/lib/config';
 import prisma from '@/lib/db';
 import { cameraSnapshotFolder, pruneExpiredCaptures, CAPTURE_RETENTION_HOURS } from '@/lib/captured-images';
 import type { ToolCall, ToolResult } from '@/lib/types';
+import { askGlassCamera, isGlassCameraName } from '@/lib/glass-camera';
 
 const TOOL_NAMES = new Set([
   'ha_get_state',
@@ -770,15 +771,28 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
         case 'ha_get_camera_snapshot': {
           const camRef = (args.entity_id as string) || (args.camera as string);
           if (!camRef) return this.error(toolCall, 'entity_id is required — a camera name or id (e.g. "garage" or "camera.garage")');
+          // The glass camera (on top of the Looking Glass at Donny's desk) isn't in Home Assistant:
+          // the hologram on the NUC runs it. Donny can turn the Chooms' access off in Settings > Camera.
+          const glass = isGlassCameraName(camRef);
+          let glassImage: Buffer | null = null;
+          if (glass) {
+            const answer = await askGlassCamera('frame', { purpose: 'snapshot', width: 1280 });
+            if (!answer.ok || !answer.image) {
+              return this.error(toolCall, answer.error || 'The glass camera did not give a picture.');
+            }
+            glassImage = Buffer.from(answer.image, 'base64');
+          }
           // Resolve a loose camera reference ("garage", "front cam") against the
           // camera domain (only a handful of cameras), so she doesn't need the
           // exact id. Vague/no match → return just the camera list to pick from.
-          const camResolved = await resolveEntity(ha, camRef, 'camera', pickCameraAmongTies);
+          const camResolved = glass
+            ? { entityId: 'camera.glass', resolvedFrom: camRef === 'glass' ? undefined : camRef }
+            : await resolveEntity(ha, camRef, 'camera', pickCameraAmongTies);
           if (!('entityId' in camResolved)) {
             return this.error(
               toolCall,
               `No camera matches "${camRef}".${camResolved.candidates.length
-                ? ` Cameras on THIS system: ${entityListText(camResolved.candidates)}. Use one of these.`
+                ? ` Cameras on THIS system: ${entityListText(camResolved.candidates)}, and "glass" (the camera on the Looking Glass at Donny's desk). Use one of these.`
                 : ' No camera entities found on this Home Assistant.'}`,
             );
           }
@@ -789,7 +803,7 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
           // here to wait when the camera was just moved another way, is waking from
           // sleep, or a prior frame came back blurry. Clamped 1-20s.
           const snapSettle = Number(args.settle_seconds);
-          if (Number.isFinite(snapSettle) && snapSettle > 0) {
+          if (!glass && Number.isFinite(snapSettle) && snapSettle > 0) {
             const s = Math.max(1, Math.min(20, snapSettle));
             console.log(`   ⏳ Camera snapshot settle: waiting ${s}s before capturing ${entityId}`);
             await new Promise(r => setTimeout(r, s * 1000));
@@ -798,7 +812,9 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
           const base = haSettings.baseUrl.replace(/\/+$/, '');
           const url = `${base}/api/camera_proxy/${entityId}`;
           let resp: Response;
-          try {
+          if (glassImage) {
+            resp = new Response(new Uint8Array(glassImage), { status: 200, headers: { 'Content-Type': 'image/jpeg' } });
+          } else try {
             resp = await fetch(url, {
               headers: { Authorization: `Bearer ${haSettings.accessToken}` },
             });
@@ -877,7 +893,7 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
                 choomId: ctx.choomId,
                 prompt: `Camera snapshot: ${entityId}`,
                 imageUrl: dataUrl,
-                settings: JSON.stringify({ source: 'ha_camera_snapshot', entity_id: entityId, path: savePath }),
+                settings: JSON.stringify({ source: glass ? 'glass_camera_snapshot' : 'ha_camera_snapshot', entity_id: entityId, path: savePath }),
               },
             });
             savedImageId = savedImage.id;
@@ -896,7 +912,7 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
           // Drill-down level 2: surface THIS camera's PTZ presets (scoped — only
           // this camera's, not every entity) plus the exact call to move it, so she
           // can reposition without hunting for the select.*_ptz entity id.
-          const presetInfo = await findCameraPresetSelect(ha, entityId);
+          const presetInfo = glass ? null : await findCameraPresetSelect(ha, entityId);
 
           return this.success(toolCall, {
             success: true,

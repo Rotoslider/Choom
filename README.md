@@ -664,6 +664,7 @@ On the app side:
   he sits down after a while away, from a note in her chat (`note: true` on `/api/chat`: saved as a
   system message, hidden in the chat window, never counted as his words).
 - **Her own mishaps:** a failed tool reaches the hologram as `tool_failed`, so she can make a face.
+- **The glass camera:** Settings → Camera shows the camera on the glass live (for aiming it), its adjustments, and whether the Chooms may use it; they ask for the `"glass"` camera with `ha_get_camera_snapshot` (`lib/glass-camera.ts` asks the hologram over its feed).
 
 ## Memory System (`memories.db` & `dev.db`)
 
@@ -1879,6 +1880,9 @@ SQLite via Prisma ORM. (dev.db)
 - `POST /api/hologram/mute` - The web app's mute button reaching the hologram
 - `POST /api/hologram/talk` - Words heard at the tower, into her chat or the Signal room
 - `POST /api/hologram/welcome` - The Choom he last talked with welcomes him back (a hidden note in her chat)
+- `GET/POST /api/hologram/camera` - The glass camera's state and settings (Settings → Camera)
+- `GET /api/hologram/camera/frame` - Its current picture (the preview)
+- `POST /api/hologram/camera/result` - The hologram's answer to a camera request
 
 ### Home Assistant
 - `GET /api/homeassistant` - Server-side proxy to Home Assistant API (avoids CORS). Actions: `test` (connection test), `entities` (browse all), `state` (single entity), `history` (entity history)
