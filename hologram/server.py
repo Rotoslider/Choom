@@ -216,6 +216,9 @@ def follow_choom():
                     if event.get("type") == "thinking" and last_kind.get(key) == "thinking":
                         continue
                     last_kind[key] = event.get("type")
+                    if event.get("type") == "camera_request":  # for tower_eyes, not the page
+                        threading.Thread(target=answer_camera, args=(event,), daemon=True).start()
+                        continue
                     if event.get("type") in ("turn_start", "content") and event.get("source") in ("chat", "group"):
                         wake_screen()
                     elif event.get("type") == "listening" and event.get("listening"):
@@ -373,7 +376,12 @@ def welcome_watch():
                 continue
             away = time.time() - present_at
             present_at = time.time()
-            if away < WELCOME_AFTER_S:
+            cam = camera_settings()
+            if cam.get("welcome") is False:
+                places = []
+                continue
+            after = WELCOME_AFTER_S if os.environ.get("HOLOGRAM_WELCOME_AFTER_S") else float(cam.get("welcome_minutes", 20)) * 60
+            if away < after:
                 places = []
                 continue
             hour = time.localtime().tm_hour
@@ -389,6 +397,54 @@ def welcome_watch():
             places = []
         except Exception as e:
             latest["welcome_watch_error"] = f"{type(e).__name__}: {e}"
+
+
+# --- The glass camera, for the Choom app -----------------------------------------------------
+# The Choom app's Camera tab and the Chooms' "glass" camera send camera_request events down the feed
+# server.py already follows; tower_eyes.py (127.0.0.1:8766) answers, and the answer is posted back to
+# /api/hologram/camera/result. Nothing on the NUC listens beyond localhost.
+EYES_URL = "http://127.0.0.1:8766"
+
+
+def answer_camera(event):
+    op, args, answer = event.get("op"), event.get("args") or {}, {"id": event.get("id")}
+    try:
+        if op == "frame":
+            query = urllib.parse.urlencode({"width": int(args.get("width", 960)), "overlay": "1" if args.get("overlay") else "0",
+                                            "purpose": "snapshot" if args.get("purpose") == "snapshot" else "preview"})
+            with urllib.request.urlopen(f"{EYES_URL}/frame?{query}", timeout=8) as response:
+                answer.update(ok=True, image=base64.b64encode(response.read()).decode())
+        elif op in ("state", "settings"):
+            request = (urllib.request.Request(f"{EYES_URL}/settings", data=json.dumps(args).encode(),
+                                              headers={"Content-Type": "application/json"})
+                       if op == "settings" else f"{EYES_URL}/state")
+            with urllib.request.urlopen(request, timeout=8) as response:
+                answer.update(ok=True, state=json.loads(response.read()))
+        else:
+            answer.update(ok=False, error=f"unknown camera op {op}")
+    except urllib.error.HTTPError as e:
+        try:
+            answer.update(ok=False, status=e.code, error=json.loads(e.read()).get("error"))
+        except Exception:
+            answer.update(ok=False, status=e.code, error=f"camera answered {e.code}")
+    except Exception as e:
+        answer.update(ok=False, error=f"the glass camera isn't answering ({type(e).__name__})")
+    try:
+        request = urllib.request.Request(f"{CHOOM_URL}/api/hologram/camera/result", data=json.dumps(answer).encode(),
+                                         headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(request, timeout=15).read()
+    except Exception as e:
+        latest["camera_error"] = f"{type(e).__name__}: {e}"
+    if op == "settings" or (op == "frame" and args.get("purpose") == "snapshot"):  # not every preview frame
+        log_entry({"kind": "camera", "op": "snapshot" if op == "frame" else op, "ok": answer.get("ok")})
+
+
+def camera_settings():
+    """camera.json (written by tower_eyes.py from the Choom app's Camera tab), or {}."""
+    try:
+        return json.loads((HA_CONFIG / "camera.json").read_text())
+    except (OSError, ValueError):
+        return {}
 
 
 def choom_image(image_id):

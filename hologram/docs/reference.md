@@ -11,7 +11,8 @@ configuration, and debugging.
 ./launch.sh stop          # close everything and hand the voice back to the browsers
 ```
 
-`launch.sh` finds the Portrait as the display running 1536x2048, starts `server.py` on
+At login, `~/.config/autostart/choom-hologram.desktop` runs `launch.sh living` (after 15 s); its
+output goes to `autostart.log`. `launch.sh` finds the Portrait as the display running 1536x2048, starts `server.py` on
 127.0.0.1:8765, starts `tower_ears.py` if its venv exists, and opens a Chrome kiosk window on the
 Portrait with its own profile. Environment:
 
@@ -201,6 +202,26 @@ Test on a video: `.venv-ears/bin/python tower_eyes.py --source clip.mp4 --print`
 
 Coming home or sitting at the desk wakes the Choom on the glass and she greets you; getting into bed
 puts the glass to sleep at any hour, getting up wakes it. Leaving counts only after two minutes away.
+
+## The glass camera (Settings → Camera)
+
+`tower_eyes.py` also answers on 127.0.0.1:8766: the latest frame as a JPEG (kept in memory only), the
+camera's state and adjustments, and its settings, kept in `camera.json` in the config folder and
+applied again whenever the camera starts. `camera_controls.py` sets the MX Brio's adjustments through
+V4L2 (brightness, contrast, color, sharpness, backlight compensation, exposure, white balance, focus,
+zoom, pan, tilt, anti-flicker) and its field of view (65°, 78° or 90°) through Logitech's vendor
+control unit. Its light has no control on this model; turning the camera off (`enabled: false`) lets
+go of it, which turns the light off and stops eye contact and the welcome back.
+
+The Choom app reaches it without any port opening on the NUC: `lib/glass-camera.ts` sends a
+`camera_request` event down the hologram feed, `server.py` asks `tower_eyes.py` and posts the answer
+to `/api/hologram/camera/result`. Routes (home only): `GET /api/hologram/camera` (state),
+`POST /api/hologram/camera` (settings, `{controls: {...}}`, `{reset_controls: true}`),
+`GET /api/hologram/camera/frame?overlay=1` (the preview; the overlay marks his face, green while he's
+looking at the glass). The Chooms ask for the `"glass"` camera with `ha_get_camera_snapshot`; it's
+saved and shown like their Home Assistant camera snapshots, and refused when the Camera tab's
+"Chooms can look through this camera" is off. Settings also hold eye contact on or off, how wide
+counts as looking (`yaw_limit`), and the welcome back's switch and minutes (read by `server.py`).
 
 ## Welcome back
 

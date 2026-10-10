@@ -19,6 +19,8 @@ app: listening, thinking, using tools, sleeping at night.
 - **Talking at the tower.** Say "OK Aloy" (or Optic, Genesis, Eve) and she turns to listen; "OK
   Chooms" talks to the group room. Typing or the mic in the app works too.
 - **Eye contact.** With a camera by the glass, she turns to you when you look at her.
+- **The glass camera.** A Camera tab in the Choom app's settings shows its live picture (for
+  aiming it), its adjustments, and whether the Chooms may take a snapshot with it.
 - **Welcome back.** Sit down after a while away and the Choom you last talked with welcomes you
   back, asking about whatever you'd told her you were off to do.
 - **Expressions and moments.** Happy, surprised, sad or concerned when the conversation calls for it;
