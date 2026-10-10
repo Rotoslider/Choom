@@ -737,7 +737,9 @@ let appListening = false;
 // Local weather from the server (every 10 minutes): a windy day stirs Genesis's hair (her wind
 // clips join her quiet moments), and later rain or snow can drift through the glass.
 let weather = { wind: 0, gust: 0, description: '' };
-const windy = () => Math.max(weather.wind || 0, (weather.gust || 0) * 0.7) >= 15;
+// Windy: a 10-minute average of 12 mph or gusts of 20 (Donny's own weather station when Home Assistant
+// has one; OpenWeather's town readings ran low and never reported gusts).
+const windy = () => (weather.wind || 0) >= 12 || (weather.gust || 0) >= 20;
 fetch('/status', { cache: 'no-store' }).then((r) => r.json()).then((st) => { if (st.weather) weather = st.weather; }).catch(() => {});
 
 // ---- Weather in the glass -------------------------------------------------------------------
@@ -948,7 +950,8 @@ const poseTo = (c) => c.to || 'main';
 // A play() cut short because the waiting clip was swapped for a moment (a tool look, a picture
 // look) is expected, not an error.
 const videoError = (e) => { if (e.name !== 'AbortError') post('error', { message: `alive video: ${e.message}` }); };
-const WAKING_POSES = new Set(['main', 'relaxed']);  // the framings she lives in (not asleep, not full-body)
+const WAKING_POSES = new Set(['main', 'relaxed']);
+const LOOKS_AWAY = /glance|look|sidelook|shoulder|daydream|horizon|lookup|lookdown|hunter|skycheck|scan|turn|dreamy|thinkdown|picture/;  // the framings she lives in (not asleep, not full-body)
 const FULL_IDLE_CHANCE = 0.07;
 // Her clothes. Clips in other outfits live in poses of their own (relaxed@evening), and an outfit's
 // name says when she wears it: cold… under 45°F, hot… over 85°F, evening… from 6 to 11 pm, and day…
@@ -962,21 +965,48 @@ const OUTFIT_RULES = [
   [/^hot/, () => typeof weather.temperature === 'number' && weather.temperature > 85],
   [/^evening/, () => { const h = hourNow(); return h >= 18 && h < 23; }],
 ];
-// An outfit with only a few clips would loop them all evening (the clock look), so each day she
-// wears one for about OUTFIT_MIN_PER_CLIP minutes per clip it has, then changes back; outfits with
-// more clips are worn longer. Time worn is counted per day (p.worn).
-const OUTFIT_MIN_PER_CLIP = 4;
-const ALT_LOOKS = new Set(['plain', 'noheart']);  // looks in her usual clothes, not outfits: no time limit
-function outfitLeft(p, o) {
+// An outfit or other look with a dozen clips loops them every minute (the clock look), so she wears
+// it in short visits spread through its hours: a visit lasts about 30 s per clip it has (each clip
+// comes around about six times; 3 to 15 minutes), then she's back in her usual clothes for at least
+// 25 minutes. Outfits also have a daily total of 2 minutes per clip. More clips, longer visits. Kept
+// across relaunches (localStorage), which used to hand her a fresh evening in the sweater each time.
+const VISIT_S_PER_CLIP = 30;
+const VISIT_MIN_MS = 3 * 60000, VISIT_MAX_MS = 15 * 60000, VISIT_REST_MS = 25 * 60000;
+const OUTFIT_DAY_MS_PER_CLIP = 2 * 60000;
+const ALT_LOOKS = new Set(['plain', 'noheart']);  // looks in her usual clothes: visits, but no daily total
+function wardrobe(p) {
+  if (!p.wardrobe) {
+    try { p.wardrobe = JSON.parse(localStorage.getItem(`wardrobe-${p.id}`)) || null; } catch { p.wardrobe = null; }
+  }
   const today = new Date().toDateString();
-  if (!p.worn || p.worn.day !== today) p.worn = { day: today };
-  const clips = p.alive.clips.filter((c) => outfitOf(poseFrom(c)) === o).length;
-  return clips * OUTFIT_MIN_PER_CLIP * 60000 - (p.worn[o] || 0);
+  if (!p.wardrobe || p.wardrobe.day !== today) p.wardrobe = { day: today, worn: {}, rested: p.wardrobe?.rested || {}, visit: null };
+  return p.wardrobe;
+}
+function saveWardrobe(p) {
+  try { localStorage.setItem(`wardrobe-${p.id}`, JSON.stringify(p.wardrobe)); } catch { /* the page works without it */ }
+}
+const lookClips = (p, o) => p.alive.clips.filter((c) => outfitOf(poseFrom(c)) === o).length;
+const visitLength = (p, o) => Math.min(VISIT_MAX_MS, Math.max(VISIT_MIN_MS, lookClips(p, o) * VISIT_S_PER_CLIP * 1000));
+function mayWear(p, o) {
+  const w = wardrobe(p), now = Date.now();
+  if (w.visit && w.visit.o === o) return now - w.visit.start < visitLength(p, o);  // wearing it: until the visit is up
+  if (now - (w.rested[o] || 0) < VISIT_REST_MS) return false;                     // just took it off
+  return ALT_LOOKS.has(o) || (w.worn[o] || 0) < lookClips(p, o) * OUTFIT_DAY_MS_PER_CLIP;
+}
+// Called with each clip she finishes: counts time worn, starts and ends visits.
+function noteWorn(p, pose, ms) {
+  const w = wardrobe(p), o = outfitOf(pose), now = Date.now();
+  if (w.visit && w.visit.o !== o) { w.rested[w.visit.o] = now; w.visit = null; }
+  if (o) {
+    if (!w.visit) w.visit = { o, start: now };
+    w.worn[o] = (w.worn[o] || 0) + ms;
+  }
+  saveWardrobe(p);
 }
 function wantedOutfit(p, want) {
   if (want === 'sleep') return null;
   const outfits = [...new Set(p.alive.clips.filter((c) => clipMoods(c).includes('talk')).map((c) => outfitOf(poseFrom(c))).filter(Boolean))]
-    .filter((o) => ALT_LOOKS.has(o) || outfitLeft(p, o) > 0);
+    .filter((o) => mayWear(p, o));
   for (const [rule, when] of OUTFIT_RULES) {
     const o = outfits.find((x) => rule.test(x));
     if (o && when()) return o;
@@ -1070,11 +1100,7 @@ function nextClip(p, after) {
   // After a full-body move, cut back to the framing she was in.
   if (pose === 'full') pose = p.cutFrom || 'main';
   const want = wantedMood(p);
-  const wore = after >= 0 && clips[after] ? outfitOf(poseTo(clips[after])) : null;
-  if (wore) {  // time worn in that outfit today
-    outfitLeft(p, wore);
-    p.worn[wore] = (p.worn[wore] || 0) + clips[after].frames / (p.alive.fps || 24) * 1000;
-  }
+  if (after >= 0 && clips[after]) noteWorn(p, poseTo(clips[after]), clips[after].frames / (p.alive.fps || 24) * 1000);
   // Time to change clothes (or back into her usual ones before sleep): a cut to her base loop in the
   // other outfit, at a quiet moment.
   const dressed = outfitOf(pose), dress = pose === 'asleep' ? null : wantedOutfit(p, want);
@@ -1180,8 +1206,15 @@ function nextClip(p, after) {
   const justWoke = after >= 0 && clips[after] && clipMoods(clips[after]).includes('wake');
   const drowsy = want === 'idle' && (justWoke || (hour >= SLEEP_FROM - 2 && hour < SLEEP_FROM) ||
                                      (hour >= SLEEP_UNTIL && hour < SLEEP_UNTIL + 2));
-  const fits = all.filter((k) => clipMoods(clips[k]).includes(want) || (breezy && clipMoods(clips[k]).includes('windy')) ||
+  let fits = all.filter((k) => clipMoods(clips[k]).includes(want) || (breezy && clipMoods(clips[k]).includes('windy')) ||
                                  (drowsy && clipMoods(clips[k]).includes('yawn')));
+  // Facing him (he's looking at the glass) in a look with few listening clips (an outfit has four):
+  // her quiet clips that keep facing forward join in, or four clips loop every twenty seconds.
+  if (want === 'listen' && fits.length < 10) {
+    const facing = all.filter((k) => !fits.includes(k) && poseTo(clips[k]) === pose && clipMoods(clips[k]).includes('idle') &&
+                                     !LOOKS_AWAY.test(clips[k].source || ''));
+    fits = fits.concat(facing);
+  }
   // Right after a pose change she stays put for at least one clip (no hand up-down-up fidgeting).
   const justMoved = after >= 0 && clips[after] && poseFrom(clips[after]) !== poseTo(clips[after]);
   let pool = fits.filter((k) => k !== after && !(justMoved && poseTo(clips[k]) !== pose));
@@ -1199,9 +1232,12 @@ function nextClip(p, after) {
   // Quiet clips play like a shuffled deck: one that played lately waits until most of the others
   // have had their turn (pure chance brought some back within a minute and left others unseen).
   // Her main loop is exempt; it's her resting state.
+  // Quiet and listening clips play like a shuffled deck (her main loop is exempt while she's quiet:
+  // it's her resting state; while she faces him it takes its turn like the rest).
   const recent = (p.recentClips ||= []);
-  if (want === 'idle') {
-    const fresh = pool.filter((k) => k === main || !recent.includes(k));
+  const shuffled = want === 'idle' || want === 'listen';
+  if (shuffled) {
+    const fresh = pool.filter((k) => (want === 'idle' && k === main) || !recent.includes(k));
     if (fresh.length) pool = fresh;
   }
   // Late at night (10 pm to 6 am) the calm clips come up more and the laughs and teasing less.
@@ -1222,10 +1258,11 @@ function nextClip(p, after) {
   let pick = pool[pool.length - 1];
   for (let i = 0; i < pool.length; i++) { r -= weights[i]; if (r <= 0) { pick = pool[i]; break; } }
   if (want === 'talk' && handMove(pick)) (p.moments ||= new Set()).add(pick); // a gesture, at its own pace
-  if (want === 'idle' && pick !== main) {
+  if (shuffled && !(want === 'idle' && pick === main)) {
     recent.push(pick);
-    const quiet = clips.filter((c) => clipMoods(c).includes('idle')).length;
-    while (recent.length > Math.max(1, Math.floor(quiet * 0.7))) recent.shift();
+    // Remember most of the deck for the look she's in (an outfit's dozen, or her usual hundred).
+    const deck = all.filter((k) => clipMoods(clips[k]).some((m) => m === 'idle' || m === 'listen')).length;
+    while (recent.length > Math.max(1, Math.floor(deck * 0.7))) recent.shift();
   }
   return pick;
 }

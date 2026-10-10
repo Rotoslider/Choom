@@ -259,20 +259,41 @@ def voice_heartbeat():
 
 
 def weather_watch():
-    """Every 10 minutes, the local weather from the Choom app (its OpenWeather settings), passed to
-    the page: windy days stir Genesis's hair, and later rain or snow can drift through the glass."""
+    """The local weather, passed to the page: windy days stir Genesis's hair, rain and snow drift
+    through the glass, the temperature picks her clothes. From the Choom app (its OpenWeather settings)
+    every 10 minutes, with wind, gusts and temperature from Donny's own weather station every 2 minutes
+    when weather.json maps them to Home Assistant sensors, e.g. {"wind": "sensor.station_wind_average_
+    10_minutes", "gust": "sensor.station_wind_gust", "temperature": "sensor.station_temperature"}
+    (OpenWeather's town readings ran well under his station's and never reported gusts)."""
+    town, town_at, windy_was = {}, 0.0, None
     while True:
         try:
-            with urllib.request.urlopen(f"{CHOOM_URL}/api/weather", timeout=30) as response:
-                w = json.loads(response.read()).get("weather") or {}
-            entry = {"type": "weather", "wind": w.get("windSpeed") or 0, "gust": w.get("windGust") or 0,
-                     "description": w.get("description") or "", "temperature": w.get("temperature"),
-                     "time": time.strftime("%Y-%m-%dT%H:%M:%S")}
+            if time.time() - town_at > 600:
+                town_at = time.time()
+                with urllib.request.urlopen(f"{CHOOM_URL}/api/weather", timeout=30) as response:
+                    town = json.loads(response.read()).get("weather") or {}
+            entry = {"type": "weather", "wind": town.get("windSpeed") or 0, "gust": town.get("windGust") or 0,
+                     "description": town.get("description") or "", "temperature": town.get("temperature"),
+                     "source": "town", "time": time.strftime("%Y-%m-%dT%H:%M:%S")}
+            station, url_file, token_file = HA_CONFIG / "weather.json", HA_CONFIG / "ha_url", HA_CONFIG / "ha_token"
+            if station.exists() and url_file.exists() and token_file.exists():
+                base, token = url_file.read_text().strip().rstrip("/"), token_file.read_text().strip()
+                for key, entity in json.loads(station.read_text()).items():
+                    try:
+                        entry[key] = round(float(ha_get(base, token, f"/api/states/{entity}").get("state")), 1)
+                        entry["source"] = "station"
+                    except (TypeError, ValueError):
+                        pass  # unavailable for now: keep the town reading
             latest["weather"] = entry
             broadcast(entry)
+            windy = (entry["wind"] or 0) >= 12 or (entry["gust"] or 0) >= 20  # the page's rule (living.js windy())
+            if windy != windy_was:  # log when it turns windy or calm
+                log_entry({"kind": "weather", "windy": windy, "wind": entry["wind"], "gust": entry["gust"],
+                           "temperature": entry["temperature"], "source": entry["source"]})
+                windy_was = windy
         except Exception as e:
             latest["weather_error"] = f"{type(e).__name__}: {e}"
-        time.sleep(600)
+        time.sleep(120)
 
 
 IMAGE_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")

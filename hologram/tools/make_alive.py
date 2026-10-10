@@ -276,6 +276,11 @@ def particles(src):
     return bool(re.search(r"motes|windy|sparkle", Path(src).stem))
 
 
+def joined(src):
+    """Whether a clip is in an outfit (its name has an outfit prefix: evening-relaxed)."""
+    return "-" in Path(src).stem.split("_", 1)[-1]
+
+
 def unpack(packed, i, w):
     """Frame i of a clip's cut-out, kept bit-packed (an eighth of the memory)."""
     return np.unpackbits(packed[i], axis=1, count=w).astype(bool)
@@ -341,6 +346,14 @@ def main():
         # cut-out alone clipped away the motes that drift beyond her outline.
         if particles(src):
             masks |= lit
+        # Outfit clips: anything lit that touches her outline is her (or her clothes). U2-Net took the
+        # dark knit of Genesis's sweater, where it runs off the bottom-left of the frame, for background
+        # in whole stretches of a clip, the first frame included, so the outline rule couldn't help.
+        if joined(src):
+            for i in range(len(masks)):
+                count, labels = cv2.connectedComponents(lit[i].astype(np.uint8), connectivity=8)
+                touching = np.unique(labels[masks[i] & lit[i]])
+                masks[i] |= np.isin(labels, touching[touching > 0])
         del lit
         fresh = depth_file.exists() and depth_file.stat().st_mtime >= Path(src).stat().st_mtime
         raw = np.load(depth_file, mmap_mode="r") if fresh else None
@@ -410,7 +423,7 @@ def main():
         out = folder / f"alive_{Path(src).stem}.mp4"
         moods, start, end = clip_role(cid, src)
         before = built_before.get(name)
-        expect = [BUILD, round(lo, 6), round(hi, 6), round(focus, 6), stamp(src), main_stamp] + (["lit"] if particles(src) else [])
+        expect = [BUILD, round(lo, 6), round(hi, 6), round(focus, 6), stamp(src), main_stamp] + (["lit"] if particles(src) else []) + (["joined"] if joined(src) else [])
         if before and before.get("built") == expect and out.exists():
             # Unchanged since it was last built: keep the video and its mouth track (its role may change).
             meta_clips.append({**before, "file": out.name, "moods": moods, "from": start, "to": end, "talk": "talk" in moods})
@@ -441,7 +454,7 @@ def main():
         del frames, depth
         meta_clips.append({"file": out.name, "frames": c["frames"], "source": name,
                            "moods": moods, "from": start, "to": end, "talk": "talk" in moods,
-                           "built": [BUILD, round(lo, 6), round(hi, 6), round(focus, 6), c["stamp"], main_stamp] + (["lit"] if particles(src) else []),
+                           "built": [BUILD, round(lo, 6), round(hi, 6), round(focus, 6), c["stamp"], main_stamp] + (["lit"] if particles(src) else []) + (["joined"] if joined(src) else []),
                            "mouth": [[round(v, 5) for v in m] for m in mouths.tolist()]})
         encoded += 1
         print(f"  wrote {out.name} ({out.stat().st_size / 1e6:.1f} MB), face found in {found}/{c['frames']} frames")

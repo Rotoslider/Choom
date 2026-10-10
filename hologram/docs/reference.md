@@ -108,8 +108,12 @@ of her clean picture. The outfit's name says when she wears it (`OUTFIT_RULES` i
 `cold…` under 45°F, `hot…` over 85°F, `evening…` from 6 to 11 pm, and `day…` outfits take turns with
 her usual clothes, a different one each day. She changes with a camera cut at a quiet moment, and back
 into her usual clothes before she sleeps. An outfit needs at least a base loop with the `talk` mood.
-So a few clips don't loop for hours, she wears an outfit for about four minutes per clip it has each
-day (`OUTFIT_MIN_PER_CLIP`), then changes back; outfits grow into longer stretches as clips are added.
+So a dozen clips don't loop for hours, she wears an outfit (or another look) in visits: about 30 s per
+clip it has (3 to 15 minutes), then at least 25 minutes in her usual clothes, and an outfit for at
+most 2 minutes per clip a day. Kept in the kiosk's localStorage across relaunches. While he looks at
+her, a look with few listening clips borrows her quiet clips that keep facing forward, and listening
+clips shuffle like the quiet ones. Outfit clips keep any lit area touching her outline (U2-Net took
+the dark knit of Genesis's sweater for background).
 The Chooms aren't told what they're wearing in the glass, so it doesn't steer their selfies.
 An outfit change can also happen on screen instead of by a cut: a clip that starts in one look and
 ends in the other (Wan2GP's start and end pictures differ) is played for the change. Genesis's plain
@@ -229,6 +233,9 @@ can answer without "OK" and her name.
 - **Screensaver:** after two quiet minutes, a random Choom takes the glass every 3 to 5 minutes (not
   while she sleeps, on the stage, or when someone is talking near the tower).
 - **Weather:** wind brings Genesis's wind clips and drifting dust; rain and snow fall through the glass.
+  Windy means a 10-minute average of 12 mph or gusts of 20, read every 2 minutes from Donny's own
+  weather station when `weather.json` in the config folder maps `wind`, `gust` and `temperature` to
+  Home Assistant sensors (OpenWeather's town readings ran low and never reported gusts).
 - **Background turns:** heartbeats and delegated tasks that start at night run unseen, and so does a
   heartbeat that starts during a conversation (the stage is up, someone is talking, or a chat in the
   last three minutes), so it doesn't take the front or float its pictures in the middle of it.
