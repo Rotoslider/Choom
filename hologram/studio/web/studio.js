@@ -238,14 +238,18 @@ function renderGlass() {
   const c = state.choom;
   const bar = $('#buildBar');
   const { added, removed } = c.glass;
-  const changes = added.length || removed.length
+  const building = state.jobs.some((j) => j.kind === 'build' && j.status === 'running' && j.args.choom === state.cid);
+  const changes = (added.length || removed.length
     ? `Not built yet: ${added.length} to add, ${removed.length} to take off.`
-    : 'The glass shows this sequence.';
+    : 'The glass shows this sequence.')
+    + (building ? ' A build is running now; changes made since it started go in with the next one.' : '');
   const build = el('button', { className: 'primary', type: 'button', disabled: !!c.problems.length || !(added.length || removed.length), tip: 'Cut-outs, depth and reliefs for new clips (only new ones are encoded), then the glass reloads once nobody is talking' },
     'Build and put on the glass');
   build.addEventListener('click', attempt(async () => {
-    await api('/api/build', { choom: state.cid });
-    toast('Building: cut-outs, depth and reliefs for the new clips, then the glass reloads when she is quiet');
+    const r = await api('/api/build', { choom: state.cid });
+    toast(r.already
+      ? 'A build for her is already waiting; it reads her sequence when it starts, so it will include this'
+      : 'Building: cut-outs, depth and reliefs for the new clips, then the glass reloads when she is quiet');
     pollJobs();
   }));
   if (!c.inManifest) {

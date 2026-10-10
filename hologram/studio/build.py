@@ -44,7 +44,8 @@ def run(cmd, log, env=None):
     """Run a step, passing its output to log(line); raises if it fails."""
     log("$ " + " ".join(str(c) for c in cmd[:3]) + (f" ... ({len(cmd) - 3} more)" if len(cmd) > 3 else ""))
     proc = subprocess.Popen([str(c) for c in cmd], cwd=HOLOGRAM, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                            text=True, env={**os.environ, **(env or {})}, start_new_session=True)
+                            text=True, env={**os.environ, "PYTHONUNBUFFERED": "1", **(env or {})},
+                            start_new_session=True)  # unbuffered: each clip's line shows as it's written
     for line in proc.stdout:
         log(line.rstrip())
     if proc.wait() != 0:

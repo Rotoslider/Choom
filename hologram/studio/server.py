@@ -151,6 +151,11 @@ class Handler(BaseHTTPRequestHandler):
                 trouble = build.problems(proj)
                 if trouble:
                     return self.fail("; ".join(trouble))
+                # A build reads her sequence when it starts, so one already waiting covers this click too.
+                waiting = [j for j in jobs.jobs if j["kind"] == "build" and j["status"] == "waiting"
+                           and j["args"]["choom"] == proj.id]
+                if waiting:
+                    return self.send_json({"job": waiting[0], "already": True})
                 return self.send_json({"job": jobs.add("build", {"choom": proj.id, "relaunch": data.get("relaunch", True)})})
             if parts == ["api", "new-choom"]:
                 return self.new_choom(data)
