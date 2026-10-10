@@ -60,6 +60,7 @@ import { tools as selfSchedulingTools } from '@/skills/core/self-scheduling/tool
 import { tools as musicTools } from '@/skills/core/music-assistant/tools';
 import { tools as printerTools } from '@/skills/core/printer-monitor/tools';
 import { tools as groupChatTools } from '@/skills/core/group-chat/tools';
+import { tools as lookingGlassTools } from '@/skills/core/looking-glass/tools';
 import { tools as skillLoaderTools } from '@/skills/core/skill-loader/tools';
 import SkillLoaderHandler from '@/skills/core/skill-loader/handler';
 import { tools as sisterMailTools } from '@/skills/core/sister-mail/tools';
@@ -94,6 +95,7 @@ import { default as SelfSchedulingHandler } from '@/skills/core/self-scheduling/
 import { default as MusicHandler } from '@/skills/core/music-assistant/handler';
 import { default as PrinterHandler } from '@/skills/core/printer-monitor/handler';
 import { default as GroupChatHandler } from '@/skills/core/group-chat/handler';
+import { default as LookingGlassHandler } from '@/skills/core/looking-glass/handler';
 
 // ============================================================================
 // YAML Frontmatter Parser (minimal)
@@ -185,6 +187,7 @@ const CORE_SKILLS: SkillDef[] = [
   { dirName: 'music-assistant', tools: musicTools, handler: MusicHandler },
   { dirName: 'printer-monitor', tools: printerTools, handler: PrinterHandler },
   { dirName: 'group-chat', tools: groupChatTools, handler: GroupChatHandler },
+  { dirName: 'looking-glass', tools: lookingGlassTools, handler: LookingGlassHandler },
   { dirName: 'skill-loader', tools: skillLoaderTools, handler: SkillLoaderHandler },
   { dirName: 'sister-mail', tools: sisterMailTools, handler: SisterMailHandler },
 ];

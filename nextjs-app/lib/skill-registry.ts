@@ -474,6 +474,7 @@ export class SkillRegistry {
         [/\b(contacts?|phone number|address book)\b/i, ['google-contacts']],
         [/\b(youtube|video|channel|playlist)\b/i, ['google-youtube']],
         [/\b(plan|multi.?step|step.?by.?step|break.?down)\b/i, ['plan-mode']],
+        [/\b(looking[\s-]?glass|hologram|on the glass|dance|dancing|twirl|curtsy|closet|wardrobe|outfits?)\b/i, ['looking-glass']],
         [/\b(freecad|\bcad\b|3d\s?print|3d\s?model|stl|fcstd|solidworks|bracket|parametric|design (?:a |the )?part|model (?:a |the )?part)\b/i, ['freecad']],
       ];
 
