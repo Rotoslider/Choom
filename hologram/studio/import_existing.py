@@ -10,6 +10,7 @@ rendered more than once keeps its latest take, the earlier ones go in its histor
     python3 studio/import_existing.py aloy optic genesis eve [--force]
 """
 import json
+import re
 import sys
 import zipfile
 from collections import Counter, defaultdict
@@ -36,6 +37,45 @@ def queued_takes():
                                     "frames": p["video_length"], "start": p.get("image_start"),
                                     "end": p.get("image_end") or p.get("image_start")})
     return takes
+
+
+def wardrobe_hints(proj):
+    """For each look her outfits were made from: the subject line with the clothes left open
+    ("... wearing {wearing}, glows softly against ..."), from what her outfits' lines share, and what
+    the Klein edits kept unchanged ("her face, expression, freckles, ..."), from their settings."""
+    from collections import defaultdict
+    from config import PICTURES
+    import os
+    by_base = defaultdict(list)
+    for look_id, look in proj.looks.items():
+        # Her outfits (the names the glass knows: cold, hot, evening, day...), not her other looks
+        # (Genesis plain, Optic without her heart), which change more than her clothes.
+        if re.match(r"\w+@(cold|hot|evening|day)", look_id) and look.get("subject"):
+            by_base[look_id.split("@")[0]].append(look["subject"])
+    for base, subjects in by_base.items():
+        if len(subjects) < 2 or base not in proj.looks:
+            continue
+        head = os.path.commonprefix(subjects)
+        tail = os.path.commonprefix([s[::-1] for s in subjects])[::-1]
+        cut = max(head.rfind("wearing "), head.rfind(" and "))
+        if cut < 0:
+            continue
+        head = head[:cut] + ("wearing " if head[cut:].startswith("wearing ") else " and ")
+        comma = tail.find(", ")
+        if comma < 0:
+            continue
+        proj.looks[base]["wardrobe"] = head + "{wearing}" + tail[comma:]
+    for f in sorted(PICTURES.glob(f"{proj.id}_*.json")):
+        try:
+            settings = json.loads(f.read_text())
+        except (OSError, ValueError):
+            continue
+        prompt = settings.get("prompt", "")
+        m = re.match(r"Change her clothes: .*? Keep everything else exactly the same: (.*?),? (?:the (?:warm studio )?lighting)", prompt)
+        refs = [os.path.basename(r) for r in settings.get("image_refs", [])]
+        for look in proj.looks.values():
+            if m and refs and look.get("picture") == refs[0]:
+                look["kleinKeep"] = m.group(1)
 
 
 def import_choom(cid, takes, names):
@@ -85,6 +125,7 @@ def import_choom(cid, takes, names):
             keep = proj.looks.get(c["from"], {}).get("keep", "")
             c["action"] = parts[2].removeprefix(keep).strip() if keep else parts[2]
             c["seconds"] = prompts.FRAMES_SECONDS.get(c["frames"], 5)
+    wardrobe_hints(proj)
     return proj
 
 

@@ -104,6 +104,22 @@
     <!-- Looks: her pictures and the lines every prompt in that look starts with -->
     <section data-pane="looks" class="pane">
       <p class="hint">Each look is a clean picture of her and the line that describes her in it. Every clip in the look starts and ends on that picture; the <b>subject</b> starts every prompt (say “a plain pure black background”), the <b>keep</b> line follows it in every clip (Genesis: her motes stay on her), and loops finish with the <b>ending</b>.</p>
+      <div id="drafts"></div>
+      <details class="custom" id="newOutfit">
+        <summary>New outfit</summary>
+        <p class="hint">Klein makes a few versions of her in the new clothes from a look's picture; pick one and it becomes a look you can plan clips for (start with Essentials, then a dozen or more quiet moments). When she wears it comes from its name, like the glass's other outfits.</p>
+        <div class="custom-form">
+          <label>Starts from <select id="outfitBase"></select></label>
+          <label>She wears it on <select id="outfitWhen"></select></label>
+          <label>Name (optional) <input id="outfitName" placeholder="dress" pattern="[a-z0-9]*"></label>
+          <label class="wide">She now wears
+            <textarea id="outfitWearing" rows="2" placeholder="a long burgundy dress with thin straps"></textarea></label>
+          <label class="wide">Instruction for Klein (edit if her pose holds something it must keep)
+            <textarea id="outfitPrompt" rows="4"></textarea></label>
+          <label>Versions <select id="outfitCount"><option>2</option><option selected>3</option><option>4</option></select></label>
+          <div class="wide row-end"><span id="outfitLook" class="muted"></span><button id="outfitMake" type="button">Make pictures</button></div>
+        </div>
+      </details>
       <div id="looksGrid" class="looks-grid"></div>
     </section>
   </div>
@@ -118,6 +134,8 @@
   <video id="playerVideo" controls loop muted playsinline></video>
   <div class="player-foot"><span id="playerName"></span><button id="playerClose" class="ghost" type="button">Close</button></div>
 </dialog>
+
+<dialog id="zoom"><img id="zoomImg" alt=""></dialog>
 
 <div id="toast" class="toast" role="status" hidden></div>
 <script src="/web/studio.js"></script>

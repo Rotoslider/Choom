@@ -468,6 +468,8 @@ function lintOf(prompt, loop) {
 // --- Looks ----------------------------------------------------------------------------------------
 function renderLooks() {
   const c = state.choom;
+  renderOutfitForm();
+  renderDrafts();
   $('#looksGrid').replaceChildren(...lookOrder(c.looks).map((look) => {
     const l = c.looks[look];
     const subject = el('textarea', { rows: 5, value: l.subject || '' });
@@ -489,6 +491,73 @@ function renderLooks() {
         el('div', { className: 'row' }, save)));
   }));
 }
+
+// --- New outfits (Klein) --------------------------------------------------------------------------
+const draftUrl = (f) => `/media/draft/${encodeURIComponent(f.replace(/^drafts\//, ''))}`;
+const WHEN = { evening: 'evenings, 6 to 11 pm', cold: 'cold days (under 45\u00b0F)', hot: 'hot days (over 85\u00b0F)', day: 'daytime, taking turns with her usual clothes' };
+let promptEdited = false;
+function kleinPrompt() {
+  const base = state.choom.looks[$('#outfitBase').value] || {};
+  const wearing = $('#outfitWearing').value.trim().replace(/\.$/, '') || '\u2026';
+  const keep = (base.kleinKeep || 'her face, expression, hair and pose').replace(/[,. ]+$/, '');
+  return `Change her clothes: she now wears ${wearing}. Keep everything else exactly the same: ${keep}, the lighting, the framing, and the pure black background.`;
+}
+function outfitLookId() {
+  const name = $('#outfitName').value.toLowerCase().replace(/[^a-z0-9]/g, '');
+  return `${$('#outfitBase').value}@${$('#outfitWhen').value}${name}`;
+}
+function updateOutfitForm() {
+  if (!promptEdited) $('#outfitPrompt').value = kleinPrompt();
+  const id = outfitLookId();
+  $('#outfitLook').textContent = state.choom.looks[id] ? `she already has ${id}: give it a name` : `becomes the look ${id}`;
+}
+function renderOutfitForm() {
+  const bases = lookOrder(state.choom.looks).filter((l) => !l.includes('@') && !['full', 'asleep'].includes(l) && state.choom.looks[l].picture);
+  const home = state.choom.sequence.length ? state.choom.clips[state.choom.sequence[0]].from : bases[0];
+  const wardrobeBase = bases.find((l) => state.choom.looks[l].wardrobe) || home;
+  const was = $('#outfitBase').value;
+  $('#outfitBase').replaceChildren(...bases.map((l) => el('option', { value: l, selected: l === (was || wardrobeBase) }, l)));
+  if (!$('#outfitWhen').options.length) $('#outfitWhen').replaceChildren(...Object.entries(WHEN).map(([k, v]) => el('option', { value: k }, v)));
+  updateOutfitForm();
+}
+['outfitBase', 'outfitWhen', 'outfitName', 'outfitWearing'].forEach((id) => $(`#${id}`).addEventListener('input', updateOutfitForm));
+$('#outfitPrompt').addEventListener('input', () => { promptEdited = true; });
+$('#outfitMake').addEventListener('click', attempt(async () => {
+  if (!$('#outfitWearing').value.trim() && !promptEdited) return toast('Say what she wears', true);
+  state.choom = (await api(`/api/choom/${state.cid}/outfit`, {
+    base: $('#outfitBase').value, when: $('#outfitWhen').value, name: $('#outfitName').value,
+    wearing: $('#outfitWearing').value, prompt: $('#outfitPrompt').value, count: Number($('#outfitCount').value),
+  })).choom;
+  promptEdited = false;
+  $('#outfitWearing').value = ''; $('#outfitName').value = '';
+  toast('Klein is making the pictures; they show up here when done (after any render ahead of it)');
+  renderLooks();
+  pollJobs();
+}));
+
+function renderDrafts() {
+  const drafts = state.choom.drafts || {};
+  $('#drafts').replaceChildren(...Object.entries(drafts).map(([look, d]) => el('section', { className: 'draft' },
+    el('h3', {}, look),
+    el('p', { className: 'muted' }, d.wearing ? `She wears ${d.wearing}. ` : '', d.status === 'making' ? 'Klein is making the pictures\u2026'
+      : d.status === 'failed' ? 'Klein failed; see the work list.' : 'Pick the one that keeps her most herself.'),
+    el('div', { className: 'pics' }, ...(d.pictures || []).map((f) => el('figure', {},
+      el('img', { src: draftUrl(f), alt: `${look} version`, loading: 'lazy', onclick: () => { $('#zoomImg').src = draftUrl(f); $('#zoom').showModal(); } }),
+      el('button', {
+        className: 'ghost', type: 'button', onclick: attempt(async () => {
+          state.choom = (await api(`/api/choom/${state.cid}/adopt`, { look, picture: f })).choom;
+          toast(`${look} is a look now: plan its clips in Plan & render`);
+          renderLooks();
+        }),
+      }, 'Use this one')))),
+    el('div', { className: 'row' }, el('button', {
+      className: 'ghost', type: 'button', onclick: attempt(async () => {
+        state.choom = (await api(`/api/choom/${state.cid}/discard`, { look })).choom;
+        renderLooks();
+      }),
+    }, 'Discard')))));
+}
+$('#zoom').addEventListener('click', () => $('#zoom').close());
 
 // --- Jobs -----------------------------------------------------------------------------------------
 const STATE_WORDS = { waiting: 'waiting', running: 'running', done: 'done', failed: 'failed', cancelled: 'cancelled' };

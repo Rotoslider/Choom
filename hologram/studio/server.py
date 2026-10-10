@@ -13,6 +13,7 @@ from pathlib import Path
 
 import build
 import jobs
+import pictures
 import plan
 import prompts
 import render
@@ -110,7 +111,7 @@ class Handler(BaseHTTPRequestHandler):
         if parts[0] == "web" and len(parts) == 2 and FILE.match(parts[1]):
             return self.send_file(WEB / parts[1])
         if parts[0] == "media" and len(parts) == 3 and FILE.match(parts[2]):
-            folder = {"clip": CLIPS, "sheet": SHEETS, "picture": PICTURES}.get(parts[1])
+            folder = {"clip": CLIPS, "sheet": SHEETS, "picture": PICTURES, "draft": pictures.DRAFTS}.get(parts[1])
             return self.send_file(folder / parts[2], cache=parts[1] != "sheet") if folder else self.send_error(404)
         if parts[:2] == ["api", "chooms"]:
             tint = colors()
@@ -192,6 +193,29 @@ class Handler(BaseHTTPRequestHandler):
                 for n in names:
                     if proj.clips[n]["status"] == "planned":
                         proj.unplan(n)
+            elif action == "outfit":
+                # A new outfit: Klein makes versions of her in it from a look's picture.
+                base = data["base"]
+                if not proj.looks.get(base, {}).get("picture"):
+                    return self.fail(f"no {base} picture to start from")
+                if data["when"] not in pictures.WHEN:
+                    return self.fail("an outfit is for cold, hot, evening or day")
+                look_id = f"{base}@{data['when']}{re.sub(r'[^a-z0-9]', '', data.get('name', '').lower())}"
+                if look_id in proj.looks:
+                    return self.fail(f"she already has {look_id}; give it another name")
+                wearing = data.get("wearing", "").strip()
+                prompt = (data.get("prompt") or "").strip() or pictures.outfit_prompt(wearing, proj.looks[base].get("kleinKeep", ""))
+                proj.data.setdefault("drafts", {})[look_id] = {"base": base, "wearing": wearing, "prompt": prompt,
+                                                               "pictures": [], "status": "making"}
+                jobs.add("picture", {"choom": cid, "look": look_id, "source": proj.looks[base]["picture"],
+                                     "prompt": prompt, "count": int(data.get("count", 3))})
+            elif action == "adopt":
+                draft = proj.data.get("drafts", {}).get(data["look"])
+                if not draft or data["picture"] not in draft["pictures"]:
+                    return self.fail("no such draft picture")
+                pictures.adopt(proj, data["look"], data["picture"], draft.get("wearing"), draft.get("prompt"))
+            elif action == "discard":
+                proj.data.get("drafts", {}).pop(data["look"], None)
             elif action == "look":
                 look = proj.looks.setdefault(data["look"], {})
                 for key in ("subject", "ending", "keep", "picture"):

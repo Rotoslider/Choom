@@ -17,11 +17,13 @@ import traceback
 from pathlib import Path
 
 import build
+import pictures
 import render
 from config import PROJECTS, WAN2GP_PYTHON
+from project import editing
 
 JOBS_FILE = PROJECTS / "jobs.json"
-LANES = {"render": "gpu", "build": "gpu", "review": "cpu"}
+LANES = {"render": "gpu", "build": "gpu", "picture": "gpu", "review": "cpu"}
 lock = threading.RLock()
 jobs = []
 
@@ -125,7 +127,22 @@ def do_review(job):
         raise RuntimeError("review.py failed")
 
 
-WORK = {"render": do_render, "build": do_build, "review": do_review}
+def do_picture(job):
+    """Klein versions of a new look; they wait in her project's drafts until one is chosen."""
+    a = job["args"]
+    try:
+        names = pictures.run(a["choom"], a["look"], a["source"], a["prompt"], a.get("count", 3), log=lambda line: note(job, line))
+    except Exception:
+        with editing(a["choom"]) as proj:
+            proj.data.get("drafts", {}).get(a["look"], {})["status"] = "failed"
+        raise
+    with editing(a["choom"]) as proj:
+        draft = proj.data.setdefault("drafts", {}).setdefault(a["look"], {})
+        draft["pictures"] = draft.get("pictures", []) + names
+        draft["status"] = "ready"
+
+
+WORK = {"render": do_render, "build": do_build, "picture": do_picture, "review": do_review}
 
 
 def worker(lane):

@@ -76,7 +76,16 @@ what it's for, using the roles in `tools/clip_roles.py`: `idle_glance` is a quie
    reliefs for new clips (only new ones are encoded), reloads the glass once no Choom is talking, and
    then clears the old videos.
 5. **Looks.** Edit each look's subject line, its keep line (said in every clip of the look; Genesis's
-   motes stay on her) and its loop ending.
+   motes stay on her) and its loop ending. **New outfit** makes a new look:
+   1. Say what she wears and when: cold days, hot days, evenings, or daytime taking turns with her
+      usual clothes. The outfit's name tells the glass when, like `evening…` or `day…`.
+   2. Flux.2 Klein makes a few versions from her picture. The instruction keeps everything but her
+      clothes, using what her earlier outfit edits kept.
+   3. Pick one. It becomes the look (`main@eveningdress`), with her subject line in the new clothes,
+      worked out from her other outfits' lines. Then plan its clips: Essentials first (it needs a
+      base loop to talk over), then a dozen or more quiet moments.
+
+   On the glass she wears an outfit in short visits, about 30 s per clip it has.
 
 Renders and builds take turns on the GPU; checks run beside them. The list of work survives a
 restart. A render keeps going if the Studio closes, and the Studio picks it up again when it starts.
@@ -113,12 +122,13 @@ queues (`queue/<name>.zip` with `<name>_plan.json`) for each clip's prompt and s
 | `render.py` | Wan2GP queue zips, the headless run, collecting outputs by seed |
 | `review.py` | contact sheets and automatic checks (needs numpy) |
 | `build.py` | masks, depth and reliefs, relaunch, prune |
+| `pictures.py` | Klein edits for new looks, choosing a version |
 | `jobs.py` | the GPU and CPU work lists |
 | `web/` | the page |
 
 ## Not yet
 
-- Making new looks from the page (Klein outfit edits, a new Choom from a picture) is the next part.
-  For now, new outfit pictures are made with Wan2GP's Flux.2 Klein and added under Looks.
-- A new Choom also needs her still relief (`tools/make_depth.py`) and an entry in
-  `portraits/manifest.json`.
+- A new Choom from a picture (her clean picture, still relief and manifest entry) is the next part.
+- Looks that change more than clothes on screen (Genesis's motes fading, Optic's heart) need change
+  clips and an entry in `ALT_LOOKS` in `living.js`; the Studio can render the clips but not yet wire
+  the look.
