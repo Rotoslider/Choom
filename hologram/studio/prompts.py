@@ -7,7 +7,10 @@ exactly as they began, so the page can play her clips in any order.
 """
 import re
 
-SECONDS = {5: (124, "five"), 6: (141, "six"), 7: (175, "seven"), 10: (243, "ten")}
+# H3 takes 107 + 17k frames at 24 fps. Five seconds fail least; long clips (a dance, a slow turn, a
+# moment that unfolds) drift more into new shots, halos or colour shifts, so check them closely.
+SECONDS = {5: (124, "five"), 6: (141, "six"), 7: (175, "seven"), 10: (243, "ten"), 12: (294, "twelve"),
+           15: (362, "fifteen")}
 FRAMES_SECONDS = {frames: s for s, (frames, _) in SECONDS.items()}
 CAMERA = "The camera stays locked off, framed exactly as at the start, and never zooms or pushes in."
 SOUND = "overall_soundscape: Near silence, a soft room tone."

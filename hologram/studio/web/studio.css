@@ -251,3 +251,13 @@ dialog#newChoom::backdrop { background: #000b; }
 .custom-form input[type="file"] { padding: 6px; }
 .steps { margin: 6px 0 0; padding-left: 20px; color: var(--muted); }
 .steps li.done { color: var(--good); }
+
+/* --- tooltips ----------------------------------------------------------------------------------- */
+.tip {
+  position: fixed; z-index: 50; max-width: 320px; padding: 7px 10px; border-radius: 8px; pointer-events: none;
+  background: #f3f4f8; color: #14161c; font-size: 12.5px; line-height: 1.4; white-space: pre-line;
+  box-shadow: 0 8px 30px #000b; border: 1px solid color-mix(in srgb, var(--tint) 50%, transparent);
+}
+#newOutfit [hidden] { display: none; }
+button.small { padding: 3px 10px; font-size: 12px; }
+.look-head button { margin-left: auto; }

@@ -206,18 +206,27 @@ class Handler(BaseHTTPRequestHandler):
                     if proj.clips[n]["status"] == "planned":
                         proj.unplan(n)
             elif action == "outfit":
-                # A new outfit: Klein makes versions of her in it from a look's picture.
-                base = data["base"]
+                # A new look from a picture she has: an outfit, her full body, or her asleep. Klein
+                # makes a few versions; one is picked later.
+                base, kind = data["base"], data.get("kind", "outfit")
                 if not proj.looks.get(base, {}).get("picture"):
                     return self.fail(f"no {base} picture to start from")
-                if data["when"] not in pictures.WHEN:
-                    return self.fail("an outfit is for cold, hot, evening or day")
-                look_id = f"{base}@{data['when']}{re.sub(r'[^a-z0-9]', '', data.get('name', '').lower())}"
-                if look_id in proj.looks:
-                    return self.fail(f"she already has {look_id}; give it another name")
+                if kind not in pictures.KINDS:
+                    return self.fail("a new look is an outfit, full body or asleep")
+                if kind == "outfit":
+                    if data["when"] not in pictures.WHEN:
+                        return self.fail("an outfit is for cold, hot, evening or day")
+                    look_id = f"{base}@{data['when']}{re.sub(r'[^a-z0-9]', '', data.get('name', '').lower())}"
+                else:
+                    look_id = kind
+                if look_id in proj.looks and proj.looks[look_id].get("picture"):
+                    return self.fail(f"she already has {look_id}" + ("; give it another name" if kind == "outfit" else ""))
                 wearing = data.get("wearing", "").strip()
-                prompt = (data.get("prompt") or "").strip() or pictures.outfit_prompt(wearing, proj.looks[base].get("kleinKeep", ""))
-                proj.data.setdefault("drafts", {})[look_id] = {"base": base, "wearing": wearing, "prompt": prompt,
+                keep = proj.looks[base].get("kleinKeep", "")
+                default = {"outfit": lambda: pictures.outfit_prompt(wearing, keep), "full": lambda: pictures.full_prompt(keep, wearing),
+                           "asleep": lambda: pictures.asleep_prompt(keep)}[kind]
+                prompt = (data.get("prompt") or "").strip() or default()
+                proj.data.setdefault("drafts", {})[look_id] = {"base": base, "kind": kind, "wearing": wearing, "prompt": prompt,
                                                                "pictures": [], "status": "making"}
                 jobs.add("picture", {"choom": cid, "look": look_id, "source": proj.looks[base]["picture"],
                                      "prompt": prompt, "count": int(data.get("count", 3))})

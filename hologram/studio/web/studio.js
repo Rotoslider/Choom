@@ -4,8 +4,9 @@
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
-const el = (tag, props = {}, ...kids) => {
+const el = (tag, { tip, ...props } = {}, ...kids) => {
   const e = Object.assign(document.createElement(tag), props);
+  if (tip) e.dataset.tip = tip;
   for (const k of kids.flat()) if (k != null) e.append(k.nodeType ? k : document.createTextNode(k));
   return e;
 };
@@ -21,7 +22,7 @@ const clipUrl = (n) => `/media/clip/${encodeURIComponent(n)}.mp4`;
 const sheetUrl = (n, v) => `/media/sheet/${encodeURIComponent(n)}.jpg?v=${v || 0}`;
 const pictureUrl = (f) => `/media/picture/${encodeURIComponent(f)}`;
 const short = (cid, n) => n.replace(`${cid}_`, '');
-const secondsOf = (c) => c.seconds || ({ 124: 5, 141: 6, 175: 7, 243: 10 }[c.frames] || 5);
+const secondsOf = (c) => c.seconds || ({ 124: 5, 141: 6, 175: 7, 243: 10, 294: 12, 362: 15 }[c.frames] || 5);
 
 const state = {
   chooms: [], cid: null, choom: null, tab: 'review',
@@ -61,11 +62,10 @@ async function loadChooms() {
   state.cleanPrompt = data.cleanPrompt;
   const nav = $('#chooms');
   nav.replaceChildren(...state.chooms.map((c) => {
-    const b = el('button', { type: 'button', onclick: () => openChoom(c.id) },
+    const b = el('button', { type: 'button', onclick: () => openChoom(c.id), tip: `${c.name}: ${c.onGlass} clips on the glass${c.counts.rendered ? `, ${c.counts.rendered} to review` : ''}${c.counts.planned ? `, ${c.counts.planned} planned` : ''}` },
       el('span', { className: 'swatch' }), c.name, el('small', {}, `${c.onGlass}`));
     b.style.setProperty('--c', c.color || '#9fb4ff');
     b.dataset.id = c.id;
-    b.title = `${c.onGlass} clips on the glass` + (c.counts.rendered ? `, ${c.counts.rendered} to review` : '');
     return b;
   }));
   if (!state.chooms.length) {
@@ -138,11 +138,19 @@ function renderReview() {
     : el('span', {}, `${names.length} clip${names.length === 1 ? '' : 's'}`));
 }
 
+const FLAG_TIPS = {
+  background: 'The black around her lifts: fog, a glow or a flash rolling in',
+  'push-in': 'She grows in the frame: the camera pushed in or zoomed',
+  color: 'Her light or colour drifts from her picture (sometimes on purpose: a fade, a glow)',
+  seam: "The last frame doesn't come back to the first: a jump each time it loops",
+  cut: 'A sudden jump mid-clip: a new shot',
+};
+
 function reviewCard(name) {
   const c = state.choom.clips[name];
   const cid = state.cid;
   const hasSheet = !!c.checks;
-  const sheet = el('div', { className: `sheet${hasSheet ? '' : ' missing'}`, title: 'Click to play' },
+  const sheet = el('div', { className: `sheet${hasSheet ? '' : ' missing'}`, tip: 'Eight frames, first to last. Click to play the clip' },
     hasSheet ? null : 'no sheet yet');
   if (hasSheet) sheet.style.backgroundImage = `url("${sheetUrl(name, c.rendered || c.changed)}")`;
   sheet.addEventListener('click', () => play(name));
@@ -170,13 +178,13 @@ function reviewCard(name) {
         el('span', { className: 'tag' }, c.from === c.to ? c.from : `${c.from} → ${c.to}`),
         el('span', { className: `tag status-${c.status}` }, c.status),
         `${secondsOf(c)} s`,
-        ...(c.flags || []).map((f) => el('span', { className: 'tag flag', title: JSON.stringify(c.checks || {}) }, f)),
+        ...(c.flags || []).map((f) => el('span', { className: 'tag flag', tip: FLAG_TIPS[f] || f }, f)),
         state.choom.sequence.includes(name) ? el('span', { className: 'tag' }, 'on the glass') : null),
       el('p', { className: 'action' }, c.action || '(prompt not recorded)'),
       el('div', { className: 'card-buttons' },
-        el('button', { className: 'keep', type: 'button', onclick: () => decide('kept') }, 'Keep'),
-        el('button', { className: 'drop', type: 'button', onclick: () => decide('dropped') }, 'Drop'),
-        el('button', { type: 'button', onclick: reroll, title: 'Render it again with a new seed' }, 'Re-roll'),
+        el('button', { className: 'keep', type: 'button', onclick: () => decide('kept'), tip: 'Keep it (K): it can go on the glass' }, 'Keep'),
+        el('button', { className: 'drop', type: 'button', onclick: () => decide('dropped'), tip: 'Drop it (D): it stays in her project, off the glass' }, 'Drop'),
+        el('button', { type: 'button', onclick: reroll, tip: 'Re-roll (R): plan it again with a new seed (edit the wording first if you like); the old take is kept' }, 'Re-roll'),
         note)));
   card.addEventListener('keydown', (e) => {
     if (e.target === note) return;
@@ -226,7 +234,7 @@ function renderGlass() {
   const changes = added.length || removed.length
     ? `Not built yet: ${added.length} to add, ${removed.length} to take off.`
     : 'The glass shows this sequence.';
-  const build = el('button', { className: 'primary', type: 'button', disabled: !!c.problems.length || !(added.length || removed.length) },
+  const build = el('button', { className: 'primary', type: 'button', disabled: !!c.problems.length || !(added.length || removed.length), tip: 'Cut-outs, depth and reliefs for new clips (only new ones are encoded), then the glass reloads once nobody is talking' },
     'Build and put on the glass');
   build.addEventListener('click', attempt(async () => {
     await api('/api/build', { choom: state.cid });
@@ -236,7 +244,7 @@ function renderGlass() {
   if (!c.inManifest) {
     const hasMain = !!c.looks.main?.picture;
     const kept = c.sequence.length;
-    const still = el('button', { className: 'primary', type: 'button', disabled: !hasMain }, 'Put her on the glass');
+    const still = el('button', { className: 'primary', type: 'button', disabled: !hasMain, tip: 'Make her still relief (cut-out, depth, mouth) and add her to the glass; her clips replace it once built' }, 'Put her on the glass');
     still.addEventListener('click', attempt(async () => {
       await api('/api/still', { choom: state.cid });
       toast('Making her still relief (cut-out, depth, mouth); the glass reloads with her when it is quiet');
@@ -262,11 +270,20 @@ function renderGlass() {
     const off = Object.keys(c.clips).filter((n) => c.clips[n].from === look && c.clips[n].status === 'kept' && !c.sequence.includes(n)).sort();
     const s = c.stats[look] || { onGlass: 0, quiet: 0, minutes: 0 };
     const pic = c.looks[look].picture;
+    const allOn = off.length ? el('button', {
+      className: 'ghost small', type: 'button', tip: `Put all ${off.length} kept clips of this look on the glass`,
+      onclick: attempt(async () => {
+        state.choom = (await api(`/api/choom/${state.cid}/place`, { names: off, on: true })).choom;
+        toast(`${off.length} clips added to ${look}; build to put them on the glass`);
+        renderGlass();
+      }),
+    }, `Put all ${off.length} on the glass`) : null;
     return el('div', { className: 'look-block' },
       el('div', { className: 'look-head' },
         pic ? el('img', { src: pictureUrl(pic), alt: '', loading: 'lazy' }) : null,
         el('h3', {}, look),
-        el('span', { className: 'stat' }, `${s.onGlass} on the glass · ${s.quiet} quiet moments · ${s.minutes} min before one repeats`)),
+        el('span', { className: 'stat' }, `${s.onGlass} on the glass · ${s.quiet} quiet moments · ${s.minutes} min before one repeats`),
+        allOn),
       el('div', { className: 'lane-label' }, 'On the glass'),
       lane(look, on, true),
       el('div', { className: 'lane-label' }, `Kept, not on the glass (${off.length})`),
@@ -310,7 +327,7 @@ function tile(name, on) {
   const main = name === state.choom.sequence[0];
   const t = el('div', {
     className: `tile${main ? ' main' : ''}${(c.flags || []).length ? ' flagged' : ''}`, draggable: !main,
-    title: `${short(state.cid, name)} · ${secondsOf(c)} s${c.flags?.length ? ` · ${c.flags.join(', ')}` : ''}\n${c.action || ''}`,
+    tip: `${short(state.cid, name)} · ${secondsOf(c)} s${c.flags?.length ? ` · flagged: ${c.flags.join(', ')}` : ''}${main ? ' · her main idle (stays first)' : ''}\n${c.action || ''}`,
   });
   t.dataset.name = name;
   if (c.checks) t.style.backgroundImage = `url("${sheetUrl(name, c.rendered || c.changed)}")`;
@@ -351,7 +368,7 @@ function renderLibrary(packs) {
   const blocks = packs.filter((p) => byPack[p.id]).map((p) => {
     const acts = byPack[p.id];
     const fresh = acts.filter((o) => !o.have.length);
-    const pick = el('button', { className: 'ghost', type: 'button' }, `Pick the ${fresh.length} she doesn't have`);
+    const pick = el('button', { className: 'ghost', type: 'button', tip: 'Tick every action in this pack she has no clip for yet' }, `Pick the ${fresh.length} she doesn't have`);
     pick.addEventListener('click', () => { fresh.forEach((o) => state.picked.add(o.key + '|' + o.pack)); renderLibrary(packs); });
     return el('section', { className: 'pack' },
       el('header', {}, el('h3', {}, p.title), el('p', {}, p.about), fresh.length ? pick : el('span', { className: 'muted' }, 'she has them all')),
@@ -362,11 +379,11 @@ function renderLibrary(packs) {
         return el('label', { className: `act${o.have.length ? ' have' : ''}` }, box,
           el('span', { className: 'k' }, short(state.cid, o.name),
             el('small', {}, `${o.seconds} s${o.have.length ? ` · has ${o.have.map((n) => short(state.cid, n)).join(', ')}` : ''}`),
-            o.hands ? el('span', { className: 'hands', title: 'Uses a hand: if her pose holds something, edit the planned prompt to say how she frees it' }, 'uses a hand') : null),
+            o.hands ? el('span', { className: 'hands', tip: 'Uses a hand: if her pose holds something (a heart, crossed arms), edit the planned wording to say how she frees it and puts it back' }, 'uses a hand') : null),
           el('span', { className: 't' }, o.text));
       })));
   });
-  const add = el('button', { className: 'primary', type: 'button', id: 'planAdd' });
+  const add = el('button', { className: 'primary', type: 'button', id: 'planAdd', tip: 'Add the ticked actions to her plan: each gets its name, prompt and seed' });
   add.addEventListener('click', attempt(async () => {
     const items = state.options.filter((o) => state.picked.has(o.key + '|' + o.pack)).map((o) => ({ pack: o.pack, key: o.key }));
     const { results, choom } = await api(`/api/choom/${state.cid}/plan`, { look: state.planLook, items });
@@ -426,7 +443,7 @@ function renderPlanned() {
     el('div', {}, `${planned.length} clips · about ${minutes < 90 ? `${minutes} min` : `${(minutes / 60).toFixed(1)} h`} of rendering. `,
       el('span', { className: 'muted' }, 'The glass runs slower while the GPU renders; about one clip in six comes out wrong, so review them all.')),
     el('div', { className: 'row' },
-      el('button', { className: 'primary', type: 'button', onclick: () => go(0) }, 'Render now'),
+      el('button', { className: 'primary', type: 'button', onclick: () => go(0), tip: 'Queue every planned clip and start Wan2GP now (the glass runs slower meanwhile)' }, 'Render now'),
       el('span', { className: 'muted' }, 'or at'), when,
       el('button', {
         className: 'ghost', type: 'button', onclick: () => {
@@ -435,6 +452,7 @@ function renderPlanned() {
           if (t < new Date()) t.setDate(t.getDate() + 1);
           go(Math.round(t / 1000));
         },
+        tip: 'Start the render at this time (tonight, while the glass is quiet)',
       }, 'Schedule')));
 }
 
@@ -457,12 +475,13 @@ function plannedItem(name) {
     ...lint.map((w) => el('div', { className: 'lint' }, w)),
     editing,
     el('div', { className: 'row' },
-      el('button', { className: 'ghost', type: 'button', onclick: () => { editing.hidden = !editing.hidden; } }, 'Edit'),
+      el('button', { className: 'ghost', type: 'button', onclick: () => { editing.hidden = !editing.hidden; }, tip: 'Change what she does; the prompt is rebuilt from her look' }, 'Edit'),
       el('button', {
         className: 'ghost', type: 'button', onclick: attempt(async () => {
           state.choom = (await api(`/api/choom/${state.cid}/unplan`, { names: [name] })).choom;
           renderPlanned();
         }),
+        tip: c.history?.length ? 'Forget this re-roll and go back to the take she had' : 'Take it out of the plan',
       }, c.history?.length ? 'Keep the old take' : 'Remove')));
 }
 
@@ -498,6 +517,7 @@ function renderLooks() {
         state.choom = (await api(`/api/choom/${state.cid}/look`, { look, subject: subject.value, keep: keep.value, ending: ending.value })).choom;
         toast(`${look} saved; clips planned from now on use it`);
       }),
+      tip: 'Save the look; clips planned from now on use it (rendered clips keep their prompts)',
     }, 'Save');
     const s = c.stats[look] || { onGlass: 0 };
     return el('article', { className: 'look-card' },
@@ -510,24 +530,39 @@ function renderLooks() {
   }));
 }
 
-// --- New outfits (Klein) --------------------------------------------------------------------------
+// --- New looks: outfits, full body, asleep (Klein) -------------------------------------------------
 const draftUrl = (f) => `/media/draft/${encodeURIComponent(f.replace(/^drafts\//, ''))}`;
-const WHEN = { evening: 'evenings, 6 to 11 pm', cold: 'cold days (under 45\u00b0F)', hot: 'hot days (over 85\u00b0F)', day: 'daytime, taking turns with her usual clothes' };
+const WHEN = { evening: 'evenings, 6 to 11 pm', cold: 'cold days (under 45°F)', hot: 'hot days (over 85°F)', day: 'daytime, taking turns with her usual clothes' };
 let promptEdited = false;
+const outfitKind = () => $('#outfitKind').value;
+// The same instructions as studio/pictures.py, shown so they can be edited before Klein runs.
 function kleinPrompt() {
   const base = state.choom.looks[$('#outfitBase').value] || {};
-  const wearing = $('#outfitWearing').value.trim().replace(/\.$/, '') || '\u2026';
+  const wearing = $('#outfitWearing').value.trim().replace(/\.$/, '');
   const keep = (base.kleinKeep || 'her face, expression, hair and pose').replace(/[,. ]+$/, '');
-  return `Change her clothes: she now wears ${wearing}. Keep everything else exactly the same: ${keep}, the lighting, the framing, and the pure black background.`;
+  if (outfitKind() === 'full') {
+    return 'Show her from head to toe, standing relaxed and facing the viewer, her whole figure in frame with a little black space above her head and below her feet. '
+      + `Keep ${keep} exactly as in the picture, with the same light on the same pure black background.${wearing ? ` She wears ${wearing}.` : ''}`;
+  }
+  if (outfitKind() === 'asleep') {
+    return 'She has dozed off peacefully: her eyes are gently closed, her face is soft and relaxed, and her head tips slightly down and to one side. '
+      + `Keep everything else exactly the same: ${keep}, the lighting, the framing, and the pure black background.`;
+  }
+  return `Change her clothes: she now wears ${wearing || '…'}. Keep everything else exactly the same: ${keep}, the lighting, the framing, and the pure black background.`;
 }
 function outfitLookId() {
+  if (outfitKind() !== 'outfit') return outfitKind();
   const name = $('#outfitName').value.toLowerCase().replace(/[^a-z0-9]/g, '');
   return `${$('#outfitBase').value}@${$('#outfitWhen').value}${name}`;
 }
 function updateOutfitForm() {
+  const kind = outfitKind();
+  $$('#newOutfit .when').forEach((e) => { e.hidden = kind !== 'outfit'; });
+  $('#newOutfit .wearing').hidden = kind === 'asleep';
+  $('#outfitWearingLabel').textContent = kind === 'full' ? 'What she wears below the waist (optional; her top is kept)' : 'She now wears';
   if (!promptEdited) $('#outfitPrompt').value = kleinPrompt();
   const id = outfitLookId();
-  $('#outfitLook').textContent = state.choom.looks[id] ? `she already has ${id}: give it a name` : `becomes the look ${id}`;
+  $('#outfitLook').textContent = state.choom.looks[id]?.picture ? `she already has ${id}${kind === 'outfit' ? ': give it a name' : ''}` : `becomes the look ${id}`;
 }
 function renderOutfitForm() {
   const bases = lookOrder(state.choom.looks).filter((l) => !l.includes('@') && !['full', 'asleep'].includes(l) && state.choom.looks[l].picture);
@@ -539,11 +574,12 @@ function renderOutfitForm() {
   updateOutfitForm();
 }
 ['outfitBase', 'outfitWhen', 'outfitName', 'outfitWearing'].forEach((id) => $(`#${id}`).addEventListener('input', updateOutfitForm));
+$('#outfitKind').addEventListener('input', () => { promptEdited = false; updateOutfitForm(); });
 $('#outfitPrompt').addEventListener('input', () => { promptEdited = true; });
 $('#outfitMake').addEventListener('click', attempt(async () => {
-  if (!$('#outfitWearing').value.trim() && !promptEdited) return toast('Say what she wears', true);
+  if (outfitKind() === 'outfit' && !$('#outfitWearing').value.trim() && !promptEdited) return toast('Say what she wears', true);
   state.choom = (await api(`/api/choom/${state.cid}/outfit`, {
-    base: $('#outfitBase').value, when: $('#outfitWhen').value, name: $('#outfitName').value,
+    kind: outfitKind(), base: $('#outfitBase').value, when: $('#outfitWhen').value, name: $('#outfitName').value,
     wearing: $('#outfitWearing').value, prompt: $('#outfitPrompt').value, count: Number($('#outfitCount').value),
   })).choom;
   promptEdited = false;
@@ -567,12 +603,14 @@ function renderDrafts() {
           toast(`${look} is a look now: plan its clips in Plan & render`);
           renderLooks();
         }),
+        tip: 'Make this version the look',
       }, 'Use this one')))),
     el('div', { className: 'row' }, el('button', {
       className: 'ghost', type: 'button', onclick: attempt(async () => {
         state.choom = (await api(`/api/choom/${state.cid}/discard`, { look })).choom;
         renderLooks();
       }),
+      tip: 'Throw these versions away (the files stay in clean/drafts)',
     }, 'Discard')))));
 }
 $('#zoom').addEventListener('click', () => $('#zoom').close());
@@ -645,12 +683,51 @@ function renderJobs() {
       j.log?.length && j.status !== 'done' ? el('pre', {}, j.log.slice(-8).join('\n')) : null,
       ['waiting', 'running'].includes(j.status) ? el('div', {}, el('button', {
         className: 'ghost', type: 'button', onclick: attempt(async () => { await api(`/api/jobs/${j.id}/cancel`, {}); pollJobs(); }),
+        tip: j.kind === 'render' ? 'Stop Wan2GP; clips not rendered yet go back to planned' : 'Cancel this job',
       }, 'Cancel')) : null);
   }));
   if (!state.jobs.length) $('#jobsList').replaceChildren(el('p', { className: 'muted' }, 'No work yet.'));
 }
 $('#jobsButton').addEventListener('click', () => { $('#jobsPanel').hidden = !$('#jobsPanel').hidden; renderJobs(); });
 $('#jobsClose').addEventListener('click', () => { $('#jobsPanel').hidden = true; });
+
+// --- Tooltips -------------------------------------------------------------------------------------
+let tipTimer = null;
+let tipFor = null;
+function showTip(target) {
+  const tip = $('#tip');
+  tip.textContent = target.dataset.tip;
+  tip.hidden = false;
+  const r = target.getBoundingClientRect();
+  const t = tip.getBoundingClientRect();
+  let x = Math.min(Math.max(8, r.left + r.width / 2 - t.width / 2), window.innerWidth - t.width - 8);
+  let y = r.bottom + 8;
+  if (y + t.height > window.innerHeight - 8) y = r.top - t.height - 8;
+  tip.style.left = `${x}px`;
+  tip.style.top = `${Math.max(8, y)}px`;
+}
+function hideTip() { clearTimeout(tipTimer); tipFor = null; $('#tip').hidden = true; }
+document.addEventListener('mouseover', (e) => {
+  const target = e.target.closest?.('[data-tip]');
+  if (target === tipFor) return;
+  hideTip();
+  if (!target) return;
+  tipFor = target;
+  tipTimer = setTimeout(() => showTip(target), 450);
+});
+document.addEventListener('focusin', (e) => {
+  const target = e.target.closest?.('[data-tip]');
+  if (target && target.matches(':focus-visible')) { tipFor = target; showTip(target); }
+});
+['mousedown', 'scroll', 'keydown', 'focusout', 'dragstart'].forEach((ev) => document.addEventListener(ev, hideTip, true));
+
+// A changed address (a link, back and forward) opens that view.
+window.addEventListener('hashchange', () => {
+  const was = { cid: state.cid, tab: state.tab, f: state.reviewFilter };
+  fromHash();
+  if (was.cid !== state.cid) openChoom(state.cid).catch((e) => toast(e.message, true));
+  else if (was.tab !== state.tab || was.f !== state.reviewFilter) render();
+});
 
 loadChooms().catch((e) => { $('#intro').textContent = `Couldn’t reach the Studio: ${e.message}`; });
 pollJobs();

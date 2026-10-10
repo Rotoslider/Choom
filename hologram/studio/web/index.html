@@ -16,8 +16,8 @@
     </div>
   </div>
   <nav id="chooms" class="chooms" aria-label="Chooms"></nav>
-  <button id="newChoomButton" class="ghost" type="button">+ New Choom</button>
-  <button id="jobsButton" class="jobs-pill" type="button" aria-controls="jobsPanel">
+  <button id="newChoomButton" class="ghost" type="button" data-tip="Bring a new Choom to the glass, starting from a picture of her">+ New Choom</button>
+  <button id="jobsButton" class="jobs-pill" type="button" aria-controls="jobsPanel" data-tip="The work list: renders, pictures, builds and checks. Click to see progress or cancel">
     <span class="dot"></span><span id="jobsText">Idle</span>
   </button>
 </header>
@@ -34,10 +34,10 @@
         <p id="choomLine" class="muted"></p>
       </div>
       <div id="tabs" class="tabs" role="tablist">
-        <button role="tab" data-tab="review">Review</button>
-        <button role="tab" data-tab="glass">On the glass</button>
-        <button role="tab" data-tab="plan">Plan &amp; render</button>
-        <button role="tab" data-tab="looks">Looks</button>
+        <button role="tab" data-tab="review" data-tip="Rendered clips waiting for a decision: keep, drop or re-roll">Review</button>
+        <button role="tab" data-tab="glass" data-tip="Which clips she plays on the glass, look by look; drag to change, then build">On the glass</button>
+        <button role="tab" data-tab="plan" data-tip="Pick new clips from the library or write your own, then render them">Plan &amp; render</button>
+        <button role="tab" data-tab="looks" data-tip="Her pictures (main, outfits, full body, asleep) and the lines her prompts start with">Looks</button>
       </div>
     </div>
 
@@ -45,14 +45,14 @@
     <section data-pane="review" class="pane">
       <div class="toolbar">
         <div class="chips" id="reviewFilter">
-          <button data-f="rendered" class="on">To review</button>
-          <button data-f="flagged">Flagged</button>
-          <button data-f="kept">Kept</button>
-          <button data-f="dropped">Dropped</button>
-          <button data-f="all">All</button>
+          <button data-f="rendered" class="on" data-tip="New renders nobody has decided on yet">To review</button>
+          <button data-f="flagged" data-tip="Clips the automatic checks were unsure about (new and kept)">Flagged</button>
+          <button data-f="kept" data-tip="Clips you kept; only these can go on the glass">Kept</button>
+          <button data-f="dropped" data-tip="Clips you dropped; you can still keep one later">Dropped</button>
+          <button data-f="all" data-tip="Every rendered clip">All</button>
         </div>
-        <label class="select">Look <select id="reviewLook"></select></label>
-        <button id="makeSheets" class="ghost" type="button">Make missing sheets</button>
+        <label class="select" data-tip="Show only the clips of one look">Look <select id="reviewLook"></select></label>
+        <button id="makeSheets" class="ghost" type="button" data-tip="Make contact sheets and checks for clips that don't have them (runs beside renders)">Make missing sheets</button>
       </div>
       <p class="hint">Eight frames from first to last. Flags are hints from the automatic checks: <b>background</b> (the black lifts: fog, a glow, a flash), <b>push-in</b> (she grows: the camera moved), <b>color</b>, <b>seam</b> (the loop doesn't close), <b>cut</b> (a new shot). Keys on a card: <kbd>K</kbd> keep, <kbd>D</kbd> drop, <kbd>R</kbd> re-roll, <kbd>Space</kbd> play.</p>
       <div id="reviewGrid" class="review-grid"></div>
@@ -62,7 +62,7 @@
     <!-- On the glass: her sequence per look; drag clips on, off, or onto another to replace it -->
     <section data-pane="glass" class="pane">
       <div class="build-bar" id="buildBar"></div>
-      <p class="hint">Drag a clip into <b>On the glass</b> to add it, out to take it off, or onto another clip to swap them. Hover to play. Changes reach the glass when you build.</p>
+      <p class="hint">Drag a clip into <b>On the glass</b> to add it, out to take it off, or onto another clip to swap them. Hover to play, double-click to watch it large. Changes reach the glass when you build.</p>
       <div id="glassLooks"></div>
     </section>
 
@@ -71,26 +71,30 @@
       <div class="plan-cols">
         <div class="plan-library">
           <div class="toolbar">
-            <label class="select">Look <select id="planLook"></select></label>
+            <label class="select" data-tip="The look these clips are for: they start and end on its picture">Look <select id="planLook"></select></label>
             <span id="planLookInfo" class="muted"></span>
           </div>
           <div id="library"></div>
-          <details class="custom">
-            <summary>Write your own clip</summary>
+          <details class="custom" id="customClip">
+            <summary data-tip="Any move she can make and end where she began: a dance, a turn with her back to you, a stretch">Write your own clip</summary>
+            <p class="hint">Say what she does, start to finish, in one or two sentences. She must end where she began (the Studio adds the camera line and the ending). Five seconds fail least; a dance or a slow turn may want ten or fifteen.</p>
             <div class="custom-form">
-              <label>Kind
+              <label data-tip="What the glass uses it for">Kind
                 <select id="customKind">
-                  <option value="moment">Quiet moment</option>
-                  <option value="talk">Talking loop</option>
-                  <option value="oops">Oops face</option>
-                  <option value="pose">Selfie move</option>
+                  <option value="moment">Quiet moment (plays while nobody talks)</option>
+                  <option value="pose">Look-at-me move (plays with a selfie)</option>
+                  <option value="talk">Talking loop (calm, lips closed: lip sync goes on top)</option>
+                  <option value="oops">Oops face (her own mishap)</option>
                 </select></label>
-              <label>Short name <input id="customKey" placeholder="adjustglasses" pattern="[a-z0-9]+"></label>
-              <label>Length
-                <select id="customSeconds"><option value="5">5 s</option><option value="7">7 s</option></select></label>
+              <label data-tip="A short name, letters and digits: it becomes part of the clip's name">Short name <input id="customKey" placeholder="dance" pattern="[a-z0-9]+"></label>
+              <label data-tip="Longer clips drift more: new shots, halos, colour shifts. Check them closely">Length
+                <select id="customSeconds">
+                  <option value="5">5 s</option><option value="7">7 s</option><option value="10">10 s</option>
+                  <option value="12">12 s</option><option value="15">15 s</option>
+                </select></label>
               <label class="wide">What she does
-                <textarea id="customText" rows="3" placeholder="She pushes her glasses up her nose with one finger, then smiles at the viewer."></textarea></label>
-              <button id="customAdd" type="button">Add to the plan</button>
+                <textarea id="customText" rows="3" placeholder="She sways her hips and turns once on the spot with a happy smile, her hair swinging out, then settles facing the viewer."></textarea></label>
+              <button id="customAdd" type="button" data-tip="Plan it with the look's subject line, camera line and ending; check the warnings before rendering">Add to the plan</button>
             </div>
           </details>
         </div>
@@ -107,18 +111,24 @@
       <p class="hint">Each look is a clean picture of her and the line that describes her in it. Every clip in the look starts and ends on that picture; the <b>subject</b> starts every prompt (say “a plain pure black background”), the <b>keep</b> line follows it in every clip (Genesis: her motes stay on her), and loops finish with the <b>ending</b>.</p>
       <div id="drafts"></div>
       <details class="custom" id="newOutfit">
-        <summary>New outfit</summary>
-        <p class="hint">Klein makes a few versions of her in the new clothes from a look's picture; pick one and it becomes a look you can plan clips for (start with Essentials, then a dozen or more quiet moments). When she wears it comes from its name, like the glass's other outfits.</p>
+        <summary data-tip="Klein makes a few versions from one of her pictures; you pick one">New look: an outfit, full body or asleep</summary>
+        <p class="hint">Klein makes a few versions from one of her pictures; pick one and it becomes a look you can plan clips for. An <b>outfit</b> needs Essentials first, then a dozen or more quiet moments; when she wears it comes from its name, like the glass's other outfits. <b>Full body</b> is for the full-body moves and twirls; <b>asleep</b> is for the sleep clips.</p>
         <div class="custom-form">
-          <label>Starts from <select id="outfitBase"></select></label>
-          <label>She wears it on <select id="outfitWhen"></select></label>
-          <label>Name (optional) <input id="outfitName" placeholder="dress" pattern="[a-z0-9]*"></label>
-          <label class="wide">She now wears
+          <label data-tip="What Klein makes">Kind
+            <select id="outfitKind">
+              <option value="outfit">An outfit</option>
+              <option value="full">Full body (head to toe)</option>
+              <option value="asleep">Asleep (eyes closed)</option>
+            </select></label>
+          <label data-tip="The picture Klein starts from; everything but the change is kept">Starts from <select id="outfitBase"></select></label>
+          <label class="when" data-tip="The glass picks outfits by time and weather; the name says when">She wears it on <select id="outfitWhen"></select></label>
+          <label class="when" data-tip="Letters and digits; tells two outfits for the same time apart (eveningdress, eveningknit)">Name (optional) <input id="outfitName" placeholder="dress" pattern="[a-z0-9]*"></label>
+          <label class="wide wearing"><span id="outfitWearingLabel">She now wears</span>
             <textarea id="outfitWearing" rows="2" placeholder="a long burgundy dress with thin straps"></textarea></label>
           <label class="wide">Instruction for Klein (edit if her pose holds something it must keep)
             <textarea id="outfitPrompt" rows="4"></textarea></label>
-          <label>Versions <select id="outfitCount"><option>2</option><option selected>3</option><option>4</option></select></label>
-          <div class="wide row-end"><span id="outfitLook" class="muted"></span><button id="outfitMake" type="button">Make pictures</button></div>
+          <label data-tip="How many versions to choose from (about a minute each)">Versions <select id="outfitCount"><option>2</option><option selected>3</option><option>4</option></select></label>
+          <div class="wide row-end"><span id="outfitLook" class="muted"></span><button id="outfitMake" type="button" data-tip="Queue the Klein pictures; they appear above when done (after any render ahead of them)">Make pictures</button></div>
         </div>
       </details>
       <div id="looksGrid" class="looks-grid"></div>
@@ -127,7 +137,7 @@
 </main>
 
 <aside id="jobsPanel" class="jobs-panel" hidden>
-  <div class="jobs-head"><h3>Work</h3><button id="jobsClose" class="ghost" type="button" aria-label="Close">✕</button></div>
+  <div class="jobs-head"><h3>Work</h3><button id="jobsClose" class="ghost" type="button" aria-label="Close" data-tip="Close the work list">✕</button></div>
   <div id="jobsList"></div>
 </aside>
 
@@ -141,27 +151,28 @@
     <h2>A new Choom on the glass</h2>
     <p class="hint">Start from a picture of her: a render, a portrait, her Choom avatar. Klein cleans it up into a picture of her on black (pick the best of a few), then the Studio makes her still relief so the glass knows her, and her clips come from the library like everyone else's. Her name should match her name in the Choom app, so the glass knows when she talks.</p>
     <div class="custom-form">
-      <label>Name <input id="ncName" required placeholder="Lissa"></label>
-      <label>Her colour <input id="ncColor" type="color" value="#7fd4ff"></label>
-      <label>Particles
+      <label data-tip="As the Choom app calls her; her id is this in lower case">Name <input id="ncName" required placeholder="Lissa"></label>
+      <label data-tip="Her colour on the glass: her name, her picture frames, her particles">Her colour <input id="ncColor" type="color" value="#7fd4ff"></label>
+      <label data-tip="The effect around her on the glass">Particles
         <select id="ncStyle">
           <option value="motes">drifting motes (like Genesis)</option>
           <option value="embers">warm embers (like Aloy)</option>
           <option value="scan">a scan band (like Optic)</option>
           <option value="code">a code band (like Eve)</option>
         </select></label>
-      <label class="wide">Her picture <input id="ncPicture" type="file" accept="image/png,image/jpeg,image/webp" required></label>
+      <label class="wide" data-tip="Waist-up, facing you, works best; Klein can fix the background">Her picture <input id="ncPicture" type="file" accept="image/png,image/jpeg,image/webp" required></label>
       <label class="wide">Who she is (the start of every prompt; leave out the background)
         <textarea id="ncWho" rows="2" placeholder="A young woman with short black hair, green eyes and freckles, wearing a red bomber jacket"></textarea></label>
       <label class="wide check"><input id="ncClean" type="checkbox" checked> Clean it up with Klein (recommended unless she's already on plain black, facing you)</label>
       <label class="wide">Instruction for Klein <textarea id="ncPrompt" rows="3"></textarea></label>
-      <div class="wide row-end"><button value="cancel" class="ghost">Cancel</button><button id="ncCreate" type="button" class="primary">Create her</button></div>
+      <div class="wide row-end"><button value="cancel" class="ghost">Cancel</button><button id="ncCreate" type="button" class="primary" data-tip="Creates her project; Klein's versions appear under Looks">Create her</button></div>
     </div>
   </form>
 </dialog>
 
 <dialog id="zoom"><img id="zoomImg" alt=""></dialog>
 
+<div id="tip" class="tip" role="tooltip" hidden></div>
 <div id="toast" class="toast" role="status" hidden></div>
 <script src="/web/studio.js"></script>
 </body>
