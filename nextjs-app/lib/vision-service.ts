@@ -43,8 +43,12 @@ const DEFAULT_MAX_IMAGE_DIMENSION = 768; // Max width/height for vision model in
  * Converts to PNG for consistent encoding.
  * Returns { buffer, mime } — the resized image buffer and MIME type.
  */
+// The largest original accepted before shrinking (a phone photo over Signal can be 20+ MB); the
+// vision limit (maxImageSizeBytes) applies to the shrunk image, not the original.
+const MAX_ORIGINAL_BYTES = 100 * 1024 * 1024;
+
 async function resizeForVision(input: Buffer, maxDimension: number): Promise<{ buffer: Buffer; mime: string }> {
-  const image = sharp(input);
+  const image = sharp(input, { limitInputPixels: false }).rotate(); // upright, per the photo's EXIF
   const metadata = await image.metadata();
   const width = metadata.width || 0;
   const height = metadata.height || 0;
@@ -55,12 +59,12 @@ async function resizeForVision(input: Buffer, maxDimension: number): Promise<{ b
     return { buffer: buf, mime: 'image/png' };
   }
 
-  // Resize to fit within maxDimension x maxDimension
-  const resized = await image
-    .resize(maxDimension, maxDimension, { fit: 'inside', withoutEnlargement: true })
-    .png()
-    .toBuffer();
-  return { buffer: resized, mime: 'image/png' };
+  // Resize to fit within maxDimension x maxDimension. A big photo goes to JPEG (a PNG of it can still
+  // be several MB); a big screenshot or drawing stays PNG.
+  const photo = metadata.format === 'jpeg' || metadata.format === 'heif' || metadata.format === 'webp';
+  const fitted = image.resize(maxDimension, maxDimension, { fit: 'inside', withoutEnlargement: true });
+  const resized = photo ? await fitted.jpeg({ quality: 90 }).toBuffer() : await fitted.png().toBuffer();
+  return { buffer: resized, mime: photo ? 'image/jpeg' : 'image/png' };
 }
 
 export class VisionService {
@@ -71,6 +75,21 @@ export class VisionService {
   private apiKey?: string;
   private maxImageDimension: number;
   private maxImageSizeBytes: number;
+
+  /** A huge original is refused before it is decoded; anything under that is shrunk first. */
+  private checkOriginal(bytes: number): void {
+    if (bytes > MAX_ORIGINAL_BYTES) {
+      throw new Error(`Image too large (${(bytes / 1024 / 1024).toFixed(1)}MB). Maximum: ${MAX_ORIGINAL_BYTES / 1024 / 1024}MB`);
+    }
+  }
+
+  /** The vision limit applies to the shrunk image. */
+  private checkShrunk(resized: { buffer: Buffer; mime: string }): { buffer: Buffer; mime: string } {
+    if (resized.buffer.length > this.maxImageSizeBytes) {
+      throw new Error(`Image too large even after shrinking (${(resized.buffer.length / 1024 / 1024).toFixed(1)}MB). Maximum: ${Math.round(this.maxImageSizeBytes / 1024 / 1024)}MB`);
+    }
+    return resized;
+  }
 
   constructor(config: VisionServiceConfig) {
     this.endpoint = config.endpoint.replace(/\/+$/, '');
@@ -109,10 +128,8 @@ export class VisionService {
         throw new Error('Path traversal blocked: image path resolves outside workspace');
       }
       const rawBuffer = await readFile(fullPath);
-      if (rawBuffer.length > this.maxImageSizeBytes) {
-        throw new Error(`Image too large (${(rawBuffer.length / 1024 / 1024).toFixed(1)}MB). Maximum: ${Math.round(this.maxImageSizeBytes / 1024 / 1024)}MB`);
-      }
-      const resized = await resizeForVision(rawBuffer, this.maxImageDimension);
+      this.checkOriginal(rawBuffer.length);
+      const resized = this.checkShrunk(await resizeForVision(rawBuffer, this.maxImageDimension));
       base64Data = resized.buffer.toString('base64');
       resolvedMime = resized.mime;
     } else if (imageUrl) {
@@ -122,20 +139,15 @@ export class VisionService {
         throw new Error(`Failed to fetch image from URL: ${response.status} ${response.statusText}`);
       }
       const arrayBuffer = await response.arrayBuffer();
-      if (arrayBuffer.byteLength > this.maxImageSizeBytes) {
-        throw new Error(`Image too large (${(arrayBuffer.byteLength / 1024 / 1024).toFixed(1)}MB). Maximum: ${Math.round(this.maxImageSizeBytes / 1024 / 1024)}MB`);
-      }
-      const resized = await resizeForVision(Buffer.from(arrayBuffer), this.maxImageDimension);
+      this.checkOriginal(arrayBuffer.byteLength);
+      const resized = this.checkShrunk(await resizeForVision(Buffer.from(arrayBuffer), this.maxImageDimension));
       base64Data = resized.buffer.toString('base64');
       resolvedMime = resized.mime;
     } else if (imageBase64) {
       // Use raw base64
-      const sizeEstimate = Math.ceil(imageBase64.length * 0.75);
-      if (sizeEstimate > this.maxImageSizeBytes) {
-        throw new Error(`Image too large (~${(sizeEstimate / 1024 / 1024).toFixed(1)}MB). Maximum: ${Math.round(this.maxImageSizeBytes / 1024 / 1024)}MB`);
-      }
+      this.checkOriginal(Math.ceil(imageBase64.length * 0.75));
       const rawBuffer = Buffer.from(imageBase64, 'base64');
-      const resized = await resizeForVision(rawBuffer, this.maxImageDimension);
+      const resized = this.checkShrunk(await resizeForVision(rawBuffer, this.maxImageDimension));
       base64Data = resized.buffer.toString('base64');
       resolvedMime = resized.mime;
     } else {
