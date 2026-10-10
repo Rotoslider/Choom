@@ -310,6 +310,20 @@ export function CameraSettings() {
           </div>
         </>
       )}
+
+      <div className="space-y-1 rounded-md border border-border p-3">
+        <div className="flex items-center gap-2">
+          <ImageIcon className="h-4 w-4 text-muted-foreground" />
+          <h3 className="text-sm font-medium">Glass Studio</h3>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          New clips, outfits and Chooms for the glass are planned, rendered, checked and arranged in Glass Studio,
+          which runs on the computer the Portrait is plugged into. Open it in a browser there.
+        </p>
+        <a href="http://127.0.0.1:8767" target="_blank" rel="noreferrer" className="text-xs underline underline-offset-2">
+          Open Glass Studio (http://127.0.0.1:8767)
+        </a>
+      </div>
     </div>
   );
 }
