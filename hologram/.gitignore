@@ -20,3 +20,6 @@ ears.log
 eyes.log
 # Glass Studio's log
 studio/studio.log
+# What the Chooms asked the glass for and haven't got (tools/closet.py; shown in Glass Studio)
+portraits/*/wishes.json
+portraits/*/wishes.part

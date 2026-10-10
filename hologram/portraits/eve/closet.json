@@ -1,0 +1,47 @@
+{
+ "usual": "a white dress drawn as a glowing wireframe mesh",
+ "looks": {
+  "cold": {
+   "tags": [
+    "cold",
+    "flannel",
+    "red",
+    "shirt",
+    "tank",
+    "top",
+    "white"
+   ],
+   "wearing": "an open red plaid flannel shirt over a white ribbed tank top"
+  },
+  "daygreen": {
+   "tags": [
+    "day",
+    "dress",
+    "green"
+   ],
+   "wearing": "a tailored dark green dress"
+  },
+  "dayyellow": {
+   "tags": [
+    "day",
+    "dress",
+    "sundress",
+    "yellow"
+   ],
+   "wearing": "a pale yellow sundress with thin spaghetti straps and a button front"
+  },
+  "evening": {
+   "tags": [
+    "blue",
+    "denim",
+    "evening",
+    "overalls",
+    "tank",
+    "top",
+    "white"
+   ],
+   "wearing": "light denim overalls over a white ribbed tank top"
+  }
+ },
+ "moves": {}
+}

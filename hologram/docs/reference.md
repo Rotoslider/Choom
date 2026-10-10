@@ -233,6 +233,28 @@ saved and shown like their Home Assistant camera snapshots, and refused when the
 "Chooms can look through this camera" is off. Settings also hold eye contact on or off, how wide
 counts as looking (`yaw_limit`), and the welcome back's switch and minutes (read by `server.py`).
 
+## The Chooms asking the glass
+
+The looking-glass skill in the Choom app (`skills/core/looking-glass`) gives each Choom three tools:
+`glass_move` (a move at her next quiet moment), `glass_wear` (clothes from her closet on the glass,
+kept until bedtime) and `glass_closet` (what she has, never what she has on). Like the camera, they
+travel over the hologram feed. `lib/glass-closet.ts` sends a `glass_request` event, then `server.py`
+matches it against her `alive.json` and the closet words Glass Studio writes to
+`portraits/<id>/closet.json`, using `tools/closet.py`. The server sends the page a `glass` event
+naming the clips to pick from, or the outfit, and posts the answer to `/api/hologram/glass/result`.
+- **Moves:** selfie moves, full-body clips, and clips named for a move (dance, wave, kiss). On the
+  page, a move plays from her current pose if she has it there. Otherwise she cuts to her full figure,
+  or goes through a pose change, as Aloy raises her hand first.
+- **Clothes:** an outfit is matched by garment, then colour, and a tie is a coin toss. A chosen
+  outfit takes priority over the time and weather rules until she sleeps or the day ends. It's kept
+  in the page's wardrobe, in localStorage.
+- **Wishes:** a request with no match goes in `portraits/<id>/wishes.json` (not in git), which the
+  Studio shows on its Plan page.
+
+To ask by hand from the Mac, use `POST /api/hologram/glass {choom, op, what}` (home only). On the
+NUC, use `POST 127.0.0.1:8765/glass` (answered locally). `/control {"glassReset": true}` forgets every
+chosen outfit.
+
 ## Welcome back
 
 When Donny sits back down after 20 minutes or more away, the Choom he last talked with one to one

@@ -23,10 +23,15 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import base64
+import sys
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE / "tools"))
+import closet  # noqa: E402
+
+PORTRAITS = HERE / "portraits"
 CALIBRATION = HERE / "calibration" / "LKG-PORT-07952_visual.json"
 LOG = HERE / "telemetry.log"
 LOG_MAX_BYTES = 50_000_000
@@ -218,6 +223,9 @@ def follow_choom():
                     last_kind[key] = event.get("type")
                     if event.get("type") == "camera_request":  # for tower_eyes, not the page
                         threading.Thread(target=answer_camera, args=(event,), daemon=True).start()
+                        continue
+                    if event.get("type") == "glass_request":  # a Choom asking the glass (answered here)
+                        threading.Thread(target=answer_glass, args=(event,), daemon=True).start()
                         continue
                     if event.get("type") in ("turn_start", "content") and event.get("source") in ("chat", "group"):
                         wake_screen()
@@ -439,6 +447,70 @@ def answer_camera(event):
         log_entry({"kind": "camera", "op": "snapshot" if op == "frame" else op, "ok": answer.get("ok")})
 
 
+# --- The Chooms asking the glass ----------------------------------------------------------------
+# The looking-glass skill in the Choom app: glass_move("a little dance"), glass_wear("my red dress")
+# and glass_closet() go down the feed as glass_request events. The answer is worked out here from
+# what is built on the glass (tools/closet.py), the page is told what to play or wear, and the
+# answer goes back to /api/hologram/glass/result, the way the camera's do.
+def glass_answer(request):
+    choom = str(request.get("choom") or "").strip()
+    cid, op = choom.lower(), request.get("op")
+    what = str(request.get("what") or "").strip()[:120]
+    alive, worn = closet.load(PORTRAITS, cid)
+    if not alive.get("clips"):
+        return {"ok": False, "error": f"{choom or 'That Choom'} isn't on the glass yet."}
+    moves, outfits = closet.moves(cid, alive, worn), closet.outfits(alive, worn)
+    names = sorted({closet.move_name(w) for w in moves})
+    if op == "closet":
+        # What she has, never what she's wearing at the moment.
+        return {"ok": True, "moves": names,
+                "clothes": [f"your usual clothes{': ' + worn['usual'] if worn.get('usual') else ''}"] +
+                           [o["wearing"] or ", ".join(o["tags"]) for o in outfits.values()],
+                "note": "Ask for something you don't have and it goes on Donny's wish list for Glass Studio."}
+    if not what:
+        return {"ok": False, "error": "Say what: a move (\"a twirl\") or clothes (\"my red dress\")."}
+    if op == "move":
+        found = closet.match_move(what, moves)
+        if not found:
+            closet.add_wish(PORTRAITS, cid, "move", what)
+            return {"ok": True, "done": False,
+                    "message": f"There's no \"{what}\" on the glass yet. It's on Donny's wish list in Glass Studio now.",
+                    "moves": names}
+        word = found[0][0]
+        broadcast({"type": "glass", "choom": cid, "move": sorted({s for _, srcs in found for s in srcs}), "name": word})
+        return {"ok": True, "done": True, "message": f"On the glass you {closet.move_name(word)} at your next quiet moment."}
+    if op == "wear":
+        match = closet.match_outfit(what, outfits)
+        if match is None:
+            closet.add_wish(PORTRAITS, cid, "wear", what)
+            return {"ok": True, "done": False,
+                    "message": f"There's nothing like \"{what}\" in your closet on the glass yet. It's on Donny's wish list in Glass Studio now.",
+                    "clothes": [o["wearing"] or ", ".join(o["tags"]) for o in outfits.values()]}
+        name, outfit = match
+        broadcast({"type": "glass", "choom": cid, "wear": None if name == "usual" else name})
+        if name == "usual":
+            return {"ok": True, "done": True, "message": "On the glass you change back into your usual clothes at your next quiet moment."}
+        return {"ok": True, "done": True,
+                "message": f"On the glass you change into {outfit['wearing'] or name} at your next quiet moment, and keep it on until bedtime unless you change again."}
+    return {"ok": False, "error": f"unknown op {op}"}
+
+
+def answer_glass(event):
+    try:
+        answer = glass_answer(event)
+    except Exception as e:  # a broken closet file must not leave her waiting
+        answer = {"ok": False, "error": f"the glass couldn't answer ({type(e).__name__})"}
+    try:
+        request = urllib.request.Request(f"{CHOOM_URL}/api/hologram/glass/result",
+                                         data=json.dumps({**answer, "id": event.get("id")}).encode(),
+                                         headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(request, timeout=15).read()
+    except Exception as e:
+        latest["glass_error"] = f"{type(e).__name__}: {e}"
+    log_entry({"kind": "glass", "choom": event.get("choom"), "op": event.get("op"), "what": event.get("what"),
+               "done": answer.get("done"), "ok": answer.get("ok")})
+
+
 def camera_settings():
     """camera.json (written by tower_eyes.py from the Choom app's Camera tab), or {}."""
     try:
@@ -590,7 +662,7 @@ class Handler(SimpleHTTPRequestHandler):
         return super().do_GET()
 
     def do_POST(self):
-        if self.path not in ("/log", "/control", "/speak", "/simulate", "/ears", "/eyes"):
+        if self.path not in ("/log", "/control", "/speak", "/simulate", "/ears", "/eyes", "/glass"):
             self.send_error(404)
             return
         length = int(self.headers.get("Content-Length", 0))
@@ -614,6 +686,10 @@ class Handler(SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(audio)
             return
+        if self.path == "/glass":
+            # Test hook: a Choom's glass request without the Choom app, e.g. {"choom": "genesis", "op": "move",
+            # "what": "twirl"}; answered here instead of to the Mac.
+            return self._send_json(glass_answer(entry))
         if self.path == "/simulate":
             # Test hook: inject a Choom-app event, e.g. {"event": "content", "choom": "aloy", ...}
             broadcast({**entry, "type": "choom"})

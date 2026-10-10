@@ -69,6 +69,9 @@ Studio writes that line from the line her other outfits share, with the new clot
 
 Fix anything here before planning, because the clips are written from it.
 
+- **Closet words:** what she can ask for the outfit by ("my red dress"). They're read from what she
+  wears: *burgundy, dress, evening, long, red*. Add a word if she'd call it something else.
+
 ## 4. Plan the clips
 
 Go to **Plan & render** and choose the new look at the top.
@@ -153,4 +156,6 @@ The outfit appears at its hour, in short visits.
 - **An outfit-specific moment** makes it feel worn: Genesis tugging the sweater back onto her
   shoulder, Aloy pulling up her jacket collar. Add one with **Write your own clip** on the Plan page.
 - **The Chooms can know their closet.** They aren't told what they're wearing at any moment, since
-  that would steer every picture they make. Telling them what their closet holds is fine.
+  that would steer every picture they make. They can see what their closet holds with
+  `glass_closet`, and change into an outfit with `glass_wear` once it's built. Clothes they ask for
+  and don't have yet show up as wishes on the Plan page, which makes a good list of what to make next.

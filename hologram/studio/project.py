@@ -25,9 +25,10 @@ import os
 import sys
 import time
 
-from config import CLIPS, PICTURES, PROJECTS, TOOLS
+from config import CLIPS, PICTURES, PORTRAITS, PROJECTS, TOOLS
 
 sys.path.insert(0, str(TOOLS))
+import closet  # noqa: E402
 from clip_roles import clip_role  # noqa: E402
 
 STATUSES = ("planned", "queued", "rendered", "kept", "dropped")
@@ -149,6 +150,33 @@ class Project:
                 self.sequence.append(name)
         elif name in self.sequence and name != self.sequence[0]:
             self.sequence.remove(name)
+
+    # --- her closet on the glass (tools/closet.py) ----------------------------------------------
+    def closet_words(self, look_id):
+        """The words she can ask for a look by: its own, or ones read from what she wears in it."""
+        look = self.looks.get(look_id, {})
+        return look.get("tags") or closet.default_tags(look_id, look.get("subject", ""),
+                                                       self.looks.get("main", {}).get("subject", ""))
+
+    def write_closet(self):
+        """portraits/<id>/closet.json, which the glass answers her requests from: each outfit's closet
+        words and what she wears in it, and words given to clips. Only for a Choom on the glass."""
+        f = PORTRAITS / self.id / "closet.json"
+        if not f.parent.is_dir():
+            return
+        looks, main = {}, self.looks.get("main", {}).get("subject", "")
+        usual = closet.wearing(main)
+        for lid in sorted(self.looks, key=lambda l: (base_of(l) != "main", l)):  # main@evening before relaxed@evening
+            o, subject = outfit_of(lid), self.looks[lid].get("subject", "")
+            if o and o not in looks:
+                worn = closet.wearing(subject, main)
+                looks[o] = {"tags": self.closet_words(lid),  # her usual clothes, changed some other way: say how
+                            "wearing": closet.changes(subject, main) if worn == usual else worn}
+        data = {"usual": usual, "looks": looks,
+                "moves": {n: c["tags"] for n, c in sorted(self.clips.items()) if c.get("tags")}}
+        text = json.dumps(data, indent=1) + "\n"
+        if not f.exists() or f.read_text() != text:
+            f.write_text(text)
 
     def summary(self):
         counts = {s: 0 for s in STATUSES}

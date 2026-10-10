@@ -40,9 +40,19 @@ def details(proj):
     alive = PORTRAITS / proj.id / "alive.json"
     built = [c["source"].removesuffix(".mp4") for c in json.loads(alive.read_text())["clips"]] if alive.exists() else []
     glass = {"added": [n for n in proj.sequence if n not in built], "removed": [n for n in built if n not in proj.sequence]}
+    closet = {look: proj.closet_words(look) for look in proj.looks if "@" in look}
     return {**proj.data, "stats": looks, "problems": build.problems(proj), "glass": glass, "inManifest": build.in_manifest(proj.id),
+            "closet": closet, "wishes": wishes(proj.id),
             "color": colors().get(proj.id) or proj.data.get("color"),
             "plannedMinutes": round(sum(render.minutes(c.get("frames") or 124) for c in planned))}
+
+
+def wishes(cid):
+    """What she asked the glass for and hasn't got (tools/closet.py writes them)."""
+    try:
+        return json.loads((PORTRAITS / cid / "wishes.json").read_text())
+    except (OSError, ValueError):
+        return []
 
 
 def colors():
@@ -247,6 +257,18 @@ class Handler(BaseHTTPRequestHandler):
                 for key in ("subject", "ending", "keep", "picture"):
                     if key in data:
                         look[key] = data[key]
+                if "tags" in data:  # closet words; empty goes back to the ones read from her clothes
+                    tags = data["tags"] if isinstance(data["tags"], list) else str(data["tags"]).split(",")
+                    tags = [w.strip().lower() for w in tags if w.strip()]
+                    if tags:
+                        look["tags"] = tags
+                    else:
+                        look.pop("tags", None)
+                proj.write_closet()
+            elif action == "wish":  # let a wish go (made, or not to be)
+                f = PORTRAITS / cid / "wishes.json"
+                left = [w for w in wishes(cid) if not (w["kind"] == data.get("kind") and w["what"] == data.get("what"))]
+                f.write_text(json.dumps(left, indent=1))
             else:
                 return self.fail("unknown action", 404)
         return self.send_json({"choom": details(Project.load(cid))})

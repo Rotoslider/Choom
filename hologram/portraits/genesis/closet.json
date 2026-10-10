@@ -1,0 +1,63 @@
+{
+ "usual": "",
+ "looks": {
+  "cold": {
+   "tags": [
+    "cable",
+    "cold",
+    "cream",
+    "knit",
+    "sweater",
+    "white"
+   ],
+   "wearing": "a thick cream cable-knit sweater with a high neck"
+  },
+  "daydenim": {
+   "tags": [
+    "blue",
+    "day",
+    "denim",
+    "shirt",
+    "white"
+   ],
+   "wearing": "an open light blue denim shirt over a white t-shirt"
+  },
+  "evening": {
+   "tags": [
+    "cream",
+    "evening",
+    "knit",
+    "sweater",
+    "white"
+   ],
+   "wearing": "a thick cream knit sweater off one shoulder"
+  },
+  "eveningdress": {
+   "tags": [
+    "burgundy",
+    "dress",
+    "evening",
+    "long",
+    "red"
+   ],
+   "wearing": "a long burgundy dress with thin straps"
+  },
+  "hot": {
+   "tags": [
+    "hot",
+    "pink",
+    "rose",
+    "top"
+   ],
+   "wearing": "a dusty-rose top with thin spaghetti straps"
+  },
+  "plain": {
+   "tags": [
+    "plain",
+    "top"
+   ],
+   "wearing": "natural skin, a delicate necklace and a dark top with thin straps"
+  }
+ },
+ "moves": {}
+}

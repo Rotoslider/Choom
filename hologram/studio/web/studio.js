@@ -367,10 +367,46 @@ async function renderPlan() {
   lookOptions($('#planLook'), state.planLook, false);
   const look = c.looks[state.planLook];
   $('#planLookInfo').textContent = look.picture ? `starts and ends on ${look.picture}` : 'this look has no picture yet';
+  renderWishes();
   const [{ options }, { packs }] = await Promise.all([api(`/api/options/${state.cid}/${encodeURIComponent(state.planLook)}`), api('/api/packs')]);
   state.options = options;
   renderLibrary(packs);
   renderPlanned();
+}
+
+// Her wishes: what she asked the glass for (glass_move, glass_wear) and hasn't got yet.
+function renderWishes() {
+  const c = state.choom;
+  if (!c.wishes?.length) return $('#wishes').replaceChildren();
+  const day = (t) => new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  const letGo = (w) => attempt(async () => {
+    state.choom = (await api(`/api/choom/${state.cid}/wish`, { kind: w.kind, what: w.what })).choom;
+    renderWishes();
+  });
+  $('#wishes').replaceChildren(el('div', { className: 'wishes' },
+    el('h3', {}, `${c.name}'s wishes`),
+    el('p', { className: 'hint' }, 'What she asked the glass for and hasn\'t got yet. Once it\'s made she can ask for it by name. Let a wish go when it\'s made, or if it won\'t be.'),
+    ...c.wishes.map((w) => el('div', { className: 'wish' },
+      el('span', {}, el('b', {}, `“${w.what}”`), ` ${w.kind === 'wear' ? 'to wear' : 'a move'} · asked ${w.times > 1 ? `${w.times} times, last ` : ''}${day(w.last)}`),
+      w.kind === 'wear'
+        ? el('button', { type: 'button', className: 'ghost', onclick: () => wishOutfit(w), tip: 'Start a new outfit with this as what she wears' }, 'New outfit')
+        : el('button', { type: 'button', className: 'ghost', onclick: () => wishMove(w), tip: 'Write it as your own clip: a move that ends where it began (sitting down or leaving need new poses, not yet)' }, 'Write it'),
+      el('button', { type: 'button', className: 'ghost', onclick: letGo(w), tip: 'Take it off her list' }, 'Let go')))));
+}
+function wishMove(w) {
+  $('#customClip').open = true;
+  $('#customKey').value = w.what.toLowerCase().replace(/^(a|an|the|some|my)\s+/, '').replace(/[^a-z0-9]/g, '').slice(0, 16);
+  $('#customClip').scrollIntoView({ block: 'center' });
+  $('#customText').focus();
+}
+function wishOutfit(w) {
+  state.tab = 'looks'; remember(); render();
+  $('#newOutfit').open = true;
+  $('#outfitKind').value = 'outfit';
+  $('#outfitKind').dispatchEvent(new Event('input'));
+  $('#outfitWearing').value = w.what.replace(/^(my|a|an|the|some)\s+/i, '');
+  updateOutfitForm();
+  $('#newOutfit').scrollIntoView({ block: 'start' });
 }
 
 function renderLibrary(packs) {
@@ -524,9 +560,16 @@ function renderLooks() {
     const subject = el('textarea', { rows: 5, value: l.subject || '' });
     const keep = el('textarea', { rows: 2, value: l.keep || '' });
     const ending = el('textarea', { rows: 2, value: l.ending || '' });
+    // An outfit's closet words: what she can ask for it by (glass_wear). Sent only when changed, so
+    // words read from her clothes keep following them.
+    const words = look.includes('@') ? (c.closet?.[look] || []).join(', ') : null;
+    const closet = words === null ? null : el('input', { value: words });
     const save = el('button', {
       className: 'ghost', type: 'button', onclick: attempt(async () => {
-        state.choom = (await api(`/api/choom/${state.cid}/look`, { look, subject: subject.value, keep: keep.value, ending: ending.value })).choom;
+        state.choom = (await api(`/api/choom/${state.cid}/look`, {
+          look, subject: subject.value, keep: keep.value, ending: ending.value,
+          ...(closet && closet.value !== words ? { tags: closet.value } : {}),
+        })).choom;
         toast(`${look} saved; clips planned from now on use it`);
       }),
       tip: 'Save the look; clips planned from now on use it (rendered clips keep their prompts)',
@@ -538,6 +581,7 @@ function renderLooks() {
         el('h3', {}, look),
         el('p', { className: 'muted' }, `${l.picture || 'no picture'} · ${s.onGlass} clips on the glass`),
         el('label', {}, 'Subject', subject), el('label', {}, 'Keep line', keep), el('label', {}, 'Loop ending', ending),
+        closet && el('label', { tip: 'Words she can ask for this outfit by (“my red dress”): the garment, its colour. Read from what she wears unless you change them; empty goes back to those' }, 'Closet words', closet),
         el('div', { className: 'row' }, save)));
   }));
 }

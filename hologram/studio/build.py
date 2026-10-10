@@ -75,6 +75,7 @@ def build(cid, log=print, relaunch=True):
     run([WAN2GP_PYTHON, TOOLS / "make_alive_masks.py", cid, *sources], log,
         env={"U2NET_HOME": str(WAN2GP / "ckpts" / "rembg")})
     run([FORGE_PYTHON, TOOLS / "make_alive.py", cid, *sources], log)
+    proj.write_closet()  # what she can ask the glass for, from the looks just built
     with editing(cid) as p:
         p.data["built"] = {"time": time.strftime("%Y-%m-%dT%H:%M:%S"), "clips": len(sources),
                            "minutes": round((time.time() - started) / 60, 1)}

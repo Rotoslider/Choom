@@ -105,4 +105,8 @@ quiet. Every clip's prompt, seed and decision is kept in her project file.
 Start with [your first Choom on the glass](studio/docs/tutorial-new-choom.md) on a fresh install, or
 [a new outfit for a Choom you have](studio/docs/tutorial-outfit.md).
 
+The Chooms can also ask the glass for a move or for clothes from their closet there themselves. Anything
+they ask for and don't have yet shows up as a wish in the Studio
+([how](studio/README.md#what-the-chooms-can-ask-for)).
+
 ![Glass Studio: Optic's clips on the glass](studio/docs/images/glass.jpg)

@@ -149,6 +149,41 @@ An outfit's name tells the glass when she wears it (`OUTFIT_RULES` in `living.js
 She wears an outfit in visits of about 30 seconds per clip it has, then goes back to her usual
 clothes for a while.
 
+### What the Chooms can ask for
+
+The Chooms can ask the glass for things themselves, with three tools in the Choom app (the
+looking-glass skill):
+
+| Tool | What it does |
+|---|---|
+| `glass_move("a little dance")` | plays a move at her next quiet moment, once |
+| `glass_wear("my red dress")` | changes her clothes at her next quiet moment; she keeps them on until bedtime, or until she changes again |
+| `glass_closet()` | lists her moves and the clothes in her closet, never what she has on |
+
+The glass answers from what's built:
+- **Moves** are her selfie moves, her full-body clips, and clips named for a move: a dance, a wave,
+  a kiss, a curtsy. "Spin around" finds a twirl, and "flip my hair" finds a hair flip.
+- **Clothes** match an outfit's **closet words**. They're read from what she wears in the look
+  ("dress, burgundy, red"). You can change them on the look's card. A garment she names must be in
+  the outfit; colour breaks ties, so "the red dress" finds the burgundy one. If two outfits fit
+  equally, the glass picks one at random.
+
+![An outfit's closet words on its look card](docs/images/closet-words.jpg)
+
+Something she asks for and hasn't got becomes a **wish**. Her wishes show at the top of Plan &
+render. Each has a button to start making it: **Write it** opens Write your own clip, and **New
+outfit** opens New look with her words filled in. **Let go** takes a wish off the list once it's made,
+or if it won't be.
+
+![Her wishes on the Plan page](docs/images/wishes.jpg)
+
+The request goes down the hologram's feed and the hologram's server answers it, the way the glass
+camera's requests work, so the NUC opens no port. The matching is in `tools/closet.py`, and the Studio
+writes `portraits/<id>/closet.json` when a look's words change and on every build. To try a request
+by hand, use the hologram's test hook:
+`curl -X POST 127.0.0.1:8765/glass -d '{"choom":"genesis","op":"move","what":"twirl"}'`. To forget
+every Choom's chosen clothes, use `curl -X POST 127.0.0.1:8765/control -d '{"glassReset":true}'`.
+
 ### A new Choom
 
 ![The New Choom dialog](docs/images/new-2-dialog.jpg)
@@ -242,5 +277,5 @@ queues (`queue/<name>.zip` with `<name>_plan.json`) for each clip's prompt and s
   render the clips but can't yet add the entry.
 - **Moves between poses:** walking off and vanishing, sitting down in a chair. They need new poses on
   the glass and clips between them.
-- **The Chooms choosing their clothes.** An idea: when a Choom says she's wearing a dress, the glass
-  puts her in the closest dress in her closet.
+- **Moves that need another pose on request:** a Choom can ask to sit by a campfire, but until the
+  glass has a seated pose, that request becomes a wish.

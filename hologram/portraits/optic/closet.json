@@ -1,0 +1,60 @@
+{
+ "usual": "glowing orange ring headphones and a mint t-shirt",
+ "looks": {
+  "cold": {
+   "tags": [
+    "blue",
+    "cold",
+    "denim",
+    "green",
+    "jacket",
+    "mint",
+    "orange",
+    "shirt"
+   ],
+   "wearing": "glowing orange ring headphones and a light denim jacket over a mint t-shirt"
+  },
+  "daygrey": {
+   "tags": [
+    "day",
+    "gray",
+    "grey",
+    "orange",
+    "shirt"
+   ],
+   "wearing": "glowing orange ring headphones and a loose heather-grey t-shirt"
+  },
+  "evening": {
+   "tags": [
+    "blue",
+    "evening",
+    "long",
+    "navy",
+    "orange",
+    "shirt"
+   ],
+   "wearing": "glowing orange ring headphones and a baggy navy long-sleeve t-shirt"
+  },
+  "hot": {
+   "tags": [
+    "hot",
+    "orange",
+    "tank",
+    "top",
+    "white"
+   ],
+   "wearing": "glowing orange ring headphones and a loose white tank top"
+  },
+  "noheart": {
+   "tags": [
+    "green",
+    "mint",
+    "noheart",
+    "orange",
+    "shirt"
+   ],
+   "wearing": "leaning slightly forward with her empty hands loosely clasped in front of her"
+  }
+ },
+ "moves": {}
+}

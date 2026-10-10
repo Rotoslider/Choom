@@ -171,7 +171,7 @@ button:focus-visible, select:focus-visible, textarea:focus-visible, input:focus-
 .custom-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
 .custom-form label { display: grid; gap: 4px; color: var(--muted); font-size: 12px; }
 .custom-form .wide { grid-column: 1 / -1; }
-.custom-form input, .custom-form select, .custom-form textarea, .look-card textarea, .planned-item textarea {
+.custom-form input, .custom-form select, .custom-form textarea, .look-card textarea, .look-card input, .planned-item textarea {
   padding: 7px 9px; border: 1px solid var(--line-2); border-radius: 7px; background: var(--bg); color: var(--fg); width: 100%;
 }
 .custom-form button { justify-self: start; padding: 7px 14px; border-radius: 7px; border: 1px solid var(--tint); background: none; cursor: pointer; }
@@ -264,3 +264,11 @@ button.small { padding: 3px 10px; font-size: 12px; }
 .custom-form .check input { width: auto; flex: none; }
 .custom-form button.primary { background: var(--tint); color: #07080b; border: 0; }
 .intro h2 { color: var(--fg); margin-bottom: 8px; }
+
+/* Her wishes (Plan): what she asked the glass for and hasn't got */
+.wishes { background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--tint); border-radius: var(--radius); padding: 10px 14px; margin-bottom: 12px; }
+.wishes h3 { margin: 0 0 2px; font-size: 14px; }
+.wishes .hint { margin: 0 0 8px; }
+.wish { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 4px 0; border-top: 1px solid var(--line); }
+.wish span { flex: 1 1 260px; min-width: 0; }
+.wish b { font-weight: 500; }

@@ -249,6 +249,13 @@ What the video model gets wrong, and how to word around it:
 
 The Studio warns about most of these when you plan.
 
+### Let her ask
+
+Once she's on the glass she can ask for her own moves and clothes: `glass_move("a twirl")`,
+`glass_wear("my red dress")`. These come from the looking-glass skill in the Choom app. Anything she
+asks for and hasn't got appears as a wish at the top of Plan & render, so her ideas become your list.
+See [What the Chooms can ask for](../README.md#what-the-chooms-can-ask-for).
+
 ### Ideas that need more than the Studio has yet
 
 Some moves don't start and end on her picture:

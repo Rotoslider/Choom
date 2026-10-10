@@ -1,0 +1,48 @@
+{
+ "usual": "a cream blouse",
+ "looks": {
+  "cold": {
+   "tags": [
+    "brown",
+    "cold",
+    "cream",
+    "jacket",
+    "knit",
+    "leather",
+    "sweater",
+    "white"
+   ],
+   "wearing": "a brown leather jacket with a cream fur-lined collar over a cream knit sweater"
+  },
+  "dayflannel": {
+   "tags": [
+    "black",
+    "day",
+    "flannel",
+    "red",
+    "shirt",
+    "white"
+   ],
+   "wearing": "an open red and black plaid flannel shirt over a white t-shirt"
+  },
+  "evening": {
+   "tags": [
+    "evening",
+    "green",
+    "knit",
+    "sweater"
+   ],
+   "wearing": "a cozy forest-green knit sweater"
+  },
+  "hot": {
+   "tags": [
+    "hot",
+    "tank",
+    "top",
+    "white"
+   ],
+   "wearing": "a fitted white tank top"
+  }
+ },
+ "moves": {}
+}

@@ -1003,8 +1003,22 @@ function noteWorn(p, pose, ms) {
   }
   saveWardrobe(p);
 }
+// Clothes she chose herself (glass_wear): kept until she goes to sleep or chooses again, at most
+// until midnight (the wardrobe starts fresh each day).
+function chosenOutfit(p) {
+  const c = wardrobe(p).chosen;
+  if (!c) return undefined;
+  if (c.o && !p.alive.clips.some((x) => outfitOf(poseFrom(x)) === c.o && clipMoods(x).includes('talk'))) return undefined;
+  return c.o;
+}
 function wantedOutfit(p, want) {
-  if (want === 'sleep') return null;
+  if (want === 'sleep') {
+    const w = wardrobe(p);
+    if (w.chosen) { w.chosen = null; saveWardrobe(p); }
+    return null;
+  }
+  const chosen = chosenOutfit(p);
+  if (chosen !== undefined) return chosen;
   const outfits = [...new Set(p.alive.clips.filter((c) => clipMoods(c).includes('talk')).map((c) => outfitOf(poseFrom(c))).filter(Boolean))]
     .filter((o) => mayWear(p, o));
   for (const [rule, when] of OUTFIT_RULES) {
@@ -1091,7 +1105,7 @@ function suits(p, k) {
   const want = wantedMood(p);
   const c = p.alive.clips[k];
   return clipMoods(c).includes(want) || (p.moments?.has(k) && want !== 'listen' && want !== 'sleep') ||
-         ((p.emotion || p.poseWanted) && poseFrom(c) !== poseTo(c)); // on her way to an expression or a move
+         ((p.emotion || p.poseWanted || p.moveWanted || chosenOutfit(p) !== undefined) && poseFrom(c) !== poseTo(c)); // on her way to an expression, a move or her clothes
 }
 
 function nextClip(p, after) {
@@ -1104,7 +1118,8 @@ function nextClip(p, after) {
   // Time to change clothes (or back into her usual ones before sleep): a cut to her base loop in the
   // other outfit, at a quiet moment.
   const dressed = outfitOf(pose), dress = pose === 'asleep' ? null : wantedOutfit(p, want);
-  if (dress !== dressed && pose !== 'asleep' && (want === 'idle' || want === 'sleep' || want === 'listen')) {
+  const quiet = want === 'idle' || want === 'sleep' || want === 'listen' || (want === 'think' && chosenOutfit(p) !== undefined);
+  if (dress !== dressed && pose !== 'asleep' && quiet) {
     const to = dress ? `${basePose(pose)}@${dress}` : basePose(pose);
     // A clip that makes the change on screen (Genesis's motes fading away or sparkling back), else a cut.
     const change = clips.map((c, k) => k).filter((k) => poseFrom(clips[k]) === pose && poseTo(clips[k]) === to);
@@ -1113,9 +1128,14 @@ function nextClip(p, after) {
       (p.moments ||= new Set()).add(k);
       return k;
     }
+    const hasLoop = (pz) => clips.some((c) => poseFrom(c) === pz && poseTo(c) === pz && clipMoods(c).includes('talk'));
     const loops = clips.map((c, k) => k).filter((k) => poseFrom(clips[k]) === to && poseTo(clips[k]) === to &&
                                                         clipMoods(clips[k]).includes('talk'));
     if (loops.length) return loops[0];
+    // The outfit only in her other pose (Aloy's are all hand-down): she moves into that pose first.
+    const via = dress ? clips.findIndex((c) => poseFrom(c) === pose && poseTo(c) !== pose && !outfitOf(poseTo(c)) &&
+                                               hasLoop(`${poseTo(c)}@${dress}`)) : -1;
+    if (via >= 0) return via;
   }
   // Asleep: stay asleep, or wake first if anything else is wanted. Sleepy: doze off (via a pose
   // change if needed).
@@ -1147,6 +1167,26 @@ function nextClip(p, after) {
     if (felt < 0 || arrived) p.emotion = null;
     if (arrived) (p.moments ||= new Set()).add(felt); // played out in full, not hurried
     if (felt >= 0) return felt;
+  }
+  // A move she asked for (glass_move), at her next quiet moment: from the pose she's in if she has it
+  // there, else her whole figure (a cut), else on the far side of a pose change, else wherever it is.
+  if (p.moveWanted && performance.now() > p.moveWanted.until) p.moveWanted = null;
+  if (p.moveWanted && (want === 'think' || want === 'idle')) {
+    const asked = clips.map((c, k) => k).filter((k) => p.moveWanted.sources.has(clips[k].source));
+    const here = asked.filter((k) => poseFrom(clips[k]) === pose);
+    const wide = asked.filter((k) => poseFrom(clips[k]) === 'full');
+    const starts = new Set(asked.map((k) => poseFrom(clips[k])));
+    const toward = clips.findIndex((c) => poseFrom(c) === pose && poseTo(c) !== pose && starts.has(poseTo(c)));
+    if (!here.length && !wide.length && toward >= 0) return toward; // Aloy raises her hand first
+    const from = here.length ? here : wide.length ? wide : asked;
+    p.moveWanted = null;
+    if (from.length) {
+      const k = from[Math.floor(Math.random() * from.length)];
+      if (poseFrom(clips[k]) === 'full') p.cutFrom = pose; // back to this framing after it
+      post('glass', { choom: p.id, picked: clips[k].source });
+      (p.moments ||= new Set()).add(k);
+      return k;
+    }
   }
   // A selfie she just made: one of her "look at me" moves (via a pose change if needed).
   if (p.poseWanted && want !== 'listen' && want !== 'sleep') {
@@ -1531,6 +1571,7 @@ events.onmessage = (e) => {
   if (ev.type === 'choom') onChoomEvent(ev);
   if (ev.type === 'presence') onPresence(ev);
   if (ev.type === 'gaze') onGaze(ev);
+  if (ev.type === 'glass') onGlass(ev);
   if (ev.type === 'weather') {
     // The weather turns: Genesis, who loves it, glances up at the sky (if she's on the glass).
     const turned = weather.description && ev.description && ev.description !== weather.description;
@@ -1556,6 +1597,7 @@ function onControl(ev) {
   if (ev.weather && typeof ev.weather === 'object') weather = ev.weather; // debug: pretend weather
   if (typeof ev.hour === 'number' || ev.hour === null) debugHour = ev.hour;
   if (typeof ev.sleep === 'boolean') debugSleep = ev.sleep;
+  if (ev.glassReset === true) for (const p of portraits) if (p.alive && wardrobe(p).chosen) { wardrobe(p).chosen = null; saveWardrobe(p); } // forget clothes they chose
   if (ev.activity === true) lastActivity = performance.now(); // someone talking near the tower (tower_ears)
   if (ev.chime === 'open' || ev.chime === 'close') chime(ev.chime);  // the tower's reply window
   if (typeof ev.gaze === 'boolean') onGaze({ looking: ev.gaze, face: true }); // debug: pretend he's looking
@@ -1572,6 +1614,25 @@ function onControl(ev) {
     p.aliveFrame = 0;
     pl.video.play().catch(() => {});
   }
+}
+
+// ---- The Chooms asking the glass (server.py answers; tools/closet.py matches) ------------------
+// A move she asked for plays at her next quiet moment, if that comes within three minutes; clothes
+// she chose she keeps until bedtime, or until she chooses again.
+const MOVE_FRESH_MS = 180000;
+function onGlass(ev) {
+  const p = portraits.find((q) => q.id === String(ev.choom || '').toLowerCase());
+  if (!p?.alive) return;
+  if (Array.isArray(ev.move)) p.moveWanted = { sources: new Set(ev.move), until: performance.now() + MOVE_FRESH_MS };
+  if ('wear' in ev) {
+    const w = wardrobe(p);
+    w.chosen = { o: ev.wear || null, at: Date.now() };
+    saveWardrobe(p);
+  }
+  // Swap the waiting clip now, unless the hand-over to it is under way or an expression waits there.
+  const a = p.players?.[p.active], b = p.players?.[1 - p.active];
+  if (p === portraits[current] && a && b && a.clip >= 0 && !a.video.ended && b.video.paused && !p.moments?.has(b.clip)) aliveLoad(p, b, nextClip(p, a.clip));
+  post('glass', { choom: p.id, move: ev.name || null, wear: 'wear' in ev ? ev.wear || 'usual' : undefined });
 }
 
 // ---- Choom app link: show whoever is talking and speak her reply in her own voice ----------
@@ -2310,9 +2371,10 @@ const windowInfo = () => ({
 });
 post('start', { page: 'living', chooms: portraits.map((p) => p.name), window: windowInfo() });
 function sendStatus() {
+  const cp = portraits[current], pl = cp.players?.[cp.active];
   post('status', {
-    page: 'living', fps, choom: portraits[current].name, body: body ? body.url : null, listening: heard(), mood, voiceOn,
-    queued: speech.queue.length, window: windowInfo(),
+    page: 'living', fps, choom: cp.name, body: body ? body.url : null, listening: heard(), mood, voiceOn,
+    queued: speech.queue.length, window: windowInfo(), clip: cp.alive && pl?.clip >= 0 ? cp.alive.clips[pl.clip]?.source : null,
   });
 }
 setInterval(sendStatus, 2000);
