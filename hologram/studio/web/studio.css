@@ -261,3 +261,6 @@ dialog#newChoom::backdrop { background: #000b; }
 #newOutfit [hidden] { display: none; }
 button.small { padding: 3px 10px; font-size: 12px; }
 .look-head button { margin-left: auto; }
+.custom-form .check input { width: auto; flex: none; }
+.custom-form button.primary { background: var(--tint); color: #07080b; border: 0; }
+.intro h2 { color: var(--fg); margin-bottom: 8px; }

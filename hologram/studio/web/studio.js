@@ -30,6 +30,7 @@ const state = {
   planLook: null, options: [], picked: new Set(), edits: {}, jobs: [], minutesPerClip: 5.5,
 };
 try { Object.assign(state, JSON.parse(localStorage.getItem('glass-studio') || '{}'), { choom: null, options: [], picked: new Set(), edits: {}, jobs: [] }); } catch { /* fine without */ }
+state.planLooks ||= {};  // the look last planned for, per Choom
 // The address keeps the view (#optic/glass, #genesis/review/kept), so a view can be linked or reloaded.
 const fromHash = () => {
   const [cid, tab, filter] = decodeURIComponent(location.hash.slice(1)).split('/');
@@ -41,7 +42,7 @@ fromHash();
 const remember = () => {
   const hash = `#${state.cid || ''}/${state.tab}${state.tab === 'review' ? `/${state.reviewFilter}` : ''}`;
   if (state.cid && location.hash !== hash) history.replaceState(null, '', hash);
-  try { localStorage.setItem('glass-studio', JSON.stringify({ cid: state.cid, tab: state.tab, reviewFilter: state.reviewFilter })); } catch { /* fine without */ }
+  try { localStorage.setItem('glass-studio', JSON.stringify({ cid: state.cid, tab: state.tab, reviewFilter: state.reviewFilter, planLooks: state.planLooks })); } catch { /* fine without */ }
 };
 
 function toast(message, bad = false) {
@@ -69,7 +70,11 @@ async function loadChooms() {
     return b;
   }));
   if (!state.chooms.length) {
-    $('#intro').innerHTML = '<p>No Choom projects yet. Run <code>python3 studio/studio.py import</code> to adopt existing clips.</p>';
+    $('#intro').replaceChildren(
+      el('h2', {}, 'No Chooms here yet'),
+      el('p', {}, 'Click ', el('b', {}, '+ New Choom'), ' to bring your first one to the glass: a picture of her is all it takes to start. ',
+        'The guide is in studio/docs/tutorial-new-choom.md.'),
+      el('p', { className: 'muted' }, 'Clips made before the Studio can be adopted with python3 studio/studio.py import.'));
     return;
   }
   openChoom(state.chooms.some((c) => c.id === state.cid) ? state.cid : state.chooms[0].id);
@@ -351,6 +356,7 @@ function tile(name, on) {
 // --- Plan & render --------------------------------------------------------------------------------
 async function renderPlan() {
   const c = state.choom;
+  state.planLook = state.planLooks[state.cid];
   if (!state.planLook || !c.looks[state.planLook]) state.planLook = c.sequence.length ? c.clips[c.sequence[0]].from : Object.keys(c.looks)[0];
   lookOptions($('#planLook'), state.planLook, false);
   const look = c.looks[state.planLook];
@@ -406,7 +412,7 @@ function updatePlanButton() {
   b.textContent = n ? `Plan ${n} clip${n > 1 ? 's' : ''} in ${state.planLook}` : 'Pick actions to plan';
 }
 
-$('#planLook').addEventListener('change', (e) => { state.planLook = e.target.value; state.picked.clear(); renderPlan(); });
+$('#planLook').addEventListener('change', (e) => { state.planLook = state.planLooks[state.cid] = e.target.value; remember(); state.picked.clear(); renderPlan(); });
 $('#customAdd').addEventListener('click', attempt(async () => {
   const key = $('#customKey').value.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
   const text = $('#customText').value.trim();
