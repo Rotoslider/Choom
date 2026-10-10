@@ -282,11 +282,14 @@ image_cache = {}  # the last few pictures fetched for the page: id -> (content t
 # --- Welcome back ------------------------------------------------------------------------
 # When Donny sits back down after a while away, the Choom he last talked with welcomes him back (the
 # Choom app's /api/hologram/welcome picks her and gives her a note; she knows from their conversation
-# where he went). He's at the desk while the camera sees his face or he has used the NUC's keyboard or
-# mouse in the last 30 seconds.
+# where he went). He's at the desk while the camera sees his face, or he has used the NUC's keyboard or
+# mouse in the last 30 seconds and the camera saw him in the last 5 minutes. GNOME also resets its idle
+# time when the screens wake (a Choom starting to talk wakes them) or the monitor layout is reapplied,
+# which kept "bringing him back" while he was out at the gate; the camera decides when he's back.
 WELCOME_AFTER_S = float(os.environ.get("HOLOGRAM_WELCOME_AFTER_S", 20 * 60))  # away at least this long
 WELCOME_EVERY_S = 2 * 60 * 60    # at most one welcome back every two hours
 WELCOME_HOURS = (7, 23)          # not at night
+INPUT_COUNTS_S = 5 * 60          # keyboard and mouse count as him only this long after the camera saw him
 last_conversation = [0.0]        # when Donny last typed, talked or was answered (from the Choom feed)
 chat_turns = {}                  # (Choom, chat or room) -> when her turn there started
 
@@ -325,13 +328,15 @@ def send_welcome(seconds, place):
 
 
 def welcome_watch():
-    present_at, last_welcome, places, was_here = time.time(), 0.0, [], [True]
+    present_at, last_welcome, places, was_here, face_seen = time.time(), 0.0, [], [True], time.time()
     while True:
         time.sleep(5)
         try:
             idle = idle_seconds()
             face = (latest.get("gaze") or {}).get("face") is True
-            here = face or (idle is not None and idle < 30)
+            if face or not latest.get("eyes_camera"):
+                face_seen = time.time()  # (no camera: input alone decides, as before)
+            here = face or (idle is not None and idle < 30 and time.time() - face_seen < INPUT_COUNTS_S)
             presence = latest.get("presence") or {}
             latest["welcome_watch"] = {"face": face, "idle": None if idle is None else round(idle),
                                        "here": here, "unseen_for": round(time.time() - present_at)}
