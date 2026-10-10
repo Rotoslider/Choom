@@ -94,6 +94,7 @@ Choose a look and pick actions from the library. Clips she already has are marke
 | Sleep | dozing off, sleeping, waking, a yawn |
 | Selfie moves | look-at-me moves for a picture she made |
 | Full body | moves and twirls for her full-body look |
+| Big moves | longer full-body moves, 7 to 15 seconds: dances, turning her back to you, a curtsy, tai chi |
 | Picture looks | turning to a picture beside her |
 | Pose changes | moving between two poses |
 

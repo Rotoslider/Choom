@@ -200,6 +200,8 @@ below the waist if her main picture doesn't show it.
 Then plan the **Full body** pack for the `full` look: shifting her weight, a stretch, looking over her
 shoulder, a twirl, a spin. The glass cuts to her whole figure now and then, and for a twirl with a
 selfie.
+**Big moves** has longer ones, 7 to 15 seconds: a dance, a slow dance, turning her back to you, a
+curtsy, tai chi.
 
 **New look → Asleep** makes her picture with her eyes closed. Plan the **Sleep** pack (from her main
 look): dozing off, sleeping, waking, a yawn. She sleeps late at night once things go quiet, and wakes
