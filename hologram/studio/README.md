@@ -148,8 +148,9 @@ queues (`queue/<name>.zip` with `<name>_plan.json`) for each clip's prompt and s
 
 ## Not yet
 
-- Looks that change more than clothes on screen (Genesis's motes fading, Optic's heart) need change
-  clips and an entry in `ALT_LOOKS` in `living.js`. The Studio can render the clips but can't yet
-  wire up the look.
+- Looks that change more than clothes, changed on screen with clips made for it, are wired by hand.
+  Genesis's plain look fades her motes away and back, and Optic's no-heart look dissolves her heart;
+  both work. A new look of this kind needs an entry in `ALT_LOOKS` in `living.js` and change clips
+  named in `tools/clip_roles.py`. The Studio can render the clips but can't yet add the entry.
 - A full-body picture or an asleep picture for a new Choom is a Klein edit with its own instruction.
   For now, make it in Wan2GP and add it to her project's looks as `full` or `asleep`.
