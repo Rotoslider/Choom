@@ -457,7 +457,7 @@ function plannedItem(name) {
     ...lint.map((w) => el('div', { className: 'lint' }, w)),
     editing,
     el('div', { className: 'row' },
-      c.history?.length ? null : el('button', { className: 'ghost', type: 'button', onclick: () => { editing.hidden = !editing.hidden; } }, 'Edit'),
+      el('button', { className: 'ghost', type: 'button', onclick: () => { editing.hidden = !editing.hidden; } }, 'Edit'),
       el('button', {
         className: 'ghost', type: 'button', onclick: attempt(async () => {
           state.choom = (await api(`/api/choom/${state.cid}/unplan`, { names: [name] })).choom;

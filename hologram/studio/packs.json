@@ -125,9 +125,9 @@
     {"pack": "fullbody", "key": "wave", "kind": "pose", "text": "She waves at the viewer with a big happy smile, then lowers her hand and stands relaxed."},
 
     {"pack": "pictures", "key": "picturelook", "names": {"main": "picturelook", "relaxed": "relaxedpicturelook"}, "seconds": 7,
-     "text": "She turns her head to her left, toward the right side of the frame, and looks at the empty space there as if reading something, with interest and a pleased little smile, then turns back to the viewer."},
+     "text": "She turns her head to her left, toward the right side of the frame, and gazes at the empty black space there with interest and a pleased little smile, then turns back to the viewer. Nothing else appears in the frame."},
     {"pack": "pictures", "key": "picturedown", "names": {"main": "picturedown", "relaxed": "relaxedpicturedown"}, "seconds": 7,
-     "text": "Without moving her body, she glances down to her left, toward the lower right of the frame, looking at the empty space there with interest and a small smile, then lifts her eyes back to the viewer."},
+     "text": "Without moving her body, she glances down to her left, toward the lower right of the frame, looking at the empty black space there with interest and a small smile, then lifts her eyes back to the viewer. Nothing else appears in the frame."},
 
     {"pack": "poses", "key": "lower", "names": {"main": "lower"}, "ending": "She ends with her arms relaxed at her sides.",
      "text": "She slowly lowers her raised hand down to her side and relaxes her shoulders, still smiling at the viewer."},
