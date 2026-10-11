@@ -27,7 +27,7 @@ import { classifyEndpoint, isLocalEndpoint } from '@/lib/stream-timeouts';
 import { readLlmStream, newStreamState, streamHasToolCalls, type StreamState } from '@/lib/llm-stream-reader';
 import { unexposedToolMentions } from '@/lib/tool-exposure';
 import { detectClaimedTool, detectZeroToolClaim, detectUncalledToolClaim, findFabricatedImageRefs } from '@/lib/phantom-claim';
-import { isNearVerbatimRepeat, stripRepeatedParagraphs, stripInternalRepeats } from '@/lib/repetition-guard';
+import { isNearVerbatimRepeat, stripRepeatedParagraphs, stripInternalRepeats, wordCoverage } from '@/lib/repetition-guard';
 import { wakeNoteTask } from '@/lib/wake-note';
 import { trimForLocalFallback, LOCAL_FALLBACK_PROMPT_TOKENS } from '@/lib/fallback-trim';
 import {
@@ -204,11 +204,23 @@ export function dropNarrationPreambles(texts: string[], meta: Array<{ hadTools: 
  * check-in" was what reached Signal at 1:07 PM on 2026-09-14 while the
  * check-in itself sat in a suppressed tool call. The message argument is
  * her message: return it when it is not already in the reply.
+ *
+ * Nor when the reply already tells it in other words. At 6:54 PM on
+ * 2026-10-10 Genesis answered Donny's sunset picture on Signal in full, made
+ * a selfie, then passed a shorter retelling of that same reply to
+ * send_notification; it was added, she retold it once more, and the voice
+ * note read all three. Measured on the 676 suppressed notifications stored
+ * by then: on a turn Donny started, once her reply held 300+ chars beyond
+ * narration the notification was a retelling every time (content-word
+ * coverage 0.38–1.0; the one exception, at 0.26, a "saved and sent" line).
+ * Wake-ups differ: a report about the house in the third person often comes
+ * before the real message (coverage 0.35–0.58), so there it takes 0.6.
  */
 export function suppressedNotificationText(
   toolCalls: Array<{ id: string; name: string; arguments: Record<string, unknown> }>,
   results: Array<{ toolCallId: string; name: string; result: unknown }>,
   priorTexts: string[],
+  opts: { deliveredTurn?: boolean } = {},
 ): string | null {
   for (const r of results) {
     if (r.name !== 'send_notification') continue;
@@ -219,9 +231,40 @@ export function suppressedNotificationText(
     if (!msg) continue;
     const probe = msg.replace(/\s+/g, ' ').slice(0, 80);
     const already = priorTexts.some(t => t.replace(/\s+/g, ' ').includes(probe)) || isNearVerbatimRepeat(msg, priorTexts);
-    if (!already) return msg;
+    if (already) continue;
+    const said = priorTexts.filter(t => !isNarrationPreamble(t));
+    const retold = said.join('\n\n').trim().length >= 300 &&
+      (!opts.deliveredTurn || wordCoverage(msg, said).coverage >= 0.6);
+    if (!retold) return msg;
   }
   return null;
+}
+
+/**
+ * What a suppressed send_notification tells her, once the loop knows whether
+ * its message went into the reply. heartbeat_complete exists only on
+ * wake-ups, so a turn Donny started is never told to call it.
+ */
+export function noteSuppressedNotifications(
+  toolCalls: Array<{ id: string; name: string; arguments: Record<string, unknown> }>,
+  results: Array<{ toolCallId: string; name: string; result: unknown }>,
+  added: string | null,
+  isHeartbeat: boolean,
+): number {
+  const finish = isHeartbeat ? 'then finish (heartbeat_complete).' : 'then finish.';
+  let notes = 0;
+  for (const r of results) {
+    if (r.name !== 'send_notification') continue;
+    const res = r.result as { suppressed?: boolean; message?: string } | null;
+    if (!res || res.suppressed !== true) continue;
+    const call = toolCalls.find(c => c.id === r.toolCallId);
+    const msg = typeof call?.arguments?.message === 'string' ? call.arguments.message.trim() : '';
+    res.message = added !== null && msg === added
+      ? `Delivered: on this kind of turn your reply text is what reaches the user, so the message you just passed has been added to your reply word for word. Do not write it again and do not call send_notification again; add anything else you still want to say, ${finish}`
+      : `Not sent separately: on this kind of turn your reply text is what reaches the user, with the pictures you made this turn, and your reply already says this, so nothing was added. Do not write it again and do not call send_notification again. If it held something your reply has not said yet, add only that, in a sentence or two; ${finish}`;
+    notes++;
+  }
+  return notes;
 }
 
 /** Tools that stay exposed beside an intent-narrowed forced tool (see the iterationTools build). */
@@ -2698,12 +2741,15 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
             // A suppressed send_notification carries her actual message: make it
             // part of the reply (see suppressedNotificationText).
             if (suppressNotifications) {
-              const delivered = suppressedNotificationText(toolCalls, iterationResults, iterationTexts);
+              const delivered = suppressedNotificationText(toolCalls, iterationResults, iterationTexts, { deliveredTurn: isHeartbeat || isDelegation });
+              const noted = noteSuppressedNotifications(toolCalls, iterationResults, delivered, !!isHeartbeat);
               if (delivered) {
                 iterationTexts.push(delivered);
                 iterationTextMeta.push({ hadTools: false });
                 send({ type: 'content', content: (iterationTexts.length > 1 ? '\n\n' : '') + delivered });
                 console.log(`   📨 ${choomTag} send_notification suppressed — its message (${delivered.length} chars) added to the reply`);
+              } else if (noted) {
+                console.log(`   📨 ${choomTag} send_notification suppressed — her reply already says it, nothing added`);
               }
             }
 

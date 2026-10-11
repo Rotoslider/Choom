@@ -336,9 +336,46 @@ describe('a suppressed send_notification is her message (2026-09-14)', () => {
   });
   test('the loop adds it to the reply on suppressed turns', () => {
     const src = readFileSync(path.join(__dirname, '..', 'lib', 'agentic-loop.ts'), 'utf-8');
-    expect(src).toContain('const delivered = suppressedNotificationText(toolCalls, iterationResults, iterationTexts);');
+    expect(src).toContain('const delivered = suppressedNotificationText(toolCalls, iterationResults, iterationTexts, { deliveredTurn: isHeartbeat || isDelegation });');
+    expect(src).toContain('noteSuppressedNotifications(toolCalls, iterationResults, delivered, !!isHeartbeat);');
     const te = readFileSync(path.join(__dirname, '..', 'lib', 'tool-execution.ts'), 'utf-8');
     expect((te.match(/suppressed: true, message: 'Delivered:/g) || []).length).toBe(2);
+  });
+});
+
+describe('a send_notification that retells her reply is not added to it (2026-10-10)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { suppressedNotificationText, noteSuppressedNotifications } = require('../lib/agentic-loop') as typeof import('../lib/agentic-loop');
+  const told = JSON.parse(readFileSync(path.join(__dirname, 'fixtures', 'told-twice.json'), 'utf-8'));
+  const call = (message: string) => [{ id: 'n1', name: 'send_notification', arguments: { message } }];
+  const suppressed = () => [{ toolCallId: 'n1', name: 'send_notification', result: { success: true, suppressed: true, message: 'Delivered: …' } as { success: boolean; suppressed: boolean; message: string } }];
+  const { said, notification } = told.sunsetPicture;
+
+  test('on a turn Donny started, her reply in full means the notification retells it', () => {
+    expect(suppressedNotificationText(call(notification), suppressed(), said)).toBeNull();
+  });
+  test('after narration alone the notification is still her message', () => {
+    expect(suppressedNotificationText(call(notification), suppressed(), [said[0]])).toBe(notification);
+  });
+  test('on a wake-up, a report about the house before the real message keeps the message', () => {
+    const w = told.wakeReportThenMessage;
+    expect(suppressedNotificationText(call(w.notification), suppressed(), w.said, { deliveredTurn: true })).toBe(w.notification);
+  });
+  test('on a wake-up, the message told a second time is not added', () => {
+    const w = told.wakeMessageTwice;
+    expect(suppressedNotificationText(call(w.notification), suppressed(), w.said, { deliveredTurn: true })).toBeNull();
+  });
+  test('her note says whether it was added, and names heartbeat_complete only on wake-ups', () => {
+    const notAdded = suppressed();
+    expect(noteSuppressedNotifications(call(notification), notAdded, null, false)).toBe(1);
+    expect(notAdded[0].result.message).toMatch(/^Not sent separately/);
+    expect(notAdded[0].result.message).not.toContain('heartbeat_complete');
+    const added = suppressed();
+    noteSuppressedNotifications(call(notification), added, notification, true);
+    expect(added[0].result.message).toMatch(/^Delivered:/);
+    expect(added[0].result.message).toContain('(heartbeat_complete)');
+    const other = [{ toolCallId: 'x', name: 'remember', result: { success: true } }];
+    expect(noteSuppressedNotifications(call(notification), other, null, false)).toBe(0);
   });
 });
 

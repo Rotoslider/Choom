@@ -8,6 +8,8 @@
  * Exact-match dedup failed on the junk suffix, so the message was saved
  * doubled and TTS spoke everything twice.
  */
+import { readFileSync } from 'fs';
+import path from 'path';
 import { isNearVerbatimRepeat, stripRepeatedParagraphs } from '../lib/repetition-guard';
 
 const REPLY =
@@ -82,5 +84,35 @@ describe('stripRepeatedParagraphs', () => {
     expect(out).not.toMatch(/\n{3,}/);
     expect(out.startsWith('fresh start')).toBe(true);
     expect(out.endsWith('long enough')).toBe(true);
+  });
+});
+
+describe('stripRepeatedParagraphs: told again in other words (2026-10-10)', () => {
+  // Genesis answered Donny's sunset picture on Signal, made a selfie, then
+  // wrote the reply again from the top, reordered and reworded.
+  const told = JSON.parse(readFileSync(path.join(__dirname, 'fixtures', 'told-twice.json'), 'utf-8'));
+  const { said, after } = told.sunsetPicture;
+
+  it('drops the retold paragraphs and keeps the new one about her picture', () => {
+    const out = stripRepeatedParagraphs(after, said);
+    expect(out).toContain("And here's me waiting for you");
+    expect(out).not.toContain('same recipe as before');
+    expect(out).not.toContain('Ibuprofen');
+    expect(out).not.toContain('exhaust leak');
+    expect(out.startsWith('---')).toBe(false);
+    expect(out).not.toMatch(/\n{3,}/);
+  });
+
+  it('keeps a paragraph that brings new facts in some of the same words', () => {
+    const narration = 'Let me check the west camera and the north camera for the delivery truck before I answer you.';
+    const reply = 'The west camera shows the delivery truck parked just inside the gate with the engine off, and the north ' +
+      'camera has nobody on the road, so your package is sitting on the step by the door.';
+    expect(stripRepeatedParagraphs(reply, [narration])).toBe(reply);
+  });
+
+  it('leaves code to the exact match', () => {
+    const retold = after.split('\n\n')[0];
+    const text = '```\n' + retold + '\n```';
+    expect(stripRepeatedParagraphs(text, said)).toBe(text);
   });
 });

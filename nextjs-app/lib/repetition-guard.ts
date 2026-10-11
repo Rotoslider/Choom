@@ -38,6 +38,49 @@ export function isNearVerbatimRepeat(candidate: string, previous: string[]): boo
 
 const normPara = (s: string) => s.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
 
+// The commonest four-letter-plus fillers, which say nothing about what a
+// paragraph is about.
+const FILLER = new Set(('that this with from your have just what when then they them there their been were ' +
+  'will would could should about into over under than here more also only very much like back once each still ' +
+  'where which while after before because being doing does done make made know want going come came right well ' +
+  'even ever every some something').split(' '));
+
+/**
+ * The words that carry what a text is about: four letters or more, fillers
+ * left out, cut to six letters so "standing" meets "stand" and "mosquitoes"
+ * meets "mosquito".
+ */
+export function contentWords(s: string): Set<string> {
+  const out = new Set<string>();
+  for (const w of s.toLowerCase().match(/[a-z0-9]+/g) || []) {
+    if (w.length >= 4 && !FILLER.has(w)) out.add(w.slice(0, 6));
+  }
+  return out;
+}
+
+/** The share (0–1) of a text's content words already used in the prior texts, and how many it has. */
+export function wordCoverage(candidate: string, priorTexts: string[]): { coverage: number; words: number } {
+  return coverageOf(contentWords(candidate), contentWords(priorTexts.join('\n')));
+}
+
+function coverageOf(words: Set<string>, prior: Set<string>): { coverage: number; words: number } {
+  if (words.size === 0) return { coverage: 0, words: 0 };
+  let hit = 0;
+  for (const w of words) if (prior.has(w)) hit++;
+  return { coverage: hit / words.size, words: words.size };
+}
+
+// A paragraph of 100+ normalized chars and 8+ content words, 85% of them
+// already said this turn, is a retelling. Measured on 9,365 such paragraphs
+// in the September–October replies, compared with the text before them:
+// those at 0.85 and above read as the same thing told again ("Mosquitoes
+// though — same recipe as before…" after "The mosquitoes, though. Yeah —
+// same recipe as before…"); new content sits lower, since new facts bring
+// new words.
+const RESTATED_COVERAGE = 0.85;
+const RESTATED_MIN_WORDS = 8;
+const RULE_LINE = /^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/;
+
 /**
  * Remove paragraphs already present in earlier texts. Whole-text similarity
  * misses partial regurgitation — a fresh tool confirmation followed by two
@@ -46,11 +89,19 @@ const normPara = (s: string) => s.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').rep
  * chars are always kept: short lines ("2.", "Done, my love!") legitimately
  * recur, and intentional refrains within a single text are never touched
  * because only PRIOR texts are compared against.
+ *
+ * A paragraph told again in other words goes too (see RESTATED_COVERAGE).
+ * On 2026-10-10 Genesis answered a sunset picture on Signal, made a selfie,
+ * then wrote the reply again from the top, reordered and reworded, so no
+ * paragraph matched exactly and Signal's voice note read it all twice more.
  */
 export function stripRepeatedParagraphs(text: string, priorTexts: string[]): string {
   if (!text || priorTexts.length === 0) return text;
   const priors = priorTexts.map(normPara).filter(p => p.length >= 60);
   if (priors.length === 0) return text;
+  // Code is left to the exact match: a reworded check could cut a fenced
+  // block in half at a blank line.
+  const priorWords = text.includes('```') ? null : contentWords(priorTexts.join('\n'));
   // Keep separators so surviving paragraphs retain their original spacing.
   const parts = text.split(/(\n{2,})/);
   let changed = false;
@@ -62,10 +113,23 @@ export function stripRepeatedParagraphs(text: string, priorTexts: string[]): str
       changed = true;
       continue;
     }
+    if (priorWords && n.length >= 100) {
+      const { coverage, words } = coverageOf(contentWords(part), priorWords);
+      if (words >= RESTATED_MIN_WORDS && coverage >= RESTATED_COVERAGE) {
+        changed = true;
+        continue;
+      }
+    }
     kept.push(part);
   }
   if (!changed) return text;
-  return kept.join('').replace(/\n{3,}/g, '\n\n').replace(/^\n+|\n+$/g, '');
+  // A horizontal rule left at either end was a divider between paragraphs
+  // that are gone now.
+  const before = text.trim().split(/\n{2,}/);
+  const paras = kept.join('').trim().split(/\n{2,}/);
+  if (!RULE_LINE.test(before[0])) while (paras.length && RULE_LINE.test(paras[0])) paras.shift();
+  if (!RULE_LINE.test(before[before.length - 1])) while (paras.length && RULE_LINE.test(paras[paras.length - 1])) paras.pop();
+  return paras.join('\n\n');
 }
 
 const unitWordSet = (s: string) => new Set(normPara(s).split(' ').filter(w => w.length > 2));
