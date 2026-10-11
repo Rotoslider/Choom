@@ -190,6 +190,8 @@ def moves(cid, alive, closet):
     for c in alive.get("clips", []):
         src = c.get("source", "")
         word = move_word(cid, src)
+        if c.get("moods") == ["windy"]:
+            continue  # weather, not a move: it plays on windy days only
         askable = "pose" in c.get("moods", []) or c.get("from") == "full" or word in MOVE_WORDS
         for w in ([word] if askable and word else []) + list(extra.get(Path(src).stem, [])):
             out.setdefault(w, []).append(src)

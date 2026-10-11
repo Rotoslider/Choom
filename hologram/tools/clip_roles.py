@@ -112,6 +112,8 @@ KINDS = {
     "fullpose": (["pose"], "full", "full"),
     "relaxedlisten": (["idle", "listen"], "relaxed", "relaxed"),
     "relaxedpose": (["pose"], "relaxed", "relaxed"),
+    "windy": (["windy"], "main", "main"),         # her hair in the wind, on windy days only
+    "relaxedwindy": (["windy"], "relaxed", "relaxed"),
 }
 
 

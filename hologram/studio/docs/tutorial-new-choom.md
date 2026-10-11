@@ -190,6 +190,14 @@ The **Expressions** pack plays when the conversation feels happy, surprised, sad
 face. **Selfie moves** play with a picture she makes of herself. **Picture looks** turn her toward a
 picture floating beside her.
 
+### Windy days
+
+The **Windy days** pack stirs her hair and clothes in the wind. These clips play only on a windy day
+(a 10-minute average of 12 mph or gusts of 20), about one quiet clip in four. Point the glass at your
+own weather station if Home Assistant has one (`weather.json`, see the
+[reference](../../docs/reference.md)); town readings run low. They play in the look she has on, so
+give each outfit two or three of its own.
+
 ### Full body, and sleep
 
 **Looks → New look → Full body** makes a head-to-toe picture from her main one. Add what she wears
@@ -223,6 +231,7 @@ Clothes for the evening, cold days, hot days, or a different one each day. See
   - *Look-at-me move* plays with a selfie.
   - *Talking loop* is calm with lips closed; lip sync goes on top.
   - *Oops face* plays after her own mishap.
+  - *Windy day* plays only when it's windy.
 - **Short name:** becomes part of the clip's name (`dance`, `turnback`, `kiss`).
 - **Length:** five seconds fails least. A dance or a slow turn may want 10, 12 or 15.
 - **What she does:** what you'd see, start to finish, then how she settles back facing you. Some that

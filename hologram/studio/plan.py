@@ -18,6 +18,7 @@ KIND_PREFIX = {
     "listen": {"main": "listen_", "relaxed": "relaxedlisten_"},
     "oops": {"main": "oops_", "relaxed": "relaxedoops_"},
     "pose": {"main": "pose_", "relaxed": "relaxedpose_", "full": "fullpose_"},
+    "windy": {"main": "windy_", "relaxed": "relaxedwindy_"},
 }
 TRANSITION_ENDING = "She stays in the same place, facing the viewer."
 

@@ -92,6 +92,7 @@ Choose a look and pick actions from the library. Clips she already has are marke
 | Expressions | happy, surprised, sad, concerned |
 | Oops | her face at her own mishap |
 | Sleep | dozing off, sleeping, waking, a yawn |
+| Windy days | her hair and clothes in the wind, on windy days only; each outfit needs its own |
 | Selfie moves | look-at-me moves for a picture she made |
 | Full body | moves and twirls for her full-body look |
 | Big moves | longer full-body moves, 7 to 15 seconds: dances, turning her back to you, a curtsy, tai chi |
@@ -99,7 +100,8 @@ Choose a look and pick actions from the library. Clips she already has are marke
 | Pose changes | moving between two poses |
 
 **Write your own clip** takes any move that ends where it began: a dance, turning her back to you and
-turning around again, a kiss. It runs 5 to 15 seconds.
+turning around again, a kiss. It runs 5 to 15 seconds. *Windy day* makes one that plays only when
+it's windy.
 
 ![Writing your own clip: a ten-second dance](docs/images/custom-clip.jpg)
 

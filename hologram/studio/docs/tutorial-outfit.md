@@ -153,6 +153,8 @@ The outfit appears at its hour, in short visits.
 - **One outfit at a time.** Render it, review it, build it, then start the next.
 - **Short clips fail less.** Five seconds is the sweet spot. Longer clips (up to 15 s, for a dance)
   drift more into new shots and colour shifts.
+- **Two or three Windy days clips** let the wind reach her in this outfit too. Her wind clips play
+  in the look she has on, so ones made in her usual clothes stay still while she wears the outfit.
 - **An outfit-specific moment** makes it feel worn: Genesis tugging the sweater back onto her
   shoulder, Aloy pulling up her jacket collar. Add one with **Write your own clip** on the Plan page.
 - **The Chooms can know their closet.** They aren't told what they're wearing at any moment, since
