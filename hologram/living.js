@@ -1103,10 +1103,28 @@ const TOOL_LOOKS = [
 ];
 const toolLook = (tool) => (TOOL_LOOKS.find(([t]) => t.test(tool || '')) || [])[1] || null;
 
-// Her wind and her yawns are quiet clips for windy days and sleepy hours (nextClip picks them then).
-// They aren't 'idle', so the handover swapped them out again and hurried the few that got through: in
-// a week of about 97,000 clips her wind played 9 times and the yawns 4 (2026-10-11).
-const quietExtra = (c) => clipMoods(c).includes('yawn') || (clipMoods(c).includes('windy') && windy());
+// Clips that join a mood's own clips in nextClip: her wind and yawns while she's quiet on a windy day
+// or a sleepy hour, and her quiet clips that keep facing forward while he looks at her or she thinks
+// (not the lively ones while she thinks). suits() has to know them too: the handover swapped any clip
+// without the mood back out and hurried the few that got through (in a week of about 97,000 clips her
+// wind played 9 times and the yawns 4, 2026-10-11).
+const NOT_THINKING = /amused|eyebrow|smirk|beat|giggle|groove|laugh|wink|wave|tease|kiss|dance/;
+function joinsMood(want, c) {
+  const m = clipMoods(c), src = c.source || '';
+  if (want === 'idle') return m.includes('yawn') || (m.includes('windy') && windy());
+  const facing = m.includes('idle') && poseFrom(c) === poseTo(c) && !LOOKS_AWAY.test(src);
+  if (want === 'listen') return facing;
+  if (want === 'think') return facing && !NOT_THINKING.test(src);
+  return false;
+}
+// While a picture floats beside her she doesn't look up and away from it.
+const LOOKS_UP = /thinkup|skycheck|lookup/;
+// A look without picture looks (her outfits, the plain look) turns to the picture with a quiet clip
+// that looks its way: the Studio's glance is to her left, toward the picture's side of the frame, and
+// one lower right gets a look down first.
+const PICTURE_GLANCES = { picture: [/glance(?!right)/], picturedown: [/lookdown/, /glance(?!right)/] };
+// Thinking, she looks up or down (her thinking clips) at most this often.
+const THINK_LOOK_GAP_MS = 30000;
 
 // Whether clip k suits what she's doing now (an expression or tool moment plays out unless she's
 // listening or asleep).
@@ -1114,7 +1132,7 @@ function suits(p, k) {
   const want = wantedMood(p);
   const c = p.alive.clips[k];
   return clipMoods(c).includes(want) || (p.moments?.has(k) && want !== 'listen' && want !== 'sleep') ||
-         (want === 'idle' && quietExtra(c)) ||
+         joinsMood(want, c) ||
          ((p.emotion || p.poseWanted || p.moveWanted || chosenOutfit(p) !== undefined) && poseFrom(c) !== poseTo(c)); // on her way to an expression, a move or her clothes
 }
 
@@ -1221,7 +1239,11 @@ function nextClip(p, after) {
   if ((want === 'think' || want === 'idle') && p.lookAt) {
     const look = p.lookAt;
     p.lookAt = null;
-    const looks = all.filter((k) => clipMoods(clips[k]).includes(look) && poseTo(clips[k]) === pose);
+    let looks = all.filter((k) => clipMoods(clips[k]).includes(look) && poseTo(clips[k]) === pose);
+    for (const name of PICTURE_GLANCES[look] || []) {
+      if (looks.length) break;
+      looks = all.filter((k) => poseTo(clips[k]) === pose && name.test(clips[k].source || ''));
+    }
     if (looks.length) {
       const k = looks[Math.floor(Math.random() * looks.length)];
       (p.moments ||= new Set()).add(k);
@@ -1231,7 +1253,8 @@ function nextClip(p, after) {
   if ((want === 'think' || want === 'idle') && p.toolLook) {
     const look = p.toolLook;
     p.toolLook = null;
-    const moments = all.filter((k) => k !== after && poseTo(clips[k]) === pose && look.test(clips[k].source || ''));
+    const moments = all.filter((k) => k !== after && poseTo(clips[k]) === pose && look.test(clips[k].source || '') &&
+                                      !(picture.active && LOOKS_UP.test(clips[k].source || '')));
     if (moments.length) {
       const k = moments[Math.floor(Math.random() * moments.length)];
       (p.moments ||= new Set()).add(k);
@@ -1260,11 +1283,12 @@ function nextClip(p, after) {
                                  (drowsy && clipMoods(clips[k]).includes('yawn')));
   // Facing him (he's looking at the glass) in a look with few listening clips (an outfit has four):
   // her quiet clips that keep facing forward join in, or four clips loop every twenty seconds.
-  if (want === 'listen' && fits.length < 10) {
-    const facing = all.filter((k) => !fits.includes(k) && poseTo(clips[k]) === pose && clipMoods(clips[k]).includes('idle') &&
-                                     !LOOKS_AWAY.test(clips[k].source || ''));
-    fits = fits.concat(facing);
-  }
+  if (want === 'listen' && fits.length < 10) fits = fits.concat(all.filter((k) => !fits.includes(k) && joinsMood('listen', clips[k])));
+  // Thinking (waiting on her model, a minute or more through a heartbeat's tools): a look has only its
+  // base loop and a look up for it, so she took turns with them and looked up every ten seconds (eleven
+  // times in two minutes, 2026-10-11). Her calm facing clips join in, her base loop may play twice
+  // running, and a look up or down comes at most every 30 seconds (below).
+  if (want === 'think') fits = fits.concat(all.filter((k) => !fits.includes(k) && joinsMood('think', clips[k])));
   // Right after a pose change she stays put for at least one clip (no hand up-down-up fidgeting).
   const justMoved = after >= 0 && clips[after] && poseFrom(clips[after]) !== poseTo(clips[after]);
   let pool = fits.filter((k) => k !== after && !(justMoved && poseTo(clips[k]) !== pose));
@@ -1290,12 +1314,25 @@ function nextClip(p, after) {
     const fresh = pool.filter((k) => (want === 'idle' && k === main) || !recent.includes(k));
     if (fresh.length) pool = fresh;
   }
+  const thinkLook = (k) => k !== main && clipMoods(clips[k]).includes('think') && !clipMoods(clips[k]).includes('talk');
+  if (want === 'think') {
+    const mainThinks = main !== undefined && (clipMoods(clips[main]).includes('think') || joinsMood('think', clips[main]));
+    if (mainThinks && !pool.includes(main)) pool.push(main);
+    if (performance.now() - (p.thoughtAt ?? -Infinity) < THINK_LOOK_GAP_MS) {
+      const steady = pool.filter((k) => !thinkLook(k));
+      if (steady.length) pool = steady;
+    }
+  }
+  if (picture.active && p === portraits[current]) {
+    const level = pool.filter((k) => !LOOKS_UP.test(clips[k].source || ''));
+    if (level.length) pool = level;
+  }
   // Late at night (10 pm to 6 am) the calm clips come up more and the laughs and teasing less.
   const night = hour >= 22 || hour < 6;
   const calmName = /longcalm|breath|daydream|hum|base|relaxed\.|loop|heartglow/;
   const livelyName = /amused|eyebrow|smirk|beat|glance|giggle|groove/;
   const weights = pool.map((k) => {
-    let w = want === 'idle' && k === main ? 2 : 1;
+    let w = (want === 'idle' || want === 'think') && k === main ? 2 : 1;
     if (handMove(k)) w = pose === home ? (want === 'talk' ? 0.4 : 0.1) : (want === 'talk' ? 1.5 : 6);
     if (/longcalm/.test(clips[k].source || '')) w *= 2;
     if (breezy && clipMoods(clips[k]).includes('windy')) w *= 6; // on a windy day one every few minutes (the deck holds them back too)
@@ -1308,6 +1345,7 @@ function nextClip(p, after) {
   let pick = pool[pool.length - 1];
   for (let i = 0; i < pool.length; i++) { r -= weights[i]; if (r <= 0) { pick = pool[i]; break; } }
   if (want === 'talk' && handMove(pick)) (p.moments ||= new Set()).add(pick); // a gesture, at its own pace
+  if (want === 'think' && thinkLook(pick)) p.thoughtAt = performance.now();
   if (shuffled && !(want === 'idle' && pick === main)) {
     recent.push(pick);
     // Remember most of the deck for the look she's in (an outfit's dozen, or her usual hundred).

@@ -102,7 +102,7 @@ by what she is doing:
 | sleep, wake, yawn | fallasleep, sleep2, wake, yawn | 11 pm to 7 am after ten quiet minutes; yawns near bedtime |
 | windy | windy, windy_breeze, evening-windy_gust | on windy days, one every few minutes while she's quiet, in the look she has on |
 | pose | relaxedturn, poseheart, fulltwirl | a selfie she just made |
-| picture, picturedown | picturelook, relaxedpicturedown | a picture floats up: she turns to it beside her, or glances down at one lower right |
+| picture, picturedown | picturelook, relaxedpicturedown | a picture floats up: she turns to it beside her, or glances down at one lower right (an outfit uses its glance or look-down) |
 | change | fadeout, fadein | an outfit change made on screen (Genesis's motes fading away and back) |
 
 Quiet clips play like a shuffled deck: one that played lately waits until most of the others have had
@@ -282,7 +282,11 @@ can answer without "OK" and her name.
   quiet minutes or a 1:1 chat.
 - **Tool moments:** the glass flares and she plays a clip that fits the tool (`TOOL_LOOKS`): looking
   around for a camera or picture, daydreaming for a memory search, a look at the sky for the weather.
-- **Pictures:** a picture she makes or analyzes floats beside her face for about ten seconds.
+- **Thinking:** while she waits on her model (a heartbeat's tools can take minutes) she plays her base
+  loop and her calm facing clips, with a look up or down at most every 30 seconds.
+- **Pictures:** a picture she makes or analyzes floats beside her face for about ten seconds (a wide
+  one lower right). She turns to it with her picture looks; a look without them (an outfit) uses its
+  glance or look-down clip, and she doesn't look up while it's showing.
 - **Screensaver:** after two quiet minutes, a random Choom takes the glass every 3 to 5 minutes (not
   while she sleeps, on the stage, or when someone is talking near the tower).
 - **Weather:** wind brings her wind clips (in the look she has on, so an outfit needs its own; the
