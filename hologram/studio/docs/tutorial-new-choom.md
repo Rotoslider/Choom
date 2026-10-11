@@ -193,7 +193,7 @@ picture floating beside her.
 ### Windy days
 
 The **Windy days** pack stirs her hair and clothes in the wind. These clips play only on a windy day
-(a 10-minute average of 12 mph or gusts of 20), about one quiet clip in four. Point the glass at your
+(a 10-minute average of 12 mph or gusts of 20), one every few minutes while she's quiet. Point the glass at your
 own weather station if Home Assistant has one (`weather.json`, see the
 [reference](../../docs/reference.md)); town readings run low. They play in the look she has on, so
 give each outfit two or three of its own.

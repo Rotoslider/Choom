@@ -738,8 +738,10 @@ let appListening = false;
 // clips join her quiet moments), and later rain or snow can drift through the glass.
 let weather = { wind: 0, gust: 0, description: '' };
 // Windy: a 10-minute average of 12 mph or gusts of 20 (Donny's own weather station when Home Assistant
-// has one; OpenWeather's town readings ran low and never reported gusts).
-const windy = () => (weather.wind || 0) >= 12 || (weather.gust || 0) >= 20;
+// has one; OpenWeather's town readings ran low and never reported gusts). The server holds it for 20
+// minutes after the last such reading (`windy`): gusts come and go, and the rule alone turned her windy
+// day on and off every few minutes.
+const windy = () => (typeof weather.windy === 'boolean' ? weather.windy : (weather.wind || 0) >= 12 || (weather.gust || 0) >= 20);
 fetch('/status', { cache: 'no-store' }).then((r) => r.json()).then((st) => { if (st.weather) weather = st.weather; }).catch(() => {});
 
 // ---- Weather in the glass -------------------------------------------------------------------
@@ -796,7 +798,9 @@ let wxKind = null;
 function weatherKind() {
   const d = String(weather.description || '').toLowerCase();
   if (/snow|sleet|flurr/.test(d)) return 'snow';
-  if (/rain|drizzle|shower|storm|thunder/.test(d)) return 'rain';
+  // Rain from his station's rain gauge when it has one (`rain`, inches an hour): the town report said
+  // "light rain" for half an hour of a dry afternoon (2026-10-11).
+  if (typeof weather.rain === 'number' ? weather.rain > 0 : /rain|drizzle|shower|storm|thunder/.test(d)) return 'rain';
   return windy() ? 'dust' : null;
 }
 function updateWeather(dt, time, dim) {
@@ -1099,12 +1103,18 @@ const TOOL_LOOKS = [
 ];
 const toolLook = (tool) => (TOOL_LOOKS.find(([t]) => t.test(tool || '')) || [])[1] || null;
 
+// Her wind and her yawns are quiet clips for windy days and sleepy hours (nextClip picks them then).
+// They aren't 'idle', so the handover swapped them out again and hurried the few that got through: in
+// a week of about 97,000 clips her wind played 9 times and the yawns 4 (2026-10-11).
+const quietExtra = (c) => clipMoods(c).includes('yawn') || (clipMoods(c).includes('windy') && windy());
+
 // Whether clip k suits what she's doing now (an expression or tool moment plays out unless she's
 // listening or asleep).
 function suits(p, k) {
   const want = wantedMood(p);
   const c = p.alive.clips[k];
   return clipMoods(c).includes(want) || (p.moments?.has(k) && want !== 'listen' && want !== 'sleep') ||
+         (want === 'idle' && quietExtra(c)) ||
          ((p.emotion || p.poseWanted || p.moveWanted || chosenOutfit(p) !== undefined) && poseFrom(c) !== poseTo(c)); // on her way to an expression, a move or her clothes
 }
 
@@ -1288,7 +1298,7 @@ function nextClip(p, after) {
     let w = want === 'idle' && k === main ? 2 : 1;
     if (handMove(k)) w = pose === home ? (want === 'talk' ? 0.4 : 0.1) : (want === 'talk' ? 1.5 : 6);
     if (/longcalm/.test(clips[k].source || '')) w *= 2;
-    if (breezy && clipMoods(clips[k]).includes('windy')) w *= 6; // on a windy day about one clip in four
+    if (breezy && clipMoods(clips[k]).includes('windy')) w *= 6; // on a windy day one every few minutes (the deck holds them back too)
     if (clipMoods(clips[k]).includes('yawn')) w *= justWoke ? 6 : 0.5;
     if (stage.on && portraits[current] !== p && /glance|scan|smile|beat|bright/.test(clips[k].source || '')) w *= 2;
     if (night && want === 'idle') w *= calmName.test(clips[k].source || '') ? 2 : livelyName.test(clips[k].source || '') ? 0.5 : 1;

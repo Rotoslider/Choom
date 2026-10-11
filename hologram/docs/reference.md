@@ -100,7 +100,7 @@ by what she is doing:
 | oops | oops_wince, relaxedoops_jaw | once, after one of her tools fails or she says it didn't come out right (a wince, a frown at herself, an eye roll at the tool; not her sad face) |
 | greet | wave | taking the glass after a while away |
 | sleep, wake, yawn | fallasleep, sleep2, wake, yawn | 11 pm to 7 am after ten quiet minutes; yawns near bedtime |
-| windy | windy, windy_breeze, evening-windy_gust | on windy days, about one quiet clip in four, in the look she has on |
+| windy | windy, windy_breeze, evening-windy_gust | on windy days, one every few minutes while she's quiet, in the look she has on |
 | pose | relaxedturn, poseheart, fulltwirl | a selfie she just made |
 | picture, picturedown | picturelook, relaxedpicturedown | a picture floats up: she turns to it beside her, or glances down at one lower right |
 | change | fadeout, fadein | an outfit change made on screen (Genesis's motes fading away and back) |
@@ -287,9 +287,13 @@ can answer without "OK" and her name.
   while she sleeps, on the stage, or when someone is talking near the tower).
 - **Weather:** wind brings her wind clips (in the look she has on, so an outfit needs its own; the
   Studio's Windy days pack) and drifting dust; rain and snow fall through the glass, leaning with the wind.
-  Windy means a 10-minute average of 12 mph or gusts of 20, read every 2 minutes from Donny's own
-  weather station when `weather.json` in the config folder maps `wind`, `gust` and `temperature` to
-  Home Assistant sensors (OpenWeather's town readings ran low and never reported gusts).
+  Windy means a 10-minute average of 12 mph or gusts of 20, held for 20 minutes after the last such
+  reading, read every 2 minutes from Donny's own weather station when `weather.json` in the config
+  folder maps `wind`, `gust` and `temperature` to Home Assistant sensors (OpenWeather's town readings
+  ran low and never reported gusts). With `rain` mapped to the station's rain rate, it rains on the
+  glass only while the gauge reads some; otherwise the town report decides (its "light rain" once
+  rained on the glass for half an hour of a dry afternoon). A sprinkle too light to register on the
+  gauge stays off the glass.
 - **Background turns:** heartbeats and delegated tasks that start at night run unseen, and so does a
   heartbeat that starts during a conversation (the stage is up, someone is talking, or a chat in the
   last three minutes), so it doesn't take the front or float its pictures in the middle of it.

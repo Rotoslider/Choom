@@ -272,11 +272,13 @@ def voice_heartbeat():
 def weather_watch():
     """The local weather, passed to the page: windy days stir Genesis's hair, rain and snow drift
     through the glass, the temperature picks her clothes. From the Choom app (its OpenWeather settings)
-    every 10 minutes, with wind, gusts and temperature from Donny's own weather station every 2 minutes
-    when weather.json maps them to Home Assistant sensors, e.g. {"wind": "sensor.station_wind_average_
-    10_minutes", "gust": "sensor.station_wind_gust", "temperature": "sensor.station_temperature"}
-    (OpenWeather's town readings ran well under his station's and never reported gusts)."""
-    town, town_at, windy_was = {}, 0.0, None
+    every 10 minutes, with wind, gusts, temperature and rain from Donny's own weather station every 2
+    minutes when weather.json maps them to Home Assistant sensors, e.g. {"wind": "sensor.station_wind_
+    average_10_minutes", "gust": "sensor.station_wind_gust", "temperature": "sensor.station_temperature",
+    "rain": "sensor.station_precipitation_intensity"} (OpenWeather's town readings ran well under his
+    station's and never reported gusts, and its "light rain" put rain on the glass for half an hour of a
+    dry afternoon; with `rain` mapped, the page rains only while the gauge reads some)."""
+    town, town_at, windy_was, rain_was, windy_seen = {}, 0.0, None, None, 0.0
     while True:
         try:
             if time.time() - town_at > 600:
@@ -291,17 +293,24 @@ def weather_watch():
                 base, token = url_file.read_text().strip().rstrip("/"), token_file.read_text().strip()
                 for key, entity in json.loads(station.read_text()).items():
                     try:
-                        entry[key] = round(float(ha_get(base, token, f"/api/states/{entity}").get("state")), 1)
+                        value = float(ha_get(base, token, f"/api/states/{entity}").get("state"))
+                        entry[key] = round(value, 2 if key == "rain" else 1)  # rain: inches an hour
                         entry["source"] = "station"
                     except (TypeError, ValueError):
                         pass  # unavailable for now: keep the town reading
+            # Windy on a 10-minute average of 12 mph or gusts of 20, held for 20 minutes after the last
+            # such reading: gusts come and go, and the rule alone turned her windy day on and off every
+            # few minutes (living.js windy() uses `windy`).
+            if (entry["wind"] or 0) >= 12 or (entry["gust"] or 0) >= 20:
+                windy_seen = time.time()
+            entry["windy"] = windy = time.time() - windy_seen < 20 * 60
             latest["weather"] = entry
             broadcast(entry)
-            windy = (entry["wind"] or 0) >= 12 or (entry["gust"] or 0) >= 20  # the page's rule (living.js windy())
-            if windy != windy_was:  # log when it turns windy or calm
+            rain = entry.get("rain")
+            if windy != windy_was or ((rain or 0) > 0) != ((rain_was or 0) > 0):  # log when it turns windy or calm, wet or dry
                 log_entry({"kind": "weather", "windy": windy, "wind": entry["wind"], "gust": entry["gust"],
-                           "temperature": entry["temperature"], "source": entry["source"]})
-                windy_was = windy
+                           "rain": rain, "temperature": entry["temperature"], "source": entry["source"]})
+                windy_was, rain_was = windy, rain
         except Exception as e:
             latest["weather_error"] = f"{type(e).__name__}: {e}"
         time.sleep(120)
