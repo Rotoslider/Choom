@@ -102,6 +102,33 @@ export function localTimeString(d: Date = new Date(), timezone: string = OWNER_T
   });
 }
 
+// A full ISO time that names its zone ("2026-10-11T02:35:00+00:00",
+// "…02:35:03.832787+00:00", "…Z"). Times without a zone are left alone.
+const ZONED_ISO = /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})(?![\d:])/g;
+
+/**
+ * Every zoned ISO time in a tool result, in the form localTimeString gives,
+ * wherever it sits (a value, an attribute, a list of changes, inside a line
+ * of text). Home Assistant reports all of its times in UTC: Genesis read the
+ * rain gauge's last rain, "2026-10-11T02:35:00+00:00", as 2:35 when it had
+ * rained at 8:35 PM (2026-10-10).
+ */
+export function localizeTimestamps<T>(value: T, timezone: string = OWNER_TIMEZONE): T {
+  if (typeof value === 'string') {
+    return value.replace(ZONED_ISO, (iso) => {
+      const d = new Date(iso);
+      return Number.isNaN(d.getTime()) ? iso : localTimeString(d, timezone);
+    }) as T;
+  }
+  if (Array.isArray(value)) return value.map((v) => localizeTimestamps(v, timezone)) as T;
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) out[k] = localizeTimestamps(v, timezone);
+    return out as T;
+  }
+  return value;
+}
+
 /** "2026-09-13_14-23" in the owner's zone, for file names. */
 export function localFileStamp(d: Date = new Date(), timezone: string = OWNER_TIMEZONE): string {
   const p = new Intl.DateTimeFormat('en-CA', {

@@ -1,5 +1,5 @@
 import { BaseSkillHandler, type SkillHandlerContext } from '@/lib/skill-handler';
-import { localFileStamp, localTimeString } from '@/lib/time-context';
+import { localFileStamp, localTimeString, localizeTimestamps } from '@/lib/time-context';
 import { HomeAssistantService, type HomeAssistantSettings, type HAEntity } from '@/lib/homeassistant-service';
 import { WorkspaceService } from '@/lib/workspace-service';
 import { WORKSPACE_ROOT } from '@/lib/config';
@@ -185,7 +185,15 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
     return TOOL_NAMES.has(toolName);
   }
 
+  // Home Assistant gives every time in UTC (state changes, history, the
+  // logbook, timestamp sensors like the rain gauge's last rain); she gets
+  // them in local time, the way she says them to Donny.
   async execute(toolCall: ToolCall, ctx: SkillHandlerContext): Promise<ToolResult> {
+    const r = await this.run(toolCall, ctx);
+    return r.result == null ? r : { ...r, result: localizeTimestamps(r.result) };
+  }
+
+  private async run(toolCall: ToolCall, ctx: SkillHandlerContext): Promise<ToolResult> {
     const haSettings = (ctx.settings as Record<string, unknown>)?.homeAssistant as HomeAssistantSettings | undefined;
 
     if (!haSettings?.baseUrl || !haSettings?.accessToken) {
