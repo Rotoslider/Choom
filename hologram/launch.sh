@@ -4,7 +4,10 @@
 #   ./launch.sh first-light   the calibration test scene
 #   ./launch.sh stop          close everything
 set -euo pipefail
-DIR="$(cd "$(dirname "$0")" && pwd)"
+# The real folder, not a symlink to it (~/projects/looking _glass_choom/hologram): started through the
+# link, the processes carried its path, stop_all's patterns missed them, and a second mic listener
+# heard Donny's words and sent them to Genesis twice (2026-10-11).
+DIR="$(cd "$(dirname "$0")" && pwd -P)"
 PORT=8765
 PROFILE="$DIR/.chrome-profile"
 PAGE="${1:-living}"
