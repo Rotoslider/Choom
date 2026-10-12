@@ -365,6 +365,7 @@ async function renderPlan() {
   state.planLook = state.planLooks[state.cid];
   if (!state.planLook || !c.looks[state.planLook]) state.planLook = c.sequence.length ? c.clips[c.sequence[0]].from : Object.keys(c.looks)[0];
   lookOptions($('#planLook'), state.planLook, false);
+  renderChangeForm();
   const look = c.looks[state.planLook];
   $('#planLookInfo').textContent = look.picture ? `starts and ends on ${look.picture}` : 'this look has no picture yet';
   renderWishes();
@@ -466,6 +467,28 @@ $('#customAdd').addEventListener('click', attempt(async () => {
   const [name, message] = results[0];
   toast(name ? `${short(state.cid, name)} planned${message !== 'ok' ? ` (check: ${message})` : ''}` : message, !name);
   if (name) { $('#customKey').value = ''; $('#customText').value = ''; }
+  render();
+}));
+
+// A change of clothes on screen: from one of her waist-up looks to another.
+function renderChangeForm() {
+  const looks = lookOrder(state.choom.looks).filter((l) => waistUp(l) && state.choom.looks[l].picture);
+  for (const [id, pick] of [['changeFrom', waistUp(state.planLook) ? state.planLook : looks[0]], ['changeTo', looks[1]]]) {
+    const was = $(`#${id}`).value;
+    $(`#${id}`).replaceChildren(...looks.map((l) => el('option', { value: l, selected: l === (looks.includes(was) ? was : pick) }, l)));
+  }
+}
+$('#changeAdd').addEventListener('click', attempt(async () => {
+  const text = $('#changeText').value.trim();
+  if (!text) return toast('Say what happens as she changes', true);
+  const { results, choom } = await api(`/api/choom/${state.cid}/change`, {
+    from: $('#changeFrom').value, to: $('#changeTo').value, text, seconds: Number($('#changeSeconds').value),
+    key: $('#changeKey').value.trim().toLowerCase().replace(/[^a-z0-9]/g, ''),
+  });
+  state.choom = choom;
+  const [name, message] = results[0];
+  toast(`${short(state.cid, name)} planned${message !== 'ok' ? ` (check: ${message})` : ''}`);
+  $('#changeKey').value = ''; $('#changeText').value = '';
   render();
 }));
 
@@ -588,7 +611,12 @@ function renderLooks() {
 
 // --- New looks: outfits, full body, asleep (Klein) -------------------------------------------------
 const draftUrl = (f) => `/media/draft/${encodeURIComponent(f.replace(/^drafts\//, ''))}`;
-const WHEN = { evening: 'evenings, 6 to 11 pm', cold: 'cold days (under 45°F)', hot: 'hot days (over 85°F)', day: 'daytime, taking turns with her usual clothes' };
+const WHEN = { evening: 'evenings, 6 to 11 pm', cold: 'cold days (under 45°F)', hot: 'hot days (over 85°F)', day: 'daytime, taking turns with her usual clothes',
+  night: 'nights, from 10 pm until she wakes (she sleeps in it)' };
+// A new picture for a look she has, when it's the colour that's wrong (pictures.TRUE_COLOR_PROMPT).
+const TRUE_COLOR = 'Make this picture look natural and true to life: clean neutral white light with accurate, realistic skin tones and colours and no colour cast. '
+  + 'Keep everything else exactly the same: her face, expression, hair, clothes and pose, the framing, and the pure black background.';
+const waistUp = (l) => ['main', 'relaxed'].includes(l.split('@')[0]);
 let promptEdited = false;
 const outfitKind = () => $('#outfitKind').value;
 // The same instructions as studio/pictures.py, shown so they can be edited before Klein runs.
@@ -600,6 +628,7 @@ function kleinPrompt() {
     return 'Show her from head to toe, standing relaxed and facing the viewer, her whole figure in frame with a little black space above her head and below her feet. '
       + `Keep ${keep} exactly as in the picture, with the same light on the same pure black background.${wearing ? ` She wears ${wearing}.` : ''}`;
   }
+  if (outfitKind() === 'redo') return TRUE_COLOR;
   if (outfitKind() === 'asleep') {
     return 'She has dozed off peacefully: her eyes are gently closed, her face is soft and relaxed, and her head tips slightly down and to one side. '
       + `Keep everything else exactly the same: ${keep}, the lighting, the framing, and the pure black background.`;
@@ -607,24 +636,36 @@ function kleinPrompt() {
   return `Change her clothes: she now wears ${wearing || '…'}. Keep everything else exactly the same: ${keep}, the lighting, the framing, and the pure black background.`;
 }
 function outfitLookId() {
-  // A full body started from an outfit is that outfit's own (full@dayspandex), played while she wears it.
-  if (outfitKind() === 'full') { const b = $('#outfitBase').value; return b.includes('@') ? `full@${b.split('@')[1]}` : 'full'; }
-  if (outfitKind() !== 'outfit') return outfitKind();
+  const kind = outfitKind(), b = $('#outfitBase').value, o = b.split('@')[1];
+  if (kind === 'redo') return $('#outfitTarget').value;
+  // A full body or asleep look started from an outfit is that outfit's own (full@dayspandex, asleep@night).
+  if (kind === 'full' || kind === 'asleep') return o ? `${kind}@${o}` : kind;
   const name = $('#outfitName').value.toLowerCase().replace(/[^a-z0-9]/g, '');
-  return `${$('#outfitBase').value}@${$('#outfitWhen').value}${name}`;
+  return `${b.split('@')[0]}@${$('#outfitWhen').value}${name}`;  // from another outfit too, in its pose
 }
 function updateOutfitForm() {
   const kind = outfitKind();
   $$('#newOutfit .when').forEach((e) => { e.hidden = kind !== 'outfit'; });
-  $('#newOutfit .wearing').hidden = kind === 'asleep';
+  $$('#newOutfit .redo').forEach((e) => { e.hidden = kind !== 'redo'; });
+  $('#newOutfit .wearing').hidden = kind === 'asleep' || kind === 'redo';
   $('#outfitWearingLabel').textContent = kind === 'full' ? 'What she wears below the waist (optional; her top is kept)' : 'She now wears';
   if (!promptEdited) $('#outfitPrompt').value = kleinPrompt();
   const id = outfitLookId();
-  $('#outfitLook').textContent = state.choom.looks[id]?.picture ? `she already has ${id}${kind === 'outfit' ? ': give it a name' : ''}` : `becomes the look ${id}`;
+  if (kind === 'redo') {
+    const n = Object.values(state.choom.clips).filter((c) => (c.from === id || c.to === id) && c.status !== 'dropped').length;
+    $('#outfitLook').textContent = `${id} gets the new picture; its ${n} clip${n === 1 ? '' : 's'} will be planned again from it (old takes kept)`;
+  } else {
+    $('#outfitLook').textContent = state.choom.looks[id]?.picture ? `she already has ${id}${kind === 'outfit' ? ': give it a name' : ''}` : `becomes the look ${id}`;
+  }
 }
 function renderOutfitForm() {
-  const full = outfitKind() === 'full';  // a full body can start from an outfit too
-  const bases = lookOrder(state.choom.looks).filter((l) => (full || !l.includes('@')) && !['full', 'asleep'].includes(l.split('@')[0]) && state.choom.looks[l].picture);
+  // Klein can start from any of her waist-up looks (an outfit too; asleep only from her usual clothes
+  // or a night outfit), and a new picture for a look from any look at all.
+  const kind = outfitKind(), looks = state.choom.looks;
+  const withPicture = lookOrder(looks).filter((l) => looks[l].picture);
+  const bases = withPicture.filter((l) => kind === 'redo' || (waistUp(l) && (kind !== 'asleep' || !l.includes('@') || /^night/.test(l.split('@')[1]))));
+  const wasTarget = $('#outfitTarget').value;
+  $('#outfitTarget').replaceChildren(...withPicture.map((l) => el('option', { value: l, selected: l === (wasTarget || state.planLook) }, l)));
   const home = state.choom.sequence.length ? state.choom.clips[state.choom.sequence[0]].from : bases[0];
   const wardrobeBase = bases.find((l) => state.choom.looks[l].wardrobe) || home;
   const was = $('#outfitBase').value;
@@ -633,14 +674,26 @@ function renderOutfitForm() {
   updateOutfitForm();
 }
 ['outfitBase', 'outfitWhen', 'outfitName', 'outfitWearing'].forEach((id) => $(`#${id}`).addEventListener('input', updateOutfitForm));
-$('#outfitKind').addEventListener('input', () => { promptEdited = false; renderOutfitForm(); });
+$('#outfitRefs').addEventListener('change', () => { $('#outfitRefsHint').hidden = !$('#outfitRefs').files.length; });
+// A new picture for a look starts from that look's own picture unless you choose another.
+$('#outfitTarget').addEventListener('input', () => { $('#outfitBase').value = $('#outfitTarget').value; updateOutfitForm(); });
+const readFile = (file) => new Promise((ok, fail) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = () => fail(r.error); r.readAsDataURL(file); });
+$('#outfitKind').addEventListener('input', () => {
+  promptEdited = false;
+  renderOutfitForm();
+  if (outfitKind() === 'redo') { $('#outfitBase').value = $('#outfitTarget').value; updateOutfitForm(); }
+});
 $('#outfitPrompt').addEventListener('input', () => { promptEdited = true; });
 $('#outfitMake').addEventListener('click', attempt(async () => {
   if (outfitKind() === 'outfit' && !$('#outfitWearing').value.trim() && !promptEdited) return toast('Say what she wears', true);
+  const file = $('#outfitUpload').files[0], refs = [...$('#outfitRefs').files];
   state.choom = (await api(`/api/choom/${state.cid}/outfit`, {
     kind: outfitKind(), base: $('#outfitBase').value, when: $('#outfitWhen').value, name: $('#outfitName').value,
     wearing: $('#outfitWearing').value, prompt: $('#outfitPrompt').value, count: Number($('#outfitCount').value),
+    look: $('#outfitTarget').value, upload: file ? await readFile(file) : undefined,
+    refs: refs.length ? await Promise.all(refs.map(readFile)) : undefined,
   })).choom;
+  $('#outfitUpload').value = ''; $('#outfitRefs').value = ''; $('#outfitRefsHint').hidden = true;
   promptEdited = false;
   $('#outfitWearing').value = ''; $('#outfitName').value = '';
   toast('Klein is making the pictures; they show up here when done (after any render ahead of it)');
@@ -658,8 +711,10 @@ function renderDrafts() {
       el('img', { src: draftUrl(f), alt: `${look} version`, loading: 'lazy', onclick: () => { $('#zoomImg').src = draftUrl(f); $('#zoom').showModal(); } }),
       el('button', {
         className: 'ghost', type: 'button', onclick: attempt(async () => {
-          state.choom = (await api(`/api/choom/${state.cid}/adopt`, { look, picture: f })).choom;
-          toast(`${look} is a look now: plan its clips in Plan & render`);
+          const res = await api(`/api/choom/${state.cid}/adopt`, { look, picture: f });
+          state.choom = res.choom;
+          toast(res.replanned ? `${look} has its new picture: ${res.replanned.length} clips planned again; render them from Plan & render`
+            : `${look} is a look now: plan its clips in Plan & render`);
           renderLooks();
         }),
         tip: 'Make this version the look',

@@ -2,6 +2,7 @@
 moods it can play in and the pose it starts and ends in. Shared by make_alive.py (which writes them
 into alive.json for the page) and Glass Studio (which names the clips it plans so they land here).
 """
+import re
 from pathlib import Path
 
 # What each clip is for, from its name (<choom>_<action>.mp4): the moods it can play in (idle, talk,
@@ -117,18 +118,29 @@ KINDS = {
 }
 
 
+# A change of clothes on screen: <choom>_[<from>-]change_<to>[_<what>], "usual" for her usual
+# clothes (genesis_eveningdress-change_night_slip: the burgundy dress to her night look). The glass
+# plays it instead of the camera cut when she changes from one to the other.
+CHANGE = re.compile(r"change_([a-z0-9]+)(?:_[a-z0-9]+)?")
+
+
 def clip_role(cid, src):
     """(moods, pose it starts in, pose it ends in) from the clip's name, <choom>_[<outfit>-]<action>.
-    Clips in other clothes (evening-relaxed, cold-relaxed_glance, dayspandex-full_sway) live in poses
-    of their own (relaxed@evening, full@dayspandex); the page changes her clothes with a camera cut."""
+    Clips in other clothes (evening-relaxed, cold-relaxed_glance, dayspandex-full_sway, night-sleep)
+    live in poses of their own (relaxed@evening, full@dayspandex, asleep@night); the page changes her
+    clothes with a camera cut, or a change clip."""
     action = Path(src).stem.removeprefix(f"{cid}_")
     outfit = None
     if "-" in action:
         outfit, action = action.split("-", 1)
+    change = CHANGE.fullmatch(action)
+    if change:
+        home, to = AWAKE_POSE.get(cid, "main"), change.group(1)
+        return ["change"], f"{home}@{outfit}" if outfit else home, home if to == "usual" else f"{home}@{to}"
     kind = action.split("_")[0] if "_" in action else None
     moods, start, end = ROLES.get(action) or KINDS.get(kind) or ROLES["base"]
     if action in ("fallasleep", "wake") and cid in AWAKE_POSE:
         start, end = [AWAKE_POSE[cid] if pose == "main" else pose for pose in (start, end)]
     if outfit:
-        start, end = [f"{pose}@{outfit}" if pose in ("main", "relaxed", "full") else pose for pose in (start, end)]
+        start, end = [f"{pose}@{outfit}" if pose in ("main", "relaxed", "full", "asleep") else pose for pose in (start, end)]
     return moods, start, end

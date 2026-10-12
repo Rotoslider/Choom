@@ -9,7 +9,7 @@
      "about": "Played once when what was said feels that way."},
     {"id": "oops", "title": "Oops", "for": ["main", "relaxed"],
      "about": "Her face at her own mishap (a tool failed, a picture didn't come out): rueful, not sad."},
-    {"id": "sleep", "title": "Sleep", "for": ["main", "relaxed"],
+    {"id": "sleep", "title": "Sleep", "for": ["main", "relaxed", "night"],
      "about": "Dozing off, sleeping and waking (11 pm to 7 am after ten quiet minutes), and yawns near bedtime. Needs an asleep picture."},
     {"id": "windy", "title": "Windy days", "for": ["main", "relaxed", "outfit"],
      "about": "Her hair and clothes stirring in the wind. They play only on a windy day (a 10-minute average of 12 mph or gusts of 20, from your own weather station when Home Assistant has one), one every few minutes while she's quiet, in whatever she has on, so each outfit needs its own. Two or three per look are plenty. The wind has to rise and settle within the clip: it starts and ends on her picture."},

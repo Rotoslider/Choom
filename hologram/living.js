@@ -958,16 +958,32 @@ const WAKING_POSES = new Set(['main', 'relaxed']);
 const LOOKS_AWAY = /glance|look|sidelook|shoulder|daydream|horizon|lookup|lookdown|hunter|skycheck|scan|turn|dreamy|thinkdown|picture/;  // the framings she lives in (not asleep, not full-body)
 const FULL_IDLE_CHANCE = 0.07;
 // Her clothes. Clips in other outfits live in poses of their own (relaxed@evening), and an outfit's
-// name says when she wears it: cold… under 45°F, hot… over 85°F, evening… from 6 to 11 pm, and day…
-// outfits take turns with her usual clothes, a different one each day (picked from the date, so it
-// holds all day). She changes with a camera cut at a quiet moment, and back into her usual clothes
-// before she sleeps.
+// name says when she wears it: night… from 10 pm until she wakes, cold… under 45°F, hot… over 85°F,
+// evening… from 6 to 11 pm, and day… outfits take turns with her usual clothes, a different one each
+// day (picked from the date, so it holds all day). She changes with a camera cut at a quiet moment
+// (or a change clip made for it, <choom>_eveningdress-change_night_slip), and back into her usual
+// clothes before she sleeps, unless a night outfit has its own asleep look to sleep in.
 const outfitOf = (pose) => pose.split('@')[1] || null;
 const basePose = (pose) => pose.split('@')[0];
 // Her whole figure: her usual full body, or an outfit's own (full@dayspandex), which the glass cuts
 // to only while she wears that outfit.
 const isFull = (pose) => basePose(pose) === 'full';
 const fullOf = (pose) => (outfitOf(pose) ? `full@${outfitOf(pose)}` : 'full');
+// Night clothes, from 10 pm until she wakes: nightwarm… when it's 70°F or warmer, nightcold… below
+// (his station), any other night… outfit either way. Chosen when she first puts them on and kept until
+// morning, so a cooling night doesn't change her pajamas at 2 am.
+const NIGHT_FROM = 22, NIGHT_WARM_F = 70;
+const nightNow = () => { const h = hourNow(); return h >= NIGHT_FROM || h < SLEEP_UNTIL; };
+const msUntilHour = (hour) => { const d = new Date(), t = new Date(d); t.setHours(hour, 0, 0, 0); if (t <= d) t.setDate(t.getDate() + 1); return t - d; };
+function nightOutfit(p, outfits) {
+  const nights = outfits.filter((o) => /^night/.test(o));
+  if (!nights.length) return null;
+  if (p.nightPick && performance.now() < p.nightPick.until && nights.includes(p.nightPick.o)) return p.nightPick.o;
+  const t = weather.temperature, warm = typeof t === 'number' ? t >= NIGHT_WARM_F : null;
+  const o = (warm !== null && nights.find((x) => (warm ? /warm/ : /cold/).test(x))) || nights.find((x) => !/warm|cold/.test(x)) || nights[0];
+  p.nightPick = { o, until: performance.now() + msUntilHour(SLEEP_UNTIL) };
+  return o;
+}
 const OUTFIT_RULES = [
   [/^cold/, () => typeof weather.temperature === 'number' && weather.temperature < 45],  // °F
   [/^hot/, () => typeof weather.temperature === 'number' && weather.temperature > 85],
@@ -996,6 +1012,7 @@ function saveWardrobe(p) {
 const lookClips = (p, o) => p.alive.clips.filter((c) => outfitOf(poseFrom(c)) === o).length;
 const visitLength = (p, o) => Math.min(VISIT_MAX_MS, Math.max(VISIT_MIN_MS, lookClips(p, o) * VISIT_S_PER_CLIP * 1000));
 function mayWear(p, o) {
+  if (/^night/.test(o)) return true;  // all night long
   const w = wardrobe(p), now = Date.now();
   if (w.visit && w.visit.o === o) return now - w.visit.start < visitLength(p, o);  // wearing it: until the visit is up
   if (now - (w.rested[o] || 0) < VISIT_REST_MS) return false;                     // just took it off
@@ -1019,16 +1036,25 @@ function chosenOutfit(p) {
   if (c.o && !p.alive.clips.some((x) => outfitOf(poseFrom(x)) === c.o && clipMoods(x).includes('talk'))) return undefined;
   return c.o;
 }
+// The outfits she can wear: those with a loop she can talk over.
+const wearable = (p) => [...new Set(p.alive.clips.filter((c) => clipMoods(c).includes('talk')).map((c) => outfitOf(poseFrom(c))).filter(Boolean))];
+// Her night clothes, if she can sleep in them: their own asleep look (asleep@nightcold) to sleep and wake in.
+function bedOutfit(p) {
+  const o = nightOutfit(p, wearable(p));
+  const has = (mood) => p.alive.clips.some((c) => clipMoods(c).includes(mood) && poseFrom(c) === `asleep@${o}`);
+  return o && has('sleep') && has('wake') ? o : null;
+}
 function wantedOutfit(p, want) {
   if (want === 'sleep') {
     const w = wardrobe(p);
     if (w.chosen) { w.chosen = null; saveWardrobe(p); }
-    return null;
+    return bedOutfit(p);
   }
   const chosen = chosenOutfit(p);
   if (chosen !== undefined) return chosen;
-  const outfits = [...new Set(p.alive.clips.filter((c) => clipMoods(c).includes('talk')).map((c) => outfitOf(poseFrom(c))).filter(Boolean))]
-    .filter((o) => mayWear(p, o));
+  const outfits = wearable(p).filter((o) => mayWear(p, o));
+  const night = nightNow() && nightOutfit(p, outfits);
+  if (night) return night;
   for (const [rule, when] of OUTFIT_RULES) {
     const o = outfits.find((x) => rule.test(x));
     if (o && when()) return o;
@@ -1077,7 +1103,7 @@ function sleepy() {
 }
 
 // She only dozes off if she has a sleep loop to stay asleep in (and can wake from it).
-const canSleep = (p) => p.alive && p.alive.clips.some((c) => clipMoods(c).includes('sleep') && poseFrom(c) === 'asleep') &&
+const canSleep = (p) => p.alive && p.alive.clips.some((c) => clipMoods(c).includes('sleep') && basePose(poseFrom(c)) === 'asleep') &&
                         p.alive.clips.some((c) => clipMoods(c).includes('wake'));
 
 // A clip that gets her into a mood from the pose she's in: one that starts here, or else the pose
@@ -1089,7 +1115,9 @@ function seekClip(p, pose, wanted, after = -1) {
   if (here.length > 1) here = here.filter((k) => k !== after);
   if (here.length) return here[Math.floor(Math.random() * here.length)];
   const targets = new Set(ks.filter((k) => clipMoods(clips[k]).includes(wanted)).map((k) => poseFrom(clips[k])));
-  const toward = ks.find((k) => poseFrom(clips[k]) === pose && poseTo(clips[k]) !== pose && targets.has(poseTo(clips[k])));
+  // (Not through a change of clothes: an expression in her night look isn't worth changing out of it.)
+  const toward = ks.find((k) => poseFrom(clips[k]) === pose && poseTo(clips[k]) !== pose && targets.has(poseTo(clips[k])) &&
+                                !clipMoods(clips[k]).includes('change'));
   return toward ?? -1;
 }
 
@@ -1149,9 +1177,10 @@ function nextClip(p, after) {
   if (after >= 0 && clips[after]) noteWorn(p, poseTo(clips[after]), clips[after].frames / (p.alive.fps || 24) * 1000);
   // Time to change clothes (or back into her usual ones before sleep): a cut to her base loop in the
   // other outfit, at a quiet moment.
-  const dressed = outfitOf(pose), dress = pose === 'asleep' ? null : wantedOutfit(p, want);
+  const asleep = basePose(pose) === 'asleep';  // asleep, or asleep in her night outfit (asleep@night)
+  const dressed = outfitOf(pose), dress = asleep ? dressed : wantedOutfit(p, want);
   const quiet = want === 'idle' || want === 'sleep' || want === 'listen' || (want === 'think' && chosenOutfit(p) !== undefined);
-  if (dress !== dressed && pose !== 'asleep' && quiet) {
+  if (dress !== dressed && !asleep && quiet) {
     const to = dress ? `${basePose(pose)}@${dress}` : basePose(pose);
     // A clip that makes the change on screen (Genesis's motes fading away or sparkling back), else a cut.
     const change = clips.map((c, k) => k).filter((k) => poseFrom(clips[k]) === pose && poseTo(clips[k]) === to);
@@ -1171,7 +1200,7 @@ function nextClip(p, after) {
   }
   // Asleep: stay asleep, or wake first if anything else is wanted. Sleepy: doze off (via a pose
   // change if needed).
-  if (pose === 'asleep' && want !== 'sleep') {
+  if (asleep && want !== 'sleep') {
     const wake = seekClip(p, pose, 'wake');
     if (wake >= 0) return wake;
   }
@@ -1210,7 +1239,7 @@ function nextClip(p, after) {
     const wideHere = asked.filter((k) => poseFrom(clips[k]) === fullOf(pose));
     const wide = wideHere.length ? wideHere : asked.filter((k) => poseFrom(clips[k]) === 'full');
     const starts = new Set(asked.map((k) => poseFrom(clips[k])));
-    const toward = clips.findIndex((c) => poseFrom(c) === pose && poseTo(c) !== pose && starts.has(poseTo(c)));
+    const toward = clips.findIndex((c) => poseFrom(c) === pose && poseTo(c) !== pose && starts.has(poseTo(c)) && !clipMoods(c).includes('change'));
     if (!here.length && !wide.length && toward >= 0) return toward; // Aloy raises her hand first
     const from = here.length ? here : wide.length ? wide : asked;
     p.moveWanted = null;
@@ -1303,7 +1332,7 @@ function nextClip(p, after) {
   // in eight; an expression raises it too) and rarely while she's quiet, and goes back down after a
   // clip or two. Her hand moves are idle clips, so while she talks they join the pool here.
   const home = clips.some((c) => poseFrom(c) === 'relaxed' && clipMoods(c).includes('talk')) ? 'relaxed' : 'main';
-  const handMove = (k) => poseTo(clips[k]) !== pose && WAKING_POSES.has(poseTo(clips[k]));
+  const handMove = (k) => poseTo(clips[k]) !== pose && WAKING_POSES.has(poseTo(clips[k])) && !clipMoods(clips[k]).includes('change');
   if (want === 'talk' && !justMoved) pool.push(...all.filter((k) => handMove(k) && !pool.includes(k)));
   if (!pool.length) pool = fits.length ? fits : all.filter((k) => k !== after);   // the only fitting clip may repeat
   if (!pool.length) pool = all.length ? all : [0];
@@ -1371,7 +1400,7 @@ function hurryAlive(p) {
   const waiting = !p.moments?.has(pl.clip) && ((p.emotion && wantedMood(p) !== 'talk' && p.alive.clips.some((c) => clipMoods(c).includes(p.emotion))) ||
                   Boolean(p.moments?.has(p.players[1 - p.active].clip)));
   // Woken from sleep: the sleep clip hurries along even more, so she's awake in a few seconds.
-  const asleep = poseFrom(p.alive.clips[pl.clip]) === 'asleep' && poseTo(p.alive.clips[pl.clip]) === 'asleep';
+  const asleep = basePose(poseFrom(p.alive.clips[pl.clip])) === 'asleep' && basePose(poseTo(p.alive.clips[pl.clip])) === 'asleep';
   // At double speed an idle clip reads as frantic talking; 1.4x still brings her back soon.
   pl.video.playbackRate = !fits ? (asleep ? 2.5 : 1.4) : waiting ? 1.3 : (pl.baseRate || 1);
 }
@@ -2367,7 +2396,7 @@ renderer.setAnimationLoop((now) => {
   // Asleep (or dozing off / waking): the glass dims and her particles slow.
   const cur = portraits[current];
   const curClip = cur.alive && cur.players[cur.active].clip >= 0 ? cur.alive.clips[cur.players[cur.active].clip] : null;
-  const asleepNow = curClip && (poseTo(curClip) === 'asleep' || poseFrom(curClip) === 'asleep') ? 1 : 0;
+  const asleepNow = curClip && (basePose(poseTo(curClip)) === 'asleep' || basePose(poseFrom(curClip)) === 'asleep') ? 1 : 0;
   sleepAmt += (asleepNow - sleepAmt) * Math.min(dt * 0.6, 1);
   shared.glow.value *= 1 - 0.45 * sleepAmt;
   // Tool moments: while she works a tool her light surges for a few seconds (Aloy's orbs flare,
@@ -2447,7 +2476,7 @@ setInterval(() => {
   if (mood !== 'idle' || speech.busy || speech.queue.length || heard() || phase !== 'idle' || sleepy() || stage.on || gaze.looking) return;
   const here = portraits[current];
   const clip = here.alive && here.players[here.active].clip >= 0 ? here.alive.clips[here.players[here.active].clip] : null;
-  if ((clip && (poseFrom(clip) === 'asleep' || poseTo(clip) === 'asleep')) || now - (here.wokeAt || 0) < 3 * 60 * 1000) return;
+  if ((clip && (basePose(poseFrom(clip)) === 'asleep' || basePose(poseTo(clip)) === 'asleep')) || now - (here.wokeAt || 0) < 3 * 60 * 1000) return;
   const others = portraits.map((q, k) => k).filter((k) => k !== current);
   const next = others[Math.floor(Math.random() * others.length)];
   if (now - (portraits[next].lastShown || 0) > 45 * 60 * 1000) portraits[next].greet = true;

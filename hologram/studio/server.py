@@ -19,7 +19,7 @@ import plan
 import prompts
 import render
 from config import CFG, CLIPS, PICTURES, PORTRAITS, SHEETS, WORKSPACE, ensure_workspace
-from project import STATUSES, Project, editing, next_seeds, outfit_of
+from project import STATUSES, Project, base_of, editing, next_seeds, outfit_of
 
 WEB = Path(__file__).resolve().parent / "web"
 NAME = re.compile(r"^[a-z0-9][a-z0-9_@\-]*$")
@@ -213,6 +213,11 @@ class Handler(BaseHTTPRequestHandler):
                 items = [library[(i["pack"], i["key"])] if "pack" in i else i for i in data["items"]]
                 results = plan.add(proj, data["look"], items)
                 return self.send_json({"results": results, "choom": details(proj)})
+            elif action == "change":  # a change of clothes on screen, from one look to another
+                name, message = plan.add_change(proj, data["from"], data["to"], data.get("key"), data["text"], data.get("seconds", 5))
+                if not name:
+                    return self.fail(message)
+                return self.send_json({"results": [(name, message)], "choom": details(proj)})
             elif action == "rewrite":
                 warnings = plan.rewrite(proj, data["name"], data.get("text"), data.get("seconds"))
                 return self.send_json({"warnings": warnings, "choom": details(proj)})
@@ -221,48 +226,78 @@ class Handler(BaseHTTPRequestHandler):
                     if proj.clips[n]["status"] == "planned":
                         proj.unplan(n)
             elif action == "outfit":
-                # A new look from a picture she has: an outfit, her full body, or her asleep. Klein
-                # makes a few versions; one is picked later.
+                # A new look (an outfit, her full body, her asleep) or a new picture for a look she
+                # has. Klein makes a few versions from any look's picture (or one sent from his
+                # computer, `upload`), and one is picked later; the look it starts from gives the new
+                # look its description.
                 base, kind = data["base"], data.get("kind", "outfit")
                 if not proj.looks.get(base, {}).get("picture"):
                     return self.fail(f"no {base} picture to start from")
                 if kind not in pictures.KINDS:
-                    return self.fail("a new look is an outfit, full body or asleep")
+                    return self.fail("a new look is an outfit, full body, asleep, or a new picture for a look she has")
+                if kind != "redo" and base_of(base) in ("full", "asleep"):
+                    return self.fail("a new look starts from one of her waist-up looks")
                 if kind == "outfit":
-                    if outfit_of(base):
-                        return self.fail("a new outfit starts from one of her usual looks")
                     if data["when"] not in pictures.WHEN:
-                        return self.fail("an outfit is for cold, hot, evening or day")
-                    look_id = f"{base}@{data['when']}{re.sub(r'[^a-z0-9]', '', data.get('name', '').lower())}"
-                elif kind == "full" and outfit_of(base):
-                    look_id = f"full@{outfit_of(base)}"  # that outfit's own full body
-                elif outfit_of(base):
-                    return self.fail("asleep is in her usual clothes: start from her main look")
+                        return self.fail("an outfit is for cold, hot, evening, day or night")
+                    # From another outfit's picture too (Genesis's night look from her plain one), in its pose.
+                    look_id = f"{base_of(base)}@{data['when']}{re.sub(r'[^a-z0-9]', '', data.get('name', '').lower())}"
+                elif kind == "full":
+                    look_id = f"full@{outfit_of(base)}" if outfit_of(base) else "full"  # an outfit's own full body
+                elif kind == "asleep":
+                    if outfit_of(base) and not outfit_of(base).startswith("night"):
+                        return self.fail("she sleeps in her usual clothes or a night outfit")
+                    look_id = f"asleep@{outfit_of(base)}" if outfit_of(base) else "asleep"
                 else:
-                    look_id = kind
-                if look_id in proj.looks and proj.looks[look_id].get("picture"):
+                    look_id = data.get("look", "")
+                    if not proj.looks.get(look_id, {}).get("picture"):
+                        return self.fail("choose the look that gets the new picture")
+                if kind != "redo" and look_id in proj.looks and proj.looks[look_id].get("picture"):
                     return self.fail(f"she already has {look_id}" + ("; give it another name" if kind == "outfit" else ""))
+                # Pictures sent from his computer: one to start from instead of the look's (`upload`),
+                # and more for Klein to take things from (`refs`: a dress, shoes, her face close up).
+                stamp = time.strftime("%Y%m%d-%H%M%S")
+                sent = [("start", data["upload"])] if data.get("upload") else []
+                sent += [(str(i + 2), r) for i, r in enumerate(data.get("refs") or [])]
+                saved = {}
+                for tag, url in sent:
+                    raw = base64.b64decode(url.split(",", 1)[-1])
+                    ext = ".jpg" if raw[:3] == b"\xff\xd8\xff" else ".png" if raw[:8] == b"\x89PNG\r\n\x1a\n" else ".webp" if raw[8:12] == b"WEBP" else None
+                    if not ext:
+                        return self.fail("pictures should be PNG, JPEG or WebP")
+                    saved[tag] = f"{cid}_ref_{stamp}_{tag}{ext}"
+                    (PICTURES / saved[tag]).write_bytes(raw)
+                source = saved.pop("start", proj.looks[base]["picture"])
+                refs = list(saved.values())
                 wearing = data.get("wearing", "").strip()
                 keep = proj.looks[base].get("kleinKeep", "")
                 default = {"outfit": lambda: pictures.outfit_prompt(wearing, keep), "full": lambda: pictures.full_prompt(keep, wearing),
-                           "asleep": lambda: pictures.asleep_prompt(keep)}[kind]
+                           "asleep": lambda: pictures.asleep_prompt(keep), "redo": lambda: pictures.TRUE_COLOR_PROMPT}[kind]
                 prompt = (data.get("prompt") or "").strip() or default()
                 proj.data.setdefault("drafts", {})[look_id] = {"base": base, "kind": kind, "wearing": wearing, "prompt": prompt,
-                                                               "pictures": [], "status": "making"}
-                jobs.add("picture", {"choom": cid, "look": look_id, "source": proj.looks[base]["picture"],
+                                                               "pictures": [], "status": "making",
+                                                               **({"replace": True} if kind == "redo" else {}),
+                                                               **({"refs": refs} if refs else {})}
+                jobs.add("picture", {"choom": cid, "look": look_id, "source": source, "refs": refs,
                                      "prompt": prompt, "count": int(data.get("count", 3))})
             elif action == "adopt":
                 draft = proj.data.get("drafts", {}).get(data["look"])
                 if not draft or data["picture"] not in draft["pictures"]:
                     return self.fail("no such draft picture")
-                pictures.adopt(proj, data["look"], data["picture"], draft.get("wearing"), draft.get("prompt"), draft.get("base"))
+                pictures.adopt(proj, data["look"], data["picture"], draft.get("wearing"), draft.get("prompt"), draft.get("base"),
+                               bool(draft.get("replace")))
+                if draft.get("replace"):  # its clips are planned again from the new picture
+                    redo, left = plan.repicture(proj, data["look"])
+                    return self.send_json({"replanned": redo, "left": left, "choom": details(proj)})
             elif action == "discard":
                 proj.data.get("drafts", {}).pop(data["look"], None)
             elif action == "look":
                 look = proj.looks.setdefault(data["look"], {})
-                for key in ("subject", "ending", "keep", "picture"):
+                for key in ("subject", "ending", "keep", "picture", "wardrobe", "kleinKeep"):
                     if key in data:
                         look[key] = data[key]
+                if any(k in data for k in ("subject", "ending", "keep")):
+                    plan.refresh_prompts(proj, data["look"])  # its planned clips say it the new way
                 if "tags" in data:  # closet words; empty goes back to the ones read from her clothes
                     tags = data["tags"] if isinstance(data["tags"], list) else str(data["tags"]).split(",")
                     tags = [w.strip().lower() for w in tags if w.strip()]

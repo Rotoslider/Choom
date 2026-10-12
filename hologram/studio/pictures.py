@@ -3,7 +3,8 @@ few versions of her in new clothes (or with something changed) out, one of which
 
 An outfit's name says when she wears it, which is how the glass chooses (OUTFIT_RULES in
 living.js): cold... under 45°F, hot... over 85°F, evening... from 6 to 11 pm, day... taking turns
-with her usual clothes, a different one each day.
+with her usual clothes, a different one each day, night... from 10 pm until she wakes (she falls
+asleep in it if it has its own asleep look and sleep clips).
 """
 import json
 import os
@@ -17,7 +18,8 @@ from project import base_of, outfit_of
 
 DRAFTS = PICTURES / "drafts"
 WHEN = {"cold": "cold days (under 45°F)", "hot": "hot days (over 85°F)", "evening": "evenings, 6 to 11 pm",
-        "day": "daytime, taking turns with her usual clothes"}
+        "day": "daytime, taking turns with her usual clothes",
+        "night": "nights, from 10 pm until she wakes (she sleeps in it)"}
 BACKGROUND = "the lighting, the framing, and the pure black background"
 CLEAN_PROMPT = ("Clean up this picture of her: the same young woman with exactly the same face, hair, expression "
                 "and clothes, facing the viewer, framed from the waist up with a little black space above her head, "
@@ -45,7 +47,11 @@ def asleep_prompt(keep):
             f"{keep.strip().rstrip(',. ') or 'her face, hair and clothes'}, {BACKGROUND}.")
 
 
-KINDS = {"outfit": "an outfit", "full": "full body", "asleep": "asleep"}
+KINDS = {"outfit": "an outfit", "full": "full body", "asleep": "asleep", "redo": "a new picture for a look she has"}
+# Klein's instruction for a new picture of a look she has, when it's the colour that's wrong.
+TRUE_COLOR_PROMPT = ("Make this picture look natural and true to life: clean neutral white light with accurate, realistic "
+                     "skin tones and colours and no colour cast. Keep everything else exactly the same: her face, "
+                     "expression, hair, clothes and pose, the framing, and the pure black background.")
 
 
 def subject_for(look, wearing):
@@ -60,13 +66,16 @@ def subject_for(look, wearing):
     return re.sub(r",? against a", f", wearing {wearing}, against a", subject, count=1)
 
 
-def run(choom, look_id, source, prompt, count=3, seed=31, log=print):
+def run(choom, look_id, source, prompt, count=3, seed=31, log=print, refs=()):
     """Render `count` versions with Klein from the picture `source` (in clean/); returns their file
-    names, saved in clean/drafts/ as <choom>_<look>_<n>.png."""
+    names, saved in clean/drafts/ as <choom>_<look>_<n>.png. `refs` are more pictures in clean/ for
+    Klein to take things from (a dress, shoes, a close-up of her face): picture 2, 3, ... in the
+    instruction. The first stays the main subject, so her framing, pose and light are kept."""
     settings_file = WAN2GP / "settings" / "flux2_klein_9b_settings.json"
     settings = json.loads(settings_file.read_text()) if settings_file.exists() else {}
     settings.update({"model_type": CFG["picture_model"], "prompt": prompt, "video_prompt_type": "KI",
-                     "image_refs": [str(PICTURES / source)], "resolution": "1440x1920", "num_inference_steps": 4,
+                     "image_refs": [str(PICTURES / source)] + [str(PICTURES / r) for r in refs],
+                     "resolution": "1440x1920", "num_inference_steps": 4,
                      "seed": int(seed), "repeat_generation": int(count), "image_mode": 1})
     slug = look_id.replace("@", "_")
     out = DRAFTS / f"run_{choom}_{slug}_{time.strftime('%Y%m%d-%H%M%S')}"
@@ -92,10 +101,33 @@ def run(choom, look_id, source, prompt, count=3, seed=31, log=print):
     return names
 
 
-def adopt(proj, look_id, draft, wearing=None, prompt=None, base_look=None):
+def new_file(proj, look_id):
+    """A free file name in clean/ for a look's picture: <choom>_<outfit>_<n>.png for an outfit,
+    <choom>_full_dayspandex_<n>.png for an outfit's full body or asleep look."""
+    kind, outfit = base_of(look_id), outfit_of(look_id)
+    slug = outfit if outfit and kind in ("main", "relaxed") else look_id.replace("@", "_")
+    n = 1
+    while (PICTURES / f"{proj.id}_{slug}_{n}.png").exists():
+        n += 1
+    return PICTURES / f"{proj.id}_{slug}_{n}.png"
+
+
+def adopt(proj, look_id, draft, wearing=None, prompt=None, base_look=None, replace=False):
     """Make a draft picture a look: copied into clean/ as <choom>_<outfit>_1.png, with its subject line
-    in the new clothes and the base look's keep line and ending. A full body comes from her main look,
-    or from an outfit's (base_look) for that outfit's own full body, full@<outfit>."""
+    in the new clothes and the base look's keep line and ending. base_look is the look the picture
+    started from (an outfit can start from another outfit, Genesis's night look from her plain one);
+    a full body or asleep look started from an outfit is that outfit's own (full@dayspandex,
+    asleep@night). replace: a new picture for a look she has; the rest of the look stays (its clips
+    are planned again from it, plan.repicture)."""
+    if replace:
+        target = new_file(proj, look_id)
+        shutil.copy2(PICTURES / draft, target)
+        look = proj.looks[look_id]
+        look["picture"] = target.name
+        if prompt:
+            look["klein"] = prompt
+        proj.data.get("drafts", {}).pop(look_id, None)
+        return look
     if look_id in proj.looks and not proj.looks[look_id].get("picture"):
         # A look waiting for its picture (a new Choom's main): just give it the chosen one.
         target = PICTURES / f"{proj.id}_{look_id}_1.png"
@@ -106,17 +138,12 @@ def adopt(proj, look_id, draft, wearing=None, prompt=None, base_look=None):
         proj.data.get("drafts", {}).pop(look_id, None)
         return proj.looks[look_id]
     kind, outfit = base_of(look_id), outfit_of(look_id)
+    target = new_file(proj, look_id)
+    shutil.copy2(PICTURES / draft, target)
     if kind in ("full", "asleep"):
         base = proj.looks.get(base_look or f"main@{outfit}", {}) if outfit else proj.looks.get("main", {})
-        slug = look_id.replace("@", "_")  # full, full_dayspandex
-        target = PICTURES / f"{proj.id}_{slug}_1.png"
-        n = 1
-        while target.exists():
-            n += 1
-            target = PICTURES / f"{proj.id}_{slug}_{n}.png"
-        shutil.copy2(PICTURES / draft, target)
         # An outfit's full body: what's said of her legs and feet joins the outfit's own clothes.
-        if outfit and wearing and base.get("wearing") and base["wearing"].lower() not in wearing.lower():
+        if outfit and kind == "full" and wearing and base.get("wearing") and base["wearing"].lower() not in wearing.lower():
             wearing = f"{base['wearing']}, {wearing.strip().rstrip('.')}"
         subject = (subject_for(base, wearing) if wearing else base.get("subject", "")).rstrip(". ")
         proj.looks[look_id] = {
@@ -127,22 +154,15 @@ def adopt(proj, look_id, draft, wearing=None, prompt=None, base_look=None):
             **({"keep": base["keep"]} if base.get("keep") else {}),
             **({"klein": prompt} if prompt else {}),
         }
-        proj.data.get("drafts", {}).pop(look_id, None)
-        return proj.looks[look_id]
-    base = proj.looks.get(base_of(look_id), {})
-    outfit = outfit or look_id
-    n = 1
-    while (PICTURES / f"{proj.id}_{outfit}_{n}.png").exists():
-        n += 1
-    target = PICTURES / f"{proj.id}_{outfit}_{n}.png"
-    shutil.copy2(PICTURES / draft, target)
-    proj.looks[look_id] = {
-        "picture": target.name,
-        "subject": subject_for(base, wearing) if wearing else base.get("subject", ""),
-        "ending": base.get("ending", ""),
-        **({"keep": base["keep"]} if base.get("keep") else {}),
-        **({"wearing": wearing} if wearing else {}),
-        **({"klein": prompt} if prompt else {}),
-    }
+    else:
+        base = proj.looks.get(base_look or base_of(look_id), {})
+        proj.looks[look_id] = {
+            "picture": target.name,
+            "subject": subject_for(base, wearing) if wearing else base.get("subject", ""),
+            "ending": base.get("ending", ""),
+            **({"keep": base["keep"]} if base.get("keep") else {}),
+            **({"wearing": wearing} if wearing else {}),
+            **({"klein": prompt} if prompt else {}),
+        }
     proj.data.get("drafts", {}).pop(look_id, None)
     return proj.looks[look_id]

@@ -162,6 +162,35 @@ for plays in her usual clothes.
 
 The glass cuts to them only while she wears that outfit.
 
+## 9. A night look she sleeps in (optional)
+
+A `night…` outfit is worn from 10 pm until she wakes, all night, and she can fall asleep in it. With
+two, name them `warm` and `cold` (`main@nightwarm`, `main@nightcold`): the glass picks the warm one
+when it's 70°F or warmer at your station and the cold one below, when she first puts them on, and
+keeps it until morning.
+
+1. **The outfit:** **New look**, *An outfit*, **She wears it on** *nights*. **Starts from** can be
+   another look: Genesis's night look starts from her plain look, so she's just herself, without her
+   motes. Plan Essentials and a dozen quiet moments as for any outfit.
+2. **Its asleep look:** **New look**, *Asleep*, **Starts from** the night outfit (`main@night`). The
+   new look is `asleep@night`.
+3. **Its sleep clips:** in the night outfit's look, the **Sleep** pack plans dozing off, two sleep
+   loops, waking and a yawn in it (`genesis_night-fallasleep`, `genesis_night-sleep`, ...).
+4. **The change into it:** on the Plan page, **Change of clothes** from the look she's usually in by
+   then (her evening dress) to the night look, and one back to her usual clothes for the morning.
+   Without one, she changes with a camera cut.
+
+Until it has its own asleep look, she wears it from 10 pm and changes back to her usual clothes to
+fall asleep.
+
+## A new picture for a look
+
+If a look came out wrong in every clip (Genesis's plain look is orange, from a golden-hour picture),
+give it a new picture: **New look**, *A new picture for a look she has*, choose the **Look**.
+**Starts from** is that look's own picture; the instruction asks Klein for natural, neutral colour.
+Pick a version, and every clip in the look is planned again from it. Fix its **subject** line too
+(say "clean neutral light", not "soft warm light"), then render the clips.
+
 ---
 
 ## Tips

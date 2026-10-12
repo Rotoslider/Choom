@@ -148,7 +148,8 @@ def do_picture(job):
     """Klein versions of a new look; they wait in her project's drafts until one is chosen."""
     a = job["args"]
     try:
-        names = pictures.run(a["choom"], a["look"], a["source"], a["prompt"], a.get("count", 3), log=lambda line: note(job, line))
+        names = pictures.run(a["choom"], a["look"], a["source"], a["prompt"], a.get("count", 3), log=lambda line: note(job, line),
+                             refs=a.get("refs", ()))
     except Exception:
         with editing(a["choom"]) as proj:
             proj.data.get("drafts", {}).get(a["look"], {})["status"] = "failed"

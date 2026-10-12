@@ -63,12 +63,14 @@ def unique_name(proj, name, numbered):
 
 def options(proj, look_id):
     """The library's actions for a look: [{pack, key, text, seconds, hands, name, have}], `have`
-    naming the clip she already has for it (any status but dropped)."""
+    naming the clip she already has for it (any status but dropped). A night outfit (she sleeps in
+    it) also gets the Sleep pack."""
     lib, kind = library(), look_kind(look_id)
+    kinds = {kind} | ({"night"} if kind == "outfit" and outfit_of(look_id).startswith("night") else set())
     packs = {p["id"]: p for p in lib["packs"]}
     out = []
     for a in lib["actions"]:
-        if kind not in packs[a["pack"]]["for"]:
+        if not kinds & set(packs[a["pack"]]["for"]):
             continue
         part = action_name(a, look_id)
         if not part:
@@ -86,7 +88,10 @@ def prompt_for(proj, start, end, text, seconds, ending=None):
     look = proj.looks[start]
     if ending is None:
         ending = look.get("ending", "") if start == end else TRANSITION_ENDING
-    return prompts.build(look["subject"], text, seconds, ending, look.get("keep", ""))
+    # The look's keep line (Genesis's motes stay on her) only if the look she ends in keeps it too: on
+    # the way to her plain or night look her motes go.
+    keep = look.get("keep", "") if look.get("keep") == proj.looks.get(end, {}).get("keep") else ""
+    return prompts.build(look["subject"], text, seconds, ending, keep)
 
 
 def add(proj, look_id, items):
@@ -131,3 +136,51 @@ def rewrite(proj, name, text=None, seconds=None):
         clip["frames"] = prompts.SECONDS[int(seconds)][0]
     clip["prompt"] = prompt_for(proj, clip["from"], clip["to"], clip["action"], clip["seconds"], clip.get("ending"))
     return prompts.lint(clip["prompt"], loop=clip["from"] == clip["to"])
+
+
+def add_change(proj, start, end, key, text, seconds=5):
+    """Plan a change of clothes on screen, from one of her waist-up looks to another in the same pose
+    (the burgundy dress to her night look, her night look back to her usual clothes). It's rendered
+    from the first look's picture to the second's, and the glass plays it instead of a camera cut.
+    Returns (name or None, message)."""
+    if start == end or base_of(start) != base_of(end) or base_of(start) not in ("main", "relaxed"):
+        return None, "a change goes between two of her waist-up looks in the same pose"
+    key = re.sub(r"[^a-z0-9]", "", (key or "").lower()) or "swap"
+    part = (f"{outfit_of(start)}-" if outfit_of(start) else "") + f"change_{outfit_of(end) or 'usual'}_{key}"
+    name = unique_name(proj, f"{proj.id}_{part}", True)
+    _, frm, to = roles(proj.id, name)
+    if (frm, to) != (start, end):  # Aloy's outfits are all hand-down: a change from her finger-up look can't be named
+        return None, f"the glass would read {name} as {frm} to {to}; choose looks in her home pose"
+    missing = [p for p in (start, end) if not proj.looks.get(p, {}).get("picture")]
+    if missing:
+        return None, f"{name}: needs a picture for the {' and '.join(missing)} look first"
+    seconds = int(seconds)
+    prompt = prompt_for(proj, start, end, text, seconds)
+    proj.add_clip(name, prompt=prompt, action=text, seconds=seconds, ending=None, frames=prompts.SECONDS[seconds][0],
+                  seed=next_seeds(1)[0], start=proj.looks[start]["picture"], end=proj.looks[end]["picture"], queue=None)
+    warnings = prompts.lint(prompt, loop=False)
+    return name, "; ".join(f"{w}: {why}" for w, why in warnings) or "ok"
+
+
+def refresh_prompts(proj, look_id):
+    """Rewrite the prompts of the look's planned clips (its subject, keep line or ending changed)."""
+    for c in proj.clips.values():
+        if c["status"] == "planned" and look_id in (c["from"], c["to"]) and c.get("action"):
+            c["prompt"] = prompt_for(proj, c["from"], c["to"], c["action"], c["seconds"], c.get("ending"))
+
+
+def repicture(proj, look_id):
+    """A look has a new picture: every clip that starts or ends in it is planned again from it, with a
+    new seed and its pictures and prompt from the looks (the old takes stay in each clip's history, and
+    a clip comes off the glass until its new take is kept). Returns (planned again, left alone)."""
+    names = [n for n, c in proj.clips.items() if look_id in (c["from"], c["to"]) and c["status"] != "dropped"]
+    redo = [n for n in names if proj.clips[n]["status"] != "queued" and proj.clips[n].get("action")]
+    for n, seed in zip(redo, next_seeds(len(redo))):
+        c = proj.clips[n]
+        if c["status"] == "planned":
+            c["seed"] = seed
+        else:
+            proj.reroll(n, seed)
+        c["start"], c["end"] = proj.looks[c["from"]]["picture"], proj.looks[c["to"]]["picture"]
+        c["prompt"] = prompt_for(proj, c["from"], c["to"], c["action"], c["seconds"], c.get("ending"))
+    return redo, [n for n in names if n not in redo]

@@ -120,8 +120,13 @@ never cuts to her full body, and her asked-for moves play in her usual full body
 Outfits: clips in other clothes live in poses of their own (`relaxed@evening`), made from a Klein edit
 of her clean picture. The outfit's name says when she wears it (`OUTFIT_RULES` in `living.js`):
 `cold…` under 45°F, `hot…` over 85°F, `evening…` from 6 to 11 pm, and `day…` outfits take turns with
-her usual clothes, a different one each day. She changes with a camera cut at a quiet moment, and back
-into her usual clothes before she sleeps. An outfit needs at least a base loop with the `talk` mood.
+her usual clothes, a different one each day, and `night…` from 10 pm until she wakes (all night, no
+visits; `nightwarm…` at 70°F or warmer, `nightcold…` below, chosen when she puts them on and kept
+until morning). She changes with a camera cut at a quiet moment, or a change clip made for that pair of looks
+(`<choom>_[<from>-]change_<to>_<what>`, `usual` for her usual clothes), and back into her usual clothes
+before she sleeps, unless a night outfit has its own asleep look (`asleep@night`, with sleep and wake
+clips named `<choom>_night-fallasleep` and so on): then she sleeps in it. Change clips never play to
+reach an expression or a move, only to change clothes. An outfit needs at least a base loop with the `talk` mood.
 So a dozen clips don't loop for hours, she wears an outfit (or another look) in visits: about 30 s per
 clip it has (3 to 15 minutes), then at least 25 minutes in her usual clothes, and an outfit for at
 most 2 minutes per clip a day. Kept in the kiosk's localStorage across relaunches. While he looks at

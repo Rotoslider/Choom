@@ -148,9 +148,21 @@ An outfit's name tells the glass when she wears it (`OUTFIT_RULES` in `living.js
 | `cold…` | under 45°F |
 | `hot…` | over 85°F |
 | `day…` | a different day outfit each day, taking turns with her usual clothes |
+| `night…` | from 10 pm until she wakes, all night; she sleeps in it if it has its own asleep look. `nightwarm…` when it's 70°F or warmer, `nightcold…` below, chosen when she puts them on |
 
 She wears an outfit in visits of about 30 seconds per clip it has, then goes back to her usual
-clothes for a while.
+clothes for a while (a night outfit stays on all night).
+
+**Starts from** can be any of her waist-up looks, an outfit too (Genesis's night look starts from her
+plain one, without her motes), or a picture from your computer. **A new picture for a look she has**
+replaces a look's picture, for a truer colour or a better likeness: every clip in that look is
+planned again from it, and the old takes stay in each clip's history. Its clips come off the glass
+until their new takes are kept.
+
+**Change of clothes** (Plan & render) is a clip from one look to another, rendered from the first
+look's picture to the second's (`genesis_eveningdress-change_night_slip`). The glass plays it instead
+of the camera cut when she changes between them. One motion in five to seven seconds works best, and
+a change by magic renders more reliably than clothes moved by hand.
 
 ### What the Chooms can ask for
 
