@@ -28,8 +28,10 @@ def library():
 
 
 def look_kind(look_id):
-    """Which packs suit a look: "outfit" for any look in other clothes, else its pose."""
-    return "outfit" if outfit_of(look_id) else base_of(look_id)
+    """Which packs suit a look: "outfit" for her waist-up looks in other clothes, else its pose (an
+    outfit's full body, full@dayspandex, gets the full-body packs)."""
+    base = base_of(look_id)
+    return "outfit" if outfit_of(look_id) and base != "full" else base
 
 
 def action_name(action, look_id):

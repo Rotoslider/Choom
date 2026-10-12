@@ -113,6 +113,9 @@ Poses: `main` (her picture), `relaxed` (Aloy with her hand down, reached by `low
 home pose, the raised finger comes up now and then while she talks), `asleep`, and `full` (full-body
 clips made from a full-body picture built from her reference sheet; reached and left with a quick
 camera-cut fade, no lip sync). About one quiet clip in fourteen cuts to a full-body one and back.
+An outfit can have its own full body (`full@dayspandex`, clips named `<choom>_dayspandex-full_sway`):
+in that outfit the glass cuts only to it, and a move she asks for plays there; an outfit without one
+never cuts to her full body, and her asked-for moves play in her usual full body.
 
 Outfits: clips in other clothes live in poses of their own (`relaxed@evening`), made from a Klein edit
 of her clean picture. The outfit's name says when she wears it (`OUTFIT_RULES` in `living.js`):

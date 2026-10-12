@@ -47,7 +47,7 @@ def dilate(mask, r):
 
 
 def loose(name, clip):
-    return clip["from"] == "full" or clip["from"] != clip["to"] or bool(BUSY.search(name))
+    return clip["from"].split("@")[0] == "full" or clip["from"] != clip["to"] or bool(BUSY.search(name))
 
 
 def measure(src, loop=True, lenient=False):

@@ -253,7 +253,7 @@ def main():
         first frame on the pixels that are her in both (a per-frame scale and offset), so changing
         clips never changes her depth. A full-body clip is framed differently: it lines up with its
         own first frame, and its depth range is mapped onto the main clip's."""
-        c["own"] = clip_role(cid, c["src"])[1] == "full"
+        c["own"] = clip_role(cid, c["src"])[1].split("@")[0] == "full"  # full, or full@<outfit>
         c_ref, c_mask = (c["raw"][0].astype(np.float32), unpack(c["packed"], 0, w)) if c["own"] else (ref, ref_mask)
         c["fit"] = []
         for i in range(c["frames"]):
@@ -325,7 +325,7 @@ def main():
         assert enc.wait() == 0, f"ffmpeg failed on {out.name}"
         part.replace(out)
         # Full-body clips play without lip sync (her face is too small to track, or turned away mid-twirl).
-        mouths, found = (np.zeros((0, 8)), 0) if start == "full" else mouth_track(landmarker, frames)
+        mouths, found = (np.zeros((0, 8)), 0) if start.split("@")[0] == "full" else mouth_track(landmarker, frames)
         del frames, depth
         meta_clips.append({"file": out.name, "frames": c["frames"], "source": name,
                            "moods": moods, "from": start, "to": end, "talk": "talk" in moods,

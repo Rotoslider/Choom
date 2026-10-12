@@ -230,8 +230,8 @@ $('#playerClose').addEventListener('click', () => $('#player').close());
 $('#player').addEventListener('close', () => { const v = $('#playerVideo'); v.pause(); v.removeAttribute('src'); v.load(); });
 
 // --- On the glass (drag and drop) -----------------------------------------------------------------
-// Her looks in a sensible order: main, relaxed, outfits, full body, asleep.
-const rank = (l) => (l === 'main' ? 0 : l === 'relaxed' ? 1 : l === 'full' ? 3 : l === 'asleep' ? 4 : 2);
+// Her looks in a sensible order: main, relaxed, outfits, full body (hers, then her outfits'), asleep.
+const rank = (l) => (l === 'main' ? 0 : l === 'relaxed' ? 1 : l === 'full' ? 3 : l.startsWith('full@') ? 3.5 : l === 'asleep' ? 4 : 2);
 const lookOrder = (looks) => Object.keys(looks).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
 
 function renderGlass() {
@@ -607,6 +607,8 @@ function kleinPrompt() {
   return `Change her clothes: she now wears ${wearing || '…'}. Keep everything else exactly the same: ${keep}, the lighting, the framing, and the pure black background.`;
 }
 function outfitLookId() {
+  // A full body started from an outfit is that outfit's own (full@dayspandex), played while she wears it.
+  if (outfitKind() === 'full') { const b = $('#outfitBase').value; return b.includes('@') ? `full@${b.split('@')[1]}` : 'full'; }
   if (outfitKind() !== 'outfit') return outfitKind();
   const name = $('#outfitName').value.toLowerCase().replace(/[^a-z0-9]/g, '');
   return `${$('#outfitBase').value}@${$('#outfitWhen').value}${name}`;
@@ -621,7 +623,8 @@ function updateOutfitForm() {
   $('#outfitLook').textContent = state.choom.looks[id]?.picture ? `she already has ${id}${kind === 'outfit' ? ': give it a name' : ''}` : `becomes the look ${id}`;
 }
 function renderOutfitForm() {
-  const bases = lookOrder(state.choom.looks).filter((l) => !l.includes('@') && !['full', 'asleep'].includes(l) && state.choom.looks[l].picture);
+  const full = outfitKind() === 'full';  // a full body can start from an outfit too
+  const bases = lookOrder(state.choom.looks).filter((l) => (full || !l.includes('@')) && !['full', 'asleep'].includes(l.split('@')[0]) && state.choom.looks[l].picture);
   const home = state.choom.sequence.length ? state.choom.clips[state.choom.sequence[0]].from : bases[0];
   const wardrobeBase = bases.find((l) => state.choom.looks[l].wardrobe) || home;
   const was = $('#outfitBase').value;
@@ -630,7 +633,7 @@ function renderOutfitForm() {
   updateOutfitForm();
 }
 ['outfitBase', 'outfitWhen', 'outfitName', 'outfitWearing'].forEach((id) => $(`#${id}`).addEventListener('input', updateOutfitForm));
-$('#outfitKind').addEventListener('input', () => { promptEdited = false; updateOutfitForm(); });
+$('#outfitKind').addEventListener('input', () => { promptEdited = false; renderOutfitForm(); });
 $('#outfitPrompt').addEventListener('input', () => { promptEdited = true; });
 $('#outfitMake').addEventListener('click', attempt(async () => {
   if (outfitKind() === 'outfit' && !$('#outfitWearing').value.trim() && !promptEdited) return toast('Say what she wears', true);

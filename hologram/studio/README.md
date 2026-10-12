@@ -26,7 +26,7 @@ stands in the glass in 3D, and her lips follow her voice over any clip she talks
 - **Looks.** A look is one picture of her:
   - her main pose (`main`)
   - Aloy's hand-down pose (`relaxed`)
-  - full body (`full`)
+  - full body (`full`), and an outfit's own full body (`full@dayspandex`)
   - asleep (`asleep`)
   - outfits (`main@evening`, `relaxed@cold`)
   - other looks (Genesis without her motes, `main@plain`)
@@ -132,7 +132,8 @@ Each look has its picture and three lines:
 - **Loop ending:** how she ends every loop.
 
 **New look** makes a new picture with Flux.2 Klein from one she has: an outfit, her full body, or her
-asleep. Klein makes a few versions and you pick one.
+asleep. Klein makes a few versions and you pick one. A full body started from an outfit is that
+outfit's own (`full@dayspandex`): the glass cuts to it only while she wears the outfit.
 
 | | |
 |:---:|:---:|

@@ -964,6 +964,10 @@ const FULL_IDLE_CHANCE = 0.07;
 // before she sleeps.
 const outfitOf = (pose) => pose.split('@')[1] || null;
 const basePose = (pose) => pose.split('@')[0];
+// Her whole figure: her usual full body, or an outfit's own (full@dayspandex), which the glass cuts
+// to only while she wears that outfit.
+const isFull = (pose) => basePose(pose) === 'full';
+const fullOf = (pose) => (outfitOf(pose) ? `full@${outfitOf(pose)}` : 'full');
 const OUTFIT_RULES = [
   [/^cold/, () => typeof weather.temperature === 'number' && weather.temperature < 45],  // °F
   [/^hot/, () => typeof weather.temperature === 'number' && weather.temperature > 85],
@@ -1140,7 +1144,7 @@ function nextClip(p, after) {
   const clips = p.alive.clips;
   let pose = after >= 0 && clips[after] ? poseTo(clips[after]) : 'main';
   // After a full-body move, cut back to the framing she was in.
-  if (pose === 'full') pose = p.cutFrom || 'main';
+  if (isFull(pose)) pose = p.cutFrom || 'main';
   const want = wantedMood(p);
   if (after >= 0 && clips[after]) noteWorn(p, poseTo(clips[after]), clips[after].frames / (p.alive.fps || 24) * 1000);
   // Time to change clothes (or back into her usual ones before sleep): a cut to her base loop in the
@@ -1202,7 +1206,9 @@ function nextClip(p, after) {
   if (p.moveWanted && (want === 'think' || want === 'idle')) {
     const asked = clips.map((c, k) => k).filter((k) => p.moveWanted.sources.has(clips[k].source));
     const here = asked.filter((k) => poseFrom(clips[k]) === pose);
-    const wide = asked.filter((k) => poseFrom(clips[k]) === 'full');
+    // Her whole figure in the clothes she has on, else in her usual ones.
+    const wideHere = asked.filter((k) => poseFrom(clips[k]) === fullOf(pose));
+    const wide = wideHere.length ? wideHere : asked.filter((k) => poseFrom(clips[k]) === 'full');
     const starts = new Set(asked.map((k) => poseFrom(clips[k])));
     const toward = clips.findIndex((c) => poseFrom(c) === pose && poseTo(c) !== pose && starts.has(poseTo(c)));
     if (!here.length && !wide.length && toward >= 0) return toward; // Aloy raises her hand first
@@ -1210,7 +1216,7 @@ function nextClip(p, after) {
     p.moveWanted = null;
     if (from.length) {
       const k = from[Math.floor(Math.random() * from.length)];
-      if (poseFrom(clips[k]) === 'full') p.cutFrom = pose; // back to this framing after it
+      if (isFull(poseFrom(clips[k]))) p.cutFrom = pose; // back to this framing after it
       post('glass', { choom: p.id, picked: clips[k].source });
       (p.moments ||= new Set()).add(k);
       return k;
@@ -1218,9 +1224,9 @@ function nextClip(p, after) {
   }
   // A selfie she just made: one of her "look at me" moves (via a pose change if needed).
   if (p.poseWanted && want !== 'listen' && want !== 'sleep') {
-    const full = clips.map((c, k) => k).filter((k) => poseFrom(clips[k]) === 'full' && clipMoods(clips[k]).includes('pose'));
-    const waistUp = clips.some((c) => clipMoods(c).includes('pose') && poseFrom(c) !== 'full');
-    if (full.length && pose !== 'full' && !outfitOf(pose) && (!waistUp || Math.random() < 0.65)) { // full-body (by a cut) two times in three
+    const full = clips.map((c, k) => k).filter((k) => poseFrom(clips[k]) === fullOf(pose) && clipMoods(clips[k]).includes('pose'));
+    const waistUp = clips.some((c) => clipMoods(c).includes('pose') && !isFull(poseFrom(c)));
+    if (full.length && !isFull(pose) && (!waistUp || Math.random() < 0.65)) { // full-body (by a cut) two times in three
       p.poseWanted = false;
       p.cutFrom = pose; // where to cut back to after the move
       const move = full[Math.floor(Math.random() * full.length)];
@@ -1263,10 +1269,10 @@ function nextClip(p, after) {
   }
   // Now and then while she's quiet, the glass cuts to her whole figure for a few seconds and back,
   // like a camera changing shots (her full-body quiet clips). Only the Choom on the glass, never on
-  // the stage, and not twice running.
-  const cameFromWide = after >= 0 && clips[after] && poseFrom(clips[after]) === 'full';
-  if (want === 'idle' && !stage.on && p === portraits[current] && !cameFromWide && !outfitOf(pose) && Math.random() < FULL_IDLE_CHANCE) {
-    const wide = clips.map((c, k) => k).filter((k) => poseFrom(clips[k]) === 'full' && clipMoods(clips[k]).includes('idle'));
+  // the stage, and not twice running. In an outfit, only to that outfit's own full body.
+  const cameFromWide = after >= 0 && clips[after] && isFull(poseFrom(clips[after]));
+  if (want === 'idle' && !stage.on && p === portraits[current] && !cameFromWide && Math.random() < FULL_IDLE_CHANCE) {
+    const wide = clips.map((c, k) => k).filter((k) => poseFrom(clips[k]) === fullOf(pose) && clipMoods(clips[k]).includes('idle'));
     if (wide.length) {
       p.cutFrom = pose;
       return wide[Math.floor(Math.random() * wide.length)];
@@ -1447,7 +1453,7 @@ function followAliveMouth(p) {
   const fu = frontMaterial.uniforms;
   // In a full-body move her face is small and turning: no lip sync there. Its track is empty, which
   // used to return before this and left the mouth on from the clip before (a mouth over a twirl).
-  fu.mouthOn.value = poseFrom(p.alive.clips[clip]) === 'full' || !m ? 0 : 1;
+  fu.mouthOn.value = isFull(poseFrom(p.alive.clips[clip])) || !m ? 0 : 1;
   if (!m) return;
   fu.mouthC.value.set(m[0], m[1]);
   fu.mouthSize.value.set(m[2], m[3], m[4]);
@@ -2373,7 +2379,7 @@ renderer.setAnimationLoop((now) => {
   updateParticles(paused ? 0 : dt, (1 + 1.5 * listenAmt + 1.4 * thinking + 2.5 * level + 4 * toolBoost) * (1 - 0.7 * sleepAmt));
   shared.time.value = simTime;
   // Her atom dims while she sleeps and steps aside in a full-body move (it's sized for her close-up).
-  const fullNow = curClip && poseFrom(curClip) === 'full' ? 1 : 0;
+  const fullNow = curClip && isFull(poseFrom(curClip)) ? 1 : 0;
   fullAmt += (fullNow - fullAmt) * Math.min(dt * 5, 1);
   if (orbGroup.visible) updateOrbs(presence * (1 - 0.6 * sleepAmt) * (1 - fullAmt));
   particleMaterial.uniforms.time.value = simTime;

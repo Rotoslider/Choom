@@ -19,7 +19,7 @@ import plan
 import prompts
 import render
 from config import CFG, CLIPS, PICTURES, PORTRAITS, SHEETS, WORKSPACE, ensure_workspace
-from project import STATUSES, Project, editing, next_seeds
+from project import STATUSES, Project, editing, next_seeds, outfit_of
 
 WEB = Path(__file__).resolve().parent / "web"
 NAME = re.compile(r"^[a-z0-9][a-z0-9_@\-]*$")
@@ -229,9 +229,15 @@ class Handler(BaseHTTPRequestHandler):
                 if kind not in pictures.KINDS:
                     return self.fail("a new look is an outfit, full body or asleep")
                 if kind == "outfit":
+                    if outfit_of(base):
+                        return self.fail("a new outfit starts from one of her usual looks")
                     if data["when"] not in pictures.WHEN:
                         return self.fail("an outfit is for cold, hot, evening or day")
                     look_id = f"{base}@{data['when']}{re.sub(r'[^a-z0-9]', '', data.get('name', '').lower())}"
+                elif kind == "full" and outfit_of(base):
+                    look_id = f"full@{outfit_of(base)}"  # that outfit's own full body
+                elif outfit_of(base):
+                    return self.fail("asleep is in her usual clothes: start from her main look")
                 else:
                     look_id = kind
                 if look_id in proj.looks and proj.looks[look_id].get("picture"):
@@ -249,7 +255,7 @@ class Handler(BaseHTTPRequestHandler):
                 draft = proj.data.get("drafts", {}).get(data["look"])
                 if not draft or data["picture"] not in draft["pictures"]:
                     return self.fail("no such draft picture")
-                pictures.adopt(proj, data["look"], data["picture"], draft.get("wearing"), draft.get("prompt"))
+                pictures.adopt(proj, data["look"], data["picture"], draft.get("wearing"), draft.get("prompt"), draft.get("base"))
             elif action == "discard":
                 proj.data.get("drafts", {}).pop(data["look"], None)
             elif action == "look":

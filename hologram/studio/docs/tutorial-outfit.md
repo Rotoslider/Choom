@@ -146,6 +146,22 @@ glass**:
 
 The outfit appears at its hour, in short visits.
 
+## 8. Her full body in the outfit (optional)
+
+On her usual clothes the glass cuts to her whole figure now and then, and her twirls and dances are
+full-body clips. An outfit can have its own full body, so a twirl she asks for while wearing it
+happens in it. Without one, the glass never cuts to her full body in this outfit, and a move she asks
+for plays in her usual clothes.
+
+1. In **Looks**, open **New look**, set **Kind** to *Full body*, and set **Starts from** to the outfit
+   (`main@dayspandex`). The new look is `full@dayspandex`.
+2. Under **What she wears below the waist**, say what Klein should show below the outfit's picture:
+   *white spandex leggings and white sneakers*. Her top is kept from the outfit's picture.
+3. Pick a version as before. Then plan a few clips from **Full body** in that look (a sway, a
+   stretch, a twirl), render, review and build them as for the outfit.
+
+The glass cuts to them only while she wears that outfit.
+
 ---
 
 ## Tips

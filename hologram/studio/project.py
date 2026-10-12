@@ -168,7 +168,7 @@ class Project:
         usual = closet.wearing(main)
         for lid in sorted(self.looks, key=lambda l: (base_of(l) != "main", l)):  # main@evening before relaxed@evening
             o, subject = outfit_of(lid), self.looks[lid].get("subject", "")
-            if o and o not in looks:
+            if o and o not in looks and base_of(lid) != "full":  # the outfit, not its full body
                 worn = closet.wearing(subject, main)
                 looks[o] = {"tags": self.closet_words(lid),  # her usual clothes, changed some other way: say how
                             "wearing": closet.changes(subject, main) if worn == usual else worn}

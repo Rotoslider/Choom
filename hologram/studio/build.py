@@ -14,7 +14,7 @@ import time
 import json
 
 from config import CLIPS, FORGE_PYTHON, HOLOGRAM, PICTURES, PORTRAITS, TOOLS, WAN2GP, WAN2GP_PYTHON
-from project import Project, editing
+from project import Project, base_of, editing
 
 
 def in_manifest(cid):
@@ -35,7 +35,7 @@ def problems(proj):
         out.append(f"no clip file for {', '.join(missing[:5])}" + (" ..." if len(missing) > 5 else ""))
     looks = {proj.clips[n]["from"] for n in proj.sequence if n in proj.clips}
     talkers = {proj.clips[n]["from"] for n in proj.sequence if n in proj.clips and "talk" in proj.clips[n]["moods"]}
-    for look in sorted(looks - talkers - {"full", "asleep"}):
+    for look in sorted(l for l in looks - talkers if base_of(l) not in ("full", "asleep")):
         out.append(f"the {look} look has no clip she can talk over (its base loop)")
     return out
 

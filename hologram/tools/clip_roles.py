@@ -119,8 +119,8 @@ KINDS = {
 
 def clip_role(cid, src):
     """(moods, pose it starts in, pose it ends in) from the clip's name, <choom>_[<outfit>-]<action>.
-    Clips in other clothes (evening-relaxed, cold-relaxed_glance) live in poses of their own
-    (relaxed@evening); the page changes her clothes with a camera cut."""
+    Clips in other clothes (evening-relaxed, cold-relaxed_glance, dayspandex-full_sway) live in poses
+    of their own (relaxed@evening, full@dayspandex); the page changes her clothes with a camera cut."""
     action = Path(src).stem.removeprefix(f"{cid}_")
     outfit = None
     if "-" in action:
@@ -130,5 +130,5 @@ def clip_role(cid, src):
     if action in ("fallasleep", "wake") and cid in AWAKE_POSE:
         start, end = [AWAKE_POSE[cid] if pose == "main" else pose for pose in (start, end)]
     if outfit:
-        start, end = [f"{pose}@{outfit}" if pose in ("main", "relaxed") else pose for pose in (start, end)]
+        start, end = [f"{pose}@{outfit}" if pose in ("main", "relaxed", "full") else pose for pose in (start, end)]
     return moods, start, end
