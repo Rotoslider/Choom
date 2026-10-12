@@ -1038,16 +1038,21 @@ function chosenOutfit(p) {
 }
 // The outfits she can wear: those with a loop she can talk over.
 const wearable = (p) => [...new Set(p.alive.clips.filter((c) => clipMoods(c).includes('talk')).map((c) => outfitOf(poseFrom(c))).filter(Boolean))];
-// Her night clothes, if she can sleep in them: their own asleep look (asleep@nightcold) to sleep and wake in.
+// Night clothes she can sleep in: their own asleep look (asleep@nightcold) to sleep and wake in.
+const canSleepIn = (p, o) => ['sleep', 'wake'].every((mood) => p.alive.clips.some((c) => clipMoods(c).includes(mood) && poseFrom(c) === `asleep@${o}`));
 function bedOutfit(p) {
   const o = nightOutfit(p, wearable(p));
-  const has = (mood) => p.alive.clips.some((c) => clipMoods(c).includes(mood) && poseFrom(c) === `asleep@${o}`);
-  return o && has('sleep') && has('wake') ? o : null;
+  return o && canSleepIn(p, o) ? o : null;
 }
 function wantedOutfit(p, want) {
   if (want === 'sleep') {
-    const w = wardrobe(p);
+    const w = wardrobe(p), chosen = w.chosen?.o;
     if (w.chosen) { w.chosen = null; saveWardrobe(p); }
+    // Night clothes she put on herself (glass_wear) stay on to sleep in, and until morning.
+    if (chosen && /^night/.test(chosen) && canSleepIn(p, chosen)) {
+      p.nightPick = { o: chosen, until: performance.now() + msUntilHour(SLEEP_UNTIL) };
+      return chosen;
+    }
     return bedOutfit(p);
   }
   const chosen = chosenOutfit(p);

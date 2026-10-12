@@ -30,7 +30,9 @@ GARMENTS = {
     "pants": {"pants", "trousers", "slacks", "leggings"},
     "skirt": {"skirt"},
     "shorts": {"shorts"},
-    "pajamas": {"pajamas", "pyjamas", "pjs", "nightgown", "nightie", "sleepwear"},
+    "pajamas": {"pajamas", "pajama", "pyjamas", "pjs", "jammies", "nightgown", "nightie", "nightdress", "nightshirt",
+                "sleepwear", "nightwear"},
+    "lingerie": {"lingerie", "teddy", "negligee", "babydoll", "bodysuit", "chemise"},
     "swimsuit": {"swimsuit", "bikini", "swimwear"},
     "overalls": {"overalls", "dungarees"},
     "robe": {"robe", "kimono"},
@@ -59,7 +61,9 @@ STOP = {"a", "an", "the", "my", "your", "her", "some", "on", "in", "into", "with
         "outfit", "clothes", "please", "little", "i", "want", "to", "me", "something", "one", "that", "this", "for",
         "do", "of", "and", "again", "now", "bit", "quick", "just", "go", "get", "dressed"}
 # An outfit's name says when she wears it (living.js OUTFIT_RULES); the rest is its own name.
-WHEN = ("evening", "cold", "hot", "day")
+WHEN = ("evening", "cold", "hot", "day", "night")
+# Asking for something to sleep in finds her night clothes (their name starts with night).
+NIGHT_WORDS = {"night", "nighttime", "bed", "bedtime", "sleep", "sleeping"}
 
 # Clip actions a Choom may ask for even though they aren't selfie moves or full-body clips.
 MOVE_WORDS = {"dance", "groove", "twirl", "spin", "wave", "kiss", "blowkiss", "wink", "curtsy", "bow", "stretch",
@@ -108,6 +112,8 @@ def canon(tokens):
     out = set()
     for w in tokens:
         out.add(w)
+        if w in NIGHT_WORDS:
+            out.add("night")
         if w in GARMENT_OF:
             out.add(GARMENT_OF[w])
         if w in COLOR_OF:
@@ -127,8 +133,10 @@ def wearing(subject, main_subject=""):
     """What she wears in a look, from its subject line: "a long burgundy dress with thin straps". A
     look without a "wearing" phrase (Genesis without her motes) is the part of its subject that isn't
     in her main one: "natural skin, a delicate necklace and a dark top with thin straps"."""
-    m = re.search(r"\bwearing ([^,]+)", subject or "")
-    return m.group(1).strip() if m else changes(subject, main_subject)
+    # Up to where the scene starts (", against a plain pure black background", ", glows softly"), not the
+    # first comma: "a long, soft ivory cotton nightgown" came back as "a long".
+    m = re.search(r"\bwearing (.+?)(?:, (?:glows|softly|against|in clean|in soft|her |standing|holding)|$)", subject or "")
+    return m.group(1).strip().rstrip(",. ") if m else changes(subject, main_subject)
 
 
 def changes(subject, main_subject):
@@ -148,6 +156,8 @@ def default_tags(look_id, subject, main_subject=""):
     tags += [GARMENT_OF[w] for w in tokens if w in GARMENT_OF] + [COLOR_OF[w] for w in tokens if w in COLOR_OF]
     outfit = look_id.split("@")[1] if "@" in look_id else look_id
     tags += [w for w in name_words(outfit) if w]
+    if outfit.startswith("night"):
+        tags.append("pajamas")  # "my pajamas" finds them, whatever they are (Eve's are a lace teddy)
     return sorted(set(tags))
 
 
@@ -218,9 +228,10 @@ def match_move(request, available):
     return [(w, srcs) for s, w, srcs in scored if s == best]
 
 
-def match_outfit(request, available):
+def match_outfit(request, available, warm=None):
     """An outfit for a request: ("usual", None) for her usual clothes, (name, outfit), or None.
-    A garment named must be in the outfit; colours and other words break ties; a tie is a coin toss."""
+    A garment named must be in the outfit; colours and other words break ties; a tie between her warm
+    and cold night clothes goes by the weather (`warm`: 70°F or more), any other tie is a coin toss."""
     asked = canon(words(request))
     if asked & USUAL:
         return ("usual", None)
@@ -237,7 +248,10 @@ def match_outfit(request, available):
     if not scored:
         return None
     best = max(s for s, _ in scored)
-    name = random.choice([n for s, n in scored if s == best])
+    tied = [n for s, n in scored if s == best]
+    if warm is not None:
+        tied = [n for n in tied if ("warm" if warm else "cold") in n] or tied
+    name = random.choice(tied)
     return (name, available[name])
 
 

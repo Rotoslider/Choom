@@ -489,7 +489,8 @@ def glass_answer(request):
         broadcast({"type": "glass", "choom": cid, "move": sorted({s for _, srcs in found for s in srcs}), "name": word})
         return {"ok": True, "done": True, "message": f"On the glass you {closet.move_name(word)} at your next quiet moment."}
     if op == "wear":
-        match = closet.match_outfit(what, outfits)
+        t = (latest.get("weather") or {}).get("temperature")
+        match = closet.match_outfit(what, outfits, warm=t >= 70 if isinstance(t, (int, float)) else None)
         if match is None:
             closet.add_wish(PORTRAITS, cid, "wear", what)
             return {"ok": True, "done": False,
