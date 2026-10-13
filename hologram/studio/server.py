@@ -26,6 +26,12 @@ NAME = re.compile(r"^[a-z0-9][a-z0-9_@\-]*$")
 FILE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_@\-.]*$")
 
 
+def built_clips(cid):
+    """The clips her glass plays now: her alive.json, as the last build left it."""
+    alive = PORTRAITS / cid / "alive.json"
+    return [c["source"].removesuffix(".mp4") for c in json.loads(alive.read_text())["clips"]] if alive.exists() else []
+
+
 def details(proj):
     """Her project plus what the page shows about it: per look, the clips on the glass and how many
     minutes of distinct quiet moments she has before one repeats."""
@@ -37,8 +43,7 @@ def details(proj):
         looks[look] = {"onGlass": len(on), "quiet": len(quiet), "minutes": round(seconds / 60, 1)}
     planned = [c for c in proj.clips.values() if c["status"] == "planned"]
     # What the glass shows now (her alive.json) against her sequence: changes not built yet.
-    alive = PORTRAITS / proj.id / "alive.json"
-    built = [c["source"].removesuffix(".mp4") for c in json.loads(alive.read_text())["clips"]] if alive.exists() else []
+    built = built_clips(proj.id)
     glass = {"added": [n for n in proj.sequence if n not in built], "removed": [n for n in built if n not in proj.sequence]}
     closet = {look: proj.closet_words(look) for look in proj.looks if "@" in look}
     return {**proj.data, "stats": looks, "problems": build.problems(proj), "glass": glass, "inManifest": build.in_manifest(proj.id),
@@ -128,7 +133,7 @@ class Handler(BaseHTTPRequestHandler):
         if parts[:2] == ["api", "chooms"]:
             tint = colors()
             chooms = [Project.load(c) for c in Project.ids()]
-            return self.send_json({"chooms": [{**p.summary(), "color": tint.get(p.id) or p.data.get("color")} for p in chooms],
+            return self.send_json({"chooms": [{**p.summary(), "onGlass": len(built_clips(p.id)), "color": tint.get(p.id) or p.data.get("color")} for p in chooms],
                                    "workspace": str(WORKSPACE), "minutesPerClip": CFG["minutes_per_clip"],
                                    "cleanPrompt": pictures.CLEAN_PROMPT})
         if parts[:2] == ["api", "choom"] and len(parts) == 3 and NAME.match(parts[2]):

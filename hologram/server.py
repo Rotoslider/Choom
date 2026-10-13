@@ -330,6 +330,8 @@ image_cache = {}  # the last few pictures fetched for the page: id -> (content t
 WELCOME_AFTER_S = float(os.environ.get("HOLOGRAM_WELCOME_AFTER_S", 20 * 60))  # away at least this long
 WELCOME_EVERY_S = 2 * 60 * 60    # at most one welcome back every two hours
 WELCOME_HOURS = (7, 23)          # not at night
+MORNING = (5, 4 * 60 * 60)       # but back after a night away (4 h or more) counts from 5 am: up at
+                                 # 6:43 after 518 minutes away went unwelcomed as "night" (2026-10-13)
 INPUT_COUNTS_S = 5 * 60          # keyboard and mouse count as him only this long after the camera saw him
 last_conversation = [0.0]        # when Donny last typed, talked or was answered (from the Choom feed)
 chat_turns = {}                  # (Choom, chat or room) -> when her turn there started
@@ -402,7 +404,8 @@ def welcome_watch():
                 places = []
                 continue
             hour = time.localtime().tm_hour
-            why = ("night" if not WELCOME_HOURS[0] <= hour < WELCOME_HOURS[1] else
+            morning = MORNING[0] <= hour < WELCOME_HOURS[0] and away >= MORNING[1]
+            why = ("night" if not (WELCOME_HOURS[0] <= hour < WELCOME_HOURS[1] or morning) else
                    "welcomed lately" if time.time() - last_welcome < WELCOME_EVERY_S else
                    "already talking" if time.time() - last_conversation[0] < 120 else
                    "in bed" if presence.get("bed") is True else None)

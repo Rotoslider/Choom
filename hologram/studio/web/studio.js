@@ -87,6 +87,10 @@ async function openChoom(cid, keepScroll = false) {
   state.choom = await api(`/api/choom/${cid}`);
   document.documentElement.style.setProperty('--tint', state.choom.color || '#9fb4ff');
   $$('#chooms button').forEach((b) => b.classList.toggle('on', b.dataset.id === cid));
+  // Her tab counts what her glass plays now (it changes when a build lands, not when clips are placed).
+  const { sequence, glass } = state.choom;
+  const tab = $(`#chooms button[data-id="${cid}"] small`);
+  if (tab) tab.textContent = `${sequence.length - glass.added.length + glass.removed.length}`;
   $('#intro').hidden = true;
   $('#choom').hidden = false;
   render();
