@@ -535,11 +535,14 @@ function plannedItem(name) {
   const c = state.choom.clips[name];
   const lint = lintOf(c.prompt, c.from === c.to);
   const text = el('textarea', { rows: 3, value: c.action || '' });
+  // A re-roll can be longer too (a full turn that came out rushed in five seconds).
+  const length = el('select', { tip: 'How long the clip is; longer clips take longer to render' },
+    ...[5, 6, 7, 10, 12, 15].map((s) => el('option', { value: s, selected: s === secondsOf(c) }, `${s} s`)));
   const editing = el('div', { hidden: true }, text,
-    el('div', { className: 'row' },
+    el('div', { className: 'row' }, length,
       el('button', {
         className: 'ghost', type: 'button', onclick: attempt(async () => {
-          state.choom = (await api(`/api/choom/${state.cid}/rewrite`, { name, text: text.value })).choom;
+          state.choom = (await api(`/api/choom/${state.cid}/rewrite`, { name, text: text.value, seconds: Number(length.value) })).choom;
           renderPlanned();
         }),
       }, 'Save')));
@@ -550,7 +553,7 @@ function plannedItem(name) {
     ...lint.map((w) => el('div', { className: 'lint' }, w)),
     editing,
     el('div', { className: 'row' },
-      el('button', { className: 'ghost', type: 'button', onclick: () => { editing.hidden = !editing.hidden; }, tip: 'Change what she does; the prompt is rebuilt from her look' }, 'Edit'),
+      el('button', { className: 'ghost', type: 'button', onclick: () => { editing.hidden = !editing.hidden; }, tip: 'Change what she does or how long it is; the prompt is rebuilt from her look' }, 'Edit'),
       el('button', {
         className: 'ghost', type: 'button', onclick: attempt(async () => {
           state.choom = (await api(`/api/choom/${state.cid}/unplan`, { names: [name] })).choom;
