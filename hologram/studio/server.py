@@ -141,7 +141,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"packs": plan.library()["packs"]})
         if parts[:2] == ["api", "jobs"]:
             with jobs.lock:
-                return self.send_json({"jobs": jobs.jobs[-40:]})
+                return self.send_json({"jobs": jobs.recent(40)})
         return self.send_error(404)
 
     # --- POST ----------------------------------------------------------------------------------

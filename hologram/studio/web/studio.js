@@ -783,7 +783,9 @@ async function pollJobs() {
 setInterval(pollJobs, 8000);
 
 function renderJobs() {
-  $('#jobsList').replaceChildren(...[...state.jobs].reverse().slice(0, 15).map((j) => {
+  const newest = [...state.jobs].reverse();
+  const live = newest.filter((j) => ['waiting', 'running'].includes(j.status));  // a long render stays on top of its reviews
+  $('#jobsList').replaceChildren(...[...live, ...newest.filter((j) => !live.includes(j))].slice(0, 15).map((j) => {
     const p = j.progress || {};
     const pct = p.total ? Math.round(100 * p.done / p.total) : 0;
     const what = j.kind === 'render' ? `${j.args.clips} clips (${j.args.queue})` : j.args.choom || '';

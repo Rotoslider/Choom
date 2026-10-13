@@ -33,9 +33,17 @@ def load():
     jobs = json.loads(JOBS_FILE.read_text()) if JOBS_FILE.exists() else []
 
 
+def recent(n):
+    """The last n jobs, and every job still waiting or running however far back it is: a long render
+    lands a review job per clip, which pushed it (and the renders waiting for tonight) out of the
+    last 40 the page asks for, and would have dropped them from the file."""
+    last = {j["id"] for j in jobs[-n:]}
+    return [j for j in jobs if j["id"] in last or j["status"] in ("waiting", "running")]
+
+
 def save():
     part = JOBS_FILE.with_suffix(".part")
-    part.write_text(json.dumps(jobs[-200:], indent=1))
+    part.write_text(json.dumps(recent(200), indent=1))
     os.replace(part, JOBS_FILE)
 
 
