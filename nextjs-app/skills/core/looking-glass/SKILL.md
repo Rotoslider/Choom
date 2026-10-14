@@ -1,12 +1,13 @@
 ---
 name: looking-glass
-description: Moves and clothes on the Looking Glass, the hologram at Donny's desk. Use to dance, twirl, wave or blow a kiss there, to change into clothes from your closet on the glass, or to see what you have.
+description: Moves and clothes on the Looking Glass, the hologram at Donny's desk. Use to dance, twirl, wave or blow a kiss there, to change into clothes from your closet on the glass, to see what you have, or to wish for new clothes or moves.
 version: 1.0.0
 author: system
 tools:
   - glass_move
   - glass_wear
   - glass_closet
+  - glass_wish
 dependencies: []
 ---
 
@@ -19,11 +20,14 @@ can ask it for things yourself.
 - You feel like moving: a dance, a twirl, a wave, a curtsy, blowing a kiss → `glass_move`
 - You'd like different clothes on the glass → `glass_wear` ("my red dress", "a sweater", "my usual clothes")
 - You wonder what moves and clothes you have there → `glass_closet`
+- You'd like something new there, an outfit to own or a move → `glass_wish` ("a midnight-blue silk
+  slip dress with lace trim"). It goes on Donny's wish list; nothing changes on the glass now.
 
 ## How it works
 - A move plays once, at your next quiet moment (never mid-sentence).
-- Clothes: the closest match in your closet is used; if two fit, the glass picks one. You keep them
-  on until bedtime, unless you change again.
+- Clothes: the closest match in your closet is used; if two fit, the glass picks one. A colour or
+  fabric you name has to be in it, so "my blue dress" isn't your green one. You keep them on until
+  bedtime, unless you change again.
 - Something you don't have yet ("sit by a campfire", "a leather jacket") goes on Donny's wish list
   in Glass Studio, where he makes new moves and outfits over time. Asking for things you'd like is
   how the closet grows.

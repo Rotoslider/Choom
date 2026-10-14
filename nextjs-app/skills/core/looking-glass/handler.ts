@@ -2,7 +2,7 @@ import { BaseSkillHandler, SkillHandlerContext } from '@/lib/skill-handler';
 import type { ToolCall, ToolResult } from '@/lib/types';
 import { askGlass, type GlassAnswer } from '@/lib/glass-closet';
 
-const TOOL_NAMES = new Set(['glass_move', 'glass_wear', 'glass_closet']);
+const TOOL_NAMES = new Set(['glass_move', 'glass_wear', 'glass_closet', 'glass_wish']);
 
 export default class LookingGlassHandler extends BaseSkillHandler {
   canHandle(toolName: string): boolean {
@@ -23,6 +23,9 @@ export default class LookingGlassHandler extends BaseSkillHandler {
         break;
       case 'glass_closet':
         answer = await askGlass(choom, 'closet');
+        break;
+      case 'glass_wish':
+        answer = await askGlass(choom, 'wish', arg('wish'), arg('kind') === 'move' ? 'move' : 'wear');
         break;
       default:
         return this.error(toolCall, `Unknown glass tool: ${toolCall.name}`);

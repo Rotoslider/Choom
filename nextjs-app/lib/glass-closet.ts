@@ -4,12 +4,13 @@
  * hologram's feed as glass_request events; the hologram's server on the NUC matches them against
  * what is built on the glass (hologram/tools/closet.py), tells the page what to play or wear, and
  * posts the answer back to /api/hologram/glass/result, the way the glass camera's answers come back.
- * Something a Choom asks for and hasn't got goes on her wish list in Glass Studio.
+ * Something a Choom asks for and hasn't got goes on her wish list in Glass Studio, and so does a wish
+ * she makes outright (op wish, with kind wear or move), which changes nothing on the glass.
  */
 import { randomUUID } from 'crypto';
 import { hologramConnected, publishHologram } from '@/lib/hologram-bus';
 
-export type GlassOp = 'closet' | 'move' | 'wear';
+export type GlassOp = 'closet' | 'move' | 'wear' | 'wish';
 
 export interface GlassAnswer {
   ok: boolean;
@@ -26,7 +27,7 @@ const store = globalThis as unknown as { __choomGlassRequests?: Map<string, Pend
 const pending = (store.__choomGlassRequests ??= new Map<string, Pending>());
 
 /** Ask the glass; resolves with its answer, or ok:false if the glass isn't running or doesn't answer. */
-export function askGlass(choom: string, op: GlassOp, what = '', timeoutMs = 8_000): Promise<GlassAnswer> {
+export function askGlass(choom: string, op: GlassOp, what = '', kind?: 'wear' | 'move', timeoutMs = 8_000): Promise<GlassAnswer> {
   if (!hologramConnected()) return Promise.resolve({ ok: false, error: 'The Looking Glass (the hologram on the NUC) is not running right now.' });
   const id = randomUUID();
   return new Promise((resolve) => {
@@ -35,7 +36,7 @@ export function askGlass(choom: string, op: GlassOp, what = '', timeoutMs = 8_00
       resolve({ ok: false, error: 'The Looking Glass did not answer in time.' });
     }, timeoutMs);
     pending.set(id, { resolve, timer });
-    publishHologram({ type: 'glass_request', id, choom, op, what });
+    publishHologram({ type: 'glass_request', id, choom, op, what, ...(kind ? { kind } : {}) });
   });
 }
 
