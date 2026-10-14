@@ -28,7 +28,7 @@ app: listening, thinking, using tools, sleeping at night.
 - **Selfies.** A selfie she makes comes with a "look at me" move, sometimes a full-body twirl.
 - **Outfits.** Clothes by the hour and the weather (Aloy: a sweater in the evening, a jacket when
   it's cold), changed with a camera cut.
-- **Group stage.** In a group room all four stand together, the speaker in front.
+- **Group stage.** In a group room the Chooms in it stand together (two to four), the speaker in front.
 - **Days and nights.** She dozes off late at night and wakes in the morning; with Home Assistant she
   greets you when you get home or sit down, and sleeps when you go to bed. Wind, rain and snow
   outside show in the glass.

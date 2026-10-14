@@ -1497,9 +1497,10 @@ function followAliveMouth(p) {
 }
 
 // ---- The group stage -------------------------------------------------------------------------
-// When the Chooms talk in a group room, all four stand in the glass: whoever is talking in front
-// (the main portrait, with her voice, mouth, particles and name), her sisters smaller behind her and
-// turned toward her. When the turn passes, the two trade places: the new speaker steps forward and
+// When the Chooms talk in a group room, the ones in that room stand in the glass (two to four; all
+// four when the room isn't known, as for "OK Chooms"): whoever is talking in front (the main
+// portrait, with her voice, mouth, particles and name), her sisters smaller behind her and turned
+// toward her. When the turn passes, the two trade places: the new speaker steps forward and
 // the last one steps back into the spot she left. The stage stays up while the room talks and folds
 // back to the one speaker a few minutes after it goes quiet, or as soon as Donny talks to one of
 // them on her own.
@@ -1509,8 +1510,11 @@ const STAGE_BACK = [
   { x: 0, y: 0.42, z: -0.18, s: 0.36 },
   { x: 0.47, y: 0.16, z: -0.1, s: 0.42 },
 ];
+// The places behind her, by how many sisters there are; a sister keeps her place when another joins.
+const STAGE_BACKS = { 1: [STAGE_BACK[0]], 2: [STAGE_BACK[0], STAGE_BACK[2]], 3: STAGE_BACK };
 const STAGE_LINGER_MS = 3 * 60 * 1000;
-const stage = { on: false, until: 0, mix: 0, place: [], shown: [], slots: [] };
+// members: the Chooms in the room (portrait indices), or null for all four.
+const stage = { on: false, until: 0, mix: 0, place: [], shown: [], slots: [], members: null };
 
 function stageSlot(j) {
   if (!stage.slots[j]) {
@@ -1540,11 +1544,49 @@ function bindStageSlot(j) {
   if (p.alive) u.texSize.value.set(p.alive.texSize[0], p.alive.texSize[1]);
 }
 
-// The room starts talking: everyone takes a place, the speaker (index i) in front.
-function stageEnter(i) {
+// The Chooms in a room, from a group turn's member names (the Choom app sends them): the speaker
+// always, and null (all four) when the event doesn't say.
+function roomMembers(ev, i) {
+  if (!Array.isArray(ev.room)) return null;
+  const members = new Set(ev.room.map(choomIndex).filter((k) => k >= 0));
+  if (i >= 0) members.add(i);
+  return members.size ? members : null;
+}
+
+// Who stands where: the one in front, and the others in the room behind her, each keeping her place
+// when she can. A Choom not in the room has none, and isn't drawn.
+function stageArrange(front) {
+  const back = portraits.map((q, k) => k).filter((k) => k !== front && (!stage.members || stage.members.has(k)));
+  const free = [...(STAGE_BACKS[back.length] || [])];
+  const kept = back.filter((k) => {
+    const n = free.indexOf(stage.place[k]);
+    if (n >= 0) free.splice(n, 1);
+    return n >= 0;
+  });
+  portraits.forEach((q, k) => {
+    if (k === front || kept.includes(k)) return;
+    stage.place[k] = back.includes(k) ? free.shift() : null;
+    if (stage.place[k]) {
+      bindStageSlot(k);
+      if (q.players && q.alive) aliveStart(q);
+    }
+  });
+  stage.place[front] = STAGE_FRONT;
+}
+
+// The room starts talking: the Chooms in it take a place, the speaker (index i) in front.
+function stageEnter(i, members = null) {
   stage.until = performance.now() + STAGE_LINGER_MS;
-  if (stage.on) return;
+  if (stage.on) {
+    // Already up ("OK Chooms" shows all four): the room's turn says who's in it.
+    if (members && [...members].sort().join() !== [...(stage.members || [])].sort().join()) {
+      stage.members = members;
+      stageArrange(current);
+    }
+    return;
+  }
   stage.on = true;
+  stage.members = members;
   const front = i >= 0 ? i : current;
   // The one in front is the one on the glass (drawn last, over her sisters): Genesis stayed "on the
   // glass" from a back place while Optic stood in front, and was drawn over her.
@@ -1557,9 +1599,10 @@ function stageEnter(i) {
       post('choom', { choom: portraits[front].name, stage: true });
     }
   }
-  portraits.map((q, k) => k).filter((k) => k !== front).forEach((k, n) => { stage.place[k] = STAGE_BACK[n]; });
-  stage.place[front] = STAGE_FRONT;
+  stage.place = [];
+  stageArrange(front);
   portraits.forEach((q, k) => {
+    if (!stage.place[k]) return;
     if (stage.mix === 0) stage.shown[k] = { ...stage.place[k] };
     bindStageSlot(k);
     if (q.players && q.alive) aliveStart(q);
@@ -1598,7 +1641,12 @@ function updateStage(dt) {
   const front = stage.shown[current] || STAGE_FRONT;
   portraits.forEach((q, j) => {
     const place = stage.place[j];
-    if (!place) return;
+    if (!place) {
+      if (stage.slots[j]) stage.slots[j].mesh.visible = false;
+      if (j !== current && stage.shown[j] && portraits[j].players) for (const pl of portraits[j].players) pl.video.pause();
+      delete stage.shown[j];
+      return;
+    }
     const at = (stage.shown[j] ||= { ...place });
     for (const key of ['x', 'y', 'z', 's']) at[key] += (place[key] - at[key]) * k;
     const slot = stage.slots[j];
@@ -1620,13 +1668,16 @@ function updateStage(dt) {
 function switchTo(i, force = false) {
   const next = (i + portraits.length) % portraits.length;
   if (next === current && phase !== 'out' && !force) return;
-  // On the stage the turn passes without a fade: the two trade places.
+  // On the stage the turn passes without a fade: the two trade places. A Choom who isn't in the room
+  // (a 1:1 reply while it talks) joins it; one who isn't in it steps out when she leaves the front.
   if (stage.on && stage.mix >= 1 && phase === 'idle' && next !== current) {
     const last = current;
+    stage.members?.add(next);
     stage.place[last] = stage.place[next];
     stage.place[next] = STAGE_FRONT;
     current = next;
-    bindStageSlot(last);
+    stageArrange(next);
+    if (stage.place[last]) bindStageSlot(last);
     applyPortrait(next);
     labelT = 0;
     post('choom', { choom: portraits[next].name, stage: true });
@@ -1693,7 +1744,7 @@ function onControl(ev) {
   if (typeof ev.jaw === 'number' || ev.jaw === null) debugJaw = ev.jaw; // hold the mouth open this far (null: off)
   if (ev.presence && typeof ev.presence === 'object') onPresence(ev.presence); // debug: pretend presence
   if (typeof ev.picture === 'string') showPicture(ev.picture, ev.kind || 'picture', portraits[current]); // debug: a gallery image id
-  if (ev.stage === true) stageEnter(current); // debug: the group stage
+  if (ev.stage === true) stageEnter(current, Array.isArray(ev.room) ? roomMembers(ev, current) : null); // debug: the group stage (room: names)
   if (ev.stage === false) stageExit();
   if (typeof ev.clip === 'number' && portraits[current].players) { // debug: jump to a moving relief clip
     const p = portraits[current];
@@ -2098,7 +2149,7 @@ function onChoomEvent(ev) {
       break;
     case 'turn_start':
       appListening = false; // he sent it: her turn now
-      if (ev.source === 'group') stageEnter(i);
+      if (ev.source === 'group') stageEnter(i, roomMembers(ev, i));
       else if (ev.source === 'chat' && !roomActive()) stageExit(); // a 1:1 reply mid-room comes to the front instead
       // What he just said: she reacts to its feeling before she starts thinking it over.
       // A chat turn is Donny talking only if he typed or used the mic in that chat just before;
@@ -2335,12 +2386,14 @@ renderer.setAnimationLoop((now) => {
     if (phaseT >= 0.45) {
       // Faded over to another Choom while the stage comes up: she takes the front, the last one her spot.
       if (stage.on && stage.place[pending] !== STAGE_FRONT) {
+        stage.members?.add(pending);
         stage.place[current] = stage.place[pending];
         stage.place[pending] = STAGE_FRONT;
         stage.shown[pending] = { ...STAGE_FRONT };
       }
       current = pending;
       pending = null;
+      if (stage.on) stageArrange(current);
       applyPortrait(current);
       phase = 'in';
       phaseT = 0;
