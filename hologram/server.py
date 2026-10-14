@@ -231,8 +231,14 @@ def follow_choom():
                         wake_screen()
                     elif event.get("type") == "listening" and event.get("listening"):
                         wake_screen()  # Donny started typing or talking to them
-                    if event.get("source") in ("chat", "group", "mic", "tower") or event.get("type") == "listening":
-                        last_conversation[0] = time.time()
+                    source = event.get("source")
+                    if source == "heartbeat" and event.get("chatId"):
+                        autonomous_chats.add(event["chatId"])
+                    if (source in ("mic", "tower") or event.get("type") == "listening"
+                            or (source == "chat" and event.get("chatId") not in autonomous_chats)):
+                        last_donny[0] = last_conversation[0] = time.time()
+                    elif source == "group" and time.time() - last_donny[0] < DONNY_IN_ROOM_S:
+                        last_conversation[0] = time.time()  # a room he's part of, not them talking among themselves
                     # Which Chooms are mid-turn in a conversation (not a heartbeat): tower_ears waits for
                     # her turn to end before it opens the reply window.
                     # Per conversation: Genesis can be mid-turn in her chat and in the room at once, and
@@ -334,6 +340,11 @@ MORNING = (5, 4 * 60 * 60)       # but back after a night away (4 h or more) cou
                                  # 6:43 after 518 minutes away went unwelcomed as "night" (2026-10-13)
 INPUT_COUNTS_S = 5 * 60          # keyboard and mouse count as him only this long after the camera saw him
 last_conversation = [0.0]        # when Donny last typed, talked or was answered (from the Choom feed)
+last_donny = [0.0]               # when he himself last typed, talked or wrote (a chat, Signal, the mic)
+DONNY_IN_ROOM_S = 10 * 60        # a group room counts as his conversation only this long after he took part:
+                                 # the four of them talking in a room Genesis opened from her wake-up
+                                 # heartbeat skipped his good morning as "already talking" (2026-10-14)
+autonomous_chats = set()         # her heartbeat chats: the 7 am briefing comes through one as a "chat" turn
 chat_turns = {}                  # (Choom, chat or room) -> when her turn there started
 
 
