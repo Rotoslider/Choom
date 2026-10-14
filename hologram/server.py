@@ -471,14 +471,14 @@ def answer_camera(event):
 
 
 # --- The Chooms asking the glass ----------------------------------------------------------------
-# The looking-glass skill in the Choom app: glass_move("a little dance"), glass_wear("my red dress")
-# and glass_closet() go down the feed as glass_request events. The answer is worked out here from
-# what is built on the glass (tools/closet.py), the page is told what to play or wear, and the
-# answer goes back to /api/hologram/glass/result, the way the camera's do.
+# The looking-glass skill in the Choom app: glass_move("a little dance"), glass_wear("my red dress"),
+# glass_closet() and glass_wish("a silk slip dress") go down the feed as glass_request events. The
+# answer is worked out here from what is built on the glass (tools/closet.py), the page is told what
+# to play or wear, and the answer goes back to /api/hologram/glass/result, the way the camera's do.
 def glass_answer(request):
     choom = str(request.get("choom") or "").strip()
     cid, op = choom.lower(), request.get("op")
-    what = str(request.get("what") or "").strip()[:120]
+    what = str(request.get("what") or "").strip()[:200]
     alive, worn = closet.load(PORTRAITS, cid)
     if not alive.get("clips"):
         return {"ok": False, "error": f"{choom or 'That Choom'} isn't on the glass yet."}
@@ -492,6 +492,9 @@ def glass_answer(request):
                 "note": "Ask for something you don't have and it goes on Donny's wish list for Glass Studio."}
     if not what:
         return {"ok": False, "error": "Say what: a move (\"a twirl\") or clothes (\"my red dress\")."}
+    if op == "wish":  # something new she'd like, asked for as a wish: nothing changes on the glass
+        closet.add_wish(PORTRAITS, cid, "move" if request.get("kind") == "move" else "wear", what)
+        return {"ok": True, "done": False, "message": f"\"{what}\" is on Donny's wish list in Glass Studio now."}
     if op == "move":
         found = closet.match_move(what, moves)
         if not found:

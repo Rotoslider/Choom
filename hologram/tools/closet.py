@@ -230,17 +230,19 @@ def match_move(request, available):
 
 def match_outfit(request, available, warm=None):
     """An outfit for a request: ("usual", None) for her usual clothes, (name, outfit), or None.
-    A garment named must be in the outfit; colours and other words break ties; a tie between her warm
+    A garment, colour or fabric named must be in the outfit: "a midnight-blue silk slip dress" isn't her
+    dark green dress, it's a wish (Eve, 2026-10-14). Other words break ties; a tie between her warm
     and cold night clothes goes by the weather (`warm`: 70°F or more), any other tie is a coin toss."""
     asked = canon(words(request))
     if asked & USUAL:
         return ("usual", None)
     garments = asked & set(GARMENTS)
     colors = asked & set(COLORS)
+    fabrics = asked & MATERIALS
     scored = []
     for name, o in available.items():
         has = canon(words(" ".join(o["tags"]) + " " + o.get("wearing", "") + " " + " ".join(name_words(name))))
-        if garments and not garments & has:
+        if any(named and not named & has for named in (garments, colors, fabrics)):
             continue
         score = 10 * len(garments & has) + 3 * len(colors & has) + 2 * len((asked - garments - colors) & has)
         if score:

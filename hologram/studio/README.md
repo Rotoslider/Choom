@@ -166,7 +166,7 @@ a change by magic renders more reliably than clothes moved by hand.
 
 ### What the Chooms can ask for
 
-The Chooms can ask the glass for things themselves, with three tools in the Choom app (the
+The Chooms can ask the glass for things themselves, with four tools in the Choom app (the
 looking-glass skill):
 
 | Tool | What it does |
@@ -174,20 +174,21 @@ looking-glass skill):
 | `glass_move("a little dance")` | plays a move at her next quiet moment, once |
 | `glass_wear("my red dress")` | changes her clothes at her next quiet moment; she keeps them on until bedtime, or until she changes again |
 | `glass_closet()` | lists her moves and the clothes in her closet, never what she has on |
+| `glass_wish("a midnight-blue silk slip dress")` | puts clothes or a move she'd like on her wish list; nothing changes on the glass |
 
 The glass answers from what's built:
 - **Moves** are her selfie moves, her full-body clips, and clips named for a move: a dance, a wave,
   a kiss, a curtsy. "Spin around" finds a twirl, and "flip my hair" finds a hair flip.
 - **Clothes** match an outfit's **closet words**. They're read from what she wears in the look
-  ("dress, burgundy, red"). You can change them on the look's card. A garment she names must be in
-  the outfit; colour breaks ties, so "the red dress" finds the burgundy one. If two outfits fit
-  equally, the glass picks one at random.
+  ("dress, burgundy, red"). You can change them on the look's card. A garment, colour or fabric she
+  names must be in the outfit, so "the red dress" finds the burgundy one but "a blue silk dress"
+  doesn't find a green one. If two outfits fit equally, the glass picks one at random.
 
 ![An outfit's closet words on its look card](docs/images/closet-words.jpg)
 
-Something she asks for and hasn't got becomes a **wish**. Her wishes show at the top of Plan &
-render. Each has a button to start making it: **Write it** opens Write your own clip, and **New
-outfit** opens New look with her words filled in. **Let go** takes a wish off the list once it's made,
+Something she asks for and hasn't got becomes a **wish**, and so does whatever she asks for with
+`glass_wish`. Her wishes show at the top of Plan & render. Each has a button to start making it:
+**Write it** opens Write your own clip, and **New outfit** opens New look with her words filled in. **Let go** takes a wish off the list once it's made,
 or if it won't be.
 
 ![Her wishes on the Plan page](docs/images/wishes.jpg)
