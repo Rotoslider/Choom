@@ -6,7 +6,8 @@
  * reply in her own voice. With no subscriber connected, publishing is a no-op.
  *
  * Events: turn_start, thinking, tool, image, content (speakable text), retract, done, error,
- * turn_end. Each carries { choom, choomId, chatId, voice, source }. A tool event names the sister
+ * turn_end. Each carries { choom, choomId, chatId, voice, source }, and a room's events also roomId and
+ * room (the Chooms in it, so the glass shows only them). A tool event names the sister
  * when Aloy delegates (target); an image event carries the gallery imageId and its kind: selfie,
  * picture, snapshot (a camera) or looking (an image she is analyzing), so the hologram can float it
  * beside her.
@@ -28,6 +29,7 @@ export interface HologramTurn {
   voice: string | null;
   source: 'chat' | 'group' | 'heartbeat' | 'delegation';
   roomId: string | null;
+  room?: string[];  // a group turn: the names of the Chooms in the room
 }
 
 type HologramEvent = Record<string, unknown>;

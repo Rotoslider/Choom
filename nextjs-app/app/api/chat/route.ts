@@ -1202,6 +1202,13 @@ export async function POST(request: NextRequest) {
     // agentic loop, and finalize (assistant-message save, token usage,
     // execution trace) — lives in lib/chat-stream.ts + lib/agentic-loop.ts
     // (C-22 POST split). Prep above resolves everything the turn needs.
+    // The Chooms in this room, so the Looking Glass stands only them on its stage.
+    const groupRoomMembers: string[] | undefined = isGroupTurn && groupRoomId
+      ? await prisma.groupParticipant.findMany({
+          where: { roomId: groupRoomId, active: true },
+          select: { choom: { select: { name: true } } },
+        }).then((rows) => rows.map((r) => r.choom.name)).catch(() => undefined)
+      : undefined;
     const stream = new ReadableStream({
       async start(controller) {
         await runChatTurn({
@@ -1213,7 +1220,7 @@ export async function POST(request: NextRequest) {
           noTools: !!noTools,
           maxIterationsOverride,
           isHeartbeat: !!isHeartbeat,
-          isGroupTurn, freshContext, delegatorName, groupRoomId,
+          isGroupTurn, freshContext, delegatorName, groupRoomId, groupRoomMembers,
           taskModelOverride, taskOverrideActive,
           autoSetProjectInfo, detectedProject, choomMaxIterations, skillDispatch,
           memoryClient, memoryCompanionId, weatherSettings,

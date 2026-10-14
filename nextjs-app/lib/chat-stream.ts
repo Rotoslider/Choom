@@ -52,6 +52,7 @@ export interface ChatTurnParams {
   freshContext: boolean;
   delegatorName: unknown;
   groupRoomId: string | undefined;
+  groupRoomMembers?: string[];
   taskModelOverride: unknown;
   taskOverrideActive: boolean;
   autoSetProjectInfo: { folder: string; name: string } | null;
@@ -81,7 +82,7 @@ export async function runChatTurn(params: ChatTurnParams): Promise<void> {
     controller, choom, chat, choomId, chatId, logChatId, message,
     settings, clientLLMSettings, providers,
     isDelegation, suppressNotifications, noTools, maxIterationsOverride,
-    isHeartbeat, isGroupTurn, freshContext, delegatorName, groupRoomId,
+    isHeartbeat, isGroupTurn, freshContext, delegatorName, groupRoomId, groupRoomMembers,
     taskModelOverride, taskOverrideActive,
     autoSetProjectInfo, detectedProject, choomMaxIterations, skillDispatch,
     memoryClient, memoryCompanionId, weatherSettings,
@@ -105,6 +106,7 @@ export async function runChatTurn(params: ChatTurnParams): Promise<void> {
           voice: choom.voiceId ?? null,
           source: isHeartbeat ? 'heartbeat' : isDelegation ? 'delegation' : isGroupTurn ? 'group' : 'chat',
           roomId: groupRoomId ?? null,
+          ...(groupRoomMembers?.length ? { room: groupRoomMembers } : {}),
         }, message);
         const send = (data: Record<string, unknown>) => {
           hologram.event(data);
