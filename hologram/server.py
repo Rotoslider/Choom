@@ -59,17 +59,46 @@ buttons = {"state": "starting"}
 _last_wake = 0.0
 
 
-def wake_screen():
-    """GNOME blanks every monitor after idle, the Portrait included. Wake them when a Choom starts
-    talking or a Portrait button is pressed (GNOME never sees those presses: we claim the device)."""
+def gnome(dest, path, method, *args):
+    """One call to GNOME over D-Bus: its answer as text, "" if it didn't answer."""
+    try:
+        return subprocess.run(["gdbus", "call", "--session", "--dest", dest, "--object-path", path,
+                               "--method", method, *args], capture_output=True, text=True, timeout=5).stdout
+    except Exception:
+        return ""
+
+
+def screens_dark():
+    """True while GNOME's screen shield is up (the screens blanked), None if GNOME didn't answer."""
+    out = gnome("org.gnome.ScreenSaver", "/org/gnome/ScreenSaver", "org.gnome.ScreenSaver.GetActive")
+    return "true" in out if out else None
+
+
+def wake_screen(why):
+    """GNOME blanks every monitor after idle, the Portrait included. Only Donny wakes them: the camera
+    seeing him (screen_watch) or a Portrait button press (GNOME never sees those presses: we claim the
+    device). A Choom starting to talk used to wake them too, and a room the girls opened at 2:47 am lit
+    the desk until morning (2026-10-15)."""
     global _last_wake
     if time.time() - _last_wake < 10:
         return
     _last_wake = time.time()
-    subprocess.run(["gdbus", "call", "--session", "--dest", "org.gnome.ScreenSaver",
-                    "--object-path", "/org/gnome/ScreenSaver",
-                    "--method", "org.gnome.ScreenSaver.SetActive", "false"],
-                   capture_output=True, timeout=5)
+    dark = screens_dark()
+    gnome("org.gnome.ScreenSaver", "/org/gnome/ScreenSaver", "org.gnome.ScreenSaver.SetActive", "false")
+    off = not dark and monitors_off()
+    if off:
+        subprocess.run(["xset", "dpms", "force", "on"], capture_output=True, timeout=5)
+    if dark or off:
+        log_entry({"kind": "screens", "on": True, "why": why, **({"dpms": True} if off else {})})
+
+
+def monitors_off():
+    """True if the monitors are powered down with GNOME's shield down (it went dark that way at night)."""
+    try:
+        state = subprocess.run(["xset", "q"], capture_output=True, text=True, timeout=5).stdout
+        return "DPMS is Enabled" in state and "Monitor is On" not in state
+    except Exception:
+        return False
 
 
 def broadcast(event):
@@ -115,7 +144,7 @@ def read_buttons():
                     _sec, _usec, etype, code, value = INPUT_EVENT.unpack_from(data, offset)
                     if etype == EV_KEY and code in BUTTONS and value in (0, 1):
                         if value == 1:
-                            wake_screen()
+                            wake_screen("button")
                         broadcast({"type": "button", "button": BUTTONS[code],
                                    "action": "press" if value else "release"})
         except OSError:
@@ -227,10 +256,6 @@ def follow_choom():
                     if event.get("type") == "glass_request":  # a Choom asking the glass (answered here)
                         threading.Thread(target=answer_glass, args=(event,), daemon=True).start()
                         continue
-                    if event.get("type") in ("turn_start", "content") and event.get("source") in ("chat", "group"):
-                        wake_screen()
-                    elif event.get("type") == "listening" and event.get("listening"):
-                        wake_screen()  # Donny started typing or talking to them
                     source = event.get("source")
                     if source == "heartbeat" and event.get("chatId"):
                         autonomous_chats.add(event["chatId"])
@@ -331,7 +356,7 @@ image_cache = {}  # the last few pictures fetched for the page: id -> (content t
 # Choom app's /api/hologram/welcome picks her and gives her a note; she knows from their conversation
 # where he went). He's at the desk while the camera sees his face, or he has used the NUC's keyboard or
 # mouse in the last 30 seconds and the camera saw him in the last 5 minutes. GNOME also resets its idle
-# time when the screens wake (a Choom starting to talk wakes them) or the monitor layout is reapplied,
+# time when the screens wake (a Choom starting to talk woke them then) or the monitor layout is reapplied,
 # which kept "bringing him back" while he was out at the gate; the camera decides when he's back.
 WELCOME_AFTER_S = float(os.environ.get("HOLOGRAM_WELCOME_AFTER_S", 20 * 60))  # away at least this long
 WELCOME_EVERY_S = 2 * 60 * 60    # at most one welcome back every two hours
@@ -428,6 +453,46 @@ def welcome_watch():
             places = []
         except Exception as e:
             latest["welcome_watch_error"] = f"{type(e).__name__}: {e}"
+
+
+# --- Screens ------------------------------------------------------------------------------------
+# The screens wake only when the camera sees Donny (or he presses a Portrait button), and go dark again
+# GNOME's idle delay (Settings > Power > Screen Blank: 8 minutes) after it last saw him. GNOME can't do
+# that part: once its screens are woken without a key or mouse touch it never blanks them again until
+# the next touch, and they stayed lit from 2:47 am until morning (2026-10-15).
+SCREEN_SEEN_S = 10  # the camera saw him this recently: he's in view
+
+
+def screen_watch():
+    face_at, idle_was = 0.0, False
+    while True:
+        time.sleep(3)
+        try:
+            if (latest.get("gaze") or {}).get("face") is True:
+                face_at = time.time()
+            unseen = time.time() - face_at
+            dark = screens_dark()
+            status = gnome("org.gnome.SessionManager", "/org/gnome/SessionManager/Presence",
+                           "org.freedesktop.DBus.Properties.Get", "org.gnome.SessionManager.Presence", "status")
+            idle_now = "uint32 3" in status  # GNOME's session just went idle: its fade to dark starts
+            if unseen < SCREEN_SEEN_S:
+                if dark or (idle_now and not idle_was) or monitors_off():  # in view: light them, or stop the fade
+                    wake_screen("camera")
+            elif dark is False:
+                idle = idle_seconds()
+                delay = re.search(r"uint32 (\d+)", subprocess.run(["gsettings", "get", "org.gnome.desktop.session",
+                                                                 "idle-delay"], capture_output=True, text=True, timeout=5).stdout)
+                delay = int(delay.group(1)) if delay else 0  # "uint32 480": seconds, 0 for never
+                inhibited = "true" in gnome("org.gnome.SessionManager", "/org/gnome/SessionManager",
+                                            "org.gnome.SessionManager.IsInhibited", "8")  # a video playing, say
+                # Untouched past GNOME's delay (and it hasn't blanked them), and unseen as long: dark.
+                if delay and idle is not None and idle >= delay + 30 and unseen >= delay and not inhibited:
+                    gnome("org.gnome.ScreenSaver", "/org/gnome/ScreenSaver", "org.gnome.ScreenSaver.SetActive", "true")
+                    log_entry({"kind": "screens", "on": False, "why": "unseen", "idle": round(idle),
+                               "unseen": round(min(unseen, idle))})
+            idle_was = idle_now
+        except Exception as e:
+            latest["screen_watch_error"] = f"{type(e).__name__}: {e}"
 
 
 # --- The glass camera, for the Choom app -----------------------------------------------------
@@ -725,10 +790,8 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if self.path == "/ears":
             # tower_ears.py: "OK Eve" heard at the tower. The page shows her listening (and brings her
-            # to the glass); the screens wake. Only events are logged, never what was said.
+            # to the glass). Only events are logged, never what was said.
             event, choom = entry.get("event"), entry.get("choom")
-            if event == "wake":
-                wake_screen()
             if event in ("window", "window_closed"):  # the reply window opening, or closing unheard
                 broadcast({"type": "control", "chime": "open" if event == "window" else "close"})
             if event == "voice":  # someone is talking near the tower: no screensaver turn now (not logged)
@@ -833,4 +896,5 @@ if __name__ == "__main__":
     threading.Thread(target=weather_watch, daemon=True).start()
     threading.Thread(target=presence_watch, daemon=True).start()
     threading.Thread(target=welcome_watch, daemon=True).start()
+    threading.Thread(target=screen_watch, daemon=True).start()
     ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()
