@@ -374,6 +374,7 @@ class Ears:
                 while not self.frames.empty():
                     self.frames.get_nowait()
                 self.conversation(choom, follow_up=True)
+                tell_hologram("invited_done", choom)    # a room paused for her welcome picks up again
                 continue
             heard = self.wake(pcm)
             if not heard:

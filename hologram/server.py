@@ -264,17 +264,19 @@ def follow_choom():
                         last_donny[0] = last_conversation[0] = time.time()
                     elif source == "group" and time.time() - last_donny[0] < DONNY_IN_ROOM_S:
                         last_conversation[0] = time.time()  # a room he's part of, not them talking among themselves
-                    # Which Chooms are mid-turn in a conversation (not a heartbeat): tower_ears waits for
-                    # her turn to end before it opens the reply window.
-                    # Per conversation: Genesis can be mid-turn in her chat and in the room at once, and
-                    # the end of one is not the end of the other.
+                    # Which Chooms are mid-turn answering him one to one: tower_ears waits for her turn to
+                    # end before it opens the reply window. Per conversation: Genesis can be mid-turn in her
+                    # chat and in the room at once, and the end of one is not the end of the other. Her room
+                    # turn isn't her answer to him: one in the room she'd opened kept the window shut for 2
+                    # minutes after she welcomed him back (2026-10-15).
                     if event.get("source") in ("chat", "group") and event.get("choom"):
-                        turn = (event["choom"], event.get("chatId") or event.get("roomId") or event["source"])
+                        turn = (event["choom"], event["source"], event.get("chatId") or event.get("roomId"))
                         if event.get("type") == "turn_start":
                             chat_turns[turn] = time.time()
                         elif event.get("type") in ("turn_end", "error"):
                             chat_turns.pop(turn, None)
-                        latest["chat_turns"] = sorted({c for (c, _), at in chat_turns.items() if time.time() - at < 600})
+                        latest["chat_turns"] = sorted({c for (c, source, _), at in chat_turns.items()
+                                                       if source == "chat" and time.time() - at < 600})
                     broadcast({**event, "type": "choom", "event": event.get("type")})
         except Exception as e:  # network drop, app restart, timeout
             choom_feed.update(state=f"disconnected ({type(e).__name__})")
@@ -370,7 +372,10 @@ DONNY_IN_ROOM_S = 10 * 60        # a group room counts as his conversation only 
                                  # the four of them talking in a room Genesis opened from her wake-up
                                  # heartbeat skipped his good morning as "already talking" (2026-10-14)
 autonomous_chats = set()         # her heartbeat chats: the 7 am briefing comes through one as a "chat" turn
-chat_turns = {}                  # (Choom, chat or room) -> when her turn there started
+chat_turns = {}                  # (Choom, "chat" or "group", its id) -> when her turn there started
+ROOMS_PAUSED_S = 15 * 60         # a room paused for a welcome picks up again after this even if the tower
+rooms_paused = [0.0]             # never says he's done (not while he's talking at it)
+ears_at = [0.0]                  # tower_ears' last word (a wake, a window, what he said)
 
 
 def idle_seconds():
@@ -398,12 +403,33 @@ def send_welcome(seconds, place):
                                          headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(request, timeout=60) as response:
             answer = json.loads(response.read())
+        # A room running now stops before its next speaker, so his answer to her isn't held behind more
+        # room turns; it picks up again once he's done talking with her (resume_rooms).
+        paused = len(answer.get("pausing") or [])
         log_entry({"kind": "welcome", "minutes": body["awayMinutes"], "place": place, "choom": answer.get("choom"),
-                   "ok": answer.get("ok"), "skipped": answer.get("skipped")})
+                   "ok": answer.get("ok"), "skipped": answer.get("skipped"), **({"rooms_paused": paused} if paused else {})})
+        if paused:
+            rooms_paused[0] = time.time()
         if answer.get("ok") and answer.get("choom"):  # tower_ears opens a reply window once she's done
             latest["welcome"] = {"choom": answer["choom"], "at": time.time()}
     except Exception as e:
         log_entry({"kind": "welcome", "minutes": round(seconds / 60), "error": type(e).__name__})
+
+
+def resume_rooms(why):
+    """He's done talking with whoever welcomed him back: a room paused for it picks up again."""
+    rooms_paused[0] = 0.0
+    try:
+        request = urllib.request.Request(f"{CHOOM_URL}/api/hologram/welcome", data=json.dumps({"done": True}).encode(),
+                                         headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(request, timeout=30) as response:
+            answer = json.loads(response.read())
+        resumed, carried_on = len(answer.get("resumed") or []), len(answer.get("carriedOn") or [])
+        if resumed or carried_on or answer.get("error"):
+            log_entry({"kind": "rooms", "resumed": resumed, "carried_on": carried_on, "why": why,
+                       **({"error": answer["error"]} if answer.get("error") else {})})
+    except Exception as e:
+        log_entry({"kind": "rooms", "why": why, "error": type(e).__name__})
 
 
 def welcome_watch():
@@ -411,6 +437,9 @@ def welcome_watch():
     while True:
         time.sleep(5)
         try:
+            if (rooms_paused[0] and time.time() - rooms_paused[0] > ROOMS_PAUSED_S
+                    and time.time() - ears_at[0] > 2 * 60):
+                threading.Thread(target=resume_rooms, args=("timeout",), daemon=True).start()
             idle = idle_seconds()
             face = (latest.get("gaze") or {}).get("face") is True
             if face or not latest.get("eyes_camera"):
@@ -798,6 +827,10 @@ class Handler(SimpleHTTPRequestHandler):
                 tower_heard[0] = time.time()
             if event == "wake":
                 wake_screen("tower")
+            if event != "voice":
+                ears_at[0] = time.time()
+            if event == "invited_done":  # his conversation with whoever welcomed him back is over
+                threading.Thread(target=resume_rooms, args=("tower",), daemon=True).start()
             if event in ("window", "window_closed"):  # the reply window opening, or closing unheard
                 broadcast({"type": "control", "chime": "open" if event == "window" else "close"})
             if event == "voice":  # someone is talking near the tower: no screensaver turn now (not logged)

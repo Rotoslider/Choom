@@ -279,7 +279,18 @@ Assistant role he was in while away (a shop or truck sensor) is passed on as `pl
 and coming back is logged as `desk` in `telemetry.log`; `HOLOGRAM_WELCOME_AFTER_S` changes the 20
 minutes (for testing); `POST /control {"welcomeTest": 30}` sends one now. After her welcome, the
 tower's mic opens its reply window for her (`tower_ears.py` watches `/status` for it), so he
-can answer without "OK" and her name.
+can answer without "OK" and her name. The window waits for her answer to him, not for a turn of hers
+in a room (`chat_turns` in `/status` lists 1:1 turns only).
+
+A room running when she welcomes him (one a Choom opened from a heartbeat) stops before its next
+speaker: the welcome calls the room route's `PUT /api/group-chat {pause: true}`, and a Choom whose
+`talk_with_sisters` was running it is told it paused, not finished. When his conversation with her is
+over (the reply window closes unanswered), `tower_ears.py` posts `invited_done`, `server.py` sends
+`POST /api/hologram/welcome {done: true}`, and the room picks up where it stopped (`PUT {resume: true}`
+starts a keep-going run with the Choom who was next speaking first). A room that hadn't reached its
+next speaker yet just carries on; his own message to a paused room takes its place; a pause older than
+an hour is dropped. If the tower never says he's done, the room picks up after 15 minutes once the
+tower has been quiet for 2. Logged as `welcome` (`rooms_paused`) and `rooms` in `telemetry.log`.
 
 ## Everything else on the page
 
