@@ -99,7 +99,7 @@ export const tools: ToolDefinition[] = [
   },
   {
     name: 'ha_render_template',
-    description: 'Render a Jinja2 template against live Home Assistant state. Powerful for complex state questions that would take many ha_get_state calls. Supports HA helpers like states(...), is_state(...), area_entities(...), state_attr(...), expand(...), now(), etc. Returns the rendered string.',
+    description: 'Render a Jinja2 template against live Home Assistant state. Powerful for complex state questions that would take many ha_get_state calls. Supports HA helpers like states(...), is_state(...), area_entities(...), state_attr(...), expand(...), now(), etc. Returns the rendered string. Change times (last_changed, last_updated) come back in local time; the state of a timestamp sensor is UTC, so format it with as_timestamp(states(\'sensor.x\')) | timestamp_custom(\'%H:%M\'), which gives local time.',
     parameters: {
       type: 'object',
       properties: {

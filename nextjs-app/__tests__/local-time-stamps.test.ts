@@ -1,5 +1,5 @@
 /** 2026-09-13: tool results hand a Choom local time, never a bare UTC ISO stamp (Eve read a 2:23 PM snapshot as "8:23"). */
-import { localTimeString, localFileStamp, localizeTimestamps } from '@/lib/time-context';
+import { localTimeString, localFileStamp, localizeTimestamps, localTemplateTimes } from '@/lib/time-context';
 import { readFileSync } from 'fs';
 import path from 'path';
 
@@ -53,5 +53,42 @@ describe('Home Assistant times reach her in local time (2026-10-10)', () => {
   test('every Home Assistant tool result goes through it', () => {
     const src = readFileSync(path.join(__dirname, '..', 'skills', 'core', 'home-assistant', 'handler.ts'), 'utf-8');
     expect(src).toContain('return r.result == null ? r : { ...r, result: localizeTimestamps(r.result) };');
+  });
+});
+
+describe('Home Assistant templates give change times in local time (2026-10-15)', () => {
+  // Genesis: "{{ s.last_changed.strftime('%H:%M') }}" gave door sensors that changed at 10:40 as "16:40".
+  test("a state's change times go through as_local", () => {
+    expect(localTemplateTimes("{% for s in states.binary_sensor if 'door' in s.entity_id %}{{ s.entity_id }} = {{ s.state }} ({{ s.last_changed.strftime('%H:%M') }}){% endfor %}"))
+      .toBe("{% for s in states.binary_sensor if 'door' in s.entity_id %}{{ s.entity_id }} = {{ s.state }} ({{ as_local(s.last_changed).strftime('%H:%M') }}){% endfor %}");
+    expect(localTemplateTimes('{{ states.binary_sensor.kitchen1_home_east_door_window.last_changed }}'))
+      .toBe('{{ as_local(states.binary_sensor.kitchen1_home_east_door_window.last_changed) }}');
+    expect(localTemplateTimes("{{ states[e].last_updated.strftime('%m-%d %H:%M') }}"))
+      .toBe("{{ as_local(states[e].last_updated).strftime('%m-%d %H:%M') }}");
+    expect(localTemplateTimes('{{ relative_time(s.last_changed) }} | {{ as_timestamp(s.last_reported) | timestamp_local }}'))
+      .toBe('{{ relative_time(as_local(s.last_changed)) }} | {{ as_timestamp(as_local(s.last_reported)) | timestamp_local }}');
+  });
+  test('already local, a name in quotes and other names are left alone', () => {
+    for (const t of [
+      '{{ as_local(states.sensor.x.last_changed) }}',
+      '{{ as_local( s.last_updated ).strftime("%H:%M") }}',
+      "{{ states.light | selectattr('last_changed') | list }}",
+      "{{ states.light | map(attribute='last_changed') | list }}",
+      "{{ states('sensor.stonedesert_last_rain') }}",
+      '{{ s.last_changed_by }}',
+      '{{ s.state }}',
+    ]) expect(localTemplateTimes(t)).toBe(t);
+  });
+  test("Python's print of a zoned time is local too; one without a zone or seconds is not", () => {
+    expect(localizeTimestamps('door = off (2026-10-15 16:40:12.496776+00:00)')).toMatch(/^door = off \(Thu, Oct 15, 10:40\sAM \S+\)$/);
+    expect(localizeTimestamps('2026-10-14 21:55:52.496776-06:00')).toMatch(/Oct 14, 9:55\sPM/);
+    expect(localizeTimestamps('2026-10-15 10:00-12:00')).toBe('2026-10-15 10:00-12:00');
+    expect(localizeTimestamps('2026-10-15 16:40:12')).toBe('2026-10-15 16:40:12');
+  });
+  test('the template tool renders the local version, and hers if that one fails', () => {
+    const src = readFileSync(path.join(__dirname, '..', 'skills', 'core', 'home-assistant', 'handler.ts'), 'utf-8');
+    expect(src).toContain('const local = localTemplateTimes(template);');
+    expect(src).toContain('rendered = await ha.renderTemplate(local);');
+    expect(src).toContain('rendered = await ha.renderTemplate(template);');
   });
 });

@@ -1,5 +1,5 @@
 import { BaseSkillHandler, type SkillHandlerContext } from '@/lib/skill-handler';
-import { localFileStamp, localTimeString, localizeTimestamps } from '@/lib/time-context';
+import { localFileStamp, localTimeString, localizeTimestamps, localTemplateTimes } from '@/lib/time-context';
 import { HomeAssistantService, type HomeAssistantSettings, type HAEntity } from '@/lib/homeassistant-service';
 import { WorkspaceService } from '@/lib/workspace-service';
 import { WORKSPACE_ROOT } from '@/lib/config';
@@ -616,7 +616,17 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
         case 'ha_render_template': {
           const template = args.template as string;
           if (!template) return this.error(toolCall, 'template is required');
-          let rendered = await ha.renderTemplate(template);
+          // Change times in local time. as_local of a missing entity's time is
+          // an error where printing it gives nothing, so a template the change
+          // breaks runs as she wrote it.
+          const local = localTemplateTimes(template);
+          let rendered: string;
+          try {
+            rendered = await ha.renderTemplate(local);
+          } catch (err) {
+            if (local === template) throw err;
+            rendered = await ha.renderTemplate(template);
+          }
           // A template can loop over every sensor in the house — Qwen wrote one
           // that rendered 30k chars (2026-09-12). Bound it like every other
           // result; the note tells her how to get the rest.

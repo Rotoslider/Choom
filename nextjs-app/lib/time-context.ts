@@ -103,8 +103,10 @@ export function localTimeString(d: Date = new Date(), timezone: string = OWNER_T
 }
 
 // A full ISO time that names its zone ("2026-10-11T02:35:00+00:00",
-// "…02:35:03.832787+00:00", "…Z"). Times without a zone are left alone.
-const ZONED_ISO = /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})(?![\d:])/g;
+// "…02:35:03.832787+00:00", "…Z"), or Python's print of one, which is what a
+// Home Assistant template gives ("2026-10-15 16:40:12.496776+00:00", always
+// with seconds). Times without a zone are left alone.
+const ZONED_ISO = /\b\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?| \d{2}:\d{2}:\d{2}(?:\.\d+)?)(?:Z|[+-]\d{2}:?\d{2})(?![\d:])/g;
 
 /**
  * Every zoned ISO time in a tool result, in the form localTimeString gives,
@@ -116,7 +118,7 @@ const ZONED_ISO = /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]
 export function localizeTimestamps<T>(value: T, timezone: string = OWNER_TIMEZONE): T {
   if (typeof value === 'string') {
     return value.replace(ZONED_ISO, (iso) => {
-      const d = new Date(iso);
+      const d = new Date(iso.replace(' ', 'T'));
       return Number.isNaN(d.getTime()) ? iso : localTimeString(d, timezone);
     }) as T;
   }
@@ -127,6 +129,22 @@ export function localizeTimestamps<T>(value: T, timezone: string = OWNER_TIMEZON
     return out as T;
   }
   return value;
+}
+
+// A state's last_changed / last_updated / last_reported in a template
+// ("s.last_changed", "states.binary_sensor.gate.last_changed",
+// "states[e].last_changed"), unless it's already inside as_local( or the end
+// of a longer name.
+const TEMPLATE_STATE_TIME = /(?<![\w.\]])(?<!as_local\(\s*)([A-Za-z_]\w*(?:\.[A-Za-z_]\w*|\[[^\[\]]*\])*?)\.(last_changed|last_updated|last_reported)\b/g;
+
+/**
+ * A Home Assistant template with every state's change times in local time.
+ * HA keeps them in UTC, and strftime prints them with no zone, so nothing
+ * afterwards can tell: Genesis's "{{ s.last_changed.strftime('%H:%M') }}"
+ * gave door sensors that changed at 10:40 as "16:40" (2026-10-15).
+ */
+export function localTemplateTimes(template: string): string {
+  return template.replace(TEMPLATE_STATE_TIME, 'as_local($1.$2)');
 }
 
 /** "2026-09-13_14-23" in the owner's zone, for file names. */

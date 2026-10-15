@@ -128,6 +128,8 @@ template: "{{ states.person | selectattr('state','equalto','home') | map(attribu
 
 Return values that are JSON-parseable are auto-parsed; otherwise raw string is returned.
 
+Times: `last_changed` and `last_updated` come back in local time. A timestamp sensor's state (the rain gauge's last rain) is UTC: `{{ as_timestamp(states('sensor.x')) | timestamp_custom('%H:%M') }}` gives it in local time, and printed whole it's converted for you.
+
 ## Camera Snapshots
 
 To grab a still frame from an HA camera (Reolink, generic MJPEG, etc.), use **`ha_get_camera_snapshot`** — one tool, one call:
