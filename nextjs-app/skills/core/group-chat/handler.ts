@@ -638,6 +638,7 @@ export default class GroupChatHandler extends BaseSkillHandler {
 
     let transcript = '';
     let speakers = 0;
+    let pausedBefore = '';
     try {
       const response = await undiciFetch(`${baseUrl}/api/group-chat`, {
         method: 'POST',
@@ -684,6 +685,7 @@ export default class GroupChatHandler extends BaseSkillHandler {
           if (!line.startsWith('data: ')) continue;
           try {
             const data = JSON.parse(line.slice(6));
+            if (data.type === 'paused') pausedBefore = data.nextSpeakerName || 'the next speaker';
             if (data.type === 'speaker_done' && data.content) {
               speakers++;
               transcript += `${data.speakerName}: ${data.content}\n\n`;
@@ -718,7 +720,10 @@ export default class GroupChatHandler extends BaseSkillHandler {
       // it). This result returns you to your private 1:1 chat — so the note has
       // to stop the model from "continuing" the group chat here, which reads as
       // talking to siblings who can't hear it.
-      note: `The group conversation in "${room.title}" with ${sisterList} is FINISHED and saved — they already heard and responded to everything said there (${speakers} replies).${createdNote}${joinedNote}${addedNote}${notFoundNote} You are now back in your PRIVATE 1:1 chat with ${ownerName}; ${sisterList} are NOT here and cannot see what you write now. Do NOT keep talking to them or continue the discussion in this chat. If ${ownerName} asked you to run this, give him a short, natural recap of how it went; otherwise just carry on with ${ownerName}. To say more to your sisters, call talk_with_sisters again — don't type it as a chat message.`,
+      ...(pausedBefore && { paused: true }),
+      note: `${pausedBefore
+        ? `The group conversation in "${room.title}" with ${sisterList} PAUSED before ${pausedBefore}'s turn because ${ownerName} just came back to his desk (${speakers} replies so far, all saved). It picks up again by itself once he's done talking, so don't start it again.`
+        : `The group conversation in "${room.title}" with ${sisterList} is FINISHED and saved — they already heard and responded to everything said there (${speakers} replies).`}${createdNote}${joinedNote}${addedNote}${notFoundNote} You are now back in your PRIVATE 1:1 chat with ${ownerName}; ${sisterList} are NOT here and cannot see what you write now. Do NOT keep talking to them or continue the discussion in this chat. If ${ownerName} asked you to run this, give him a short, natural recap of how it went; otherwise just carry on with ${ownerName}. To say more to your sisters, call talk_with_sisters again — don't type it as a chat message.`,
     });
   }
 }

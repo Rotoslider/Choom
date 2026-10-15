@@ -6,6 +6,9 @@
  * conversation. The note is a system message: not shown in the chat, never counted as his words.
  * Nothing happens if he hasn't talked with anyone for 12 hours. Ignored from away. { dryRun: true }
  * only reports who it would be.
+ *
+ * A room running at the time stops before its next speaker, so his answer to her isn't held behind
+ * more room turns. { done: true } (the hologram, once he's done talking with her) picks it up again.
  */
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/db';
@@ -16,9 +19,24 @@ export const dynamic = 'force-dynamic';
 
 const RECENT_MS = 12 * 60 * 60 * 1000;
 
+/** Pause the running rooms, or pick the paused ones up again (the group-chat route's PUT). */
+async function rooms(request: Request, action: 'pause' | 'resume'): Promise<Record<string, unknown>> {
+  try {
+    const response = await fetch(new URL('/api/group-chat', request.url), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ [action]: true }),
+    });
+    return (await response.json()) as Record<string, unknown>;
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 export async function POST(request: Request) {
   if (requestFromAway(request)) return NextResponse.json({ ok: false, away: true }, { status: 403 });
-  const body = (await request.json().catch(() => ({}))) as { awayMinutes?: unknown; place?: unknown; dryRun?: unknown };
+  const body = (await request.json().catch(() => ({}))) as { awayMinutes?: unknown; place?: unknown; dryRun?: unknown; done?: unknown };
+  if (body.done === true) return NextResponse.json({ ok: true, ...(await rooms(request, 'resume')) });
   const minutes = typeof body.awayMinutes === 'number' && body.awayMinutes > 0 ? Math.round(body.awayMinutes) : null;
   if (!minutes) return NextResponse.json({ ok: false, error: 'awayMinutes is required' }, { status: 400 });
   const place = typeof body.place === 'string' && /^[a-z ]{1,30}$/i.test(body.place) ? body.place : null;
@@ -40,6 +58,7 @@ export async function POST(request: Request) {
     + 'If your conversation tells you where he went or what he was doing, welcome him back and ask how it went, in a sentence or two. '
     + "Otherwise a short, warm welcome back is enough. Don't mention this note or how you knew.]";
 
+  const paused = await rooms(request, 'pause');
   const settings = await (await serverSettings(request)).json();
   markViewing('chat', chat.id);
   const keepOpen = setInterval(() => markViewing('chat', chat.id), 10_000);
@@ -64,5 +83,5 @@ export async function POST(request: Request) {
     catch { /* ended early */ }
     finally { clearInterval(keepOpen); }
   })();
-  return NextResponse.json({ ok: true, choom: chat.choom.name, chatId: chat.id });
+  return NextResponse.json({ ok: true, choom: chat.choom.name, chatId: chat.id, pausing: paused.pausing ?? [] });
 }

@@ -13,6 +13,7 @@ import {
 } from '@/lib/group-chat-runner';
 import { getOwnerIdentity } from '@/lib/owner';
 import { getRoomCreatorModel } from '@/lib/group-model-config';
+import { Agent, fetch as undiciFetch } from 'undici';
 
 const baseUrl = process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
 // Per-speaker ABSOLUTE turn ceiling (default 15min). Overridable via
@@ -49,6 +50,14 @@ const PREEMPT_WAIT_MS = 150 * 1000;
 // Who is speaking in a running room — so a 409 (and GET status) can say so.
 const runningSpeakers = new Map<string, string>();
 const PREEMPT_POLL_MS = 500;
+// Welcome back (2026-10-15): when Donny sits back down and a Choom welcomes him,
+// a running room stops before its next speaker, so his answer to her isn't held
+// behind more room turns, and picks up where it left off (that speaker first)
+// once he's done talking with her. PUT { pause } / { resume }, below.
+const pauseRequested = new Set<string>();
+const pausedRooms = new Map<string, { at: number; rounds: number; nextSpeakerId: string; settings: unknown }>();
+const PAUSED_KEEP_MS = 60 * 60 * 1000; // a pause older than this isn't picked up again
+const resumeDispatcher = new Agent({ bodyTimeout: 0, headersTimeout: 0 }); // a room runs for many minutes
 const RUN_LOCK_STALE_MS = 15 * 60 * 1000; // auto-release a crashed/abandoned run
 // A Choom-initiated run (heartbeat / self-wakeup) within this window of the last
 // run on the same room is treated as an accidental duplicate and skipped — covers
@@ -150,6 +159,50 @@ export async function GET(request: NextRequest) {
   );
 }
 
+/**
+ * Welcome back. PUT { pause: true }: every running room stops before its next
+ * speaker and remembers where it was. PUT { resume: true }: each paused room
+ * picks up again, and one that hadn't reached its next speaker yet just carries
+ * on. The hologram pauses them as a Choom welcomes Donny back and resumes them
+ * once he's done talking with her.
+ */
+export async function PUT(request: Request) {
+  const body = (await request.json().catch(() => ({}))) as { pause?: unknown; resume?: unknown };
+  const json = (data: unknown, status = 200) =>
+    new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
+  const now = Date.now();
+  if (body.pause === true) {
+    const rooms = [...runningRooms].filter(([, since]) => now - since < RUN_LOCK_STALE_MS).map(([id]) => id);
+    for (const id of rooms) pauseRequested.add(id);
+    return json({ pausing: rooms.map(id => ({ roomId: id, speaker: runningSpeakers.get(id) || null })) });
+  }
+  if (body.resume === true) {
+    const carriedOn = [...pauseRequested];
+    pauseRequested.clear();
+    const resumed: string[] = [];
+    for (const [id, paused] of [...pausedRooms]) {
+      pausedRooms.delete(id);
+      if (now - paused.at > PAUSED_KEEP_MS || runningRooms.has(id)) continue;
+      resumed.push(id);
+      console.log(`   ▶️ Room ${id}: picking up again after the owner's conversation`);
+      void undiciFetch(`${baseUrl}/api/group-chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          roomId: id, continue: true, rounds: paused.rounds, nextSpeakerId: paused.nextSpeakerId,
+          settings: paused.settings, triggerSource: 'resume',
+        }),
+        dispatcher: resumeDispatcher,
+      }).then(async (res) => {
+        const reader = res.body?.getReader();
+        if (reader) while (!(await reader.read()).done) { /* the room runs on; the hologram has its own feed */ }
+      }).catch((err) => console.error(`   ▶️ Room ${id}: couldn't pick up again:`, err instanceof Error ? err.message : err));
+    }
+    return json({ resumed, carriedOn });
+  }
+  return json({ error: 'pause or resume is required' }, 400);
+}
+
 export async function POST(request: NextRequest) {
   const encoder = new TextEncoder();
   let body: Record<string, unknown>;
@@ -172,6 +225,8 @@ export async function POST(request: NextRequest) {
   // from a Choom, not the user. Saved as that Choom's line; round-0 speakers are
   // the OTHER participants reacting to it.
   const initiatorChoomId = (body.initiatorChoomId as string) || null;
+  // Keep-going after a pause: the Choom who was next speaks first.
+  const nextSpeakerId = continueRun && typeof body.nextSpeakerId === 'string' ? body.nextSpeakerId : null;
 
   if (!roomId || (!message && !continueRun)) {
     return new Response(JSON.stringify({ error: 'roomId and message are required' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
@@ -265,6 +320,7 @@ export async function POST(request: NextRequest) {
     }
   }
   runningRooms.set(roomId, nowMs);
+  pausedRooms.delete(roomId); // a new run (his message, a sister's) takes the place of a paused one
   let lockReleased = false;
   const releaseLock = () => {
     if (lockReleased) return;
@@ -317,9 +373,14 @@ export async function POST(request: NextRequest) {
   const mentioned = (continueRun || initiator)
     ? new Set<string>()
     : detectMentions(message, activeParticipants.map(p => ({ choomId: p.choomId, name: p.choom.name })));
+  const startAt = nextSpeakerId ? activeParticipants.findIndex(p => p.choomId === nextSpeakerId) : -1;
   const firstRoundSpeakers = mentioned.size > 0
     ? activeParticipants.filter(p => mentioned.has(p.choomId))
-    : (initiator ? activeParticipants.filter(p => p.choomId !== initiator.choomId) : activeParticipants);
+    : initiator
+      ? activeParticipants.filter(p => p.choomId !== initiator.choomId)
+      : startAt > 0
+        ? [...activeParticipants.slice(startAt), ...activeParticipants.slice(0, startAt)]
+        : activeParticipants;
 
   // Set when the client disconnects (user hit Stop or sent a new message to
   // jump in). Checked between speakers so we stop the sequence promptly instead
@@ -394,6 +455,14 @@ export async function POST(request: NextRequest) {
             if (cancelled) break;
             if (preemptRequested.has(roomId)) {
               console.log(`   ✋ Room ${roomId}: yielding to the owner's message before ${p.choom.name} speaks`);
+              cancelled = true;
+              break;
+            }
+            if (pauseRequested.has(roomId)) {
+              pauseRequested.delete(roomId);
+              pausedRooms.set(roomId, { at: Date.now(), rounds: maxRounds - round, nextSpeakerId: p.choomId, settings });
+              console.log(`   ⏸ Room ${roomId}: pausing for the owner's welcome back before ${p.choom.name} speaks`);
+              send({ type: 'paused', nextSpeakerName: p.choom.name });
               cancelled = true;
               break;
             }
@@ -588,6 +657,7 @@ export async function POST(request: NextRequest) {
         console.error(`   💥 [group-chat] room "${room.title || roomId}" round ${lastRound} after "${currentSpeakerName}" — aborting run:`, err instanceof Error ? err.stack || err.message : err);
         send({ type: 'error', error: (err as Error).message });
       } finally {
+        pauseRequested.delete(roomId); // asked too late: the run ended on its own
         releaseLock();
         try { controller.close(); } catch { /* already closed */ }
       }
