@@ -319,10 +319,11 @@ the buttons' input device, which needs this udev rule:
 SUBSYSTEM=="input", KERNEL=="event*", ATTRS{idVendor}=="05df", ATTRS{idProduct}=="16c0", GROUP="plugdev", MODE="0660"
 ```
 
-Only Donny wakes GNOME's blanked screens: the camera seeing him, or a Portrait button press. The
-Chooms talking never do (a room they open at night, a heartbeat, a reply to his phone). The screens go
-dark again GNOME's idle delay (Screen Blank, 8 minutes) after the camera last saw him and the NUC's
-keyboard and mouse were last touched. The server does this part itself, because GNOME never blanks
+Only Donny wakes GNOME's blanked screens: the camera seeing him, "OK Eve" (any of them) at the tower,
+or a Portrait button press. The Chooms talking never do (a room they open at night, a heartbeat, a reply
+to his phone). The screens go dark again GNOME's idle delay (Screen Blank, 8 minutes) after the camera
+last saw him or the tower last heard him (his wake phrase or his answer), and the NUC's keyboard and
+mouse were last touched. The server does this part itself, because GNOME never blanks
 screens again that were woken without a touch; not while an app keeps them on (a video playing). If
 GNOME starts its fade to dark while the camera sees him, the server stops it. Each wake and blank is
 logged as `screens` in `telemetry.log`. The server also puts a monitor back in the layout if GNOME

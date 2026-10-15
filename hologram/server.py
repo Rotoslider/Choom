@@ -76,8 +76,8 @@ def screens_dark():
 
 def wake_screen(why):
     """GNOME blanks every monitor after idle, the Portrait included. Only Donny wakes them: the camera
-    seeing him (screen_watch) or a Portrait button press (GNOME never sees those presses: we claim the
-    device). A Choom starting to talk used to wake them too, and a room the girls opened at 2:47 am lit
+    seeing him (screen_watch), "OK Eve" at the tower, or a Portrait button press (GNOME never sees those
+    presses: we claim the device). A Choom starting to talk used to wake them too, and a room the girls opened at 2:47 am lit
     the desk until morning (2026-10-15)."""
     global _last_wake
     if time.time() - _last_wake < 10:
@@ -456,11 +456,13 @@ def welcome_watch():
 
 
 # --- Screens ------------------------------------------------------------------------------------
-# The screens wake only when the camera sees Donny (or he presses a Portrait button), and go dark again
-# GNOME's idle delay (Settings > Power > Screen Blank: 8 minutes) after it last saw him. GNOME can't do
-# that part: once its screens are woken without a key or mouse touch it never blanks them again until
-# the next touch, and they stayed lit from 2:47 am until morning (2026-10-15).
-SCREEN_SEEN_S = 10  # the camera saw him this recently: he's in view
+# The screens wake only when the camera sees Donny, he says "OK Eve" at the tower, or he presses a
+# Portrait button, and go dark again GNOME's idle delay (Settings > Power > Screen Blank: 8 minutes)
+# after he was last seen or heard at the tower. GNOME can't do that part: once its screens are woken
+# without a key or mouse touch it never blanks them again until the next touch, and they stayed lit
+# from 2:47 am until morning (2026-10-15).
+SCREEN_SEEN_S = 10  # the camera saw (or the tower heard) him this recently: he's here
+tower_heard = [0.0]  # when the tower last heard him: "OK Eve", or his answer in a reply window
 
 
 def screen_watch():
@@ -470,14 +472,14 @@ def screen_watch():
         try:
             if (latest.get("gaze") or {}).get("face") is True:
                 face_at = time.time()
-            unseen = time.time() - face_at
+            unseen = time.time() - max(face_at, tower_heard[0])
             dark = screens_dark()
             status = gnome("org.gnome.SessionManager", "/org/gnome/SessionManager/Presence",
                            "org.freedesktop.DBus.Properties.Get", "org.gnome.SessionManager.Presence", "status")
             idle_now = "uint32 3" in status  # GNOME's session just went idle: its fade to dark starts
             if unseen < SCREEN_SEEN_S:
-                if dark or (idle_now and not idle_was) or monitors_off():  # in view: light them, or stop the fade
-                    wake_screen("camera")
+                if dark or (idle_now and not idle_was) or monitors_off():  # here: light them, or stop the fade
+                    wake_screen("camera" if time.time() - face_at < SCREEN_SEEN_S else "tower")
             elif dark is False:
                 idle = idle_seconds()
                 delay = re.search(r"uint32 (\d+)", subprocess.run(["gsettings", "get", "org.gnome.desktop.session",
@@ -790,8 +792,12 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if self.path == "/ears":
             # tower_ears.py: "OK Eve" heard at the tower. The page shows her listening (and brings her
-            # to the glass). Only events are logged, never what was said.
+            # to the glass); the screens wake. Only events are logged, never what was said.
             event, choom = entry.get("event"), entry.get("choom")
+            if event in ("wake", "heard"):  # Donny himself talking at the tower keeps the screens lit
+                tower_heard[0] = time.time()
+            if event == "wake":
+                wake_screen("tower")
             if event in ("window", "window_closed"):  # the reply window opening, or closing unheard
                 broadcast({"type": "control", "chime": "open" if event == "window" else "close"})
             if event == "voice":  # someone is talking near the tower: no screensaver turn now (not logged)
