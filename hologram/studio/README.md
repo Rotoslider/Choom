@@ -137,9 +137,18 @@ outfit's own (`full@dayspandex`): the glass cuts to it only while she wears the 
 
 **Discard** throws the versions away and puts their settings back in the form (kind, start look,
 when and name, what she wears, the prompt, how many), so the next try is one changed line away.
-Pictures sent from your computer have to be chosen again. A prompt changed by hand stops following
-"She now wears"; if it still has the "…" where her clothes go, **Make pictures** fills them in (or
-asks for them), since a prompt with "…" tells Klein nothing about the outfit.
+Pictures sent from your computer have to be chosen again.
+
+Klein reads only the prompt; "She now wears" is copied into it, and the look's Subject line is written
+from it. A prompt changed by hand ("Change her clothes and hair") keeps following it: what you type
+there replaces the clothes after "wears" (for a full body, its "She wears …" sentence). **Make
+pictures** fills in a "…" still standing where her clothes go, and refuses a prompt that names other
+clothes than "She now wears", so the picture and its clips can't go two ways. Before this, a touched
+prompt stopped following: four tries at Genesis's worn shop shirt sent Klein the same new button-down.
+
+A full body keeps the outfit's top from its waist-up picture, so "She now wears" there is what's below
+the waist (faded jeans and work boots). Words about the top change it in the new picture (Genesis's
+shop shirt came out worn that way) and are said twice in the look's Subject line: tidy it after.
 
 | | |
 |:---:|:---:|

@@ -681,6 +681,22 @@ function renderOutfitForm() {
   updateOutfitForm();
 }
 ['outfitBase', 'outfitWhen', 'outfitName', 'outfitWearing'].forEach((id) => $(`#${id}`).addEventListener('input', updateOutfitForm));
+// A prompt changed by hand still takes what she wears: typing in "She now wears" puts it in place of the
+// clothes the prompt names (after "wears", to the end of that sentence). It used to stop following once
+// the prompt was touched anywhere ("Change her clothes and hair"), and Discard brings such a prompt back:
+// four tries at Genesis's worn shop shirt sent Klein the same new button-down (2026-10-16).
+const WEARS = /(\bwears )([\s\S]*?)(\.(?=\s|$))/;
+function followWearing() {
+  if (!promptEdited) return;
+  const p = $('#outfitPrompt'), wearing = $('#outfitWearing').value.trim().replace(/\.$/, '');
+  if (outfitKind() === 'full') {  // optional there: its own sentence at the end
+    const without = p.value.replace(/\s*She wears [\s\S]*?\.(?=\s|$)/, '');
+    p.value = wearing ? `${without} She wears ${wearing}.` : without;
+  } else if (WEARS.test(p.value)) {
+    p.value = p.value.replace(WEARS, (all, before, clothes, after) => `${before}${wearing || '…'}${after}`);
+  }
+}
+$('#outfitWearing').addEventListener('input', followWearing);
 $('#outfitRefs').addEventListener('change', () => { $('#outfitRefsHint').hidden = !$('#outfitRefs').files.length; });
 // A new picture for a look starts from that look's own picture unless you choose another.
 $('#outfitTarget').addEventListener('input', () => { $('#outfitBase').value = $('#outfitTarget').value; updateOutfitForm(); });
@@ -699,6 +715,12 @@ $('#outfitMake').addEventListener('click', attempt(async () => {
     const wearing = $('#outfitWearing').value.trim().replace(/\.$/, '');
     if (!wearing) return toast('The prompt still says “…” where her clothes go: say what she wears', true);
     $('#outfitPrompt').value = $('#outfitPrompt').value.replace('wears …', `wears ${wearing}`);
+  }
+  // Klein reads only the prompt, and the look's Subject line is written from "She now wears": they have
+  // to name the same clothes, or the picture and its clips go two ways (a new shirt said to be worn).
+  const wears = $('#outfitWearing').value.trim().replace(/\.$/, '');
+  if (wears && ['outfit', 'full'].includes(outfitKind()) && !$('#outfitPrompt').value.includes(wears)) {
+    return toast('The prompt names different clothes from “She now wears”, and Klein only reads the prompt: make them the same', true);
   }
   const file = $('#outfitUpload').files[0], refs = [...$('#outfitRefs').files];
   state.choom = (await api(`/api/choom/${state.cid}/outfit`, {
