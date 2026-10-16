@@ -586,6 +586,125 @@ export function createGemmaToolCallFilter(): {
   return { filter, getCaptured: () => captured, flush };
 }
 
+/**
+ * Streaming filter for tool calls written as namespaced tags. Aloy on DeepSeek
+ * V4 Flash wrote them in her reply instead of calling the tool (23 times from
+ * 2026-09-24 to 2026-10-16), always as "vish":
+ *
+ *   <vish:ha_get_camera_snapshot> <vish:entity_id>camera.glass</vish:entity_id> </vish:ha_get_camera_snapshot>
+ *
+ * Nothing ran them, the chat showed the markup, and she went on as if the tool
+ * had answered: "There you are" from a camera she never looked at, "All secure"
+ * with no house check, two notes "tucked away" in memory that were never saved.
+ *
+ * A block is <ns:name>…</ns:name> holding only <ns:key>value</ns:key> fields.
+ * It's stripped either way; it's captured as a call when `name` is one of the
+ * turn's tools. The text after the first call was written without its result,
+ * so it's held back (getHeldBack) instead of shown: the loop runs the tool and
+ * she answers again with what it returned. Anything else in angle brackets,
+ * with or without a colon, passes through untouched.
+ */
+export function createTaggedToolCallFilter(toolNames: Iterable<string>): {
+  filter: (text: string) => string;
+  getCaptured: () => { id: string; name: string; arguments: Record<string, unknown> }[];
+  getHeldBack: () => string;
+  flush: () => string;
+} {
+  const known = new Set(toolNames);
+  const captured: { id: string; name: string; arguments: Record<string, unknown> }[] = [];
+  let buf = '';
+  let block: { ns: string; name: string; close: string } | null = null;
+  let held = '';
+  let holding = false;
+
+  const OPEN = /^<([A-Za-z][\w-]*):([A-Za-z_]\w*)>/;
+  const PARTIAL_OPEN = /^<(?:[A-Za-z][\w-]*(?::(?:[A-Za-z_]\w*)?)?)?$/;
+
+  const show = (s: string): string => {
+    if (!holding) return s;
+    held += s;
+    return '';
+  };
+
+  // A complete block: true when it was a tag-written call (captured or, for a
+  // name that isn't one of her tools, just stripped).
+  function take(b: { ns: string; name: string; close: string }, text: string): boolean {
+    const inner = text.slice(b.ns.length + b.name.length + 3, text.length - b.close.length);
+    const ns = b.ns.replace(/[-]/g, '\\-');
+    const field = new RegExp(`<${ns}:([A-Za-z_]\\w*)>([\\s\\S]*?)</${ns}:\\1>`, 'g');
+    if (inner.replace(field, '').trim()) return false;
+    const args: Record<string, unknown> = {};
+    for (const m of inner.matchAll(field)) {
+      const v = m[2].trim();
+      args[m[1]] = v === 'true' ? true : v === 'false' ? false : v !== '' && !isNaN(Number(v)) ? Number(v) : v;
+    }
+    if (known.has(b.name)) {
+      captured.push({ id: `tagtc_${Date.now()}_${captured.length}`, name: b.name, arguments: args });
+      holding = true;
+    } else {
+      console.warn(`   ⚠️  Tag-written call to ${b.name}, not one of this turn's tools — stripped`);
+    }
+    return true;
+  }
+
+  function filter(text: string): string {
+    buf += text || '';
+    let out = '';
+    while (buf) {
+      if (!block) {
+        const lt = buf.indexOf('<');
+        if (lt === -1) { out += show(buf); buf = ''; break; }
+        out += show(buf.slice(0, lt));
+        buf = buf.slice(lt);
+        const m = buf.match(OPEN);
+        if (m) { block = { ns: m[1], name: m[2], close: `</${m[1]}:${m[2]}>` }; continue; }
+        if (PARTIAL_OPEN.test(buf)) break;  // "<vish:get_w" — wait for the rest
+        out += show('<');
+        buf = buf.slice(1);
+      } else {
+        const end = buf.indexOf(block.close);
+        if (end === -1) {
+          // Safety valve, as for Gemma: never a call this long, release it.
+          if (buf.length > 20000) { out += show(buf); buf = ''; block = null; }
+          break;
+        }
+        const text = buf.slice(0, end + block.close.length);
+        buf = buf.slice(text.length);
+        if (!take(block, text)) out += show(text);
+        block = null;
+      }
+    }
+    return out;
+  }
+
+  function flush(): string {
+    let out = '';
+    if (block && known.has(block.name)) {
+      console.warn(`   ⚠️  Tag-written call to ${block.name} never closed (stream ended) — dropping ${buf.length} chars`);
+    } else if (buf) {
+      out = show(buf);
+    }
+    buf = '';
+    block = null;
+    return out;
+  }
+
+  return { filter, getCaptured: () => captured, getHeldBack: () => held, flush };
+}
+
+/**
+ * The tag-written calls above, out of a finished message: her past replies
+ * still hold 23 of them, and a model copies what it sees itself doing.
+ */
+export function stripTaggedToolMarkup(text: string): string {
+  if (!/<[A-Za-z][\w-]*:[A-Za-z_]\w*>/.test(text)) return text;
+  return text
+    .replace(/<([A-Za-z][\w-]*):([A-Za-z_]\w*)>(?:\s*<\1:([A-Za-z_]\w*)>[\s\S]*?<\/\1:\3>)*\s*<\/\1:\2>/g, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 // Find the index of the brace/bracket that closes the one at `start`, respecting
 // strings and escapes. Returns -1 if unbalanced.
 function matchBalanced(s: string, start: number, open: string, close: string): number {

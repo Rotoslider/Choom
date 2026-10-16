@@ -1340,6 +1340,22 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
               }
             }
 
+            // Calls written as namespaced tags (Aloy on DeepSeek V4 Flash:
+            // <vish:get_weather>…</vish:get_weather>), only names from her tools.
+            // Not beside a real call: on 2026-10-06 she made the generate_image
+            // call and also wrote it out as tags, which would draw it twice.
+            const capturedTagged = stream.capturedTagged;
+            if (capturedTagged.length > 0) {
+              if (stream.toolCalls.size > 0) {
+                console.log(`   🔧 ${choomTag} Tag-written call(s) beside a real one, not run: ${capturedTagged.map(t => t.name).join(', ')}`);
+              } else {
+                for (const ttc of dropEmptyArgCalls(capturedTagged)) {
+                  console.log(`   🔧 ${choomTag} Parsed tag-written tool call: ${ttc.name}(${JSON.stringify(ttc.arguments).slice(0, 80)})`);
+                  toolCalls.push(ttc);
+                }
+              }
+            }
+
             // Last-resort salvage of qwen's UNFORCED freestyle bracket tool calls
             // (e.g. `[generate_image prompt="…" size="large"]`). Only runs when NO
             // structured call was captured this turn — so it never double-executes —
@@ -1572,10 +1588,11 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                 const xmlCount = stream.capturedXml.length;
                 const jsonCount = stream.capturedJson.length;
                 const gemmaCount = stream.capturedGemma.length;
+                const taggedCount = stream.capturedTagged.length;
                 console.log(
                   `   🔬 ${choomTag} Empty content + no tool_calls. ` +
-                  `Stripped blocks captured: xml=${xmlCount}, json=${jsonCount}, gemma=${gemmaCount}. ` +
-                  `If all three are 0, nothing was streamed (possible LM Studio capability mismatch).`,
+                  `Stripped blocks captured: xml=${xmlCount}, json=${jsonCount}, gemma=${gemmaCount}, tagged=${taggedCount}. ` +
+                  `If all four are 0, nothing was streamed (possible LM Studio capability mismatch).`,
                 );
               }
             }

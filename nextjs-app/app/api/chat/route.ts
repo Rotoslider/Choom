@@ -19,6 +19,7 @@ import { CompactionService } from '@/lib/compaction-service';
 import { choomHasSshPermission } from '@/lib/choom-permissions';
 
 import { buildChoomContext } from '@/lib/chat-context';
+import { stripTaggedToolMarkup } from '@/lib/tool-call-parsing';
 import { buildSystemPrompt } from '@/lib/chat-prompt';
 import type { LLMSettings, ToolDefinition, WeatherSettings } from '@/lib/types';
 import * as fs from 'fs';
@@ -543,7 +544,11 @@ export async function POST(request: NextRequest) {
       if (msg.role === 'system') { rawHistory.push({ role: 'user', content: msg.content }); continue; }
       // Skip empty assistant messages (timeout leftovers with no content and no tool calls)
       if (msg.role === 'assistant' && (!msg.content || msg.content.trim() === '')) continue;
-      rawHistory.push({ role: msg.role, content: msg.content });
+      // Her own tag-written tool calls (<vish:…>) left in past replies: a model
+      // copies what it sees itself doing, so she sees those replies without them.
+      const content = msg.role === 'assistant' ? stripTaggedToolMarkup(msg.content) : msg.content;
+      if (!content.trim()) continue;
+      rawHistory.push({ role: msg.role, content });
     }
     // Collapse consecutive duplicate user messages (user retrying same prompt)
     const historyMessages: ChatMessage[] = [];

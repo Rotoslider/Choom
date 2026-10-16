@@ -19,6 +19,7 @@
 import { accumulateToolCalls, type ChatCompletionChunk, type ChatMessage, type LLMClient } from '@/lib/llm-client';
 import {
   createThinkFilter, createToolCallXmlFilter, createJsonToolCallFilter, createGemmaToolCallFilter,
+  createTaggedToolCallFilter,
 } from '@/lib/tool-call-parsing';
 import { computeStreamTimeouts, type EndpointTier } from '@/lib/stream-timeouts';
 import { stripRefrainLoop } from '@/lib/repetition-guard';
@@ -40,6 +41,8 @@ export interface StreamState {
   capturedJson: ParsedToolCall[];
   /** Gemma 4 <|tool_call>…<tool_call|> blocks leaked as text and stripped from `content`. */
   capturedGemma: ParsedToolCall[];
+  /** Calls written as namespaced tags (<vish:get_weather>…</vish:get_weather>), stripped from `content`. */
+  capturedTagged: ParsedToolCall[];
   thinkTokensFiltered: boolean;
   abortedForRepetition: boolean;
   /** Timestamp the call started; 0 until `readLlmStream` runs. */
@@ -52,7 +55,7 @@ export interface StreamState {
 export function newStreamState(): StreamState {
   return {
     content: '', reasoningProse: '', toolCalls: new Map(), finishReason: 'stop',
-    capturedXml: [], capturedJson: [], capturedGemma: [],
+    capturedXml: [], capturedJson: [], capturedGemma: [], capturedTagged: [],
     thinkTokensFiltered: false, abortedForRepetition: false,
     callStart: 0, firstChunkAt: 0,
     usage: { promptTokens: 0, completionTokens: 0, maxPromptTokens: 0 },
@@ -61,7 +64,8 @@ export function newStreamState(): StreamState {
 
 /** True when the stream produced any tool call in any form (structured or leaked as text). */
 export function streamHasToolCalls(st: StreamState): boolean {
-  return st.toolCalls.size > 0 || st.capturedXml.length > 0 || st.capturedJson.length > 0 || st.capturedGemma.length > 0;
+  return st.toolCalls.size > 0 || st.capturedXml.length > 0 || st.capturedJson.length > 0 || st.capturedGemma.length > 0
+    || st.capturedTagged.length > 0;
 }
 
 export interface ReadLlmStreamOptions {
@@ -173,6 +177,9 @@ export async function readLlmStream(st: StreamState, opts: ReadLlmStreamOptions)
   // Gemma 4 tool-call filter: strips <|tool_call>call:name{args}<tool_call|>
   // blocks emitted as text when Gemma's special tokens aren't tokenized
   const gemmaToolCallFilter = createGemmaToolCallFilter();
+  // Namespaced-tag filter: strips <vish:name><vish:key>v</vish:key></vish:name>
+  // (DeepSeek V4 Flash) and holds back what it wrote after the call, unanswered
+  const taggedToolCallFilter = createTaggedToolCallFilter(opts.tools.map(t => t.name));
 
   const emit = (text: string) => {
     // A stripped <think> block leaves its surrounding newlines behind; Qwen's
@@ -274,6 +281,7 @@ export async function readLlmStream(st: StreamState, opts: ReadLlmStreamOptions)
           visible = toolCallXmlFilter.filter(visible);
           if (visible) visible = jsonToolCallFilter.filter(visible);
           if (visible) visible = gemmaToolCallFilter.filter(visible);
+          if (visible) visible = taggedToolCallFilter.filter(visible);
           if (visible) {
             // Common model glitch: contraction directly fused to a number
             // without a separator ("That's16%", "be17%"). Insert the missing
@@ -344,9 +352,14 @@ export async function readLlmStream(st: StreamState, opts: ReadLlmStreamOptions)
     // Flush any buffered partial tag that was never completed — unless a
     // repetition abort already cut st.content: a held-back tail is loop text
     // from past the cut.
+    // What the others release still passes the tag filter: after a tag-written
+    // call its text is unanswered too.
     for (const flushed of [toolCallXmlFilter.flush(), jsonToolCallFilter.flush(), gemmaToolCallFilter.flush()]) {
-      if (flushed && !st.abortedForRepetition) emit(flushed);
+      const shown = flushed ? taggedToolCallFilter.filter(flushed) : '';
+      if (shown && !st.abortedForRepetition) emit(shown);
     }
+    const taggedTail = taggedToolCallFilter.flush();
+    if (taggedTail && !st.abortedForRepetition) emit(taggedTail);
     if (st.thinkTokensFiltered) {
       console.log(`   🧠 ${choomTag} ${label}Think tokens filtered from response`);
     }
@@ -368,5 +381,10 @@ export async function readLlmStream(st: StreamState, opts: ReadLlmStreamOptions)
     st.capturedXml = toolCallXmlFilter.getCaptured();
     st.capturedJson = jsonToolCallFilter.getCaptured();
     st.capturedGemma = gemmaToolCallFilter.getCaptured();
+    st.capturedTagged = taggedToolCallFilter.getCaptured();
+    const heldBack = taggedToolCallFilter.getHeldBack().trim();
+    if (heldBack) {
+      console.log(`   ✂️  ${choomTag} ${label}Held back ${heldBack.length} chars written after a tag-written tool call, before its result: ${heldBack.slice(0, 120).replace(/\s+/g, ' ')}`);
+    }
   }
 }
