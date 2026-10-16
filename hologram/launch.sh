@@ -64,6 +64,13 @@ if [[ "${HOLOGRAM_STUDIO:-1}" != 0 ]] && ! pgrep -f -- "^python3 .*studio/studio
   setsid nohup python3 "$DIR/studio/studio.py" serve > "$DIR/studio/studio.log" 2>&1 < /dev/null &
 fi
 
+# The glass takes the keyboard when its window opens; give it back to the window that had it (a space
+# typed for the terminal reached the glass and paused her particles, 2026-10-15).
+FOCUSED=$(xprop -root _NET_ACTIVE_WINDOW 2>/dev/null | grep -o '0x[0-9a-f]*' || true)
+if [[ -n "$FOCUSED" && "$FOCUSED" != 0x0 ]]; then
+  setsid nohup python3 "$DIR/tools/focus_back.py" "$FOCUSED" "$PROFILE" > /dev/null 2>&1 < /dev/null &
+fi
+
 nohup google-chrome \
   --user-data-dir="$PROFILE" \
   --no-first-run --no-default-browser-check --noerrdialogs --disable-session-crashed-bubble \

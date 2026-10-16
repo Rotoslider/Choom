@@ -27,6 +27,13 @@ Portrait with its own profile. Environment:
 Keys on the page: arrow keys or 1-4 switch Choom, hold L = listening, M = mute, `-`/`=` depth,
 `[`/`]` calibration center, H = readout.
 
+The keys that stay in effect until pressed again (Space = pause, M, B = body, `-`/`=`, `[`/`]`) work
+only while the readout (H) is up, and the readout says PAUSED while paused. The glass takes the
+keyboard when its window opens, so launch.sh hands it back to the window that had it
+(`tools/focus_back.py`): on 2026-10-15 a space typed for the terminal reached the glass right after a
+relaunch and froze every Choom's particles, Optic's and Eve's bands and Aloy's orbs for hours (the
+clips kept playing). Status entries in telemetry.log carry `paused`, and `tuning` entries name the key.
+
 ## Rendering
 
 `lenticular.js` draws 48 views (an 8x6 quilt, 3360x3360) from an off-axis camera rig and interleaves

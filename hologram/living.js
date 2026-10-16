@@ -2335,8 +2335,13 @@ function updateLevel(dt) {
 
 const hud = document.getElementById('hud');
 let hudOn = false;
+// Keys that stay in effect until pressed again (pause, mute, body, depth, calibration) work only
+// while the readout is up: the glass takes the keyboard when it launches, and one stray space typed
+// for another window froze her particles, scan line and orbs for hours (2026-10-15).
+const TUNING_KEYS = new Set(['Space', 'KeyM', 'KeyB', 'Minus', 'Equal', 'BracketLeft', 'BracketRight']);
 window.addEventListener('keydown', (e) => {
   if (e.repeat && e.code !== 'KeyL') return;
+  if (TUNING_KEYS.has(e.code) && !hudOn) return;
   switch (e.code) {
     case 'ArrowLeft': switchTo(current - 1); break;
     case 'ArrowRight': switchTo(current + 1); break;
@@ -2352,7 +2357,7 @@ window.addEventListener('keydown', (e) => {
     case 'BracketRight': lkg.center += e.shiftKey ? 0.001 : 0.005; break;
     default: return;
   }
-  post('tuning', { depth: baseDepth.value, center: lkg.center, choom: portraits[current].name });
+  post('tuning', { key: e.code, depth: baseDepth.value, center: lkg.center, paused, choom: portraits[current].name });
   e.preventDefault();
 });
 window.addEventListener('keyup', (e) => { if (e.code === 'KeyL') listening = false; });
@@ -2498,10 +2503,10 @@ renderer.setAnimationLoop((now) => {
     if (hudOn) {
       const exact = innerWidth === 1536 && innerHeight === 2048 && devicePixelRatio === 1;
       const shown = body ? `body ${body.url.split('/').pop()}` : `depth ${baseDepth.value.toFixed(2)}`;
-      hud.innerHTML = `LIVING PORTRAITS  ${fps} fps\nchoom ${portraits[current].name}   ${shown}\n` +
+      hud.innerHTML = `LIVING PORTRAITS  ${fps} fps${paused ? '   <span class="warn">PAUSED (space)</span>' : ''}\nchoom ${portraits[current].name}   ${shown}\n` +
         (exact ? `window ${innerWidth}x${innerHeight} at ${screenX},${screenY}` :
           `<span class="warn">window ${innerWidth}x${innerHeight} at ${screenX},${screenY} NOT pixel-exact</span>`) +
-        `\n← → or buttons: switch   hold L or bottom button: listen\nb body   - = depth   h hide`;
+        `\n← → or buttons: switch   hold L or bottom button: listen\nb body   m mute   - = depth   [ ] center   space pause   h hide`;
     }
   }
 });
@@ -2514,7 +2519,7 @@ post('start', { page: 'living', chooms: portraits.map((p) => p.name), window: wi
 function sendStatus() {
   const cp = portraits[current], pl = cp.players?.[cp.active];
   post('status', {
-    page: 'living', fps, choom: cp.name, body: body ? body.url : null, listening: heard(), mood, voiceOn,
+    page: 'living', fps, choom: cp.name, body: body ? body.url : null, listening: heard(), mood, voiceOn, paused,
     queued: speech.queue.length, window: windowInfo(), clip: cp.alive && pl?.clip >= 0 ? cp.alive.clips[pl.clip]?.source : null,
   });
 }
