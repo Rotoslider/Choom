@@ -279,8 +279,11 @@ class Handler(BaseHTTPRequestHandler):
                 default = {"outfit": lambda: pictures.outfit_prompt(wearing, keep), "full": lambda: pictures.full_prompt(keep, wearing),
                            "asleep": lambda: pictures.asleep_prompt(keep), "redo": lambda: pictures.TRUE_COLOR_PROMPT}[kind]
                 prompt = (data.get("prompt") or "").strip() or default()
+                # The form as he filled it in (when, name, versions too): a discard puts it back to try again.
                 proj.data.setdefault("drafts", {})[look_id] = {"base": base, "kind": kind, "wearing": wearing, "prompt": prompt,
-                                                               "pictures": [], "status": "making",
+                                                               "pictures": [], "status": "making", "count": int(data.get("count", 3)),
+                                                               **({"when": data["when"], "name": data.get("name", "")} if kind == "outfit" else {}),
+                                                               **({"upload": True} if data.get("upload") else {}),
                                                                **({"replace": True} if kind == "redo" else {}),
                                                                **({"refs": refs} if refs else {})}
                 jobs.add("picture", {"choom": cid, "look": look_id, "source": source, "refs": refs,

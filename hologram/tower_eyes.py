@@ -47,6 +47,10 @@ EYE_DEGREES = 50.0        # how far a fully turned iris (offset 1) turns his gaz
 LOOK_AFTER = 0.5          # seconds of looking before it counts
 AWAY_AFTER = 1.5          # seconds of looking away before it counts
 FACE_GONE_AFTER = 3.0     # seconds without a face before he's gone from the tower
+FACE_AFTER = 1.5          # seconds a face must stay before he counts as arrived, when he wasn't here lately: a lone
+                          # flash of a face at 7:05 am (nobody in view) woke the screens and Genesis welcomed no one
+FACE_BACK_S = 60.0        # he was here this recently: a face counts at once (he only turned away or leaned out)
+FACE_RUN_GAP = 0.5        # seconds between frames with a face that start a new run
 CONFIG = Path(os.environ.get("HOLOGRAM_CONFIG", Path.home() / ".config" / "choom-hologram")) / "camera.json"
 PORT = 8766
 DEFAULTS = {
@@ -133,7 +137,8 @@ class Eyes:
         self.pitch_usual = None       # his head tilt when facing the camera, learned as he does
         self.looking = False
         self.face = False
-        self.since = {"look": None, "away": None, "face": None}
+        self.since = {"look": None, "away": None, "face": None, "run": None}
+        self.here_at = float("-inf")  # the last frame with his face while he counted as here
         self.started = time.monotonic()
         self.roi, self.roi_seen, self.search, self.clock = None, 0.0, 0, -1   # where his face is in the frame
         self.settings = load_settings()
@@ -183,9 +188,14 @@ class Eyes:
             if self.face and now - (self.since["face"] or now) > FACE_GONE_AFTER:
                 self.face, self.looking, changed = False, False, True
         else:
+            if self.since["face"] is None or now - self.since["face"] > FACE_RUN_GAP:
+                self.since["run"] = now
             self.since["face"] = now
             if not self.face:
+                if now - self.here_at > FACE_BACK_S and now - self.since["run"] < FACE_AFTER:
+                    return False  # not yet: a face has to stay a moment before he counts as arrived
                 self.face, changed = True, True
+            self.here_at = now
             gaze_yaw, pitch = seen
             facing = abs(gaze_yaw) < float(self.settings.get("yaw_limit", YAW_LIMIT))
             if facing:  # learn his usual tilt while he faces the camera

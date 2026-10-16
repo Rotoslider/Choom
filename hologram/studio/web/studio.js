@@ -693,6 +693,13 @@ $('#outfitKind').addEventListener('input', () => {
 $('#outfitPrompt').addEventListener('input', () => { promptEdited = true; });
 $('#outfitMake').addEventListener('click', attempt(async () => {
   if (outfitKind() === 'outfit' && !$('#outfitWearing').value.trim() && !promptEdited) return toast('Say what she wears', true);
+  // A prompt changed before "She now wears" was filled in stops following it and keeps the "…" where her
+  // clothes go: Genesis's shop shirt and ponytail never reached Klein that way (2026-10-16).
+  if ($('#outfitPrompt').value.includes('wears …')) {
+    const wearing = $('#outfitWearing').value.trim().replace(/\.$/, '');
+    if (!wearing) return toast('The prompt still says “…” where her clothes go: say what she wears', true);
+    $('#outfitPrompt').value = $('#outfitPrompt').value.replace('wears …', `wears ${wearing}`);
+  }
   const file = $('#outfitUpload').files[0], refs = [...$('#outfitRefs').files];
   state.choom = (await api(`/api/choom/${state.cid}/outfit`, {
     kind: outfitKind(), base: $('#outfitBase').value, when: $('#outfitWhen').value, name: $('#outfitName').value,
@@ -730,9 +737,34 @@ function renderDrafts() {
       className: 'ghost', type: 'button', onclick: attempt(async () => {
         state.choom = (await api(`/api/choom/${state.cid}/discard`, { look })).choom;
         renderLooks();
+        refillOutfitForm(look, d);
       }),
-      tip: 'Throw these versions away (the files stay in clean/drafts)',
+      tip: 'Throw these versions away and put their settings back in the form, to change the prompt and try again (the files stay in clean/drafts)',
     }, 'Discard')))));
+}
+// Discarded versions: the form comes back as it was for them (kind, start look, when and name, what
+// she wears, the prompt, how many), so a new try is one changed line away instead of starting over.
+function refillOutfitForm(look, d) {
+  if (!d.kind) return;  // a new Choom's first picture: not from this form
+  promptEdited = false;
+  $('#outfitKind').value = d.kind;
+  renderOutfitForm();
+  if (d.base) $('#outfitBase').value = d.base;
+  if (d.kind === 'redo') $('#outfitTarget').value = look;
+  if (d.kind === 'outfit') {
+    const part = look.split('@')[1] || '';  // versions made before the form was kept: from the look's name
+    const when = d.when || Object.keys(WHEN).find((w) => part.startsWith(w)) || $('#outfitWhen').value;
+    $('#outfitWhen').value = when;
+    $('#outfitName').value = d.name ?? part.slice(when.length);
+  }
+  $('#outfitWearing').value = d.wearing || '';
+  if (d.count) $('#outfitCount').value = String(d.count);
+  updateOutfitForm();
+  if (d.prompt && d.prompt !== $('#outfitPrompt').value) { $('#outfitPrompt').value = d.prompt; promptEdited = true; }
+  $('#newOutfit').open = true;
+  $('#newOutfit').scrollIntoView({ block: 'start' });
+  toast(d.upload || d.refs?.length ? 'Its settings are back in the form; choose the pictures from your computer again'
+    : 'Its settings are back in the form: change what you like and make pictures again');
 }
 $('#zoom').addEventListener('click', () => $('#zoom').close());
 

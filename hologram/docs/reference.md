@@ -276,7 +276,11 @@ When Donny sits back down after 20 minutes or more away, the Choom he last talke
 welcomes him back. `server.py` counts him at the desk while the camera sees his face, or the NUC's
 keyboard or mouse was used in the last 30 seconds (GNOME's idle time) and the camera saw him in the
 last 5 minutes: GNOME also resets its idle time when the screens wake or the monitor layout is
-reapplied, which faked his return while he was out. On his return it asks the
+reapplied, which faked his return while he was out. When nobody has been seen for a minute,
+`tower_eyes.py` reports a face only once it has stayed 1.5 seconds (`FACE_AFTER`): on 2026-10-16 a
+lone flash of a face at 7:05 am, under a second, with nobody in view, woke the screens and Genesis
+welcomed an empty room. A face back within a minute counts at once, so eye contact stays quick.
+On his return it asks the
 Choom app's `POST /api/hologram/welcome {awayMinutes, place?}`. The app picks his most recent genuine
 conversation (`lastUserMessageAt`, skipped if older than 12 hours) and runs her turn there with a note
 (`note: true` on `/api/chat`): saved as a system message the chat window doesn't show, never counted

@@ -135,6 +135,12 @@ Each look has its picture and three lines:
 asleep. Klein makes a few versions and you pick one. A full body started from an outfit is that
 outfit's own (`full@dayspandex`): the glass cuts to it only while she wears the outfit.
 
+**Discard** throws the versions away and puts their settings back in the form (kind, start look,
+when and name, what she wears, the prompt, how many), so the next try is one changed line away.
+Pictures sent from your computer have to be chosen again. A prompt changed by hand stops following
+"She now wears"; if it still has the "…" where her clothes go, **Make pictures** fills them in (or
+asks for them), since a prompt with "…" tells Klein nothing about the outfit.
+
 | | |
 |:---:|:---:|
 | ![The new look form for Genesis's burgundy dress](docs/images/outfit-1-new-look.jpg) | ![Klein's three versions](docs/images/outfit-2-versions.jpg) |
