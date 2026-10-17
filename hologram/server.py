@@ -350,8 +350,12 @@ def weather_watch():
         try:
             if time.time() - town_at > 600:
                 town_at = time.time()
-                with urllib.request.urlopen(f"{CHOOM_URL}/api/weather", timeout=30) as response:
-                    town = json.loads(response.read()).get("weather") or {}
+                try:
+                    with urllib.request.urlopen(f"{CHOOM_URL}/api/weather", timeout=30) as response:
+                        town = json.loads(response.read()).get("weather") or {}
+                except Exception as e:  # the Mac down or restarting: the station still counts (it was skipped)
+                    latest["weather_error"] = f"town: {type(e).__name__}: {e}"
+                    town_at = time.time() - 480  # try the town again in 2 minutes
             entry = {"type": "weather", "wind": town.get("windSpeed") or 0, "gust": town.get("windGust") or 0,
                      "description": town.get("description") or "", "temperature": town.get("temperature"),
                      "source": "town", "time": time.strftime("%Y-%m-%dT%H:%M:%S")}
