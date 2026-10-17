@@ -14,22 +14,45 @@ next to them; the code is the source of truth.
 
 `launch.sh` takes these steps in order:
 1. Resolves its real folder, so starting it through a symlink still stops the right processes.
-2. Finds the Portrait as the connected display running 1536x2048.
-3. Stops anything left from a previous launch.
-4. Starts `server.py` on 127.0.0.1:8765.
-5. Starts `tower_ears.py` and `tower_eyes.py` if `.venv-ears` exists.
-6. Starts Glass Studio on 127.0.0.1:8767 if it isn't already running. A relaunch leaves the Studio
+2. Closes any file descriptors it was given beyond stdin, stdout and stderr, so the processes it
+   starts don't hold a caller's lock (a `flock` around a relaunch would otherwise stay held by the
+   server and Chrome, and every later relaunch would wait for it).
+3. Finds the Portrait as the connected display running 1536x2048.
+4. Stops anything left from a previous launch.
+5. Starts `server.py` on 127.0.0.1:8765.
+6. Starts `tower_ears.py` and `tower_eyes.py` if `.venv-ears` exists.
+7. Starts Glass Studio on 127.0.0.1:8767 if it isn't already running. A relaunch leaves the Studio
    running, so a render it started keeps its watcher.
-7. Opens a Chrome kiosk window on the Portrait with its own profile (`.chrome-profile`).
-8. Hands the keyboard back to the window that had it (`tools/focus_back.py`), because the kiosk
+8. Opens a Chrome kiosk window on the Portrait with its own profile (`.chrome-profile`).
+9. Hands the keyboard back to the window that had it (`tools/focus_back.py`), because the kiosk
    takes focus when it opens.
 
-To start at login, add an autostart entry, e.g. `~/.config/autostart/choom-hologram.desktop` with
-`Exec=/bin/bash -c "sleep 15; <path>/hologram/launch.sh living > <path>/hologram/autostart.log 2>&1"`.
+To start at login, add an autostart entry, `~/.config/autostart/choom-hologram.desktop`, with
+`Exec=/bin/bash -c "sleep 15; <path>/hologram/tools/autostart.sh"`. `tools/autostart.sh` tries every
+10 s for up to 10 minutes until the Portrait is connected at 1536x2048 (after a boot it can come up
+after the desktop does, and `launch.sh` gives up at once without it), and does nothing when the glass
+is already running. It appends to `autostart.log`.
 
-To reload the page without cutting a Choom off, use `tools/relaunch_when_quiet.sh`. It waits (up
-to 10 minutes) until the page reports her idle with nothing queued to say. Glass Studio's build
-uses it.
+To reload the page without cutting anyone off, use `tools/relaunch_when_quiet.sh`. It waits (up to
+10 minutes) until the page reports her idle with nothing queued to say and no conversation at the
+tower is under way (it waits through his reply window too), relaunches, then waits for the new page
+to report in. Glass Studio's build uses it. Exit codes:
+
+| Code | Meaning |
+|---|---|
+| `0` | relaunched: the new page reported in |
+| `1` | still busy after 10 minutes; not relaunched |
+| `2` | the launch failed: `launch.sh` failed (no Portrait at 1536x2048, say) or no new page within 40 s |
+
+**Recovery.** The server watches the rest:
+- **The page:** it posts its status every 2 s, also with the screens dark. If none comes for a minute
+  (Chrome crashed, the page froze), the server relaunches everything with `launch.sh`. Not in the
+  first 2 minutes after a launch, not while `launch.sh` runs, and at most once every 10 minutes.
+  Only the living page is watched.
+- **The tower's helpers:** exactly one `tower_ears.py` and one `tower_eyes.py`. A dead one is started
+  again (its log appended), up to 3 times in 10 minutes, then left down; a second one is stopped (the
+  newer).
+- Each recovery is a line in `recovery.log` and a `recovery` entry in `telemetry.log`.
 
 | Variable | Default | |
 |---|---|---|
@@ -41,6 +64,8 @@ uses it.
 | `HOLOGRAM_CONFIG` | `~/.config/choom-hologram` | the configuration folder (below) |
 | `HOLOGRAM_URL` | `http://127.0.0.1:8765` | where `tower_ears.py` and `tower_eyes.py` find the server |
 | `HOLOGRAM_WELCOME_AFTER_S` | from the Camera tab (20 min) | minutes away before a welcome back, in seconds (for testing) |
+| `HOLOGRAM_CALIBRATION` | the one `calibration/*_visual.json` | the calibration file, if `calibration/` holds several |
+| `HOLOGRAM_OWNER` | `donny` | the Home Assistant person found by name when `presence.json` doesn't say ([Presence](#presence-home-assistant)) |
 
 **Configuration folder** (`~/.config/choom-hologram/`, kept out of git). The server picks up its
 files without a restart.
@@ -53,8 +78,10 @@ files without a restart.
 | `camera.json` | tower_eyes.py, server.py | camera settings from the Choom app's Camera tab ([The glass camera](#the-glass-camera)) |
 | `studio.json` | Glass Studio | the workspace folder ([studio/README.md](../studio/README.md#setup)) |
 
-**Logs** (in `hologram/`): `server.log`, `ears.log`, `eyes.log`, `chrome.log`, `studio/studio.log`,
-and `telemetry.log` (rotated at 50 MB; see [Debugging](#debugging)).
+**Logs** (in `hologram/`): `server.log`, `ears.log`, `eyes.log`, `chrome.log` and `studio/studio.log`
+are appended on every launch (each starts with a `== <time> launch ==` line) and rotated past 5 MB
+with one old copy (`.1`), so a crash's traceback survives the next relaunch. `telemetry.log` is
+rotated at 50 MB (see [Debugging](#debugging)); `recovery.log` and `autostart.log` are appended.
 
 ## Keyboard
 
@@ -316,18 +343,22 @@ Only a wake phrase at the start counts ("OK" or "hey" plus a name):
 | Say | Goes to |
 |---|---|
 | OK Aloy, OK Optic, OK Genesis, OK Eve | her current 1:1 chat (picked as Signal picks it) |
-| OK Chooms, OK girls, OK everyone | the room set as the Signal room on the Rooms page, or else the room you last spoke in |
+| OK Chooms, OK girls | the room set as the Signal room on the Rooms page, or else the room you last spoke in |
 
-A Choom added later through Glass Studio wakes by her name, or by the spellings in her
-`portraits/manifest.json` entry's `wake` (a regular expression).
+"OK everyone" doesn't call the room: "Okay, everyone..." on a call or a video near the tower would
+send the rest of the sentence there. A Choom added later through Glass Studio wakes by her name, or by
+the spellings in her `portraits/manifest.json` entry's `wake` (a regular expression).
 
 **Messages.**
 - A bare wake phrase waits 8 s for the words.
 - A message ends when 90% of the last 2.5 s was quiet. The speakerphone sends exact silence in every
   pause, and pauses between sentences often pass 1.5 s.
 - A message can run 45 s.
-- Short sounds, and audio that fails a local speech check, are dropped, so Whisper can't turn noise
-  into a sentence.
+- Short sounds are dropped before Whisper, counted in voiced frames (each capture also carries
+  300 ms before it and the quiet that ended it): under 0.2 s of voice anywhere, under 0.3 s in a reply
+  window (a cough, a knock; "yes" is about 0.4 s). Audio that fails a local speech check is dropped
+  too, so Whisper can't turn noise into a sentence. `ears` entries in `telemetry.log` carry `seconds`
+  and `voiced`.
 
 **The reply window.** After her answer the mic opens for your reply:
 - It opens once her conversation turn has ended and her voice has stopped. A heartbeat running beside
@@ -336,6 +367,8 @@ A Choom added later through Glass Studio wakes by her name, or by the spellings 
 - If any Choom starts speaking while it's open, the window closes without sending anything, and opens
   again with a fresh chime once it's quiet. A Choom's voice is never sent as yours.
 - Only the wake phrase itself interrupts her.
+- While a conversation at the tower is under way (from the wake phrase to the reply window closing),
+  `/status` shows `tower_conversation: {"open": true}` and `relaunch_when_quiet.sh` waits for it.
 
 Nothing is kept; events go to `telemetry.log` without the words. Keep the microphone's input level up
 (`wpctl set-volume @DEFAULT_AUDIO_SOURCE@ 1.0`). `launch.sh stop` also ends the listener's
@@ -365,7 +398,10 @@ it has found it, otherwise the middle of the frame and each side in turn.
 The face is gone after 3 s without one.
 
 While you look at her, the Choom keeps to her facing-you clips and leans in a little, and the
-screensaver waits. Frames are never written anywhere; only changes are sent and logged.
+screensaver waits. Frames are never written anywhere. `tower_eyes.py` sends its state (looking, face,
+camera) to the server on each change and every 30 s, so a lost message or a server restarted on its
+own can't leave the server sure he's at the desk; the server passes on and logs only changes, and a
+page that has just started gets the current state at once.
 
 Test on a video: `.venv-ears/bin/python tower_eyes.py --source clip.mp4 --print`.
 
@@ -421,8 +457,13 @@ reads exactly that value:
  "shop": "binary_sensor.shop_presence"}
 ```
 
-- **No `home` role.** The server uses the owner's `person.` entity (the one named for the owner, or
-  the only one).
+- **No `home` role.** The server uses the `person.` entity named by a `"person"` key
+  (`{"person": "person.donny", "desk": ...}`), else the only person in Home Assistant, else the one
+  named like `HOLOGRAM_OWNER` (default `donny`).
+- **`ha_url`** should be an address that doesn't move: a hostname, or an IP the router always gives
+  Home Assistant (a DHCP reservation). When it moves, presence and the weather station stop.
+- **A page that has just started** gets the current presence at once (it only reached the page when it
+  changed).
 - **Arriving and leaving.** Arriving counts at once. Leaving counts only after two minutes absent,
   because phones drop Wi-Fi now and then.
 - **What each role does.**
@@ -432,9 +473,9 @@ reads exactly that value:
 
 ## Weather
 
-`server.py` reads the town weather from the Choom app every 10 minutes. If `weather.json` maps any of
-`wind`, `gust`, `temperature` and `rain` to Home Assistant sensors, it reads those every 2 minutes
-instead:
+`server.py` reads the town weather from the Choom app every 10 minutes (every 2 after a failure). If
+`weather.json` maps any of `wind`, `gust`, `temperature` and `rain` to Home Assistant sensors, it reads
+those every 2 minutes instead, also while the Choom app's weather can't be fetched:
 
 ```json
 {"wind": "sensor.station_wind_average_10_minutes", "gust": "sensor.station_wind_gust",
@@ -474,14 +515,26 @@ The looking-glass skill in the Choom app (`skills/core/looking-glass`) gives eac
   A move plays in the clothes she has on: from her current pose if she has it there, else as a cut to
   her whole figure in those clothes, else through a pose change in them (Aloy raises her hand first).
   A move she has only in other clothes doesn't play; the page logs a `glass` entry with `missed`.
-- **Clothes:** only outfits she can wear (with a `talk` clip) are matched.
+  The answer says so: a move only in an outfit is answered "only in <those clothes>: next time you're
+  on the glass and quiet in it", and one only in clothes she can't wear yet becomes a wish. Answers name
+  each move as something she does (`MOVE_NAMES` in `tools/closet.py`: "blow a kiss", "walk the runway").
+- **Clothes:** outfits she can wear (with a `talk` clip), and her usual clothes, are matched.
+  - Her usual clothes match by description: closet.json's `usual` plus what she holds in her main look
+    (Optic's heart), or, when her usual look names no clothes, her main Subject from the Studio project
+    without the person and the scene (Genesis's motes). "My wireframe dress" is Eve's usual dress.
+  - "Usual", "normal", "own" on their own mean her usual clothes; beside a garment, colour or fabric
+    they don't ("my own green dress" is her green dress).
   - A garment, colour or fabric she names has to be in the outfit: "a silk slip" never matches a
     cotton dress.
   - Scoring is 10 per garment, 3 per colour, 2 per other word.
-  - A tie between warm and cold night clothes goes by the temperature. Any other tie is a coin toss.
+  - A tie with her usual clothes goes to them ("my mint tee" is her usual tee, not the one under her
+    cold-day jacket). A tie between warm and cold night clothes goes by the temperature. Any other tie
+    is a coin toss.
   - The chosen outfit is kept in the page's wardrobe (localStorage).
 - **Wishes:** a move or clothes with no match, or anything asked with `glass_wish`, goes in
-  `portraits/<id>/wishes.json` (not in git). The Studio shows it on its Plan page.
+  `portraits/<id>/wishes.json` (not in git). The Studio shows it on its Plan page. The file is written
+  whole (a temp file swapped in); one that can't be read is read again, and if it stays unreadable it's
+  kept beside it as `wishes.json.unreadable-<time>` rather than written over.
 
 **By hand.** From the Mac, use `POST /api/hologram/glass {choom, op, what}` (home only). On the NUC,
 use `POST 127.0.0.1:8765/glass`, answered locally. `/control {"glassReset": true}` forgets every
@@ -529,8 +582,8 @@ Some cases run differently:
 - A room that hadn't reached its next speaker yet just carries on.
 - Your own message to a paused room takes its place.
 - A pause older than an hour is dropped.
-- If the tower never says you're done, the room picks up after 15 minutes, once the tower has been
-  quiet for 2.
+- If the tower never says you're done, the room picks up after 15 minutes (`ROOMS_PAUSED_S` in
+  `server.py`), once the tower has been quiet for 2.
 
 **Logging and tests.** Each leaving and returning is logged as `desk`. Welcomes and skips are logged as
 `welcome`, and paused rooms as `rooms`. `POST /control {"welcomeTest": 30}` sends a real welcome now,
@@ -567,8 +620,9 @@ The server does this itself, because GNOME never re-blanks screens that were wok
 It doesn't blank while an app holds the screens on (a video playing). If GNOME starts its fade to dark
 while the camera sees you, the server stops it.
 
-**Display watchdog.** It puts a monitor back in the layout if GNOME leaves it connected but off after
-an input switch (`display_fix` in telemetry).
+**Display watchdog.** It puts a monitor back in the layout if GNOME leaves it connected but off for 6 s
+after an input switch (`display_fix` in telemetry): the primary monitor at the left, the others to its
+right, the Portrait at the far right. The Portrait is never made primary, and no output is listed twice.
 
 Each wake and blank is logged as `screens`.
 
@@ -664,8 +718,11 @@ Each wake and blank is logged as `screens`.
   Use `"source": "test"` for spoken test lines, so they don't count as your conversation (the voice
   defaults to hers).
 - `POST /glass` answers a glass request locally, e.g. `{"choom": "genesis", "op": "move", "what": "twirl"}`.
-- `GET /status` shows the page, the feed, weather, presence, camera, the welcome watch and the
-  listener's state.
+- `GET /status` shows the page, the feed, weather, presence, camera, the welcome watch, the
+  listener's state and `tower_conversation` (whether a conversation at the tower is under way).
+- `GET /events` is the page's feed. A page that connects first gets the current state: the app's mute,
+  presence, gaze and weather. After the Choom feed from the Mac drops and reconnects, the server sends
+  the page `{"type": "feed", "state": "reconnected"}`.
 
 **Telemetry** (`telemetry.log`, JSON lines, rotated at 50 MB):
 
@@ -679,6 +736,7 @@ Each wake and blank is logged as `screens`.
 | `ears`, `eyes`, `gaze-seen` | server, page | the tower's listener and camera (never words or frames) |
 | `desk`, `welcome`, `rooms` | server | welcome back |
 | `screens`, `display_fix`, `weather`, `camera` | server | screens, monitor layout, weather changes, camera settings and snapshots |
+| `recovery`, `feed` | server | a page relaunch or a helper restarted or stopped (also in `recovery.log`); the Choom feed reconnecting |
 
 `tools/deinterleave.py OUT.jpg [view ...]` grabs the Portrait and rebuilds individual views. Use it to
 check depth without standing in front of the glass; run it with a Python that has numpy and Pillow.

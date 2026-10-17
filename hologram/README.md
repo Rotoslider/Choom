@@ -90,8 +90,10 @@ The Choom app runs on another machine (here a Mac Studio). The hologram reaches 
 4. **Choom app.** `export CHOOM_URL=http://<choom-host>:3000` (the default is in `launch.sh`).
 5. **Home Assistant (optional).** Put `ha_url`, `ha_token`, `presence.json` and `weather.json` in
    `~/.config/choom-hologram/` ([Presence](docs/reference.md#presence-home-assistant), [Weather](docs/reference.md#weather)).
-6. **Start.** Run `./launch.sh`; `./launch.sh stop` closes everything. To start at login, see
-   [Running](docs/reference.md#running).
+6. **Start.** Run `./launch.sh`; `./launch.sh stop` closes everything. To start at login, point an
+   autostart entry at `tools/autostart.sh`, which waits for the Portrait ([Running](docs/reference.md#running)).
+   While it runs, the server relaunches a page that stops reporting and keeps the tower's listener and
+   camera running ([Recovery](docs/reference.md#running)).
 7. **Glass Studio.** Point `~/.config/choom-hologram/studio.json` at a workspace folder and open
    http://127.0.0.1:8767 ([studio/README.md](studio/README.md)). `launch.sh` starts the Studio if it
    isn't running.
@@ -104,7 +106,7 @@ The clips themselves are made with Wan2GP and Forge Neo (Pinokio installs), as t
 | Do | What happens |
 |---|---|
 | Say "OK Aloy", "OK Optic", "OK Genesis" or "OK Eve" ("hey" works too) | she comes to the glass and listens; your words go to her current chat |
-| Say "OK Chooms", "OK girls" or "OK everyone" | the Chooms listen; your words go to the group room |
+| Say "OK Chooms" or "OK girls" | the Chooms listen; your words go to the group room |
 | Wait for the chime after she answers | the mic stays open 8 seconds for your reply, no wake phrase needed |
 | Type or hold the mic in the Choom app | she turns to listen |
 | Look at the glass | she turns to you (needs the camera) |
