@@ -488,24 +488,32 @@ async function renderPlan() {
   renderPlanned();
 }
 
-// Her wishes: what she asked the glass for (glass_move, glass_wear) and hasn't got yet.
+// Her wishes: what she asked the glass for (glass_move, glass_wear, glass_wish) and hasn't got yet, and
+// folded away below, the ones that came true.
 function renderWishes() {
   const c = state.choom;
-  if (!c.wishes?.length) return $('#wishes').replaceChildren();
+  const done = c.wishesDone || [];
+  if (!c.wishes?.length && !done.length) return $('#wishes').replaceChildren();
   const day = (t) => new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-  const letGo = (w) => attempt(async () => {
-    state.choom = (await api(`/api/choom/${state.cid}/wish`, { kind: w.kind, what: w.what })).choom;
+  const settle = (w, made) => attempt(async () => {
+    state.choom = (await api(`/api/choom/${state.cid}/wish`, { kind: w.kind, what: w.what, made })).choom;
+    toast(made ? `“${w.what}” is on her list of wishes that came true` : `“${w.what}” is off her list`);
     renderWishes();
   });
   $('#wishes').replaceChildren(el('div', { className: 'wishes' },
     el('h3', {}, `${c.name}'s wishes`),
-    el('p', { className: 'hint' }, 'What she asked the glass for and hasn\'t got yet. Once it\'s made she can ask for it by name. Let a wish go when it\'s made, or if it won\'t be.'),
-    ...c.wishes.map((w) => el('div', { className: 'wish' },
+    el('p', { className: 'hint' }, 'What she asked the glass for and hasn\'t got yet. Once it\'s made she can ask for it by name. Mark a wish made when it\'s on the glass, or let it go if it won\'t be.'),
+    ...(c.wishes || []).map((w) => el('div', { className: 'wish' },
       el('span', {}, el('b', {}, `“${w.what}”`), ` ${w.kind === 'wear' ? 'to wear' : 'a move'} · asked ${w.times > 1 ? `${w.times} times, last ` : ''}${day(w.last)}`),
       w.kind === 'wear'
         ? el('button', { type: 'button', className: 'ghost', onclick: () => wishOutfit(w), tip: 'Start a new outfit with this as what she wears' }, 'New outfit')
         : el('button', { type: 'button', className: 'ghost', onclick: () => wishMove(w), tip: 'Write it as your own clip: a move that ends where it began (sitting down or leaving need new poses, not yet)' }, 'Write it'),
-      el('button', { type: 'button', className: 'ghost', onclick: letGo(w), tip: 'Take it off her list' }, 'Let go')))));
+      el('button', { type: 'button', className: 'ghost', onclick: settle(w, true), tip: 'It\'s made: off her list, onto the list of wishes that came true' }, 'Made it'),
+      el('button', { type: 'button', className: 'ghost', onclick: settle(w, false), tip: 'It won\'t be made: take it off her list' }, 'Let go'))),
+    done.length ? el('details', { className: 'wishes-done' },
+      el('summary', {}, `Wishes that came true (${done.length})`),
+      ...[...done].reverse().map((w) => el('div', { className: 'wish' },
+        el('span', {}, el('b', {}, `“${w.what}”`), ` ${w.kind === 'wear' ? 'to wear' : 'a move'} · asked ${day(w.first || w.last)}, made ${day(w.made)}`)))) : null));
 }
 function wishMove(w) {
   $('#customClip').open = true;

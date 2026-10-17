@@ -47,7 +47,7 @@ def details(proj):
     glass = {"added": [n for n in proj.sequence if n not in built], "removed": [n for n in built if n not in proj.sequence]}
     closet = {look: proj.closet_words(look) for look in proj.looks if "@" in look}
     return {**proj.data, "stats": looks, "problems": build.problems(proj), "glass": glass, "inManifest": build.in_manifest(proj.id),
-            "closet": closet, "wishes": wishes(proj.id), "readiness": proj.readiness(built),
+            "closet": closet, "wishes": wishes(proj.id), "wishesDone": wishes_done(proj.id), "readiness": proj.readiness(built),
             "color": colors().get(proj.id) or proj.data.get("color"),
             "plannedMinutes": round(sum(render.minutes(c.get("frames") or 124) for c in planned))}
 
@@ -62,6 +62,22 @@ def wishes(cid):
 
 def colors():
     manifest = PORTRAITS / "manifest.json"
+def wishes_done(cid):
+    """Her wishes that were made (Made it on the Plan page), newest last."""
+    try:
+        return json.loads((PORTRAITS / cid / "wishes_done.json").read_text())
+    except (OSError, ValueError):
+        return []
+
+
+def write_json(path, data):
+    """Written whole and swapped in: the glass's server adds wishes to the same file any moment (its own
+    temporary name is wishes.part, so this one is different)."""
+    part = path.with_name(path.name + ".studio-part")
+    part.write_text(json.dumps(data, indent=1))
+    part.replace(path)
+
+
     return {m["id"]: m.get("color") for m in json.loads(manifest.read_text())} if manifest.exists() else {}
 
 
@@ -349,10 +365,20 @@ class Handler(BaseHTTPRequestHandler):
                     else:
                         look.pop("tags", None)
                 proj.write_closet()
-            elif action == "wish":  # let a wish go (made, or not to be)
-                f = PORTRAITS / cid / "wishes.json"
-                left = [w for w in wishes(cid) if not (w["kind"] == data.get("kind") and w["what"] == data.get("what"))]
-                f.write_text(json.dumps(left, indent=1))
+            elif action == "wish":  # a wish made ("made": it goes on her done list), or let go (it won't be)
+                which = lambda w: w["kind"] == data.get("kind") and w["what"] == data.get("what")  # noqa: E731
+                gone = [w for w in wishes(cid) if which(w)]
+                write_json(PORTRAITS / cid / "wishes.json", [w for w in wishes(cid) if not which(w)])
+                if data.get("made") and gone:
+                    write_json(PORTRAITS / cid / "wishes_done.json",
+                               wishes_done(cid) + [{**gone[0], "made": time.strftime("%Y-%m-%dT%H:%M:%S")}])
+            elif action == "home":
+                # Her home pose: the one she falls asleep from, wakes into and changes clothes in (Aloy's
+                # is relaxed, hand down). Clips planned from now on take it; built ones at the next build.
+                pose = str(data.get("pose", ""))
+                if pose not in ("main", "relaxed") or (pose != "main" and pose not in proj.looks):
+                    return self.fail("her home pose is main, or relaxed if she has that look")
+                proj.data["home"] = pose
             else:
                 return self.fail("unknown action", 404)
         return self.send_json({"choom": details(Project.load(cid))})

@@ -300,3 +300,9 @@ button.small { padding: 3px 10px; font-size: 12px; }
 .stat.warn { color: var(--warn); }
 .build-bar .problem button { margin-left: 6px; }
 .look-head { flex-wrap: wrap; }
+.wishes-done { margin-top: 6px; border-top: 1px solid var(--line); padding-top: 4px; }
+.wishes-done summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+.wishes-done .wish span { color: var(--muted); }
+.wishes-done { margin-top: 6px; border-top: 1px solid var(--line); padding-top: 4px; }
+.wishes-done summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+.wishes-done .wish span { color: var(--muted); }

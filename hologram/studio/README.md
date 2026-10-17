@@ -345,7 +345,9 @@ The glass answers from what's built:
 Something she asks for and hasn't got becomes a **wish**, and so does whatever she asks for with
 `glass_wish`. Her wishes show at the top of Plan & render, with when and how often she asked. Each
 has a button to start making it: **Write it** opens Write your own clip, and **New outfit** opens New
-look with her words filled in. **Let go** takes a wish off the list once it's made, or if it won't be.
+look with her words filled in. **Made it** moves a wish to her list of wishes that came true, folded
+away under the open ones (`portraits/<id>/wishes_done.json`, with the day it was made); **Let go**
+takes one off the list if it won't be made.
 
 ![Her wishes on the Plan page](docs/images/wishes.jpg)
 
