@@ -372,6 +372,8 @@ chat_turns = {}                  # (Choom, "chat" or "group", its id) -> when he
 ROOMS_PAUSED_S = 15 * 60         # a room paused for a welcome picks up again after this even if the tower
 rooms_paused = [0.0]             # never says he's done (not while he's talking at it)
 ears_at = [0.0]                  # tower_ears' last word (a wake, a window, what he said)
+tower_talk = {"open": False, "at": 0.0}  # a conversation at the tower under way (relaunch_when_quiet waits for it)
+TOWER_TALK_STALE_S = 180         # open with no word from tower_ears for this long: it died mid-conversation
 
 
 def idle_seconds():
@@ -774,7 +776,9 @@ class Handler(SimpleHTTPRequestHandler):
         if self.path == "/calibration.json":
             return self._send_json(json.loads(CALIBRATION.read_text()))
         if self.path == "/status":
-            return self._send_json({**latest, "buttons": buttons, "choom_feed": choom_feed})
+            talking = tower_talk["open"] and time.time() - max(tower_talk["at"], ears_at[0]) < TOWER_TALK_STALE_S
+            return self._send_json({**latest, "buttons": buttons, "choom_feed": choom_feed,
+                                    "tower_conversation": {"open": talking}})
         if self.path == "/events":
             return self._stream_events()
         if self.path.startswith("/choom-image/"):
@@ -839,6 +843,10 @@ class Handler(SimpleHTTPRequestHandler):
                 wake_screen("tower")
             if event != "voice":
                 ears_at[0] = time.time()
+            if event in ("wake", "window", "invited") or (event == "listen" and entry.get("listening") is True):
+                tower_talk.update(open=True, at=time.time())
+            elif event in ("window_closed", "invited_done") or (event == "listen" and entry.get("listening") is False):
+                tower_talk.update(open=False, at=time.time())
             if event == "invited_done":  # his conversation with whoever welcomed him back is over
                 threading.Thread(target=resume_rooms, args=("tower",), daemon=True).start()
             if event in ("window", "window_closed"):  # the reply window opening, or closing unheard

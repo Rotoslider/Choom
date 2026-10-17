@@ -14,6 +14,14 @@ PAGE="${1:-living}"
 
 CHOOM_URL="${CHOOM_URL:-http://donnys-mac-studio-3.local:3000}"
 
+# Hand the processes started below none of the file descriptors we were given: a caller's lock (flock
+# around relaunch_when_quiet.sh) went to the server, the mic, the camera and Chrome, and no later relaunch
+# could take it while they ran.
+for fd in /proc/$$/fd/*; do
+  fd=${fd##*/}
+  if (( fd > 2 && fd != 255 )); then eval "exec $fd>&-" 2>/dev/null || true; fi
+done
+
 # Logs are appended, so a crash's traceback survives the next relaunch (they were emptied on every one,
 # 44 a week), and each is rotated past 5 MB with one old copy kept. Prints the path for a redirect.
 logto() {
