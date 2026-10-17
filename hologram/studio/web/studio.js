@@ -789,6 +789,9 @@ function renderLooks() {
     // What she wears in an outfit: the Subject's clothes follow it when it changes (server side), and an
     // outfit's full body made later starts from it. Sent only when changed.
     const wears = look.includes('@') ? el('input', { value: l.wearing || '', placeholder: 'read from the Subject until set' }) : null;
+    // What Klein keeps of her when a new look starts from this one (only waist-up looks are starting
+    // points). Sent only when changed.
+    const kleinKeep = waistUp(look) ? el('textarea', { rows: 2, value: l.kleinKeep || '', placeholder: 'her face, expression, hair and pose' }) : null;
     const save = el('button', {
       className: 'ghost', type: 'button', onclick: attempt(async () => {
         const wearsChanged = wears && wears.value.trim() !== (l.wearing || '');
@@ -796,6 +799,7 @@ function renderLooks() {
           look, subject: subject.value, keep: keep.value, ending: ending.value,
           ...(closet && closet.value !== words ? { tags: closet.value } : {}),
           ...(wearsChanged ? { wearing: wears.value } : {}),
+          ...(kleinKeep && kleinKeep.value.trim() !== (l.kleinKeep || '') ? { kleinKeep: kleinKeep.value.trim().replace(/[,. ]+$/, '') } : {}),
         })).choom;
         toast(`${look} saved; clips planned from now on use it`);
         if (wearsChanged) renderLooks(); // the Subject now names the new clothes
@@ -815,6 +819,7 @@ function renderLooks() {
         el('label', {}, 'Subject', subject),
         wears && el('label', { tip: 'What she wears in this look. Changing it puts the new clothes in the Subject (unless you edit the Subject too, then yours stands), and a full body of this outfit made later starts from it' }, 'She wears', wears),
         el('label', {}, 'Keep line', keep), el('label', {}, 'Loop ending', ending),
+        kleinKeep ? el('label', { tip: 'What Klein keeps of her when a new look starts from this one (an outfit, its full body, her asleep): her face and what makes her herself, like Genesis\'s glasses and motes or Optic\'s headphones and heart. Outfits made from this look inherit it. A full body adds her clothes and leaves out her arms, hands and pose, since it stands relaxed' }, 'What Klein keeps', kleinKeep) : null,
         closet && el('label', { tip: 'Words she can ask for this outfit by (“my red dress”): the garment, its colour. Read from what she wears unless you change them; empty goes back to those' }, 'Closet words', closet),
         el('div', { className: 'row' }, save)));
   }));
@@ -856,11 +861,13 @@ function kleinPrompt() {
   const wearing = $('#outfitWearing').value.trim().replace(/\.$/, '');
   const keep = (base.kleinKeep || 'her face, expression, hair and pose').replace(/[,. ]+$/, '');
   // A full body or asleep picture keeps her clothes too: they are the point of an outfit's full body
-  // (pictures.with_clothes).
-  const kept = !base.kleinKeep ? 'her face, hair and clothes' : /clothes/.test(keep) ? keep : `${keep}, and her clothes`;
+  // (pictures.with_clothes). A full body stands relaxed, so it keeps no arms, hands or pose (Eve's crossed
+  // arms), and what she holds without how (pictures.full_keep).
+  const withClothes = (k) => (!k ? 'her face, hair and clothes' : /clothes/.test(k) ? k : `${k.replace(/,\s+and\s+(?=[^,]*$)/, ', ')}, and her clothes`);
+  const kept = withClothes(base.kleinKeep ? keep : '');
   if (outfitKind() === 'full') {
     return 'Show her from head to toe, standing relaxed and facing the viewer, her whole figure in frame with a little black space above her head and below her feet. '
-      + `Keep ${kept} exactly as in the picture, with the same light on the same pure black background.${wearing ? ` She wears ${wearing}.` : ''}`;
+      + `Keep ${withClothes(base.kleinKeep ? fullKeep(keep) : '')} exactly as in the picture, with the same light on the same pure black background.${wearing ? ` She wears ${wearing}.` : ''}`;
   }
   if (outfitKind() === 'redo') return TRUE_COLOR;
   if (outfitKind() === 'asleep') {
@@ -868,6 +875,13 @@ function kleinPrompt() {
       + `Keep everything else exactly the same: ${kept}, the lighting, the framing, and the pure black background.`;
   }
   return `Change her clothes: she now wears ${wearing || '…'}. Keep everything else exactly the same: ${keep}, the lighting, the framing, and the pure black background.`;
+}
+// pictures.full_keep: her keep line without her pose, for a full body.
+const POSE_WORDS = /\b(arms?|hands?|fingers?|pose|posture|crossed|clasped|raised|at her sides?)\b/i;
+function fullKeep(keep) {
+  return keep.replace(/[,. ]+$/, '').split(/,\s*(?:and\s+)?/).map((p) => p.trim()).filter(Boolean)
+    .map((p) => { const held = p.match(/^(.+?)\s+(?:that\s+)?she\s+(?:holds|is holding|carries)\b/i); return held ? held[1] : POSE_WORDS.test(p) ? null : p; })
+    .filter(Boolean).join(', ');
 }
 function outfitLookId() {
   const kind = outfitKind(), b = $('#outfitBase').value, o = b.split('@')[1];

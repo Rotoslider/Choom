@@ -36,14 +36,38 @@ def with_clothes(keep):
     """What a full body or asleep picture keeps: what keeps her herself (the look's kleinKeep: Genesis's
     glasses and motes) and the clothes, which are the point of an outfit's full body."""
     keep = keep.strip().rstrip(",. ")
-    return keep if "clothes" in keep else f"{keep}, and her clothes" if keep else "her face, hair and clothes"
+    if "clothes" in keep or not keep:
+        return keep or "her face, hair and clothes"
+    return f"{re.sub(r',\s+and\s+(?=[^,]*$)', ', ', keep)}, and her clothes"  # one list "and", before the clothes
+
+
+# A clause about her arms, hands or pose in a keep line: "her arms crossed in front of her".
+POSE = re.compile(r"\b(arms?|hands?|fingers?|pose|posture|crossed|clasped|raised|at her sides?)\b", re.I)
+# Something she holds: "the glowing fire agate heart she holds in front of her with both hands".
+HELD = re.compile(r"^(.+?)\s+(?:that\s+)?she\s+(?:holds|is holding|carries)\b", re.I)
+
+
+def full_keep(keep):
+    """A keep line for a full body, which stands relaxed: her pose stays out (Eve's crossed arms would
+    fight "standing relaxed" in every full body), and what she holds stays without how she holds it
+    (Optic's heart). Clauses are split at commas; "and" inside one ("her skin and body made of motes")
+    stays whole."""
+    parts = [p.strip() for p in re.split(r",\s*(?:and\s+)?", keep.strip().rstrip(",. ")) if p.strip()]
+    out = []
+    for p in parts:
+        held = HELD.match(p)
+        if held:
+            out.append(held.group(1))
+        elif not POSE.search(p):
+            out.append(p)
+    return ", ".join(out)  # with_clothes adds ", and her clothes"
 
 
 def full_prompt(keep, wearing=""):
     """Klein's instruction for a full-body picture from her main one."""
     clothes = f" She wears {wearing.strip().rstrip('.')}." if wearing.strip() else ""
     return ("Show her from head to toe, standing relaxed and facing the viewer, her whole figure in frame with a little "
-            f"black space above her head and below her feet. Keep {with_clothes(keep)} "
+            f"black space above her head and below her feet. Keep {with_clothes(full_keep(keep))} "
             f"exactly as in the picture, with the same light on the same pure black background.{clothes}")
 
 

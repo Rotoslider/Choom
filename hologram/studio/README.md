@@ -220,9 +220,13 @@ made; empty on looks made before that, until you fill it in). Changing it and cl
 the new clothes in the Subject line, unless you edited the Subject in the same save, in which case your
 Subject stands. A full body made from the outfit adds what it shows below the waist to these clothes.
 
-A look also carries **what Klein keeps** of her (`kleinKeep`: her face, Genesis's glasses and motes,
-Optic's headphones and heart), copied from the look it was made from. New looks made from it start
-their prompt with that list, and a full body or asleep picture adds her clothes to it.
+A waist-up look's card also has **What Klein keeps** of her (`kleinKeep`: her face, Genesis's glasses
+and motes, Optic's headphones and heart), copied from the look it was made from and editable there.
+New looks made from it start their prompt with that list. A full body or asleep picture adds her
+clothes to it, and a full body, which stands relaxed, leaves out what the list says about her arms,
+hands or pose (Eve's "her arms crossed in front of her" would keep her arms crossed in every full
+body) and keeps what she holds without how she holds it (Optic's heart). The prompt is shown before
+Klein runs, so either can still be changed by hand.
 
 #### New look
 
