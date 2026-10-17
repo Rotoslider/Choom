@@ -3,6 +3,9 @@
 telemetry.log
 server.log
 chrome.log
+# When Donny was last at the desk and last welcomed back (server.py), kept across relaunches
+desk.json
+desk.part
 __pycache__/
 portraits/*/mouth_check.jpg
 # Avatars stay local (this repo is public): each Choom's Avaturn export, and the stand-in

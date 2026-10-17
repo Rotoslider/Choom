@@ -414,6 +414,10 @@ WELCOME_HOURS = (7, 23)          # not at night
 MORNING = (5, 4 * 60 * 60)       # but back after a night away (4 h or more) counts from 5 am: up at
                                  # 6:43 after 518 minutes away went unwelcomed as "night" (2026-10-13)
 INPUT_COUNTS_S = 5 * 60          # keyboard and mouse count as him only this long after the camera saw him
+DESK = HERE / "desk.json"        # when he was last here and last welcomed back, kept across relaunches: the
+                                 # Studio's 4:12 am relaunch after a build started his time away over, and
+                                 # Genesis welcomed him back from 7 h 54 min away as "205 minutes" (2026-10-17)
+DESK_SAVE_S = 60                 # saved this often while he's here
 last_conversation = [0.0]        # when Donny last typed, talked or was answered (from the Choom feed)
 last_donny = [0.0]               # when he himself last typed, talked or wrote (a chat, Signal, the mic)
 DONNY_IN_ROOM_S = 10 * 60        # a group room counts as his conversation only this long after he took part:
@@ -496,8 +500,31 @@ def resume_rooms(why):
         log_entry({"kind": "rooms", "why": why, "error": type(e).__name__})
 
 
+def desk_saved():
+    """(when he was last at the desk, the last welcome back) as the last run saved them; 0 for unknown."""
+    try:
+        saved = json.loads(DESK.read_text())
+        here, welcomed = (float(saved.get(k) or 0) for k in ("here", "welcomed"))
+    except Exception:
+        return 0.0, 0.0
+    now = time.time()
+    return (here if here <= now else 0.0), (welcomed if welcomed <= now else 0.0)
+
+
+def save_desk(here, welcomed):
+    try:
+        part = DESK.with_suffix(".part")
+        part.write_text(json.dumps({"here": here, "welcomed": welcomed}))
+        part.replace(DESK)
+    except OSError:
+        pass
+
+
 def welcome_watch():
-    present_at, last_welcome, places, was_here, face_seen = time.time(), 0.0, [], [True], time.time()
+    # A relaunch carries on from the last run's desk.json; with none, he counts as here at the start.
+    saved_here, last_welcome = desk_saved()
+    present_at = saved_here or time.time()
+    places, was_here, face_seen, saved_at = [], [not saved_here], present_at, 0.0
     while True:
         time.sleep(5)
         try:
@@ -516,6 +543,8 @@ def welcome_watch():
                 log_entry({"kind": "desk", "here": here, "face": face, "idle": None if idle is None else round(idle),
                            "after": round(time.time() - present_at)})
                 was_here[0] = here
+                if not here:
+                    save_desk(present_at, last_welcome)  # the last moment he was here
             if not here:
                 # Where he is while away, from Home Assistant (the shop, the truck), if it knows.
                 for role, value in presence.items():
@@ -524,6 +553,9 @@ def welcome_watch():
                 continue
             away = time.time() - present_at
             present_at = time.time()
+            if present_at - saved_at > DESK_SAVE_S:
+                save_desk(present_at, last_welcome)
+                saved_at = present_at
             cam = camera_settings()
             if cam.get("welcome") is False:
                 places = []
@@ -542,6 +574,7 @@ def welcome_watch():
                 log_entry({"kind": "welcome", "minutes": round(away / 60), "skipped": why})
             else:
                 last_welcome = time.time()
+                save_desk(present_at, last_welcome)
                 threading.Thread(target=send_welcome, args=(away, places[-1] if places else None), daemon=True).start()
             places = []
         except Exception as e:
