@@ -54,10 +54,30 @@ const PREEMPT_POLL_MS = 500;
 // a running room stops before its next speaker, so his answer to her isn't held
 // behind more room turns, and picks up where it left off (that speaker first)
 // once he's done talking with her. PUT { pause } / { resume }, below.
-const pauseRequested = new Set<string>();
+// Neither waits forever for the { resume } (the hologram can restart, or its welcome can fail): a
+// pause request is dropped after PAUSE_MAX_MS, and a paused room picks itself up again after the
+// same time, as the hologram's own ROOMS_PAUSED_S does (hologram/server.py).
+const pauseRequested = new Map<string, number>(); // roomId -> when the pause was asked for
 const pausedRooms = new Map<string, { at: number; rounds: number; nextSpeakerId: string; settings: unknown }>();
-const PAUSED_KEEP_MS = 60 * 60 * 1000; // a pause older than this isn't picked up again
+const PAUSE_MAX_MS = 15 * 60 * 1000; // not exported: a route file may export only route handlers
 const resumeDispatcher = new Agent({ bodyTimeout: 0, headersTimeout: 0 }); // a room runs for many minutes
+
+/** A paused room picks up again: the speaker who was next goes first (a run of its own, below). */
+function pickUp(id: string, paused: { rounds: number; nextSpeakerId: string; settings: unknown }, why: string): void {
+  console.log(`   ▶️ Room ${id}: picking up again (${why})`);
+  void undiciFetch(`${baseUrl}/api/group-chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      roomId: id, continue: true, rounds: paused.rounds, nextSpeakerId: paused.nextSpeakerId,
+      settings: paused.settings, triggerSource: 'resume',
+    }),
+    dispatcher: resumeDispatcher,
+  }).then(async (res) => {
+    const reader = res.body?.getReader();
+    if (reader) while (!(await reader.read()).done) { /* the room runs on; the hologram has its own feed */ }
+  }).catch((err) => console.error(`   ▶️ Room ${id}: couldn't pick up again:`, err instanceof Error ? err.message : err));
+}
 const RUN_LOCK_STALE_MS = 15 * 60 * 1000; // auto-release a crashed/abandoned run
 // A Choom-initiated run (heartbeat / self-wakeup) within this window of the last
 // run on the same room is treated as an accidental duplicate and skipped — covers
@@ -173,30 +193,18 @@ export async function PUT(request: Request) {
   const now = Date.now();
   if (body.pause === true) {
     const rooms = [...runningRooms].filter(([, since]) => now - since < RUN_LOCK_STALE_MS).map(([id]) => id);
-    for (const id of rooms) pauseRequested.add(id);
+    for (const id of rooms) pauseRequested.set(id, now);
     return json({ pausing: rooms.map(id => ({ roomId: id, speaker: runningSpeakers.get(id) || null })) });
   }
   if (body.resume === true) {
-    const carriedOn = [...pauseRequested];
+    const carriedOn = [...pauseRequested].filter(([, at]) => now - at < PAUSE_MAX_MS).map(([id]) => id);
     pauseRequested.clear();
     const resumed: string[] = [];
     for (const [id, paused] of [...pausedRooms]) {
       pausedRooms.delete(id);
-      if (now - paused.at > PAUSED_KEEP_MS || runningRooms.has(id)) continue;
+      if (now - paused.at > PAUSE_MAX_MS || runningRooms.has(id)) continue; // (picked itself up already)
       resumed.push(id);
-      console.log(`   ▶️ Room ${id}: picking up again after the owner's conversation`);
-      void undiciFetch(`${baseUrl}/api/group-chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          roomId: id, continue: true, rounds: paused.rounds, nextSpeakerId: paused.nextSpeakerId,
-          settings: paused.settings, triggerSource: 'resume',
-        }),
-        dispatcher: resumeDispatcher,
-      }).then(async (res) => {
-        const reader = res.body?.getReader();
-        if (reader) while (!(await reader.read()).done) { /* the room runs on; the hologram has its own feed */ }
-      }).catch((err) => console.error(`   ▶️ Room ${id}: couldn't pick up again:`, err instanceof Error ? err.message : err));
+      pickUp(id, paused, "the owner's conversation is over");
     }
     return json({ resumed, carriedOn });
   }
@@ -321,6 +329,7 @@ export async function POST(request: NextRequest) {
   }
   runningRooms.set(roomId, nowMs);
   pausedRooms.delete(roomId); // a new run (his message, a sister's) takes the place of a paused one
+  pauseRequested.delete(roomId); // a pause asked of an earlier run (one that ended first) isn't this one's
   let lockReleased = false;
   const releaseLock = () => {
     if (lockReleased) return;
@@ -458,9 +467,18 @@ export async function POST(request: NextRequest) {
               cancelled = true;
               break;
             }
-            if (pauseRequested.has(roomId)) {
-              pauseRequested.delete(roomId);
-              pausedRooms.set(roomId, { at: Date.now(), rounds: maxRounds - round, nextSpeakerId: p.choomId, settings });
+            const pauseAskedAt = pauseRequested.get(roomId);
+            pauseRequested.delete(roomId);
+            if (pauseAskedAt !== undefined && Date.now() - pauseAskedAt < PAUSE_MAX_MS) {
+              const paused = { at: Date.now(), rounds: maxRounds - round, nextSpeakerId: p.choomId, settings };
+              pausedRooms.set(roomId, paused);
+              // No { resume } within PAUSE_MAX_MS (the hologram restarted, or never heard him finish):
+              // the room picks itself up, unless a resume or a new run took its place meanwhile.
+              setTimeout(() => {
+                if (pausedRooms.get(roomId) !== paused) return;
+                pausedRooms.delete(roomId);
+                if (!runningRooms.has(roomId)) pickUp(roomId, paused, 'no word from the hologram');
+              }, PAUSE_MAX_MS).unref?.();
               console.log(`   ⏸ Room ${roomId}: pausing for the owner's welcome back before ${p.choom.name} speaks`);
               send({ type: 'paused', nextSpeakerName: p.choom.name });
               cancelled = true;

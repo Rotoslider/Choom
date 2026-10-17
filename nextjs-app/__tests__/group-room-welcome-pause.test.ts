@@ -142,3 +142,65 @@ describe('a room makes way for his welcome back', () => {
     expect(src.indexOf("await rooms(request, 'pause')")).toBeLessThan(src.indexOf("fetch(new URL('/api/chat'"));
   });
 });
+
+// 2026-10-16: nothing waits forever for the { resume }. The hologram only says it's done after a
+// welcome that went out; a hologram restart, or a welcome that failed, left rooms paused.
+describe('a pause that nobody ends', () => {
+  const FIFTEEN_MIN = 15 * 60 * 1000;
+  afterEach(() => jest.restoreAllMocks());
+
+  test('a paused room picks itself up after 15 minutes with no word from the hologram', async () => {
+    const roomId = await newRoom('Water tank');
+    const timers = jest.spyOn(global, 'setTimeout');
+    mockTurn.mockImplementation(async (o: { speakerName: string }) => {
+      spoke.push(o.speakerName);
+      if (spoke.length === 1) await put({ pause: true });
+      return reply('ok');
+    });
+    await runRoom({ roomId, message: 'hi', initiatorChoomId: ids.Genesis, rounds: 2, triggerSource: 'heartbeat' });
+    const pickUp = timers.mock.calls.find(([, ms]) => ms === FIFTEEN_MIN)?.[0] as (() => void) | undefined;
+    expect(pickUp).toBeDefined();
+    expect(mockFetch).not.toHaveBeenCalled();
+    pickUp!();
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(JSON.parse((mockFetch.mock.calls[0] as [string, { body: string }])[1].body))
+      .toMatchObject({ roomId, continue: true, nextSpeakerId: ids.Eve, triggerSource: 'resume' });
+    expect(await put({ resume: true })).toEqual({ resumed: [], carriedOn: [] }); // nothing left paused
+  });
+
+  test('resumed in time: the 15-minute pick-up does nothing', async () => {
+    const roomId = await newRoom('Solar panels');
+    const timers = jest.spyOn(global, 'setTimeout');
+    mockTurn.mockImplementation(async (o: { speakerName: string }) => {
+      spoke.push(o.speakerName);
+      if (spoke.length === 1) await put({ pause: true });
+      return reply('ok');
+    });
+    await runRoom({ roomId, message: 'hi', initiatorChoomId: ids.Genesis, rounds: 2, triggerSource: 'heartbeat' });
+    expect(await put({ resume: true })).toEqual({ resumed: [roomId], carriedOn: [] });
+    (timers.mock.calls.find(([, ms]) => ms === FIFTEEN_MIN)![0] as () => void)();
+    expect(mockFetch).toHaveBeenCalledTimes(1); // the resume's, not a second one
+  });
+
+  test('a pause asked for more than 15 minutes before the next speaker is dropped', async () => {
+    const roomId = await newRoom('Well pump');
+    const realNow = Date.now.bind(Date);
+    let ahead = 0;
+    jest.spyOn(Date, 'now').mockImplementation(() => realNow() + ahead);
+    mockTurn.mockImplementation(async (o: { speakerName: string }) => {
+      spoke.push(o.speakerName);
+      if (spoke.length === 1) {
+        expect(await put({ pause: true })).toEqual({ pausing: [{ roomId, speaker: 'Aloy' }] });
+        ahead = FIFTEEN_MIN + 1000;
+        expect(await put({ resume: true })).toEqual({ resumed: [], carriedOn: [] }); // too old to count
+        ahead = 0;
+        expect(await put({ pause: true })).toEqual({ pausing: [{ roomId, speaker: 'Aloy' }] });
+        ahead = FIFTEEN_MIN + 1000; // and this one has gone stale by the time Eve is next
+      }
+      return reply('ok');
+    });
+    const events = await runRoom({ roomId, message: 'hi', initiatorChoomId: ids.Genesis, rounds: 1, triggerSource: 'heartbeat' });
+    expect(events.some(e => e.type === 'paused')).toBe(false);
+    expect(spoke.slice(0, 2)).toEqual(['Aloy', 'Eve']);
+  });
+});

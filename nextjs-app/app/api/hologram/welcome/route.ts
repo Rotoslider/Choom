@@ -9,6 +9,8 @@
  *
  * A room running at the time stops before its next speaker, so his answer to her isn't held behind
  * more room turns. { done: true } (the hologram, once he's done talking with her) picks it up again.
+ * If the welcome can't go out, the rooms pick up again at once; and a paused room picks itself up
+ * after 15 minutes with no { done } (the group-chat route's PAUSE_MAX_MS).
  */
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/db';
@@ -59,24 +61,27 @@ export async function POST(request: Request) {
     + "Otherwise a short, warm welcome back is enough. Don't mention this note or how you knew.]";
 
   const paused = await rooms(request, 'pause');
-  const settings = await (await serverSettings(request)).json();
   markViewing('chat', chat.id);
   const keepOpen = setInterval(() => markViewing('chat', chat.id), 10_000);
+  // No welcome after all: the paused rooms pick up again now. The hologram only sends { done } after
+  // a welcome that went out, so nothing else would resume them.
+  const failed = async (error: string) => {
+    clearInterval(keepOpen);
+    await rooms(request, 'resume');
+    return NextResponse.json({ ok: false, error }, { status: 502 });
+  };
   let response: Response;
   try {
+    const settings = await (await serverSettings(request)).json();
     response = await fetch(new URL('/api/chat', request.url), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ choomId: chat.choomId, chatId: chat.id, message: note, note: true, settings }),
     });
   } catch (e) {
-    clearInterval(keepOpen);
-    return NextResponse.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, { status: 502 });
+    return failed(e instanceof Error ? e.message : String(e));
   }
-  if (!response.ok || !response.body) {
-    clearInterval(keepOpen);
-    return NextResponse.json({ ok: false, error: `chat answered ${response.status}` }, { status: 502 });
-  }
+  if (!response.ok || !response.body) return failed(`chat answered ${response.status}`);
   const reader = response.body.getReader();
   void (async () => {
     try { while (!(await reader.read()).done) { /* the hologram follows on its own feed */ } }
