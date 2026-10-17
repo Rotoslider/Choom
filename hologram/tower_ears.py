@@ -49,6 +49,13 @@ MAX_SPEECH_S = 45                # the longest single message (the app's speech-
 # cough, not words: dropped before Whisper. A reply as short as "yes" is about 0.4 s of voice.
 MIN_VOICED_S = 0.2
 MIN_REPLY_VOICED_S = 0.3
+# A wedged USB mic sends nothing at all: on 2026-10-17 the EMEET stopped at 7:59 (PipeWire logging
+# "impossible timeout") and stayed silent for every app until it was unplugged. After this long with
+# nothing, while no Choom is speaking, its USB device is reset, the same as a replug; at most once per
+# MIC_RESET_EVERY_S. Needs write access to the device: tools/udev/70-choom-mic-reset.rules.
+MIC_RESET_AFTER_S = 30
+MIC_RESET_EVERY_S = 10 * 60
+USBDEVFS_RESET = 0x5514          # _IO('U', 20)
 ROOM = "Chooms"                  # "OK Chooms" / "OK girls": the group room
 NAMES = {                        # what Whisper may write for each name
     "Aloy": r"aloy|aloi|eloy|eloi|aloe|alloy|alloi|a loy|aloya|aloha",
@@ -83,6 +90,35 @@ def die_with_parent():
     """pw-record ends with this process, so a relaunch never leaves a recorder holding the mic."""
     import ctypes
     ctypes.CDLL("libc.so.6").prctl(1, 15)  # PR_SET_PDEATHSIG, SIGTERM
+
+
+def mic_usb_device():
+    """/dev/bus/usb/BBB/DDD of the USB device behind PipeWire's default source, or None (not USB)."""
+    try:
+        out = subprocess.run(["wpctl", "inspect", "@DEFAULT_AUDIO_SOURCE@"], capture_output=True, text=True,
+                             timeout=5).stdout
+        card = re.search(r'api\.alsa\.pcm\.card = "(\d+)"', out).group(1)
+        usb = Path(f"/sys/class/sound/card{card}/device").resolve().parent  # the interface's device
+        bus, num = (int((usb / name).read_text()) for name in ("busnum", "devnum"))
+        return Path(f"/dev/bus/usb/{bus:03d}/{num:03d}")
+    except Exception:
+        return None
+
+
+def reset_mic():
+    """Reset the default mic's USB device, as if it were unplugged and plugged in again. (ok, what)."""
+    import fcntl
+    device = mic_usb_device()
+    if not device:
+        return False, "the mic isn't a USB device"
+    try:
+        with open(device, "wb", buffering=0) as f:
+            fcntl.ioctl(f, USBDEVFS_RESET, 0)
+    except PermissionError:
+        return False, f"no permission for {device} (install tools/udev/70-choom-mic-reset.rules)"
+    except OSError as e:
+        return False, f"{device}: {e.strerror}"
+    return True, f"reset {device}"
 
 
 def choom_for(word):
@@ -151,6 +187,7 @@ class Ears:
         """Mono from the default PipeWire source, restarted if it ever stops. The recorder dies with
         this process: recorders orphaned by relaunches once wedged PipeWire's capture of the EMEET,
         and the mic went silent for every app (the browser's mic button too) until PipeWire restarted."""
+        stalled_since, reset_at = None, 0.0
         while True:
             proc = subprocess.Popen(["pw-record", "--rate", str(CAPTURE_RATE), "--channels", "1", "--format", "s16", "-"],
                                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, preexec_fn=die_with_parent)
@@ -159,13 +196,22 @@ class Ears:
                 # A stalled microphone sends nothing at all (no error, no end): notice within 5 s.
                 if not select.select([proc.stdout], [], [], 5)[0]:
                     tell_hologram("error", message="mic stalled: no audio for 5 s")
+                    stalled_since = stalled_since or time.time() - 5
                     break
                 chunk = proc.stdout.read(FRAME * step * 2)
                 if len(chunk) < FRAME * step * 2:
                     break
+                stalled_since = None
                 wide = np.frombuffer(chunk, np.int16).astype(np.int32).reshape(-1, step)
                 self.frames.put(wide.mean(axis=1).astype(np.int16).tobytes())  # averaging is the low-pass
             proc.kill()
+            if (stalled_since and time.time() - stalled_since >= MIC_RESET_AFTER_S
+                    and time.time() - reset_at >= MIC_RESET_EVERY_S and not self.someone_speaking):
+                reset_at = time.time()
+                ok, what = reset_mic()
+                tell_hologram("mic_reset" if ok else "error", message=f"mic reset: {what}")
+                if ok:
+                    time.sleep(8)  # back on the USB bus and PipeWire's default source again before recording
             time.sleep(2)
 
     def watch_hologram(self):
@@ -235,6 +281,8 @@ class Ears:
                                      "floor": round(self.floor, 1)}
                 if voiced_n * FRAME / RATE >= MIN_VOICED_S:
                     return pcm
+                if start_within:  # in a window: log the sound it dropped (a cough, a knock), for tuning
+                    tell_hologram("ignored", **self.last_capture)
                 return self.utterance(start_within and max(deadline - time.time(), 0.1), quiet_frames, close_if_speaking)
 
     def wake(self, pcm):
@@ -353,6 +401,8 @@ class Ears:
             # In the reply window, a sound with under MIN_REPLY_VOICED_S of voice (a cough, a door, the end
             # of a word on the TV) isn't a reply: keep listening without bothering speech-to-text.
             short = follow_up and self.last_capture.get("voiced", 1.0) < MIN_REPLY_VOICED_S
+            if short:
+                tell_hologram("ignored", choom, **self.last_capture)
             sent = None if short else self.send(choom, pcm, rest)
             if sent is None:
                 empty += 1

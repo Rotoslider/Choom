@@ -1,0 +1,8 @@
+# Lets the desktop user reset the tower's USB speakerphone, the EMEET OfficeCore M0 Plus. tower_ears.py
+# does when its microphone wedges and sends nothing for 30 s; a reset is the same as unplugging it.
+# Install (once):
+#   sudo cp ~/projects/Choom-portrait/hologram/tools/udev/70-choom-mic-reset.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules
+#   sudo udevadm trigger --subsystem-match=usb --attr-match=idVendor=328f
+# Another USB mic: put its ID from lsusb (vendor:product) in place of the EMEET's 328f:007d.
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="328f", ATTR{idProduct}=="007d", GROUP="plugdev", MODE="0664"

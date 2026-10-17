@@ -10,7 +10,7 @@ wakes anyone. Settings in studio.json:
 
 A run opens when a scheduled job (a time, or "after the render") starts, takes in every GPU job that
 ends while it's open, and closes once nothing is running or due on the GPU or the checks lane.
-State (the open run, held messages, the last ones sent) is kept in studio/notify.json.
+State (the open run, finished runs held for the message, the last ones sent) is kept in studio/notify.json.
 """
 import json
 import threading
@@ -90,28 +90,63 @@ def to_review():
     return out
 
 
-def compose(run):
+def describe(j):
+    a, p = j["args"], j.get("progress") or {}
+    if j["kind"] == "render":
+        total = p.get("total") or a.get("clips", "?")
+        return f"Render: {p['done']} of {total} clips" if p.get("done") else f"Render of {total} clips"
+    if j["kind"] == "build":
+        return f"Build {str(a.get('choom', '?')).title()}"
+    return f"{j['kind'].title()} {a.get('choom', '')}".strip()
+
+
+def compose(run, more=False):
+    """The message for a finished run; more: other work is still going when it's sent."""
     lines, failed = [], []
     for j in sorted(run["jobs"], key=lambda j: j["id"]):
-        a, p = j["args"], j["progress"]
-        if j["kind"] == "render":
-            done = p.get("done", 0)
-            total = p.get("total") or a.get("clips", "?")
-            what = f"Render: {done} of {total} clips"
-        elif j["kind"] == "build":
-            what = f"Build {a.get('choom', '?').title()}"
-        else:
-            what = f"{j['kind'].title()} {a.get('choom', '')}".strip()
         word = {"done": "done", "failed": "FAILED", "cancelled": "cancelled", "paused": "paused (work list paused)"}[j["status"]]
-        lines.append(f"• {what}: {word}")
+        lines.append(f"• {describe(j)}: {word}")
         if j["status"] == "failed" and j["error"]:
             failed.append(f"  {j['error'][:160]}")
+    if any(j["status"] == "failed" for j in run["jobs"]):
+        head = "Glass Studio: something failed."
+    else:
+        head = "Glass Studio: this run is done." if more else "Glass Studio: the work is done."
+    return "\n".join([head] + lines + failed)
+
+
+def still_going(jobs, now):
+    """GPU work running, paused, waiting or scheduled as the message goes out: on 2026-10-17 the 7:10
+    message said "the work is done" while the 5 am render was 50 clips into 73."""
+    out = []
+    for j in sorted(jobs, key=lambda j: j["id"]):
+        if j["kind"] not in TRACKED or j["status"] not in ("running", "cancelling", "paused", "waiting"):
+            continue
+        if j["status"] in ("running", "cancelling"):
+            when = "running"
+        elif j["status"] == "paused":
+            when = "paused"
+        elif j.get("after"):
+            first = next((x for x in jobs if x["id"] == j["after"]), None)
+            when = f"after the {first['kind']} (job {j['after']})" if first else f"after job {j['after']}"
+        elif j.get("not_before", 0) > now:
+            when = "at " + time.strftime("%H:%M", time.localtime(j["not_before"]))
+        else:
+            when = "next in line"
+        out.append(f"• {describe(j)}: {when}")
+    return out
+
+
+def message_for(held, jobs, now):
+    """What goes out: each finished run, then what's still going, then what waits for review."""
+    still = still_going(jobs, now)
+    parts = [h.get("message") or compose(h["run"], more=bool(still)) for h in held]
+    if still:
+        parts.append("Still going:\n" + "\n".join(still))
     review = to_review()
-    head = "Glass Studio: the work is done." if not any(j["status"] == "failed" for j in run["jobs"]) else "Glass Studio: something failed."
-    body = lines + failed
     if review:
-        body.append("To review: " + ", ".join(f"{n} {k}" + (f" ({f} flagged)" if f else "") for n, (k, f) in sorted(review.items())))
-    return "\n".join([head] + body)
+        parts.append("To review: " + ", ".join(f"{n} {k}" + (f" ({f} flagged)" if f else "") for n, (k, f) in sorted(review.items())))
+    return "\n\n".join(parts)
 
 
 def send(message):
@@ -141,9 +176,11 @@ def tick(jobs, jobs_lock, now=None):
     with jobs_lock:
         busy = any(j["status"] in ("running", "cancelling") or (j["status"] == "waiting" and j.get("not_before", 0) <= now
                    and j["kind"] in TRACKED + ("review",)) for j in jobs if j["kind"] != "relaunch")
+        jobs = [dict(j) for j in jobs]
     with _lock:
         if state["run"] and state["run"]["jobs"] and not busy:
-            state["held"] = (state["held"] + [{"at": now, "message": compose(state["run"])}])[-10:]  # off, they'd pile up
+            # Held as the run itself: the message is written as it goes out, with what's going on then.
+            state["held"] = (state["held"] + [{"at": now, "run": state["run"]}])[-10:]  # off, they'd pile up
             state["run"] = None
             save()
         elif state["run"] and not state["run"]["jobs"] and not busy and now - state["run"]["opened"] > 3600:
@@ -152,7 +189,7 @@ def tick(jobs, jobs_lock, now=None):
         if not state["held"] or quiet(now, s["quiet"]) or not (s.get("url") or s.get("dry_run")) or not s.get("choom"):
             return
         held = state["held"]
-    message = "\n\n".join(h["message"] for h in held)
+    message = message_for(held, jobs, now)
     try:
         ok = send(message)
     except Exception as e:  # the Mac asleep, the app restarting: try again next time

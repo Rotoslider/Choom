@@ -368,7 +368,8 @@ the spellings in her `portraits/manifest.json` entry's `wake` (a regular express
   300 ms before it and the quiet that ended it): under 0.2 s of voice anywhere, under 0.3 s in a reply
   window (a cough, a knock; "yes" is about 0.4 s). Audio that fails a local speech check is dropped
   too, so Whisper can't turn noise into a sentence. `ears` entries in `telemetry.log` carry `seconds`
-  and `voiced`.
+  and `voiced`; a sound dropped as too short in a window is an `ignored` entry, so you can see what a
+  cough or a knock measured.
 
 **The reply window.** After her answer the mic opens for your reply:
 - It opens once her conversation turn has ended and her voice has stopped. A heartbeat running beside
@@ -384,6 +385,22 @@ Nothing is kept; events go to `telemetry.log` without the words. Keep the microp
 (`wpctl set-volume @DEFAULT_AUDIO_SOURCE@ 1.0`). `launch.sh stop` also ends the listener's
 `pw-record`, because an orphaned recorder can wedge PipeWire capture for every app (fix:
 `systemctl --user restart wireplumber pipewire pipewire-pulse`).
+
+**A wedged microphone.** A mic that sends nothing at all is logged as `mic stalled: no audio for 5 s`,
+and the recorder restarts. The USB device itself can wedge too: PipeWire's journal repeats
+`spa.alsa: front:3c: impossible timeout`, and every app's mic, the browser's included, records
+nothing until it's unplugged. After 30 s with nothing, while no Choom is speaking, `tower_ears.py`
+resets the default mic's USB device, the same as a replug, at most once every 10 minutes (an
+`ears` `mic_reset` entry). That needs write access to the device, given once by a udev rule:
+
+```bash
+sudo cp ~/projects/Choom-portrait/hologram/tools/udev/70-choom-mic-reset.rules /etc/udev/rules.d/
+sudo udevadm control --reload-rules
+sudo udevadm trigger --subsystem-match=usb --attr-match=idVendor=328f
+```
+
+The rule is for the EMEET (`328f:007d`); for another USB mic, put its ID from `lsusb` in the rule.
+Without it the reset is logged as `no permission` and the mic waits for a replug.
 
 ## Eye contact
 
