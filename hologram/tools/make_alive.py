@@ -6,11 +6,16 @@ Writes portraits/<id>/alive_<clip>.mp4 per clip (three panels stacked: her color
 cut-out) and alive.json (frame rate, size, focus, and per clip its per-frame mouth). Run with Forge
 Neo's Python (Depth Anything V2 + MediaPipe), from the hologram folder, after make_alive_masks.py:
     ~/pinokio/api/forge-neo/app/venv/bin/python tools/make_alive.py aloy MAIN.mp4 [MORE.mp4 ...]
-Only new or changed clips are encoded. After the page has reloaded, `make_alive.py aloy --prune`
-deletes the videos of clips no longer listed.
+Only new or changed clips are encoded; a changed clip gets a new file name (alive_<clip>_v2.mp4), so
+a page still running on the old alive.json never plays a new video with an old mouth track. After the
+page has reloaded, `make_alive.py aloy --prune [--keep-file KEEP]` deletes the videos alive.json no
+longer lists and, with a keep file (one clip name per line), the cut-out and depth caches of clips not
+in it. `--home relaxed` names her home pose (tools/clip_roles.py); HOLOGRAM_PORTRAITS moves the
+portraits folder (a test Studio's).
 """
 import json
 import math
+import os
 import re
 import subprocess
 import sys
@@ -26,11 +31,21 @@ from mediapipe.tasks.python import BaseOptions, vision
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from make_depth import BG_LUMA, DETAIL, WEIGHTS, shape_depth  # noqa: E402
-from clip_roles import clip_role  # noqa: E402
+from clip_roles import clip_role, home_pose  # noqa: E402
 from make_landmarks import (CHIN, LEFT_CORNER, LOWER_INNER, LOWER_OUTER, MODEL, RIGHT_CORNER,  # noqa: E402
                             UPPER_INNER, UPPER_OUTER)
 
 HOLOGRAM = Path(__file__).resolve().parents[1]
+PORTRAITS = Path(os.environ.get("HOLOGRAM_PORTRAITS") or HOLOGRAM / "portraits")
+
+
+def save_npy(path, array):
+    """np.save, written whole and swapped in: a build stopped halfway never leaves a cut-short cache
+    that looks newer than its clip (every later build would fail on it)."""
+    part = path.with_name(path.name + ".part")
+    with open(part, "wb") as f:
+        np.save(f, array)
+    os.replace(part, path)
 
 
 def fused_attention(self, x):
@@ -161,26 +176,50 @@ def unpack(packed, i, w):
     return np.unpackbits(packed[i], axis=1, count=w).astype(bool)
 
 
-def prune(cid):
-    """make_alive.py <id> --prune: delete her clip videos alive.json no longer lists (run after the page
-    has reloaded, so it never asks for a file that's gone)."""
-    folder = HOLOGRAM / "portraits" / cid
-    keep = {c["file"] for c in json.loads((folder / "alive.json").read_text())["clips"]}
+def prune(cid, keep_file=None):
+    """make_alive.py <id> --prune [--keep-file KEEP]: delete her clip videos alive.json no longer lists
+    (run after the page has reloaded, so it never asks for a file that's gone). With a keep file (the
+    clips she still has, one name per line), also the cut-out and depth caches of clips not in it or
+    on the glass; without one, caches stay."""
+    folder = PORTRAITS / cid
+    clips = json.loads((folder / "alive.json").read_text())["clips"]
+    keep = {c["file"] for c in clips}
+    freed = 0
     for f in folder.glob("alive_*.mp4"):
         if f.name not in keep:
+            freed += f.stat().st_size
             f.unlink()
             print("removed", f.name)
+    if keep_file:
+        mine = {l.strip() for l in Path(keep_file).read_text().splitlines() if l.strip()}
+        mine |= {Path(c["source"]).stem for c in clips}
+        for pattern, prefix in (("alive_masks_*.npz", "alive_masks_"), ("alive_depth_*.npy", "alive_depth_")):
+            for f in folder.glob(pattern):
+                if f.stem.removeprefix(prefix) not in mine:
+                    freed += f.stat().st_size
+                    f.unlink()
+                    print("removed cache", f.name)
+        for f in folder.glob("*.part"):  # left by a build that was stopped
+            f.unlink()
+    print(f"prune {cid}: {freed / 1e9:.1f} GB freed")
 
 
 def main():
     """make_alive.py <id> CLIP [CLIP ...]: the first clip is her main idle; every clip must start and
     end on the same picture of her, so the page can play them in any order."""
     cid, sources = sys.argv[1], sys.argv[2:]
-    if sources == ["--prune"]:
-        return prune(cid)
-    folder = HOLOGRAM / "portraits" / cid
+    home = None
+    if "--home" in sources:
+        i = sources.index("--home")
+        home = sources[i + 1]
+        del sources[i:i + 2]
+    if sources[:1] == ["--prune"]:
+        return prune(cid, sources[2] if sources[1:2] == ["--keep-file"] else None)
+    folder = PORTRAITS / cid
     meta_file = folder / "alive.json"
     old = json.loads(meta_file.read_text()) if meta_file.exists() else {}
+    home = home or old.get("home") or home_pose(cid)  # given, the last build's, or her Studio project's
+    role = lambda src: clip_role(cid, src, home)
     built_before = {c["source"]: c for c in old.get("clips", []) if "built" in c}
     model = None
 
@@ -238,7 +277,7 @@ def main():
                 model.load_state_dict(torch.load(WEIGHTS, map_location="cpu"))
                 model = model.to("cuda").eval()
             with torch.autocast("cuda", dtype=torch.float16):  # half precision: 6x faster with the fused attention
-                np.save(depth_file, np.stack([model.infer_image(f, input_size=1022) for f in frames]).astype(np.float16))
+                save_npy(depth_file, np.stack([model.infer_image(f, input_size=1022) for f in frames]).astype(np.float16))
             raw = np.load(depth_file, mmap_mode="r")
         return {"src": src, "fps": fps, "frames": len(frames), "w": w, "h": h, "packed": np.packbits(masks, axis=2),
                 "raw": raw, "stamp": stamp(src)}, frames
@@ -253,7 +292,7 @@ def main():
         first frame on the pixels that are her in both (a per-frame scale and offset), so changing
         clips never changes her depth. A full-body clip is framed differently: it lines up with its
         own first frame, and its depth range is mapped onto the main clip's."""
-        c["own"] = clip_role(cid, c["src"])[1].split("@")[0] == "full"  # full, or full@<outfit>
+        c["own"] = role(c["src"])[1].split("@")[0] == "full"  # full, or full@<outfit>
         c_ref, c_mask = (c["raw"][0].astype(np.float32), unpack(c["packed"], 0, w)) if c["own"] else (ref, ref_mask)
         c["fit"] = []
         for i in range(c["frames"]):
@@ -295,14 +334,19 @@ def main():
     meta_clips, encoded = [], 0
     for k, src in enumerate(sources):
         name = Path(src).name
-        out = folder / f"alive_{Path(src).stem}.mp4"
-        moods, start, end = clip_role(cid, src)
+        moods, start, end = role(src)
         before = built_before.get(name)
         expect = [BUILD, round(lo, 6), round(hi, 6), round(focus, 6), stamp(src), main_stamp] + (["lit"] if particles(src) else []) + (["joined"] if joined(src) else [])
-        if before and before.get("built") == expect and out.exists():
+        if before and before.get("built") == expect and (folder / before["file"]).exists():
             # Unchanged since it was last built: keep the video and its mouth track (its role may change).
-            meta_clips.append({**before, "file": out.name, "moods": moods, "from": start, "to": end, "talk": "talk" in moods})
+            meta_clips.append({**before, "moods": moods, "from": start, "to": end, "talk": "talk" in moods})
             continue
+        # New or changed: a file name the page isn't playing now (alive.json still lists the old one
+        # until this build writes it, and its mouth track is for the old video).
+        out, v = folder / f"alive_{Path(src).stem}.mp4", 1
+        while out.exists():
+            v += 1
+            out = folder / f"alive_{Path(src).stem}_v{v}.mp4"
         if k == 0:
             c, frames = main_clip, read_clip(src)[1]
         else:
@@ -337,6 +381,7 @@ def main():
     torch.cuda.empty_cache()
 
     meta = {"fps": main_clip["fps"], "texSize": [w, h], "focus": round(focus, 4), "range": [lo, hi],
+            "home": home,
             "rangeFrom": [Path(sources[0]).name, main_stamp, BUILD], "panels": ["color", "depth", "cut"],
             "mouthFields": ["u", "v", "halfWidth", "halfHeight", "chin", "tilt", "halfGap", "lift"], "clips": meta_clips}
     part = meta_file.with_suffix(".part")

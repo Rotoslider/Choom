@@ -2,7 +2,9 @@
 moods it can play in and the pose it starts and ends in. Shared by make_alive.py (which writes them
 into alive.json for the page) and Glass Studio (which names the clips it plans so they land here).
 """
+import json
 import re
+import sys
 from pathlib import Path
 
 # What each clip is for, from its name (<choom>_<action>.mp4): the moods it can play in (idle, talk,
@@ -100,7 +102,25 @@ ROLES = {
     "windy": (["windy"], "main", "main"),
     "windy2": (["windy"], "main", "main"),
 }
-AWAKE_POSE = {"aloy": "relaxed"}  # the pose a Choom falls asleep from and wakes into, if not "main"
+
+
+# Her home pose: the one she falls asleep from, wakes into and changes clothes in. "main" unless her
+# Studio project says otherwise ("home": Aloy's is "relaxed", hand down). The Studio and the build
+# pass it; home_pose() reads it from her project for anything that doesn't.
+_homes = {}
+
+
+def home_pose(cid):
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "studio"))
+        from config import PROJECTS  # stdlib only; works under any of the Pythons the tools run in
+        f = PROJECTS / f"{cid}.json"
+        stamp = f.stat().st_mtime
+        if _homes.get(cid, (None,))[0] != stamp:
+            _homes[cid] = (stamp, json.loads(f.read_text()).get("home") or "main")
+        return _homes[cid][1]
+    except Exception:
+        return "main"
 
 
 # Clips named by kind rather than listed one by one: <kind>_<what she does>.
@@ -128,23 +148,24 @@ KINDS = {
 CHANGE = re.compile(r"change_([a-z0-9]+)(?:_[a-z0-9]+)?")
 
 
-def clip_role(cid, src):
+def clip_role(cid, src, home=None):
     """(moods, pose it starts in, pose it ends in) from the clip's name, <choom>_[<outfit>-]<action>.
     Clips in other clothes (evening-relaxed, cold-relaxed_glance, dayspandex-full_sway, night-sleep)
     live in poses of their own (relaxed@evening, full@dayspandex, asleep@night); the page changes her
-    clothes with a camera cut, or a change clip."""
+    clothes with a camera cut, or a change clip. `home` is her home pose (home_pose() if not given)."""
+    home = home or home_pose(cid)
     action = Path(src).stem.removeprefix(f"{cid}_")
     outfit = None
     if "-" in action:
         outfit, action = action.split("-", 1)
     change = CHANGE.fullmatch(action)
     if change:
-        home, to = AWAKE_POSE.get(cid, "main"), change.group(1)
+        to = change.group(1)
         return ["change"], f"{home}@{outfit}" if outfit else home, home if to == "usual" else f"{home}@{to}"
     kind = action.split("_")[0] if "_" in action else None
     moods, start, end = ROLES.get(action) or KINDS.get(kind) or ROLES["base"]
-    if action in ("fallasleep", "wake") and cid in AWAKE_POSE:
-        start, end = [AWAKE_POSE[cid] if pose == "main" else pose for pose in (start, end)]
+    if action in ("fallasleep", "wake") and home != "main":
+        start, end = [home if pose == "main" else pose for pose in (start, end)]
     if outfit:
         start, end = [f"{pose}@{outfit}" if pose in ("main", "relaxed", "full", "asleep") else pose for pose in (start, end)]
     return moods, start, end

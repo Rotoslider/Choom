@@ -11,12 +11,12 @@ import numpy as np
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from make_alive import HOLOGRAM, DepthAnythingV2, WEIGHTS, read_clip  # noqa: E402  (also patches attention)
+from make_alive import PORTRAITS, DepthAnythingV2, WEIGHTS, read_clip, save_npy  # noqa: E402  (also patches attention)
 
 
 def main():
     cid, sources = sys.argv[1], sys.argv[2:]
-    folder = HOLOGRAM / "portraits" / cid
+    folder = PORTRAITS / cid
     model = None
     for src in sources:
         depth_file = folder / f"alive_depth_{Path(src).stem}.npy"
@@ -28,7 +28,7 @@ def main():
             model.load_state_dict(torch.load(WEIGHTS, map_location="cpu"))
             model = model.to("cuda").eval()
         with torch.autocast("cuda", dtype=torch.float16):
-            np.save(depth_file, np.stack([model.infer_image(f, input_size=1022) for f in frames]).astype(np.float16))
+            save_npy(depth_file, np.stack([model.infer_image(f, input_size=1022) for f in frames]).astype(np.float16))
         print(f"depth {Path(src).name}: {len(frames)} frames")
 
 
