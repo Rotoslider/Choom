@@ -1,9 +1,9 @@
 # Tutorial: your first Choom on the glass
 
 This starts from a fresh install with no Choom on the glass yet, and ends with her living in it:
-moving, talking with lip sync, with a few dozen moments of her own and room to grow. Screenshots
-show Donny's Chooms. The new-Choom steps use Eve's original render as the example; her real Klein
-clean-ups appear as the versions.
+moving, talking with lip sync, with a few dozen moments of her own and room to grow. The screenshots
+come from an install with four Chooms. The new-Choom steps use Eve's original render as the example;
+her real Klein clean-ups appear as the versions.
 
 **Time:** an evening of setup, then a night of rendering for her first clips, then about half an
 hour of review and building. After that she grows a little at a time, a few clips or an outfit at a
@@ -16,9 +16,9 @@ go.
 ### What you need
 
 - **A Looking Glass Portrait**, connected by HDMI (picture) and USB-C (power, calibration, buttons).
-- **A PC with a big NVIDIA GPU.** Clips are made by MiniMax H3, a video model. Donny's are made on an
-  RTX PRO 6000 Blackwell, at about 5½ minutes per five-second clip, longer while the glass is
-  running. Check [Wan2GP](https://github.com/deepbeepmeep/Wan2GP) for what H3 needs on smaller cards.
+- **A PC with a big NVIDIA GPU.** Clips are made by MiniMax H3, a video model. On an RTX PRO 6000
+  Blackwell a five-second clip takes about 5½ minutes, longer while the glass is running. Check
+  [Wan2GP](https://github.com/deepbeepmeep/Wan2GP) for what H3 needs on smaller cards.
 - **Linux** (Ubuntu here), **Google Chrome**, **Python 3** and **ffmpeg**.
 - **A speakerphone** for her voice and microphone, and **a camera** on the glass for eye contact.
   Both are optional.
@@ -32,15 +32,16 @@ go.
    - **Flux.2 Klein 9B** (`flux2_klein_9b`), which edits her pictures
 
    Its Python also has rembg (U2-Net cut-outs) and numpy, which the Studio uses.
-2. **A Python with Depth Anything V2, PyTorch and MediaPipe** for `tools/make_alive.py`. Donny uses
-   Forge Neo's (also from Pinokio). Depth Anything V2 Large's weights go in Wan2GP's
+2. **A Python with Depth Anything V2, PyTorch and MediaPipe** for `tools/make_alive.py`. Forge Neo's
+   (also from Pinokio) works. Depth Anything V2 Large's weights go in Wan2GP's
    `ckpts/depth/depth_anything_v2_vitl.pth`.
 3. **The hologram:** follow [Setup in the hologram README](../../README.md#setup):
    - copy the Portrait's calibration file
    - add the udev rule for its buttons
    - point it at the Choom app
 
-   Then run `./launch.sh`. It opens the glass and starts Glass Studio.
+   Then run `./launch.sh`. It opens the glass and starts Glass Studio, which keeps running across
+   relaunches of the glass.
 
 ### Tell the Studio where things are
 
@@ -98,7 +99,8 @@ Click **+ New Choom**.
 - **Clean it up with Klein:** leave it on unless she's already facing you on plain black. The
   instruction can name what to remove, like Eve's halo.
 
-Click **Create her**. Klein makes the versions in a minute or two.
+Click **Create her**. Klein makes the versions in a minute or two; the **Work** button at the top
+right shows the job.
 
 ### 3. Pick her main picture
 
@@ -107,7 +109,12 @@ outline on clean black.
 
 ![Klein's clean-ups of Eve's render](images/new-3-versions.jpg)
 
-Then look over her **main** look card under Looks:
+If none are quite right, pick the closest and replace it later: **New look → A new picture for a look
+she has**, **Look** *main*, with your original picture under **Or start from a picture from your
+computer** and your own clean-up instruction. (Discarding her first versions leaves her without a
+main picture and no way to make more from the page.)
+
+Then look over her **main** look card under Looks, and click **Save** after any change:
 
 - **Subject:** check it describes her and says "a plain pure black background".
 - **Loop ending:** say how she ends every loop, for example *She stays in the same place and ends
@@ -136,6 +143,7 @@ Go to **Plan & render**, look **main**.
   - listening
   - thinking
   - a long calm loop
+  - a smile
   - three talking loops
 
   Without these she can't talk on the glass.
@@ -143,8 +151,10 @@ Go to **Plan & render**, look **main**.
   remembering something: the little things that say someone's home. Each five-second clip adds about
   five seconds before anything repeats.
 
-Click **Plan**, then **Schedule** the render for tonight. Twenty-five clips take three or four hours,
-and the glass runs slower while the GPU works.
+Click **Plan N clips in main**. The planned clips appear on the right with any wording warnings;
+**Edit** changes a clip's words or length. Then set a time and **Schedule** the render for tonight.
+Twenty-five clips take three or four hours, and the glass runs slower while the GPU works. The
+**Work** list shows the render waiting with its start time.
 
 ### 6. Review in the morning
 
@@ -159,14 +169,15 @@ Watch each clip (click its frames) and keep the ones where:
 - her face stays hers and her hands stay hands
 - the last frame matches the first
 
-About one clip in six fails. Re-roll the ones you'd like another try at; you can change the wording
-first.
+About one clip in six fails. **Re-roll** the ones you'd like another try at: each goes back into the
+plan with a new seed, where you can change its wording or length before rendering it again.
 
 ### 7. Build
 
 **On the glass → Put all on the glass** for her main look, then **Build and put on the glass**. Her
-clips replace the still picture once the glass reloads. Each look shows how many minutes of quiet
-moments she has before one repeats.
+clips replace the still picture once the glass reloads, and the number on her button at the top
+shows how many clips her glass plays. Each look shows how many minutes of quiet moments she has
+before one repeats.
 
 ![On the glass: a look's clips, drag and drop](images/glass.jpg)
 
@@ -193,32 +204,36 @@ picture floating beside her.
 ### Windy days
 
 The **Windy days** pack stirs her hair and clothes in the wind. These clips play only on a windy day
-(a 10-minute average of 12 mph or gusts of 20), one every few minutes while she's quiet. Point the glass at your
-own weather station if Home Assistant has one (`weather.json`, see the
-[reference](../../docs/reference.md)); town readings run low. They play in the look she has on, so
-give each outfit two or three of its own.
+(a 10-minute average of 12 mph or gusts of 20, held for 20 minutes), one every few minutes while
+she's quiet. Point the glass at your own weather station if Home Assistant has one (`weather.json`,
+see the [reference](../../docs/reference.md)); town readings run low. They play in the look she has
+on, so give each outfit two or three of its own. **Write your own clip → Windy day** makes more.
 
 ### Full body, and sleep
 
-**Looks → New look → Full body** makes a head-to-toe picture from her main one. Add what she wears
-below the waist if her main picture doesn't show it.
+**Looks → New look → Full body**, starting from `main`, makes a head-to-toe picture from her main
+one. Her top is kept from the picture; under **What she wears below the waist**, say what Klein
+should add (*white sneakers*, *faded jeans and boots*). Check the instruction keeps her signature
+things too.
 
 ![The new look form for a full-body picture](images/new-look-full-body.jpg)
 
 Then plan the **Full body** pack for the `full` look: shifting her weight, a stretch, looking over her
 shoulder, a twirl, a spin. The glass cuts to her whole figure now and then, and for a twirl with a
-selfie.
-**Big moves** has longer ones, 7 to 15 seconds: a dance, a slow dance, turning her back to you, a
-curtsy, tai chi.
+selfie. **Big moves** has longer ones, 7 to 15 seconds: a dance, a slow dance, turning her back to
+you, a curtsy, tai chi.
+
+Each outfit can have its own full body too (`full@<outfit>`), played only while she wears it: see
+[the outfit tutorial](tutorial-outfit.md#8-her-full-body-in-the-outfit).
 
 **New look → Asleep** makes her picture with her eyes closed. Plan the **Sleep** pack (from her main
-look): dozing off, sleeping, waking, a yawn. She sleeps late at night once things go quiet, and wakes
-in the morning or when you talk to her.
+look): dozing off, sleeping, waking, a yawn. She falls asleep between 11 pm and 7 am after ten quiet
+minutes, and wakes in the morning or when you talk to her.
 
 ### Outfits
 
-Clothes for the evening, cold days, hot days, or a different one each day. See
-[the outfit tutorial](tutorial-outfit.md).
+Clothes for the evening, cold days, hot days, a different one each day, or nights she sleeps in,
+each with its own full body if you like. See [the outfit tutorial](tutorial-outfit.md).
 
 ### Your own moves: a dance, turning her back to you, anything
 
@@ -261,9 +276,11 @@ The Studio warns about most of these when you plan.
 ### Let her ask
 
 Once she's on the glass she can ask for her own moves and clothes: `glass_move("a twirl")`,
-`glass_wear("my red dress")`. These come from the looking-glass skill in the Choom app. Anything she
-asks for and hasn't got appears as a wish at the top of Plan & render, so her ideas become your list.
-See [What the Chooms can ask for](../README.md#what-the-chooms-can-ask-for).
+`glass_wear("my red dress")`, `glass_closet()` to see what she has, and `glass_wish("…")` for
+something she'd like made. These come from the looking-glass skill in the Choom app. Anything she
+asks for and hasn't got appears as a wish at the top of Plan & render, with a button to start making
+it, so her ideas become your list. See
+[What the Chooms can ask for](../README.md#what-the-chooms-can-ask-for).
 
 ### Ideas that need more than the Studio has yet
 
@@ -283,8 +300,12 @@ lowering and raising her hand. The video model handles them; the glass doesn't p
 |---|---|
 | The Studio page doesn't open | Is it running? `python3 studio/studio.py serve` from the hologram folder; is port 8767 free? |
 | Klein made no pictures | The work list's error, and `clean/drafts/run_*/wan2gp.log`; check the `wan2gp` path in studio.json |
+| Make pictures says the prompt names different clothes | Klein reads only the instruction: make it name the same clothes as "She now wears" |
+| A render hasn't started | The work list: it may be scheduled for later, or waiting behind another GPU job |
 | A render stops partway | `queue/<name>.log`. Clips that didn't render go back to planned; render them again |
 | Build fails | The work list shows the failing step's output; check `forge_python` in studio.json |
 | She isn't on the glass | Did *Put her on the glass* finish? `portraits/manifest.json` should list her |
 | She doesn't talk on the glass | Her name in the Studio must match her name in the Choom app |
+| An outfit never shows | It needs its talk loop (Essentials) on the glass and a build; it comes in visits at its hours |
+| An outfit's full body never shows | It plays only while she wears that outfit; build the outfit's waist-up clips |
 | The glass is slow | A render or build is using the GPU; schedule renders for the night |
