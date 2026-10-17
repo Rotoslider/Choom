@@ -35,7 +35,8 @@ happening in the Choom app: listening, thinking, using tools, changing clothes, 
 - **Full body.** Now and then the glass cuts to her whole figure. An outfit can have its own full
   body, used only while she wears it.
 - **Their own choices.** The Chooms can ask the glass for a move or for clothes from their closet,
-  their usual clothes included ("my cream blouse"). Clothes she picks take priority until bedtime. A
+  their usual clothes included ("my cream blouse"). Clothes she picks take priority: day clothes until
+  the 10 pm night clothes, anything later until she sleeps. A
   move plays in the clothes she has on, at her next quiet moment on the glass within half an hour.
   Anything they don't have yet goes on a wish list in Glass Studio.
 

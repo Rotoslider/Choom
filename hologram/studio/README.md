@@ -389,7 +389,7 @@ Assistant has one (see the [reference](../docs/reference.md)).
   the time she'd otherwise spend in her usual clothes, decided every twenty minutes, and change on
   screen with clips made for them.
 - **Clothes she chooses herself** (`glass_wear`) stay on until she goes to sleep or changes again, at
-  most until midnight.
+  most until midnight. Day clothes chosen before 10 pm come off then for her night clothes.
 - **Windy days:** wind clips play only when it's windy (a 10-minute average of 12 mph or gusts of 20,
   held for 20 minutes after the last such reading), in the look she has on.
 
@@ -401,8 +401,8 @@ looking-glass skill):
 | Tool | What it does |
 |---|---|
 | `glass_move("a little dance")` | plays a move once, in the clothes she has on, at her next quiet moment on the glass within half an hour |
-| `glass_wear("my red dress")` | changes her clothes at her next quiet moment; she keeps them on until bedtime, or until she changes again |
-| `glass_closet()` | lists her moves and the clothes in her closet, never what she has on |
+| `glass_wear("my red dress")` | changes her clothes at her next quiet moment; she keeps them on until bedtime, or until she changes again (day clothes chosen by day: until 10 pm) |
+| `glass_closet()` | lists her moves and the clothes in her closet, never what she has on; it only lists, and its answer points her to `glass_wear` |
 | `glass_wish("a midnight-blue silk slip dress")` | puts clothes or a move she'd like on her wish list; nothing changes on the glass |
 
 The glass answers from what's built:

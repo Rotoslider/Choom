@@ -302,9 +302,10 @@ are defaults. Copy `glass-settings.example.json` to `glass-settings.json` beside
   `<id>_nightcold-fallasleep`).
 
 **Her own choice.** Clothes she chooses herself (`glass_wear`, below) take priority over these rules,
-the day outfit and the 10 pm night clothes included, until she goes to sleep, until she chooses again,
-or at most until midnight. Night clothes she chose stay on
-to sleep in when they have an asleep look.
+the day outfit included, until she goes to sleep, until she chooses again, or at most until midnight.
+Day clothes chosen before night-clothes time (`nightClothesFrom`, 10 pm) come off then for her night
+clothes; whatever she chooses after it stays on. Night clothes she chose stay on to sleep in when
+they have an asleep look.
 
 Neither the Choom app's prompts nor the glass ever tell the Chooms what they are wearing at a given
 moment, so it doesn't steer the selfies they make. They can ask what is in their closet.
@@ -508,8 +509,8 @@ The looking-glass skill in the Choom app (`skills/core/looking-glass`) gives eac
 | Tool | Does |
 |---|---|
 | `glass_move` | a move at her next quiet moment on the glass, if that comes within half an hour |
-| `glass_wear` | clothes from her closet on the glass, kept until bedtime unless she changes again |
-| `glass_closet` | what she has (moves and clothes), never what she has on |
+| `glass_wear` | clothes from her closet on the glass, kept until bedtime unless she changes again (day clothes chosen by day: until 10 pm) |
+| `glass_closet` | what she has (moves and clothes), never what she has on; it only lists, and its answer points her to `glass_wear` |
 | `glass_wish` | puts clothes or a move she'd like on the wish list, without changing anything |
 
 **How a request travels.** Like the camera, these go over the hologram feed:
@@ -561,6 +562,11 @@ both of these hold:
 
 GNOME also resets its idle time when the screens wake or the monitor layout is reapplied, so input
 alone doesn't count. Without a camera, input alone decides.
+
+**Across relaunches.** The last time you were at the desk (saved each minute while you are, and the
+moment you leave) and the last welcome are kept in `desk.json` beside `server.py`, so a relaunch
+(the Studio's after a build, say) doesn't start your time away over. Delete it and the next start
+counts you as at the desk.
 
 **The welcome.** On your return the server calls `POST /api/hologram/welcome {awayMinutes, place?}`:
 - The Choom app picks your most recent genuine conversation (`lastUserMessageAt`; skipped if older

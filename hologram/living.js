@@ -1069,10 +1069,22 @@ function noteWorn(p, pose, ms) {
   saveWardrobe(p);
 }
 // Clothes she chose herself (glass_wear): kept until she goes to sleep or chooses again, at most
-// until midnight (the wardrobe starts fresh each day).
+// until midnight (the wardrobe starts fresh each day). Day clothes chosen before night-clothes time
+// come off then: Genesis chose denim at 2:45 pm and was still in it past 10 pm (2026-10-16).
+function nightStartedAt() {
+  const d = new Date();
+  if (hourNow() < NIGHT_FROM) d.setDate(d.getDate() - 1);  // after midnight: last night's
+  d.setHours(NIGHT_FROM, 0, 0, 0);
+  return d.getTime();
+}
 function chosenOutfit(p) {
-  const c = wardrobe(p).chosen;
+  const w = wardrobe(p), c = w.chosen;
   if (!c) return undefined;
+  if (nightNow() && !/^night/.test(c.o || '') && (c.at || 0) < nightStartedAt()) {
+    w.chosen = null;
+    saveWardrobe(p);
+    return undefined;
+  }
   if (c.o && !p.alive.clips.some((x) => outfitOf(poseFrom(x)) === c.o && clipMoods(x).includes('talk'))) return undefined;
   return c.o;
 }
@@ -1877,7 +1889,7 @@ function onControl(ev) {
 // ---- The Chooms asking the glass (server.py answers; tools/closet.py matches) ------------------
 // A move she asked for plays at her next quiet moment on the glass, if that comes within half an hour
 // (asleep, or off the glass for a while, it used to lapse after three minutes); clothes she chose she
-// keeps until bedtime, or until she chooses again.
+// keeps until bedtime, or until she chooses again (day clothes chosen by day: until night-clothes time).
 const MOVE_FRESH_MS = 30 * 60 * 1000;
 function onGlass(ev) {
   const p = portraits.find((q) => q.id === String(ev.choom || '').toLowerCase());
