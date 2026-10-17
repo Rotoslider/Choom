@@ -10,13 +10,22 @@ const el = (tag, { tip, ...props } = {}, ...kids) => {
   for (const k of kids.flat()) if (k != null) e.append(k.nodeType ? k : document.createTextNode(k));
   return e;
 };
+// POSTs started and finished: a background refresh that began before one of them changes is stale (its
+// answer could bring a kept clip back under To review), so it's dropped.
+let writes = 0;
 const api = async (path, body) => {
-  const r = await fetch(path, body === undefined ? { cache: 'no-store' } : {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-  });
-  const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(data.error || `${r.status} ${r.statusText}`);
-  return data;
+  const post = body !== undefined;
+  if (post) writes++;
+  try {
+    const r = await fetch(path, post ? {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    } : { cache: 'no-store' });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || `${r.status} ${r.statusText}`);
+    return data;
+  } finally {
+    if (post) writes++;
+  }
 };
 const clipUrl = (n) => `/media/clip/${encodeURIComponent(n)}.mp4`;
 const sheetUrl = (n, v) => `/media/sheet/${encodeURIComponent(n)}.jpg?v=${v || 0}`;
@@ -80,11 +89,14 @@ async function loadChooms() {
   openChoom(state.chooms.some((c) => c.id === state.cid) ? state.cid : state.chooms[0].id);
 }
 
-async function openChoom(cid, keepScroll = false) {
+async function openChoom(cid, keepScroll = false, background = false) {
   state.cid = cid;
   remember();
   const y = window.scrollY;
-  state.choom = await api(`/api/choom/${cid}`);
+  const w = writes;
+  const data = await api(`/api/choom/${cid}`);
+  if (background && (w !== writes || cid !== state.cid)) return;  // an action answered meanwhile, with newer data
+  state.choom = data;
   document.documentElement.style.setProperty('--tint', state.choom.color || '#9fb4ff');
   $$('#chooms button').forEach((b) => b.classList.toggle('on', b.dataset.id === cid));
   // Her tab counts what her glass plays now (it changes when a build lands, not when clips are placed).
@@ -93,12 +105,45 @@ async function openChoom(cid, keepScroll = false) {
   if (tab) tab.textContent = `${sequence.length - glass.added.length + glass.removed.length}`;
   $('#intro').hidden = true;
   $('#choom').hidden = false;
+  if (background && paneBusy()) {  // he's typing: the pane waits (renderLater), the header shows it's behind
+    state.renderLater = true;
+    renderHead();
+    return;
+  }
+  state.renderLater = false;
   render();
   if (keepScroll) window.scrollTo(0, y);
 }
-const refresh = attempt(async () => { await openChoom(state.cid, true); });
+// A background refresh (work started or ended, a clip landed): it never rebuilds a pane he's typing in.
+const refresh = attempt(async () => { await openChoom(state.cid, true, true); });
 
-function render() {
+// Fields the page rebuilds (look cards, Review notes, planned-clip edits): while one has focus or holds
+// unsaved text, a background refresh leaves the pane alone and catches up when he leaves the field or
+// saves, instead of wiping what he's writing.
+const REBUILT = '#reviewGrid, #planned, #looksGrid, #drafts, #wishes, #library, #renderBox, #glassLooks';
+const TEXTY = 'textarea, select, input:not([type]), input[type="text"], input[type="search"], input[type="number"], input[type="time"]';
+function paneBusy() {
+  const pane = $(`.pane[data-pane="${state.tab}"]`);
+  const live = (e) => !!(e && e.closest?.(REBUILT) && pane?.contains(e));
+  const a = document.activeElement;
+  return (a?.matches?.(TEXTY) && live(a)) || $$('[data-dirty]', pane || document).some(live);
+}
+document.addEventListener('input', (e) => { if (e.target.matches?.(TEXTY) && e.target.closest(REBUILT)) e.target.dataset.dirty = '1'; }, true);
+document.addEventListener('focusout', () => setTimeout(renderLater, 0));
+function renderLater() {
+  if (!state.renderLater || paneBusy()) return;
+  const y = window.scrollY;
+  state.renderLater = false;
+  render();
+  window.scrollTo(0, y);
+}
+// Saved: its fields hold what the server has now, so they no longer hold back a refresh.
+function markClean(root) {
+  $$('[data-dirty]', root).forEach((e) => { delete e.dataset.dirty; });
+  setTimeout(renderLater, 0);
+}
+
+function renderHead() {
   const c = state.choom;
   const counts = Object.values(c.clips).reduce((a, k) => ({ ...a, [k.status]: (a[k.status] || 0) + 1 }), {});
   $('#choomName').textContent = c.name;
@@ -108,10 +153,16 @@ function render() {
       : `${c.sequence.length} clips on the glass`, `${Object.keys(c.looks).length} looks`,
     counts.rendered ? `${counts.rendered} to review` : null, counts.planned ? `${counts.planned} planned` : null,
     counts.queued ? `${counts.queued} rendering` : null,
+    state.renderLater ? 'newer changes show when you leave the field you’re editing or save it' : null,
   ].filter(Boolean).join(' · ');
+}
+
+function render() {
+  renderHead();
   $$('#tabs button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === state.tab)));
   $$('.pane').forEach((p) => { p.hidden = p.dataset.pane !== state.tab; });
-  ({ review: renderReview, glass: renderGlass, plan: renderPlan, looks: renderLooks })[state.tab]();
+  const done = ({ review: renderReview, glass: renderGlass, plan: renderPlan, looks: renderLooks })[state.tab]();
+  done?.catch?.((e) => toast(e.message, true));
 }
 
 $$('#tabs button').forEach((b) => b.addEventListener('click', () => { state.tab = b.dataset.tab; remember(); render(); }));
@@ -124,6 +175,13 @@ function lookOptions(select, value, withAll) {
 }
 
 function renderReview() {
+  // A refresh while he goes through cards with the keyboard keeps the card he's on.
+  const focused = document.activeElement?.closest?.('#reviewGrid .card')?.dataset.name;
+  fillReview();
+  if (focused) focusCard(focused);
+}
+
+function fillReview() {
   lookOptions($('#reviewLook'), state.reviewLook, true);
   $$('#reviewFilter button').forEach((b) => b.classList.toggle('on', b.dataset.f === state.reviewFilter));
   const c = state.choom;
@@ -166,20 +224,22 @@ function reviewCard(name) {
   if (hasSheet) sheet.style.backgroundImage = `url("${sheetUrl(name, c.rendered || c.changed)}")`;
   sheet.addEventListener('click', () => play(name));
   const note = el('input', { className: 'note', placeholder: 'note (why dropped, what to fix)', value: c.note || '' });
+  // After a decision the grid is rebuilt; the keyboard stays on the next card (or this one, if it's
+  // still shown), found by clip name, so K, D and R can follow one after another.
+  const after = (keep) => {
+    const next = card.nextElementSibling?.dataset.name || card.previousElementSibling?.dataset.name;
+    render();
+    focusCard(keep && $(`#reviewGrid .card[data-name="${CSS.escape(name)}"]`) ? name : next);
+  };
   const decide = attempt(async (status) => {
     state.choom = (await api(`/api/choom/${cid}/status`, { names: [name], status, note: note.value })).choom;
     toast(`${short(cid, name)}: ${status}`);
-    const next = card.nextElementSibling;
-    if (['rendered', 'flagged'].includes(state.reviewFilter) && status !== 'rendered') {
-      card.remove();
-      next?.focus();
-      render();
-    } else render();
+    after(!(['rendered', 'flagged'].includes(state.reviewFilter) && status !== 'rendered'));
   });
   const reroll = attempt(async () => {
     state.choom = (await api(`/api/choom/${cid}/reroll`, { names: [name] })).choom;
     toast(`${short(cid, name)} planned again with a new seed; render it from Plan & render`);
-    render();
+    after(false);
   });
   const card = el('article', { className: `card ${c.status}`, tabIndex: 0 },
     sheet,
@@ -197,6 +257,7 @@ function reviewCard(name) {
         el('button', { className: 'drop', type: 'button', onclick: () => decide('dropped'), tip: 'Drop it (D): it stays in her project, off the glass' }, 'Drop'),
         el('button', { type: 'button', onclick: reroll, tip: 'Re-roll (R): plan it again with a new seed (edit the wording first if you like); the old take is kept' }, 'Re-roll'),
         note)));
+  card.dataset.name = name;
   card.addEventListener('keydown', (e) => {
     if (e.target === note) return;
     const k = e.key.toLowerCase();
@@ -208,6 +269,11 @@ function reviewCard(name) {
     else if (k === 'arrowleft' || k === 'arrowup') { e.preventDefault(); card.previousElementSibling?.focus(); }
   });
   return card;
+}
+
+function focusCard(name) {
+  const card = name && $(`#reviewGrid .card[data-name="${CSS.escape(name)}"]`);
+  if (card) card.focus();
 }
 
 $$('#reviewFilter button').forEach((b) => b.addEventListener('click', () => {
@@ -364,7 +430,9 @@ function tile(name, on) {
 }
 
 // --- Plan & render --------------------------------------------------------------------------------
+renderPlan.seq = 0;
 async function renderPlan() {
+  const seq = ++renderPlan.seq;  // switching looks quickly: only the latest answer fills the library
   const c = state.choom;
   state.planLook = state.planLooks[state.cid];
   if (!state.planLook || !c.looks[state.planLook]) state.planLook = c.sequence.length ? c.clips[c.sequence[0]].from : Object.keys(c.looks)[0];
@@ -374,6 +442,7 @@ async function renderPlan() {
   $('#planLookInfo').textContent = look.picture ? `starts and ends on ${look.picture}` : 'this look has no picture yet';
   renderWishes();
   const [{ options }, { packs }] = await Promise.all([api(`/api/options/${state.cid}/${encodeURIComponent(state.planLook)}`), api('/api/packs')]);
+  if (seq !== renderPlan.seq) return;
   state.options = options;
   renderLibrary(packs);
   renderPlanned();
@@ -682,6 +751,7 @@ function renderLooks() {
         })).choom;
         toast(`${look} saved; clips planned from now on use it`);
         if (wearsChanged) renderLooks(); // the Subject now names the new clothes
+        else markClean(save.closest('.look-card'));
       }),
       tip: 'Save the look; clips planned from now on use it (rendered clips keep their prompts)',
     }, 'Save');

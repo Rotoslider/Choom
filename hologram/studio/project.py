@@ -32,6 +32,7 @@ import closet  # noqa: E402
 from clip_roles import clip_role  # noqa: E402
 
 STATUSES = ("planned", "queued", "rendered", "kept", "dropped")
+NOT_CHOOMS = {"jobs", "worklist", "notify", "schedule"}  # json files in studio/ that aren't Choom projects
 
 
 def outfit_of(pose):
@@ -58,7 +59,8 @@ class Project:
 
     @classmethod
     def ids(cls):
-        return sorted(p.stem for p in PROJECTS.glob("*.json") if p.stem != "jobs")  # jobs.json is the work list
+        # The Studio's own files beside the projects (the work list) aren't Chooms.
+        return sorted(p.stem for p in PROJECTS.glob("*.json") if p.stem not in NOT_CHOOMS)
 
     @classmethod
     def load(cls, cid):
