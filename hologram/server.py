@@ -32,7 +32,17 @@ sys.path.insert(0, str(HERE / "tools"))
 import closet  # noqa: E402
 
 PORTRAITS = HERE / "portraits"
-CALIBRATION = HERE / "calibration" / "LKG-PORT-07952_visual.json"
+def find_calibration():
+    """The Portrait's calibration, copied from its own USB drive into calibration/ as <serial>_visual.json
+    (one Portrait; with several, HOLOGRAM_CALIBRATION names the file)."""
+    named = os.environ.get("HOLOGRAM_CALIBRATION")
+    if named:
+        return Path(named)
+    found = sorted((HERE / "calibration").glob("*_visual.json")) or sorted((HERE / "calibration").glob("*.json"))
+    return found[0] if found else HERE / "calibration" / "visual.json"
+
+
+CALIBRATION = find_calibration()
 LOG = HERE / "telemetry.log"
 LOG_MAX_BYTES = 50_000_000
 log_lock = threading.Lock()
@@ -760,9 +770,12 @@ def presence_watch():
     """Donny's presence from Home Assistant, passed to the page when it changes: home (a person
     entity, or the phone's Wi-Fi), and at the desk or in bed (zones of a presence sensor).
     presence.json maps roles to entities, e.g. {"home": {"entity": "sensor.phone_wi_fi_connection",
-    "equals": "<home network>"}, "desk": "binary_sensor.desk_zone", "bed": "binary_sensor.bed_zone"};
-    without it, "home" is the person entity named Donny. Checks every 5 s. Waits quietly (and picks
-    the files up without a restart) until ha_url and ha_token exist."""
+    "equals": "<home network>"}, "desk": "binary_sensor.desk_zone", "bed": "binary_sensor.bed_zone"}.
+    Without a "home" role, "home" is the person entity named by "person" (e.g. "person.donny"), else the
+    only person in Home Assistant, else one named like HOLOGRAM_OWNER (default "donny"). Checks every 5 s.
+    Waits quietly (and picks the files up without a restart) until ha_url and ha_token exist. ha_url should
+    be an address that doesn't change: a hostname, or an IP the router always gives Home Assistant (a DHCP
+    reservation), since presence and the weather station stop when it moves."""
     last, entities, resolved_at = None, {}, 0.0
     shown, absent_since = {}, {}  # what the page was told per role, and since when a role has read absent
     while True:
@@ -776,11 +789,16 @@ def presence_watch():
             base, token = url_file.read_text().strip().rstrip("/"), token_file.read_text().strip()
             if time.time() - resolved_at > 600:  # re-read the mapping every 10 minutes
                 entities = json.loads(map_file.read_text()) if map_file.exists() else {}
+                person = entities.pop("person", None)  # {"person": "person.someone"}: whose home it is
                 if "home" not in entities:
-                    people = [e for e in ha_get(base, token, "/api/states") if e["entity_id"].startswith("person.")]
-                    named = [e for e in people if "donny" in (e["entity_id"] + str(e["attributes"].get("friendly_name", ""))).lower()]
-                    if named or len(people) == 1:
-                        entities["home"] = (named or people)[0]["entity_id"]
+                    if person:
+                        entities["home"] = person
+                    else:  # the only person in Home Assistant, or one named like the owner (Donny here)
+                        people = [e for e in ha_get(base, token, "/api/states") if e["entity_id"].startswith("person.")]
+                        owner = os.environ.get("HOLOGRAM_OWNER", "donny").lower()
+                        named = [e for e in people if owner in (e["entity_id"] + str(e["attributes"].get("friendly_name", ""))).lower()]
+                        if named or len(people) == 1:
+                            entities["home"] = (named or people)[0]["entity_id"]
                 resolved_at = time.time()
             now = {}
             for role, spec in entities.items():
