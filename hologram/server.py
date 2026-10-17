@@ -648,12 +648,31 @@ def glass_answer(request):
             return {"ok": True, "done": False,
                     "message": f"There's no \"{what}\" on the glass yet. It's on Donny's wish list in Glass Studio now.",
                     "moves": names}
-        word = found[0][0]
-        broadcast({"type": "glass", "choom": cid, "move": sorted({s for _, srcs in found for s in srcs}), "name": word})
-        return {"ok": True, "done": True, "message": f"On the glass you {closet.move_name(word)} at your next quiet moment."}
+        word, phrase = found[0][0], closet.move_name(found[0][0])
+        sources = sorted({s for _, srcs in found for s in srcs})
+        look_of = {c.get("source"): c.get("from", "") for c in alive.get("clips", [])}
+        # A move in her usual clothes (or her usual full body) can play whatever she has on; one made only
+        # in an outfit plays only while she wears it (the page picks moves from what she has on). Say which,
+        # never what she's wearing now.
+        anywhere = [s for s in sources if "@" not in look_of.get(s, "")]
+        in_outfits = sorted({look_of[s].split("@", 1)[1] for s in sources if "@" in look_of.get(s, "")})
+        wearable = [o for o in in_outfits if o in outfits]
+        if not anywhere and not wearable:
+            closet.add_wish(PORTRAITS, cid, "move", what)
+            return {"ok": True, "done": False,
+                    "message": f"You have a move like that only in clothes you can't wear on the glass yet. \"{what}\" is on Donny's wish list in Glass Studio now.",
+                    "moves": names}
+        broadcast({"type": "glass", "choom": cid, "move": sources, "name": word})
+        if anywhere:
+            return {"ok": True, "done": True, "message": f"On the glass you {phrase} next time you're on the glass and quiet."}
+        clothes = " or ".join(outfits[o]["wearing"] or o for o in wearable)
+        return {"ok": True, "done": True,
+                "message": f"On the glass you {phrase} only in {clothes}: next time you're on the glass and quiet in it. "
+                           f"glass_wear can put it on first."}
     if op == "wear":
         t = (latest.get("weather") or {}).get("temperature")
-        match = closet.match_outfit(what, outfits, warm=t >= 70 if isinstance(t, (int, float)) else None)
+        match = closet.match_outfit(what, outfits, warm=t >= 70 if isinstance(t, (int, float)) else None,
+                                    usual=closet.usual_clothes(worn, studio_main_subject(cid)))
         if match is None:
             closet.add_wish(PORTRAITS, cid, "wear", what)
             return {"ok": True, "done": False,
@@ -666,6 +685,17 @@ def glass_answer(request):
         return {"ok": True, "done": True,
                 "message": f"On the glass you change into {outfit['wearing'] or name} at your next quiet moment, and keep it on until bedtime unless you change again."}
     return {"ok": False, "error": f"unknown op {op}"}
+
+
+def studio_main_subject(cid):
+    """Her main look's subject line from her Glass Studio project, or "" (no Studio, no project)."""
+    try:
+        cfg = json.loads((HA_CONFIG / "studio.json").read_text())
+        workspace = Path(os.path.expanduser(cfg.get("workspace", "~/choom-studio")))
+        project = json.loads((workspace / "studio" / f"{cid}.json").read_text())
+        return str(project.get("looks", {}).get("main", {}).get("subject", ""))
+    except (OSError, ValueError, AttributeError):
+        return ""
 
 
 def answer_glass(event):

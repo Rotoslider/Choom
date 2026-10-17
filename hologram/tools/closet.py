@@ -11,6 +11,7 @@ wish in portraits/<id>/wishes.json, which the Studio shows on its Plan page.
 Shared by server.py (answering) and Glass Studio (default closet words, writing closet.json).
 """
 import json
+import os
 import random
 import re
 import time
@@ -95,10 +96,18 @@ MOVE_KEYWORDS = {
     "hop": {"jump", "bounce"},
     "heart": {"hands", "love"},
 }
+# Each move as something she does, so the glass's answer reads right: "On the glass you blow a kiss ..."
+# (it said "you kiss", "you arms", "you model"). A move not listed keeps its own word.
 MOVE_NAMES = {
-    "hairflip": "hair flip", "backturn": "turn your back", "slowdance": "slow dance", "happydance": "victory dance",
-    "taichi": "tai chi", "lookback": "look back", "lookaround": "look around", "blowkiss": "blow a kiss",
-    "pose": "strike a pose", "toss": "hair toss", "heart": "heart hands", "hair": "play with your hair",
+    "arms": "fold your arms", "backturn": "turn and show your back", "ballet": "do a ballet move",
+    "blowkiss": "blow a kiss", "bounce": "bounce on your toes", "clap": "clap your hands", "dance": "dance",
+    "groove": "groove to the music", "hair": "play with your hair", "hairflick": "flick your hair",
+    "hairflip": "flip your hair", "happydance": "do a victory dance", "heart": "make heart hands",
+    "hips": "put your hands on your hips", "hop": "hop", "kiss": "blow a kiss", "lookaround": "look around",
+    "lookback": "look back over your shoulder", "model": "strike a model pose", "point": "point",
+    "pose": "strike a pose", "runway": "walk the runway", "slowdance": "slow dance", "spin": "spin around",
+    "step": "take a step", "stretch": "stretch", "stretches": "stretch", "taichi": "do some tai chi",
+    "tilt": "tilt your head", "toss": "toss your hair", "turn": "turn around", "uncross": "uncross your arms",
 }
 MOVE_FRESH_S = 180  # a move she asked for plays within three minutes, or not at all
 
@@ -167,6 +176,18 @@ def same_clothes(subject, main_subject):
     gone = [m.group(1) for p in main if p not in look and (m := HELD.match(p))]
     added = [p for p in look if p not in main and any(w in GARMENT_OF or w in COLOR_OF for w in words(p))]
     return ", ".join(["your usual clothes"] + [f"without {g}" for g in gone] + added)
+
+
+def usual_clothes(closet, main_subject=""):
+    """Her usual clothes as words a request can match (match_outfit's `usual`): closet.json's "usual"
+    and what she holds in her main look (Optic's heart), or, when her usual look names no clothes
+    (Genesis's motes), her main subject line without the person and the scene. Never her hair or eyes:
+    "blue eyes" would have made Eve's usual dress "my blue dress"."""
+    parts = [p.strip() for p in (main_subject or "").split(",")[1:]
+             if p.strip() and "background" not in p and " light" not in p]
+    held = [m.group(1) for p in parts if (m := HELD.match(p))]
+    usual = (closet or {}).get("usual") or ", ".join(p for p in parts if not HELD.match(p))
+    return ", ".join(t for t in [usual] + held if t)
 
 
 def default_tags(look_id, subject, main_subject=""):
@@ -248,19 +269,26 @@ def match_move(request, available):
     return [(w, srcs) for s, w, srcs in scored if s == best]
 
 
-def match_outfit(request, available, warm=None):
+def match_outfit(request, available, warm=None, usual=""):
     """An outfit for a request: ("usual", None) for her usual clothes, (name, outfit), or None.
     A garment, colour or fabric named must be in the outfit: "a midnight-blue silk slip dress" isn't her
     dark green dress, it's a wish (Eve, 2026-10-14). Other words break ties; a tie between her warm
-    and cold night clothes goes by the weather (`warm`: 70°F or more), any other tie is a coin toss."""
+    and cold night clothes goes by the weather (`warm`: 70°F or more), a tie with her usual clothes goes
+    to them, any other tie is a coin toss.
+
+    `usual` describes her usual clothes (closet.json's "usual" and her main subject line), so they can be
+    asked for like any outfit: "my wireframe dress" (Eve) and "my cream blouse" (Aloy) found other outfits
+    before, and "my motes" (Genesis) became a wish. "Usual", "normal", "own" alone mean her usual clothes,
+    but not beside a garment, colour or fabric: "my own green dress" is her green dress."""
     asked = canon(words(request))
-    if asked & USUAL:
-        return ("usual", None)
     garments = asked & set(GARMENTS)
     colors = asked & set(COLORS)
     fabrics = asked & MATERIALS
+    if asked & USUAL and not (garments or colors or fabrics):
+        return ("usual", None)
+    candidates = dict(available, **({"usual": {"tags": [], "wearing": usual}} if usual.strip() else {}))
     scored = []
-    for name, o in available.items():
+    for name, o in candidates.items():
         has = canon(words(" ".join(o["tags"]) + " " + o.get("wearing", "") + " " + " ".join(name_words(name))))
         if any(named and not named & has for named in (garments, colors, fabrics)):
             continue
@@ -271,19 +299,37 @@ def match_outfit(request, available, warm=None):
         return None
     best = max(s for s, _ in scored)
     tied = [n for s, n in scored if s == best]
+    if "usual" in tied:  # "my mint tee": her usual tee, not the tee under her cold-day jacket
+        return ("usual", None)
     if warm is not None:
         tied = [n for n in tied if ("warm" if warm else "cold") in n] or tied
     name = random.choice(tied)
     return (name, available[name])
 
 
-def add_wish(portraits, cid, kind, what):
-    """Note something she asked for and hasn't got, for the Studio's Plan page."""
-    f = Path(portraits) / cid / "wishes.json"
+def read_wishes(f):
+    """The wishes in a wishes.json, read so that a half-written file (the Studio letting one go at that
+    moment) is read again rather than taken for none. A file that stays unreadable is kept beside it as
+    wishes.json.unreadable-<time> instead of being written over."""
+    for attempt in range(5):
+        try:
+            return json.loads(f.read_text())
+        except FileNotFoundError:
+            return []
+        except (OSError, ValueError):
+            time.sleep(0.1)
     try:
-        wishes = json.loads(f.read_text())
-    except (OSError, ValueError):
-        wishes = []
+        f.replace(f.with_name(f"{f.name}.unreadable-{time.strftime('%Y%m%d-%H%M%S')}"))
+    except OSError:
+        pass
+    return []
+
+
+def add_wish(portraits, cid, kind, what):
+    """Note something she asked for and hasn't got, for the Studio's Plan page. Written whole (a temp file
+    swapped in), so nobody reading it sees half a file."""
+    f = Path(portraits) / cid / "wishes.json"
+    wishes = read_wishes(f)
     same = next((w for w in wishes if w["kind"] == kind and w["what"].lower() == what.lower()), None)
     if same:
         same["times"] = same.get("times", 1) + 1
@@ -291,6 +337,6 @@ def add_wish(portraits, cid, kind, what):
     else:
         wishes.append({"kind": kind, "what": what, "times": 1, "first": time.strftime("%Y-%m-%dT%H:%M:%S"),
                        "last": time.strftime("%Y-%m-%dT%H:%M:%S")})
-    tmp = f.with_suffix(".part")
+    tmp = f.with_name(f".{f.name}.{os.getpid()}.part")
     tmp.write_text(json.dumps(wishes, indent=1))
     tmp.replace(f)
