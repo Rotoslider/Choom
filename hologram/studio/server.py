@@ -48,10 +48,10 @@ def details(proj):
     closet = {look: proj.closet_words(look) for look in proj.looks if "@" in look}
     return {**proj.data, "stats": looks, "problems": build.problems(proj), "glass": glass, "inManifest": build.in_manifest(proj.id),
             "closet": closet, "wishes": wishes(proj.id), "wishesDone": wishes_done(proj.id), "readiness": proj.readiness(built),
-            "color": colors().get(proj.id) or proj.data.get("color"),
-            "plannedMinutes": round(sum(render.minutes(c.get("frames") or 124) for c in planned))}
             # Earlier takes of re-rolled clips still on disk: {clip: [[history index, file]]}.
             "takes": {n: t for n, c in proj.clips.items() if c.get("history") and (t := proj.takes(n))},
+            "color": colors().get(proj.id) or proj.data.get("color"),
+            "plannedMinutes": round(sum(render.minutes(c.get("frames") or 124) for c in planned))}
 
 
 def wishes(cid):
@@ -243,6 +243,10 @@ class Handler(BaseHTTPRequestHandler):
             elif action == "reroll":
                 for n, seed in zip(names, next_seeds(len(names))):
                     proj.reroll(n, seed)
+            elif action == "take":  # bring an earlier take back (its sheet is made again)
+                status = proj.use_take(data["name"], int(data["index"]))
+                jobs.add("review", {"choom": cid, "clips": [data["name"]]})
+                return self.send_json({"status": status, "choom": details(proj)})
             elif action == "plan":
                 library = {(a["pack"], a["key"]): a for a in plan.library()["actions"]}
                 items = [library[(i["pack"], i["key"])] if "pack" in i else i for i in data["items"]]
@@ -278,10 +282,6 @@ class Handler(BaseHTTPRequestHandler):
                     # From another outfit's picture too (Genesis's night look from her plain one), in its pose.
                     look_id = f"{base_of(base)}@{data['when']}{re.sub(r'[^a-z0-9]', '', data.get('name', '').lower())}"
                 elif kind == "full":
-            elif action == "take":  # bring an earlier take back (its sheet is made again)
-                status = proj.use_take(data["name"], int(data["index"]))
-                jobs.add("review", {"choom": cid, "clips": [data["name"]]})
-                return self.send_json({"status": status, "choom": details(proj)})
                     look_id = f"full@{outfit_of(base)}" if outfit_of(base) else "full"  # an outfit's own full body
                 elif kind == "asleep":
                     if outfit_of(base) and not outfit_of(base).startswith("night"):
