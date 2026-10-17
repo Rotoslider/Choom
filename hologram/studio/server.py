@@ -50,6 +50,8 @@ def details(proj):
             "closet": closet, "wishes": wishes(proj.id), "wishesDone": wishes_done(proj.id), "readiness": proj.readiness(built),
             "color": colors().get(proj.id) or proj.data.get("color"),
             "plannedMinutes": round(sum(render.minutes(c.get("frames") or 124) for c in planned))}
+            # Earlier takes of re-rolled clips still on disk: {clip: [[history index, file]]}.
+            "takes": {n: t for n, c in proj.clips.items() if c.get("history") and (t := proj.takes(n))},
 
 
 def wishes(cid):
@@ -144,7 +146,7 @@ class Handler(BaseHTTPRequestHandler):
         if parts[0] == "web" and len(parts) == 2 and FILE.match(parts[1]):
             return self.send_file(WEB / parts[1])
         if parts[0] == "media" and len(parts) == 3 and FILE.match(parts[2]):
-            folder = {"clip": CLIPS, "sheet": SHEETS, "picture": PICTURES, "draft": pictures.DRAFTS}.get(parts[1])
+            folder = {"clip": CLIPS, "take": CLIPS / "takes", "sheet": SHEETS, "picture": PICTURES, "draft": pictures.DRAFTS}.get(parts[1])
             return self.send_file(folder / parts[2], cache=parts[1] != "sheet") if folder else self.send_error(404)
         if parts[:2] == ["api", "chooms"]:
             tint = colors()
@@ -164,7 +166,12 @@ class Handler(BaseHTTPRequestHandler):
                                                                         "seconds": a.get("seconds", 5)} for a in lib["actions"]]})
         if parts[:2] == ["api", "jobs"]:
             with jobs.lock:
-                return self.send_json({"jobs": jobs.recent(40)})
+                return self.send_json({"jobs": jobs.recent(40), "worklist": jobs.state()})
+        if parts[:2] == ["api", "housekeeping"]:
+            days = int(urllib.parse.parse_qs(url.query).get("takes_days", ["30"])[0])
+            report = housekeeping.survey(days, active_queues(), active_runs())
+            return self.send_json({k: ({kk: vv for kk, vv in v.items() if kk != "files"} if k in housekeeping.CATEGORIES else v)
+                                   for k, v in report.items()})
         return self.send_error(404)
 
     # --- POST ----------------------------------------------------------------------------------
@@ -244,6 +251,14 @@ class Handler(BaseHTTPRequestHandler):
             elif action == "plan":
                 library = {(a["pack"], a["key"]): a for a in plan.library()["actions"]}
                 items = [library[(i["pack"], i["key"])] if "pack" in i else i for i in data["items"]]
+            if parts == ["api", "jobs", "pause"]:
+                return self.send_json({"worklist": jobs.pause()})
+            if parts == ["api", "jobs", "resume"]:
+                return self.send_json({"worklist": jobs.resume()})
+            if parts == ["api", "housekeeping"]:
+                cats = [str(c) for c in data.get("categories", [])]
+                freed = housekeeping.clean(cats, int(data.get("takesDays", 30)), active_queues(), active_runs())
+                return self.send_json({"freed": freed})
                 results = plan.add(proj, data["look"], items)
                 return self.send_json({"results": results, "choom": details(proj)})
             elif action == "change":  # a change of clothes on screen, from one look to another
@@ -276,6 +291,10 @@ class Handler(BaseHTTPRequestHandler):
                     # From another outfit's picture too (Genesis's night look from her plain one), in its pose.
                     look_id = f"{base_of(base)}@{data['when']}{re.sub(r'[^a-z0-9]', '', data.get('name', '').lower())}"
                 elif kind == "full":
+            elif action == "take":  # bring an earlier take back (its sheet is made again)
+                status = proj.use_take(data["name"], int(data["index"]))
+                jobs.add("review", {"choom": cid, "clips": [data["name"]]})
+                return self.send_json({"status": status, "choom": details(proj)})
                     look_id = f"full@{outfit_of(base)}" if outfit_of(base) else "full"  # an outfit's own full body
                 elif kind == "asleep":
                     if outfit_of(base) and not outfit_of(base).startswith("night"):

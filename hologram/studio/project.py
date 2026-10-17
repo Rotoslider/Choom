@@ -34,6 +34,12 @@ from clip_roles import clip_role  # noqa: E402
 STATUSES = ("planned", "queued", "rendered", "kept", "dropped")
 NOT_CHOOMS = {"jobs", "worklist", "notify", "schedule"}  # json files in studio/ that aren't Choom projects
 BUILD_MINUTES_PER_CLIP = 2.5  # masks, depth and relief of one new clip in a build (October 2026 builds)
+TAKES = CLIPS / "takes"  # earlier takes of re-rolled clips (render.collect)
+
+
+def take_name(name, path):
+    """The name render.collect gives a clip's file when a re-roll replaces it: <clip>_<its file time>.mp4."""
+    return f"{name}_{time.strftime('%Y%m%d-%H%M%S', time.localtime(path.stat().st_mtime))}.mp4"
 
 
 def outfit_of(pose):
@@ -120,10 +126,14 @@ class Project:
         clip["changed"] = time.strftime("%Y-%m-%dT%H:%M:%S")
 
     def reroll(self, name, seed):
-        """Plan the clip again under the same name with a new seed; the old take goes in its history."""
+        """Plan the clip again under the same name with a new seed; the old take goes in its history,
+        with the name its file gets in clips/takes/ once the new one lands (render.collect names it
+        from the file's time), so it can be brought back (use_take)."""
         clip = self.clips[name]
         old = {k: clip.get(k) for k in ("seed", "status", "note", "flags", "checks", "queue", "rendered")}
         old["onGlass"] = name in self.sequence
+        if self.clip_file(name).exists():
+            old["take"] = take_name(name, self.clip_file(name))
         clip.setdefault("history", []).append(old)
         clip.update({"seed": seed, "status": "planned", "flags": [], "note": "", "queue": None})
         clip.pop("checks", None)
@@ -138,11 +148,75 @@ class Project:
             return
         old = clip["history"].pop()
         on_glass = old.pop("onGlass", False)
+        old.pop("take", None)  # its file never moved: the re-roll hadn't rendered
         clip.update({k: v for k, v in old.items() if v is not None})
         if not clip["history"]:
             del clip["history"]
         if on_glass and clip["status"] == "kept" and name not in self.sequence:
             self.sequence.append(name)
+
+    # --- earlier takes (a re-roll renders a clip again; render.collect moves the old file to takes/) ----
+    def takes(self, name):
+        """The earlier takes of a clip whose files are still in clips/takes/: [(history index, file)].
+        A take re-rolled since this was added says its file name; an older one is found by time (its
+        file is named from when it was written, shortly before it was collected as rendered)."""
+        clip = self.clips.get(name, {})
+        files = sorted(p.name for p in TAKES.glob(f"{name}_*.mp4")) if TAKES.is_dir() else []
+        out = []
+        for i, h in enumerate(clip.get("history", [])):
+            if h.get("take") in files:
+                out.append((i, h["take"]))
+                continue
+            try:
+                rendered = time.mktime(time.strptime(h.get("rendered") or "", "%Y-%m-%dT%H:%M:%S"))
+            except ValueError:
+                continue
+            near = []
+            for f in files:
+                try:
+                    t = time.mktime(time.strptime(f[len(name) + 1:-4], "%Y%m%d-%H%M%S"))
+                except ValueError:
+                    continue
+                if 0 <= rendered - t <= 900:
+                    near.append((rendered - t, f))
+            if near:
+                out.append((i, min(near)[1]))
+        return out
+
+    def use_take(self, name, index):
+        """Bring an earlier take back: its file becomes the clip again, with its seed, status and note,
+        and the take it replaces goes to clips/takes/ in its place in the history. The clip's sheet is
+        made again (its checks are dropped), and its file is marked new so the next build remakes its
+        depth and cut-out. Returns the restored status."""
+        clip = self.clips[name]
+        if clip["status"] not in ("rendered", "kept", "dropped"):
+            raise ValueError(f"{name} is {clip['status']}: keep the old take with Keep the old take (Plan & render)")
+        found = dict(self.takes(name))
+        if index not in found:
+            raise ValueError("that take's file isn't in clips/takes any more")
+        current, old = self.clip_file(name), TAKES / found[index]
+        if not current.exists():
+            raise ValueError(f"no file for {name}")
+        h = clip["history"][index]
+        now = {k: clip.get(k) for k in ("seed", "status", "note", "flags", "queue", "rendered")}
+        now["onGlass"] = name in self.sequence
+        now["take"] = take_name(name, current)
+        if (TAKES / now["take"]).exists():  # two takes written in the same second
+            now["take"] = now["take"][:-4] + "b.mp4"
+        current.rename(TAKES / now["take"])
+        old.rename(current)
+        os.utime(current)  # newer than her depth and cut-out caches, so the build remakes them
+        clip["history"][index] = now
+        for k in ("seed", "status", "note", "flags", "queue", "rendered"):
+            if h.get(k) is not None:
+                clip[k] = h[k]
+        clip.pop("checks", None)
+        clip["changed"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        if clip["status"] != "kept" and name in self.sequence and name != self.sequence[0]:
+            self.sequence.remove(name)
+        elif clip["status"] == "kept" and h.get("onGlass") and name not in self.sequence:
+            self.sequence.append(name)
+        return clip["status"]
 
     def place(self, name, on=True):
         """Put a kept clip on the glass, or take it off (her main idle always stays, first)."""

@@ -79,6 +79,14 @@ About one clip in six fails, so watch them all.
 - **Re-roll** puts the clip back in the plan under the same name with a new seed. You can change its
   wording or length there before rendering it again. The old take is kept in the clip's history and
   its file in `clips/takes/`.
+- **Earlier takes** shows on a re-rolled clip's card once the new take has landed: **▶** watches an
+  old one, **Use it** brings it back. The old take becomes the clip again, with its seed, status
+  (kept, dropped or to review) and note, and goes back on the glass if it was on the glass when it
+  was re-rolled. The take it replaces moves to the earlier takes in its place, so you can swap back.
+  Its sheet is made again, and its file counts as new, so the next build remakes its depth and
+  cut-out. Before the re-roll has rendered, **Keep the old take** in Plan & render does the same.
+- After **K**, **D** or **R** the keyboard stays on the next card, and a refresh while you work
+  (a render landing a clip) keeps the card you're on and leaves a note you're typing alone.
 - The filters show what is **To review**, **Flagged** (rendered and kept clips the checks were unsure
   about), **Kept**, **Dropped** or **All**, for one look or all of them.
 - **Make missing sheets** makes sheets and checks for clips that have none.

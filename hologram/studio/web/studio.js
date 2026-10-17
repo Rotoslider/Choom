@@ -252,6 +252,7 @@ function reviewCard(name) {
         ...(c.flags || []).map((f) => el('span', { className: 'tag flag', tip: FLAG_TIPS[f] || f }, f)),
         state.choom.sequence.includes(name) ? el('span', { className: 'tag' }, 'on the glass') : null),
       el('p', { className: 'action' }, c.action || '(prompt not recorded)'),
+      takesRow(name),
       el('div', { className: 'card-buttons' },
         el('button', { className: 'keep', type: 'button', onclick: () => decide('kept'), tip: 'Keep it (K): it can go on the glass' }, 'Keep'),
         el('button', { className: 'drop', type: 'button', onclick: () => decide('dropped'), tip: 'Drop it (D): it stays in her project, off the glass' }, 'Drop'),
@@ -269,6 +270,33 @@ function reviewCard(name) {
     else if (k === 'arrowleft' || k === 'arrowup') { e.preventDefault(); card.previousElementSibling?.focus(); }
   });
   return card;
+}
+
+// Earlier takes of a re-rolled clip whose files are still in clips/takes/: watch one, or bring it back
+// (project.use_take: it becomes the clip again, with its seed, status and note; the one it replaces
+// becomes a take; its sheet is made again).
+function takesRow(name) {
+  const c = state.choom.clips[name];
+  const takes = state.choom.takes?.[name] || [];
+  if (!takes.length || !['rendered', 'kept', 'dropped'].includes(c.status)) return null;
+  const cid = state.cid;
+  return el('div', { className: 'takes' }, el('span', { className: 'muted' }, 'Earlier takes:'),
+    ...takes.map(([i, file]) => {
+      const h = c.history[i] || {};
+      const label = `take ${i + 1}${h.status ? ` (${h.status})` : ''}`;
+      return el('span', { className: 'take' },
+        el('button', { className: 'ghost small', type: 'button', onclick: () => play(name, `/media/take/${encodeURIComponent(file)}`, `${short(cid, name)}, ${label}`), tip: `Watch ${label}${h.note ? `: ${h.note}` : ''}` }, `▶ ${label}`),
+        el('button', {
+          className: 'ghost small', type: 'button', tip: `Make ${label} the clip again (seed ${h.seed ?? '?'}); the take you have now goes to the earlier takes`,
+          onclick: attempt(async () => {
+            const r = await api(`/api/choom/${cid}/take`, { name, index: i });
+            state.choom = r.choom;
+            toast(`${short(cid, name)}: ${label} is back (${r.status}); its sheet is being made again`);
+            render();
+            focusCard(name);
+          }),
+        }, 'Use it'));
+    }));
 }
 
 function focusCard(name) {
@@ -289,7 +317,7 @@ $('#makeSheets').addEventListener('click', attempt(async () => {
   pollJobs();
 }));
 
-function play(name) {
+function play(name, url = clipUrl(name), label = name) {
   const v = $('#playerVideo');
   v.src = clipUrl(name);
   $('#playerName').textContent = name;

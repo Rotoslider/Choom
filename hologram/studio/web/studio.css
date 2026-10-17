@@ -306,3 +306,5 @@ button.small { padding: 3px 10px; font-size: 12px; }
 .wishes-done { margin-top: 6px; border-top: 1px solid var(--line); padding-top: 4px; }
 .wishes-done summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 .wishes-done .wish span { color: var(--muted); }
+.takes { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; font-size: 12px; margin: 2px 0 6px; }
+.take { display: inline-flex; gap: 2px; }
