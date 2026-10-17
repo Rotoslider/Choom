@@ -19,7 +19,7 @@ export const tools: ToolDefinition[] = [
   {
     name: 'glass_wear',
     description:
-      'Change your clothes on the Looking Glass, from your closet there: "my red dress", "a sweater", "my usual clothes". The closest match is used, and you keep it on until bedtime unless you change again. Clothes you don\'t have yet go on Donny\'s wish list for the glass. To ask for new clothes without changing now, use glass_wish.',
+      'Change your clothes on the Looking Glass, from your closet there: "my red dress", "a sweater", "my usual clothes". The closest match is used. Day clothes stay on until 10 pm, when your night clothes go on; anything you put on after that you keep until you go to sleep. Change again whenever you like. Clothes you don\'t have yet go on Donny\'s wish list for the glass. To ask for new clothes without changing now, use glass_wish.',
     parameters: {
       type: 'object',
       properties: {
@@ -54,7 +54,7 @@ export const tools: ToolDefinition[] = [
   {
     name: 'glass_closet',
     description:
-      'What you can do and wear on the Looking Glass: your moves and the clothes in your closet there. It doesn\'t say what you have on at the moment.',
+      'Lists what you can do and wear on the Looking Glass: your moves and the clothes in your closet there. It only lists and changes nothing; to change clothes, use glass_wear. It doesn\'t say what you have on at the moment.',
     parameters: {
       type: 'object',
       properties: {},
