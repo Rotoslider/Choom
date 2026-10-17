@@ -25,3 +25,5 @@ portraits/*/wishes.json
 portraits/*/wishes.part
 portraits/*/wishes_done.json
 portraits/*/*.studio-part
+# This install's own hours, temperatures and visit lengths (glass-settings.example.json)
+glass-settings.json

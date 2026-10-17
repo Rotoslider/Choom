@@ -1,0 +1,17 @@
+{
+  "_about": "Copy to glass-settings.json (beside living.html, not in git) and change what you like; anything left out keeps its default. Hours are 0-23 local time, temperatures °F from the weather station, lengths in minutes. Relaunch the glass to apply.",
+  "sleepFrom": 23,
+  "sleepUntil": 7,
+  "sleepAfterQuietMinutes": 10,
+  "nightClothesFrom": 22,
+  "nightWarmF": 70,
+  "coldBelowF": 45,
+  "hotAboveF": 85,
+  "eveningFrom": 18,
+  "eveningUntil": 23,
+  "visitSecondsPerClip": 30,
+  "visitMinMinutes": 3,
+  "visitMaxMinutes": 15,
+  "restMinutes": 25,
+  "dailyMinutesPerClip": 2
+}

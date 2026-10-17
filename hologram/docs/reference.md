@@ -240,6 +240,12 @@ An outfit's name says when she wears it (`OUTFIT_RULES`, `nightOutfit` and `want
 The temperature comes from the weather feed ([Weather](#weather)). An outfit is wearable only if it
 has a clip with the `talk` mood.
 
+**Install settings.** The hours, temperatures and visit lengths on this page (sleep 11 pm to 7 am,
+night clothes from 10 pm, 70°F for warm night clothes, cold under 45°F, hot over 85°F, evening 6 to 11
+pm, visits of 30 s per clip between 3 and 15 minutes, 25 minutes' rest, a daily 2 minutes per clip)
+are defaults. Copy `glass-settings.example.json` to `glass-settings.json` beside `living.html`
+(gitignored), change what you like and relaunch; anything left out keeps its default.
+
 **Visits.** A dozen clips would loop for hours, so she wears an outfit (or another look) in visits:
 - A visit lasts about 30 s per clip the look has, between 3 and 15 minutes.
 - A visit goes on until it's up (or its hours or weather end); it isn't swapped mid-way for another

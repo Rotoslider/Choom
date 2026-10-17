@@ -43,6 +43,10 @@ function makePlayer() {
 const getJSON = async (url) => (await fetch(url, { cache: 'no-store' })).json();
 const calibration = await getJSON('/calibration.json');
 const manifest = await getJSON('/portraits/manifest.json');
+// Install settings (optional): glass-settings.json beside this page overrides the hours, temperatures
+// and visit lengths (see glass-settings.example.json). Missing, broken or a wrong type: the default.
+const settings = await fetch('/glass-settings.json', { cache: 'no-store' }).then((r) => (r.ok ? r.json() : {})).catch(() => ({}));
+const setting = (key, fallback) => (typeof settings[key] === typeof fallback ? settings[key] : fallback);
 
 const lkg = new LookingGlassRenderer({ canvas: document.getElementById('c'), calibration });
 // A lost graphics context (a driver reset, the GPU out of memory: twice on Oct 10) leaves the glass
@@ -998,7 +1002,7 @@ const fullOf = (pose) => (outfitOf(pose) ? `full@${outfitOf(pose)}` : 'full');
 // Night clothes, from 10 pm until she wakes: nightwarm… when it's 70°F or warmer, nightcold… below
 // (his station), any other night… outfit either way. Chosen when she first puts them on and kept until
 // morning, so a cooling night doesn't change her pajamas at 2 am.
-const NIGHT_FROM = 22, NIGHT_WARM_F = 70;
+const NIGHT_FROM = setting('nightClothesFrom', 22), NIGHT_WARM_F = setting('nightWarmF', 70);
 const nightNow = () => { const h = hourNow(); return h >= NIGHT_FROM || h < SLEEP_UNTIL; };
 const msUntilHour = (hour) => { const d = new Date(), t = new Date(d); t.setHours(hour, 0, 0, 0); if (t <= d) t.setDate(t.getDate() + 1); return t - d; };
 function nightOutfit(p, outfits) {
@@ -1010,19 +1014,22 @@ function nightOutfit(p, outfits) {
   p.nightPick = { o, until: performance.now() + msUntilHour(SLEEP_UNTIL) };
   return o;
 }
+const COLD_BELOW_F = setting('coldBelowF', 45), HOT_ABOVE_F = setting('hotAboveF', 85);
+const EVENING_FROM = setting('eveningFrom', 18), EVENING_UNTIL = setting('eveningUntil', 23);
 const OUTFIT_RULES = [
-  [/^cold/, () => typeof weather.temperature === 'number' && weather.temperature < 45],  // °F
-  [/^hot/, () => typeof weather.temperature === 'number' && weather.temperature > 85],
-  [/^evening/, () => { const h = hourNow(); return h >= 18 && h < 23; }],
+  [/^cold/, () => typeof weather.temperature === 'number' && weather.temperature < COLD_BELOW_F],  // °F
+  [/^hot/, () => typeof weather.temperature === 'number' && weather.temperature > HOT_ABOVE_F],
+  [/^evening/, () => { const h = hourNow(); return h >= EVENING_FROM && h < EVENING_UNTIL; }],
 ];
 // An outfit or other look with a dozen clips loops them every minute (the clock look), so she wears
 // it in short visits spread through its hours: a visit lasts about 30 s per clip it has (each clip
 // comes around about six times; 3 to 15 minutes), then she's back in her usual clothes for at least
 // 25 minutes. Outfits also have a daily total of 2 minutes per clip. More clips, longer visits. Kept
 // across relaunches (localStorage), which used to hand her a fresh evening in the sweater each time.
-const VISIT_S_PER_CLIP = 30;
-const VISIT_MIN_MS = 3 * 60000, VISIT_MAX_MS = 15 * 60000, VISIT_REST_MS = 25 * 60000;
-const OUTFIT_DAY_MS_PER_CLIP = 2 * 60000;
+const VISIT_S_PER_CLIP = setting('visitSecondsPerClip', 30);
+const VISIT_MIN_MS = setting('visitMinMinutes', 3) * 60000, VISIT_MAX_MS = setting('visitMaxMinutes', 15) * 60000;
+const VISIT_REST_MS = setting('restMinutes', 25) * 60000;
+const OUTFIT_DAY_MS_PER_CLIP = setting('dailyMinutesPerClip', 2) * 60000;
 const ALT_LOOKS = new Set(['plain', 'noheart']);  // looks in her usual clothes: visits, but no daily total
 function wardrobe(p) {
   if (!p.wardrobe) {
@@ -1142,9 +1149,9 @@ function wantedMood(p) {
 // Sleep: late at night, once it has been quiet a while, the Choom on the glass dozes off and the
 // glass dims; she wakes when he types or talks to her, when a reply comes in, or in the morning.
 // Local hours.
-const SLEEP_FROM = 23;
-const SLEEP_UNTIL = 7;
-const SLEEP_AFTER_QUIET_MS = 10 * 60 * 1000;
+const SLEEP_FROM = setting('sleepFrom', 23);
+const SLEEP_UNTIL = setting('sleepUntil', 7);
+const SLEEP_AFTER_QUIET_MS = setting('sleepAfterQuietMinutes', 10) * 60 * 1000;
 let debugHour = null;     // debug: pretend it's this hour (/control {"hour": 23})
 let debugJaw = null;      // debug: hold the mouth open this far (/control {"jaw": 0.6})
 let debugSleep = false;   // debug: doze off now, however early or busy it is (/control {"sleep": true})
