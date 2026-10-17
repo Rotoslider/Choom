@@ -658,7 +658,9 @@ On the app side:
   her reply as speakable sentences, gathered from the stream the same way the web voice does.
 - **One voice:** while the hologram runs it posts a heartbeat to `/api/hologram/voice`, and browsers
   at home skip their own TTS (`lib/hologram-voice.ts`), so a reply is heard once. A browser reached
-  through ngrok keeps its own voice. The mute button also stops the hologram (`/api/hologram/mute`).
+  through ngrok keeps its own voice. The mute button also stops the hologram (`/api/hologram/mute`),
+  and a hologram that connects while the app is muted (a relaunch after every build) hears the mute
+  first on its feed.
 - **Listening:** typing or the mic in the chat input shows her listening (`/api/hologram/listening`).
 - **Talking at the tower:** `/api/hologram/talk` sends words heard at the tower to her current chat,
   or to the Signal room.
@@ -666,7 +668,9 @@ On the app side:
   he sits down after a while away, from a note in her chat (`note: true` on `/api/chat`: saved as a
   system message, hidden in the chat window, never counted as his words). A room the Chooms are running
   pauses before its next speaker (`PUT /api/group-chat {pause: true}`) and resumes when he's done
-  (`{done: true}` on the welcome route).
+  (`{done: true}` on the welcome route). If the welcome can't go out, the rooms resume at once; a
+  pause request is dropped, and a paused room picks itself up, after 15 minutes without the
+  `{done}` (the hologram's own `ROOMS_PAUSED_S` is the same).
 - **Her own mishaps:** a failed tool reaches the hologram as `tool_failed`, so she can make a face.
 - **The glass camera:** Settings → Camera shows the camera on the glass live (for aiming it), its adjustments, and whether the Chooms may use it; they ask for the `"glass"` camera with `ha_get_camera_snapshot` (`lib/glass-camera.ts` asks the hologram over its feed).
 - **The Chooms asking the glass:** the `looking-glass` skill gives each Choom `glass_move`, `glass_wear`, `glass_closet` and `glass_wish` (`lib/glass-closet.ts`, over the same feed). She can play a move she has, wear clothes from her closet on the glass, see what she has (never what she has on), or put something new on the wish list in Glass Studio.

@@ -40,11 +40,21 @@ const store = globalThis as unknown as {
   __choomHologramListeners?: Set<Listener>;
   __choomHologramVoice?: { voice: boolean; at: number };
   __choomHologramViewing?: Map<string, number>;
+  __choomHologramMuted?: boolean;
 };
 const listeners = (store.__choomHologramListeners ??= new Set<Listener>());
 
 export function subscribeHologram(listener: Listener): () => void {
   listeners.add(listener);
+  // A glass that (re)connects while the app is muted learns it first: the mute button sends only
+  // changes, so a relaunched glass (every build relaunches it) would otherwise talk over a muted app.
+  if (store.__choomHologramMuted) {
+    try {
+      listener({ type: 'mute', muted: true, time: Date.now() });
+    } catch {
+      // A broken subscriber must never affect the others.
+    }
+  }
   return () => {
     listeners.delete(listener);
   };
@@ -81,11 +91,17 @@ export function hologramVoiceActive(): boolean {
 
 /** The web app's mute button, passed on: the hologram stops talking and stays quiet until unmuted. */
 export function setHologramMuted(muted: boolean): void {
+  store.__choomHologramMuted = muted;
   publishHologram({ type: 'mute', muted });
   // Update the hand-off now rather than at the hologram's next heartbeat, so browsers polling
   // right after an unmute already know the hologram has the voice back (if it's running).
   const v = store.__choomHologramVoice;
   if (v && Date.now() - v.at < VOICE_FRESH_MS) setHologramVoice(!muted);
+}
+
+/** Whether the web app's mute is on (as last pressed; unknown after a server restart, so off). */
+export function hologramMuted(): boolean {
+  return store.__choomHologramMuted === true;
 }
 
 // ---- Donny talking to them -----------------------------------------------------------------
