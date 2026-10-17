@@ -291,6 +291,7 @@ clothes to it, and a full body, which stands relaxed, leaves out what the list s
 hands or pose (Eve's "her arms crossed in front of her" would keep her arms crossed in every full
 body) and keeps what she holds without how she holds it (Optic's heart). The prompt is shown before
 Klein runs, so either can still be changed by hand.
+
 **Rename outfit** (on an outfit's cards) gives the outfit a new name: all its looks (`main@`,
 `relaxed@`, `full@`, `asleep@`), its clips and their files in `clips/`, sheets and earlier takes move
 to it, change-of-clothes clips into it too, since a clip's name says which look it's in. The name
