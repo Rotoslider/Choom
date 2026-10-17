@@ -57,7 +57,7 @@ happening in the Choom app: listening, thinking, using tools, changing clothes, 
 |:---:|:---:|
 | ![The group stage](docs/images/stage.jpg) | ![A picture floating beside Genesis](docs/images/picture.jpg) |
 | The group stage | A picture she made |
-| ![Aloy full-body, mid-move](docs/images/full-body.jpg) | ![Aloy asleep](docs/images/asleep.jpg) |
+| ![Eve full length in her emerald gown](docs/images/full-body.jpg) | ![Aloy asleep](docs/images/asleep.jpg) |
 | A full-body move | Asleep, the glass dimmed |
 
 ## Hardware
