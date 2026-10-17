@@ -5,7 +5,7 @@ wakes anyone. Settings in studio.json:
 
     "notify": {"url": "http://donnys-mac-studio-3.local:3000",   the Choom app (empty: off)
                "choom": "Aloy",                                 whose thread it comes in (name or id)
-               "quiet": [22, 7],                                held from 22:00 until 07:00
+               "quiet": [22, 7],                                held from 22:00 until 07:00 ("07:10" works too)
                "dry_run": false}                                only write it to studio.log
 
 A run opens when a scheduled job (a time, or "after the render") starts, takes in every GPU job that
@@ -63,10 +63,20 @@ def job_ended(job):
             save()
 
 
+def minutes(when):
+    """A time of day as minutes after midnight: 7, 7.5 or "07:10"."""
+    if isinstance(when, str) and ":" in when:
+        h, m = when.split(":", 1)
+        return int(h) * 60 + int(m)
+    return round(float(when) * 60)
+
+
 def quiet(now=None, hours=None):
-    start, end = hours or settings()["quiet"]
-    h = time.localtime(now or time.time()).tm_hour
-    return (h >= start or h < end) if start > end else start <= h < end
+    """Inside the quiet hours: [22, 7] or ["22:00", "07:10"] (to land just after a 7 am briefing)."""
+    start, end = (minutes(x) for x in (hours or settings()["quiet"]))
+    t = time.localtime(now or time.time())
+    m = t.tm_hour * 60 + t.tm_min
+    return (m >= start or m < end) if start > end else start <= m < end
 
 
 def to_review():
