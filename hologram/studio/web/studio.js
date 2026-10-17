@@ -342,6 +342,7 @@ function renderGlass() {
   } else bar.replaceChildren(
     el('div', { className: 'changes' }, el('div', {}, changes),
       ...c.problems.map((p) => el('div', { className: 'problem' }, p)),
+      ...readinessWarnings(),
       c.built ? el('div', { className: 'muted' }, `Last built ${c.built.time.replace('T', ' ')} (${c.built.clips} clips, ${c.built.minutes} min)`) : null),
     build);
 
@@ -364,12 +365,51 @@ function renderGlass() {
         pic ? el('img', { src: pictureUrl(pic), alt: '', loading: 'lazy' }) : null,
         el('h3', {}, look),
         el('span', { className: 'stat' }, `${s.onGlass} on the glass · ${s.quiet} quiet moments · ${s.minutes} min before one repeats`),
+        readinessLine(look),
         allOn),
       el('div', { className: 'lane-label' }, 'On the glass'),
       lane(look, on, true),
       el('div', { className: 'lane-label' }, `Kept, not on the glass (${off.length})`),
       lane(look, off, false));
   }));
+}
+
+// How far a look and its outfit are from the glass (project.readiness): kept clips never put on the
+// glass, an outfit's full body that can't play because she can't wear the outfit yet, and what a build
+// still has to make.
+function readinessWarnings() {
+  const r = state.choom.readiness;
+  if (!r) return [];
+  return r.warnings.map((w) => {
+    const look = w.split(':')[0];
+    const n = r.looks[look];
+    const fix = n && n.kept && !n.placed ? el('button', {
+      className: 'ghost small', type: 'button', tip: `Put all ${n.kept} kept clips of ${look} on the glass (then build)`,
+      onclick: attempt(async () => { await placeAll(look); }),
+    }, 'Put them on the glass') : null;
+    return el('div', { className: 'problem' }, w, fix ? ' ' : null, fix);
+  });
+}
+async function placeAll(look) {
+  const c = state.choom;
+  const off = Object.keys(c.clips).filter((n) => c.clips[n].from === look && c.clips[n].status === 'kept' && !c.sequence.includes(n));
+  state.choom = (await api(`/api/choom/${state.cid}/place`, { names: off, on: true })).choom;
+  toast(`${off.length} clips of ${look} added; build to put them on the glass`);
+  render();
+}
+function readinessLine(look) {
+  const r = state.choom.readiness;
+  if (!r) return null;
+  const n = r.looks[look] || { kept: 0, placed: 0, unbuilt: 0 };
+  const o = look.split('@')[1];
+  const outfit = o && r.outfits[o];
+  const bits = [`${n.kept} kept`, `${n.placed} placed`];
+  if (n.unbuilt) bits.push(`${n.unbuilt} not built yet`);
+  if (outfit && waistUp(look)) bits.push(outfit.talk ? 'has a talk loop' : 'no talk loop placed: she can’t wear it yet');
+  if (outfit && waistUp(look) && outfit.unbuilt) bits.push(`about ${outfit.buildMinutes} min to build its ${outfit.unbuilt} new clips`);
+  return el('span', { className: `stat ready${outfit && waistUp(look) && !outfit.talk ? ' warn' : ''}`, tip: o
+    ? `The outfit ${o}: the glass puts her in it only once a loop she can talk over (Essentials) of ${look} is built, and plays its full body and asleep look only while she wears it`
+    : 'Kept clips of this look, how many are placed on the glass, and how many a build still has to make' }, bits.join(' · '));
 }
 
 let dragged = null;
@@ -761,6 +801,8 @@ function renderLooks() {
       el('div', {},
         el('h3', {}, look),
         el('p', { className: 'muted' }, `${l.picture || 'no picture'} · ${s.onGlass} clips on the glass`),
+        el('p', {}, readinessLine(look), (c.readiness?.looks[look]?.kept && !c.readiness.looks[look].placed)
+          ? el('button', { className: 'ghost small', type: 'button', onclick: attempt(() => placeAll(look)), tip: 'Put all its kept clips on the glass (then build)' }, 'Put them on the glass') : null),
         !l.picture && !(c.drafts || {})[look] ? firstPicture(look, l) : null,
         el('label', {}, 'Subject', subject),
         wears && el('label', { tip: 'What she wears in this look. Changing it puts the new clothes in the Subject (unless you edit the Subject too, then yours stands), and a full body of this outfit made later starts from it' }, 'She wears', wears),

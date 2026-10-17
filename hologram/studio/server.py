@@ -47,7 +47,7 @@ def details(proj):
     glass = {"added": [n for n in proj.sequence if n not in built], "removed": [n for n in built if n not in proj.sequence]}
     closet = {look: proj.closet_words(look) for look in proj.looks if "@" in look}
     return {**proj.data, "stats": looks, "problems": build.problems(proj), "glass": glass, "inManifest": build.in_manifest(proj.id),
-            "closet": closet, "wishes": wishes(proj.id),
+            "closet": closet, "wishes": wishes(proj.id), "readiness": proj.readiness(built),
             "color": colors().get(proj.id) or proj.data.get("color"),
             "plannedMinutes": round(sum(render.minutes(c.get("frames") or 124) for c in planned))}
 

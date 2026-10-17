@@ -33,6 +33,7 @@ from clip_roles import clip_role  # noqa: E402
 
 STATUSES = ("planned", "queued", "rendered", "kept", "dropped")
 NOT_CHOOMS = {"jobs", "worklist", "notify", "schedule"}  # json files in studio/ that aren't Choom projects
+BUILD_MINUTES_PER_CLIP = 2.5  # masks, depth and relief of one new clip in a build (October 2026 builds)
 
 
 def outfit_of(pose):
@@ -178,7 +179,47 @@ class Project:
                 "moves": {n: c["tags"] for n, c in sorted(self.clips.items()) if c.get("tags")}}
         text = json.dumps(data, indent=1) + "\n"
         if not f.exists() or f.read_text() != text:
-            f.write_text(text)
+            part = f.with_suffix(".part")  # swapped in whole: the glass's server reads it any moment
+            part.write_text(text)
+            os.replace(part, f)
+
+    # --- what the glass needs before it plays a look -----------------------------------------------
+    def readiness(self, built=()):
+        """Per look and per outfit, how far it is from the glass, and warnings for the two easy misses:
+        a look whose kept clips were never put on the glass (Genesis's 49 shop close-ups), and an
+        outfit's full body or asleep look on the glass while she can't wear the outfit. The glass plays
+        full@X and asleep@X only while she wears X, and she wears X only with a loop she can talk over
+        in main@X or relaxed@X on it. built: the clips her glass plays now (alive.json).
+        Returns {"looks": {look: {kept, placed, unbuilt, talk}}, "outfits": {o: {...}}, "warnings": [...]}."""
+        seq, built = set(self.sequence), set(built)
+        looks = {lid: {"kept": 0, "placed": 0, "unbuilt": 0, "talk": False} for lid in self.looks}
+        for name, c in self.clips.items():
+            if c["status"] != "kept" or c["from"] not in looks:
+                continue
+            look = looks[c["from"]]
+            look["kept"] += 1
+            if name in seq:
+                look["placed"] += 1
+                look["unbuilt"] += name not in built
+                look["talk"] |= c["from"] == c["to"] and "talk" in c.get("moods", [])
+        warnings = [f"{lid}: {n['kept']} kept clip{'s' if n['kept'] > 1 else ''}, none on the glass yet"
+                    for lid, n in looks.items() if n["kept"] and not n["placed"]]
+        outfits = {}
+        for o in sorted({outfit_of(lid) for lid in self.looks if outfit_of(lid)}):
+            waist = [lid for lid in (f"main@{o}", f"relaxed@{o}") if lid in self.looks]
+            extra = [lid for lid in (f"full@{o}", f"asleep@{o}") if lid in self.looks]
+            mine = [looks[lid] for lid in waist + extra]
+            talk = any(looks[lid]["talk"] for lid in waist)
+            unbuilt = sum(n["unbuilt"] for n in mine)
+            outfits[o] = {"looks": waist + extra, "talk": talk, "kept": sum(n["kept"] for n in mine),
+                          "placed": sum(n["placed"] for n in mine), "unbuilt": unbuilt,
+                          "buildMinutes": round(unbuilt * BUILD_MINUTES_PER_CLIP)}
+            on = [lid for lid in extra if looks[lid]["placed"]]
+            if on and not talk:
+                warnings.append(f"{' and '.join(on)} {'are' if len(on) > 1 else 'is'} on the glass, but she can't wear {o} "
+                                f"yet: {waist[0] if waist else f'main@{o}'} has no loop she can talk over on the glass "
+                                f"(Essentials), so {'they never play' if len(on) > 1 else 'it never plays'}")
+        return {"looks": looks, "outfits": outfits, "warnings": warnings}
 
     def summary(self):
         counts = {s: 0 for s in STATUSES}

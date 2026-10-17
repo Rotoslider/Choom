@@ -106,6 +106,17 @@ An outfit can only be worn once its waist-up look has a loop she can talk over o
 body (`full@<outfit>`) plays only while she wears the outfit, so build the outfit's waist-up clips
 before or with its full-body clips.
 
+Under each look's name a line says how far it is from the glass: kept clips, how many are placed,
+how many a build still has to make, and for an outfit whether it has a talk loop placed and about how
+long the build of its new clips takes (about 2.5 minutes a clip). The bar warns about the two easy
+misses, each with its fix:
+- **a look whose kept clips are none of them on the glass** (`main@dayshop: 49 kept clips, none on
+  the glass yet`), with **Put them on the glass**;
+- **an outfit's full body or asleep look on the glass while she can't wear the outfit**, because its
+  waist-up look has no talk loop placed: those clips would never play.
+
+The same line shows on each look's card under Looks.
+
 ### Plan & render
 
 ![The clip library for a new outfit, with Essentials and eight quiet moments ticked](docs/images/outfit-4-plan.jpg)

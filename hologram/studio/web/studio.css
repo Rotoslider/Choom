@@ -293,3 +293,10 @@ button.small { padding: 3px 10px; font-size: 12px; }
 .many-row { display: grid; grid-template-columns: minmax(0, 2fr) 1fr 0.8fr 1.2fr; gap: 8px; padding: 3px 0; border-top: 1px solid var(--line); }
 .many-row .problem { color: var(--warn); }
 @media (max-width: 720px) { .many { grid-template-columns: minmax(0, 1fr); } .many-row { grid-template-columns: minmax(0, 1fr) auto; } }
+
+/* How far a look is from the glass (On the glass, Looks) */
+.stat.ready { flex-basis: 100%; order: 9; }
+.look-card .stat.ready { display: inline-block; margin-right: 8px; }
+.stat.warn { color: var(--warn); }
+.build-bar .problem button { margin-left: 6px; }
+.look-head { flex-wrap: wrap; }
