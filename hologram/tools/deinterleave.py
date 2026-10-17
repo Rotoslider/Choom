@@ -7,6 +7,7 @@ the parallax a viewer gets. Usage:
 """
 import json
 import math
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -15,7 +16,18 @@ import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
 from PIL import Image, ImageGrab
 
-CALIBRATION = Path(__file__).resolve().parents[1] / "calibration" / "LKG-PORT-07952_visual.json"
+HERE = Path(__file__).resolve().parents[1]
+
+
+def find_calibration():
+    """The Portrait's calibration in calibration/ (as server.py finds it; HOLOGRAM_CALIBRATION names one)."""
+    named = os.environ.get("HOLOGRAM_CALIBRATION")
+    if named:
+        return Path(named) if Path(named).is_absolute() else HERE / "calibration" / named
+    found = sorted((HERE / "calibration").glob("*_visual.json")) or sorted((HERE / "calibration").glob("*.json"))
+    if not found:
+        raise SystemExit("no calibration in calibration/")
+    return found[0]
 VIEWS = 48
 
 
@@ -64,7 +76,7 @@ def main():
     x, y = portrait_origin()
     grab = ImageGrab.grab(bbox=(x, y, x + 1536, y + 2048), xdisplay=":0").convert("RGB")
     img = np.asarray(grab).astype(np.float32) / 255
-    idx = view_index(json.loads(CALIBRATION.read_text()), 1536, 2048)
+    idx = view_index(json.loads(find_calibration().read_text()), 1536, 2048)
     tiles = [Image.fromarray((np.clip(rebuild(img, idx, v), 0, 1) * 255).astype(np.uint8)).resize((384, 512))
              for v in views]
     sheet = Image.new("RGB", (384 * len(tiles) + 12 * (len(tiles) - 1), 512), (40, 40, 40))
