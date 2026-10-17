@@ -109,10 +109,10 @@ outline on clean black.
 
 ![Klein's clean-ups of Eve's render](images/new-3-versions.jpg)
 
-If none are quite right, pick the closest and replace it later: **New look → A new picture for a look
-she has**, **Look** *main*, with your original picture under **Or start from a picture from your
-computer** and your own clean-up instruction. (Discarding her first versions leaves her without a
-main picture and no way to make more from the page.)
+If none are quite right, click **Discard**. Her **main** card then says she has no picture yet and
+offers **Make pictures again**: change the Klein prompt if the versions went wrong (it starts from the
+last one), pick how many versions, and Klein cleans up her original picture again. You can also pick
+the closest now and replace it later with **New look → A new picture for a look she has**.
 
 Then look over her **main** look card under Looks, and click **Save** after any change:
 

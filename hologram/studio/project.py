@@ -171,7 +171,7 @@ class Project:
             if o and o not in looks and base_of(lid) != "full":  # the outfit, not its full body
                 worn = closet.wearing(subject, main)
                 looks[o] = {"tags": self.closet_words(lid),  # her usual clothes, changed some other way: say how
-                            "wearing": closet.changes(subject, main) if worn == usual else worn}
+                            "wearing": closet.same_clothes(subject, main) if worn == usual else worn}
         data = {"usual": usual, "looks": looks,
                 "moves": {n: c["tags"] for n, c in sorted(self.clips.items()) if c.get("tags")}}
         text = json.dumps(data, indent=1) + "\n"

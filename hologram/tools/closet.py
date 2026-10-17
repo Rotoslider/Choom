@@ -134,19 +134,39 @@ def wearing(subject, main_subject=""):
     look without a "wearing" phrase (Genesis without her motes) is the part of its subject that isn't
     in her main one: "natural skin, a delicate necklace and a dark top with thin straps"."""
     # Up to where the scene starts (", against a plain pure black background", ", glows softly"), not the
-    # first comma: "a long, soft ivory cotton nightgown" came back as "a long".
-    m = re.search(r"\bwearing (.+?)(?:, (?:glows|softly|against|in clean|in soft|her |standing|holding)|$)", subject or "")
+    # first comma: "a long, soft ivory cotton nightgown" came back as "a long". A new Choom's subject goes
+    # on with ", glowing softly against".
+    m = re.search(r"\bwearing (.+?)(?:, (?:glows|glowing|softly|against|in clean|in soft|her |standing|holding)|$)", subject or "")
     return m.group(1).strip().rstrip(",. ") if m else changes(subject, main_subject)
 
 
 def changes(subject, main_subject):
-    """The parts of a look's subject line that aren't in her main one (Optic without her heart:
-    "leaning slightly forward with her empty hands loosely clasped in front of her")."""
+    """The parts of a look's subject line that aren't in her main one: what a look without a
+    "wearing" phrase has instead (Genesis without her motes: "natural skin")."""
     if not main_subject:
         return ""
     main = {s.strip() for s in main_subject.split(",")}
     return ", ".join(s.strip() for s in (subject or "").split(",")[1:]
                      if s.strip() not in main and "background" not in s)
+
+
+# Something she holds in a subject line, and where: "holding a glowing fire agate heart in front of her".
+HELD = re.compile(r"^(?:holding|carrying|cradling|clutching|with)\s+(.+?)"
+                  r"(?:\s+(?:in front of her|in (?:both )?her hands?|close to her chest|against her chest|beside her))?$")
+
+
+def same_clothes(subject, main_subject):
+    """What a look in her usual clothes, changed some other way, is in her closet. What she holds in her
+    main look and not here is named ("your usual clothes, without a glowing fire agate heart"), and
+    so is clothing added here. A pose isn't clothes, so it stays out: listing Optic's heart-aside
+    look as "leaning slightly forward with her empty hands loosely clasped" told her nothing she
+    could wear."""
+    def parts(s):
+        return [p.strip() for p in (s or "").split(",")[1:] if p.strip() and "background" not in p]
+    look, main = parts(subject), parts(main_subject)
+    gone = [m.group(1) for p in main if p not in look and (m := HELD.match(p))]
+    added = [p for p in look if p not in main and any(w in GARMENT_OF or w in COLOR_OF for w in words(p))]
+    return ", ".join(["your usual clothes"] + [f"without {g}" for g in gone] + added)
 
 
 def default_tags(look_id, subject, main_subject=""):

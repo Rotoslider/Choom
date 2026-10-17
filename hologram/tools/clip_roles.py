@@ -83,11 +83,15 @@ ROLES = {
     # Yawns, for late evening and early morning.
     "yawn": (["yawn"], "main", "main"),
     "relaxedyawn": (["yawn"], "relaxed", "relaxed"),
-    # Expressions, played while she says something that feels that way.
+    # Expressions, played once when what was said feels that way.
     "happy": (["happy"], "main", "main"),
     "surprised": (["surprised"], "main", "main"),
     "sad": (["sad"], "main", "main"),
     "concerned": (["concerned"], "main", "main"),
+    "relaxedhappy": (["happy"], "relaxed", "relaxed"),  # in a relaxed pose (Aloy's outfits are all hand-down)
+    "relaxedsurprised": (["surprised"], "relaxed", "relaxed"),
+    "relaxedsad": (["sad"], "relaxed", "relaxed"),
+    "relaxedconcerned": (["concerned"], "relaxed", "relaxed"),
     # Sleep: dozing off, sleeping, waking (Aloy sleeps with her hand down), and Genesis's wind.
     "fallasleep": (["sleep"], "main", "asleep"),
     "sleep": (["sleep"], "asleep", "asleep"),

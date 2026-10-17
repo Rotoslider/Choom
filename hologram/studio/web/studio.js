@@ -594,13 +594,19 @@ function renderLooks() {
     // words read from her clothes keep following them.
     const words = look.includes('@') ? (c.closet?.[look] || []).join(', ') : null;
     const closet = words === null ? null : el('input', { value: words });
+    // What she wears in an outfit: the Subject's clothes follow it when it changes (server side), and an
+    // outfit's full body made later starts from it. Sent only when changed.
+    const wears = look.includes('@') ? el('input', { value: l.wearing || '', placeholder: 'read from the Subject until set' }) : null;
     const save = el('button', {
       className: 'ghost', type: 'button', onclick: attempt(async () => {
+        const wearsChanged = wears && wears.value.trim() !== (l.wearing || '');
         state.choom = (await api(`/api/choom/${state.cid}/look`, {
           look, subject: subject.value, keep: keep.value, ending: ending.value,
           ...(closet && closet.value !== words ? { tags: closet.value } : {}),
+          ...(wearsChanged ? { wearing: wears.value } : {}),
         })).choom;
         toast(`${look} saved; clips planned from now on use it`);
+        if (wearsChanged) renderLooks(); // the Subject now names the new clothes
       }),
       tip: 'Save the look; clips planned from now on use it (rendered clips keep their prompts)',
     }, 'Save');
@@ -610,10 +616,33 @@ function renderLooks() {
       el('div', {},
         el('h3', {}, look),
         el('p', { className: 'muted' }, `${l.picture || 'no picture'} · ${s.onGlass} clips on the glass`),
-        el('label', {}, 'Subject', subject), el('label', {}, 'Keep line', keep), el('label', {}, 'Loop ending', ending),
+        !l.picture && !(c.drafts || {})[look] ? firstPicture(look, l) : null,
+        el('label', {}, 'Subject', subject),
+        wears && el('label', { tip: 'What she wears in this look. Changing it puts the new clothes in the Subject (unless you edit the Subject too, then yours stands), and a full body of this outfit made later starts from it' }, 'She wears', wears),
+        el('label', {}, 'Keep line', keep), el('label', {}, 'Loop ending', ending),
         closet && el('label', { tip: 'Words she can ask for this outfit by (“my red dress”): the garment, its colour. Read from what she wears unless you change them; empty goes back to those' }, 'Closet words', closet),
         el('div', { className: 'row' }, save)));
   }));
+}
+
+// A look with no picture and no versions waiting: a new Choom whose first Klein versions were all
+// discarded. Every other way to make a picture starts from one she has, so Klein cleans up her source
+// picture again, from the last prompt (change it first if those versions went wrong).
+function firstPicture(look, l) {
+  const prompt = el('textarea', { rows: 4, value: l.klein || state.cleanPrompt || '' });
+  const count = el('select', {}, ...[2, 3, 4, 6].map((n) => el('option', { value: n, selected: n === 3 }, `${n} versions`)));
+  return el('div', { className: 'first-picture' },
+    el('p', { className: 'muted' }, 'She has no picture for this look yet. Klein can clean up her source picture again:'),
+    el('label', {}, 'Klein prompt', prompt),
+    el('div', { className: 'row' }, count, el('button', {
+      type: 'button', onclick: attempt(async () => {
+        state.choom = (await api(`/api/choom/${state.cid}/reclean`, { look, prompt: prompt.value, count: Number(count.value) })).choom;
+        toast('Klein is making new versions from her source picture; they show up here when done');
+        renderLooks();
+        pollJobs();
+      }),
+      tip: 'Make new versions of her first picture from the picture you gave when you added her',
+    }, 'Make pictures again')));
 }
 
 // --- New looks: outfits, full body, asleep (Klein) -------------------------------------------------
@@ -631,14 +660,17 @@ function kleinPrompt() {
   const base = state.choom.looks[$('#outfitBase').value] || {};
   const wearing = $('#outfitWearing').value.trim().replace(/\.$/, '');
   const keep = (base.kleinKeep || 'her face, expression, hair and pose').replace(/[,. ]+$/, '');
+  // A full body or asleep picture keeps her clothes too: they are the point of an outfit's full body
+  // (pictures.with_clothes).
+  const kept = !base.kleinKeep ? 'her face, hair and clothes' : /clothes/.test(keep) ? keep : `${keep}, and her clothes`;
   if (outfitKind() === 'full') {
     return 'Show her from head to toe, standing relaxed and facing the viewer, her whole figure in frame with a little black space above her head and below her feet. '
-      + `Keep ${keep} exactly as in the picture, with the same light on the same pure black background.${wearing ? ` She wears ${wearing}.` : ''}`;
+      + `Keep ${kept} exactly as in the picture, with the same light on the same pure black background.${wearing ? ` She wears ${wearing}.` : ''}`;
   }
   if (outfitKind() === 'redo') return TRUE_COLOR;
   if (outfitKind() === 'asleep') {
     return 'She has dozed off peacefully: her eyes are gently closed, her face is soft and relaxed, and her head tips slightly down and to one side. '
-      + `Keep everything else exactly the same: ${keep}, the lighting, the framing, and the pure black background.`;
+      + `Keep everything else exactly the same: ${kept}, the lighting, the framing, and the pure black background.`;
   }
   return `Change her clothes: she now wears ${wearing || '…'}. Keep everything else exactly the same: ${keep}, the lighting, the framing, and the pure black background.`;
 }

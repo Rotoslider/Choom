@@ -193,6 +193,9 @@ button:focus-visible, select:focus-visible, textarea:focus-visible, input:focus-
 .look-card h3 { font: 500 15px var(--mono); margin-bottom: 6px; }
 .look-card label { display: grid; gap: 3px; color: var(--muted); font-size: 12px; margin-bottom: 8px; }
 .look-card .row { display: flex; gap: 8px; align-items: center; }
+.look-card select { background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; font: inherit; }
+.first-picture { border: 1px dashed var(--line); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; }
+.first-picture p { margin: 0 0 8px; }
 
 /* --- jobs, player, toast ---------------------------------------------------------------------- */
 .jobs-panel {

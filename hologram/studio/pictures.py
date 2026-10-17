@@ -32,19 +32,39 @@ def outfit_prompt(wearing, keep):
             f"same: {keep.strip().rstrip(',. ') or 'her face, expression, hair and pose'}, {BACKGROUND}.")
 
 
+def with_clothes(keep):
+    """What a full body or asleep picture keeps: what keeps her herself (the look's kleinKeep: Genesis's
+    glasses and motes) and the clothes, which are the point of an outfit's full body."""
+    keep = keep.strip().rstrip(",. ")
+    return keep if "clothes" in keep else f"{keep}, and her clothes" if keep else "her face, hair and clothes"
+
+
 def full_prompt(keep, wearing=""):
     """Klein's instruction for a full-body picture from her main one."""
     clothes = f" She wears {wearing.strip().rstrip('.')}." if wearing.strip() else ""
     return ("Show her from head to toe, standing relaxed and facing the viewer, her whole figure in frame with a little "
-            f"black space above her head and below her feet. Keep {keep.strip().rstrip(',. ') or 'her face, hair and clothes'} "
+            f"black space above her head and below her feet. Keep {with_clothes(keep)} "
             f"exactly as in the picture, with the same light on the same pure black background.{clothes}")
 
 
 def asleep_prompt(keep):
     """Klein's instruction for her asleep, for the sleep clips."""
     return ("She has dozed off peacefully: her eyes are gently closed, her face is soft and relaxed, and her head tips "
-            f"slightly down and to one side. Keep everything else exactly the same: "
-            f"{keep.strip().rstrip(',. ') or 'her face, hair and clothes'}, {BACKGROUND}.")
+            f"slightly down and to one side. Keep everything else exactly the same: {with_clothes(keep)}, {BACKGROUND}.")
+
+
+# What a look's Klein prompt told Klein to keep (outfit or asleep form, then full body).
+KEPT = (re.compile(r"Keep everything else exactly the same: (.+?), the lighting, the framing"),
+        re.compile(r"Keep (.+?) exactly as in the picture"))
+
+
+def kept_in(prompt):
+    """The keep list a Klein prompt used, or "" for none or the stock one."""
+    for pattern in KEPT:
+        m = pattern.search(prompt or "")
+        if m and m.group(1).strip() not in ("her face, expression, hair and pose", "her face, hair and clothes"):
+            return m.group(1).strip()
+    return ""
 
 
 KINDS = {"outfit": "an outfit", "full": "full body", "asleep": "asleep", "redo": "a new picture for a look she has"}
@@ -60,7 +80,7 @@ def subject_for(look, wearing):
     if look.get("wardrobe"):
         return look["wardrobe"].replace("{wearing}", wearing.strip().rstrip("."))
     subject = look.get("subject", "")
-    m = re.search(r"wearing (.+?)(, (?:glows|softly|against|her|in |standing|holding))", subject)
+    m = re.search(r"wearing (.+?)(, (?:glows|glowing|softly|against|her|in |standing|holding))", subject)
     if m:
         return subject[:m.start(1)] + wearing + subject[m.end(1):]
     return re.sub(r",? against a", f", wearing {wearing}, against a", subject, count=1)
@@ -156,11 +176,16 @@ def adopt(proj, look_id, draft, wearing=None, prompt=None, base_look=None, repla
         }
     else:
         base = proj.looks.get(base_look or base_of(look_id), {})
+        # What keeps her herself goes with her into the outfit, so a full body or another outfit made
+        # from it later keeps the same: without it, a full body of Genesis's burgundy dress was told
+        # to keep only "her face, expression, hair and pose", and her glasses and motes could go.
+        klein_keep = base.get("kleinKeep") or kept_in(prompt)
         proj.looks[look_id] = {
             "picture": target.name,
             "subject": subject_for(base, wearing) if wearing else base.get("subject", ""),
             "ending": base.get("ending", ""),
             **({"keep": base["keep"]} if base.get("keep") else {}),
+            **({"kleinKeep": klein_keep} if klein_keep else {}),
             **({"wearing": wearing} if wearing else {}),
             **({"klein": prompt} if prompt else {}),
         }

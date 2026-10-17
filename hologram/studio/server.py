@@ -298,9 +298,32 @@ class Handler(BaseHTTPRequestHandler):
                     redo, left = plan.repicture(proj, data["look"])
                     return self.send_json({"replanned": redo, "left": left, "choom": details(proj)})
             elif action == "discard":
-                proj.data.get("drafts", {}).pop(data["look"], None)
+                draft = proj.data.get("drafts", {}).pop(data["look"], None)
+                if draft and draft.get("clean") and data["look"] in proj.looks:
+                    proj.looks[data["look"]]["klein"] = draft.get("prompt")  # a retry (reclean) starts from it
+            elif action == "reclean":
+                # A new Choom whose first pictures were all discarded has no main picture, and every other
+                # way to make one starts from a picture she has: Klein cleans up her source picture again.
+                look = proj.looks.get("main", {})
+                if look.get("picture"):
+                    return self.fail("she has her main picture: a new one comes from New look, “a new picture for a look”")
+                found = sorted(PICTURES.glob(f"{cid}_source.*"))
+                if not found:
+                    return self.fail("her source picture is gone from the pictures folder; make her again with + New Choom")
+                prompt = (data.get("prompt") or "").strip() or look.get("klein") or pictures.CLEAN_PROMPT
+                proj.data.setdefault("drafts", {})["main"] = {"base": None, "prompt": prompt, "pictures": [], "status": "making",
+                                                              "clean": True, "count": int(data.get("count", 3))}
+                jobs.add("picture", {"choom": cid, "look": "main", "source": found[0].name, "prompt": prompt,
+                                     "count": int(data.get("count", 3))})
             elif action == "look":
                 look = proj.looks.setdefault(data["look"], {})
+                # What she wears, changed on the card: the Subject's clothes follow it, unless the Subject
+                # was edited too (then it says what he wrote). An outfit's full body made later builds on it.
+                if "wearing" in data and data.get("subject", look.get("subject", "")) == look.get("subject", ""):
+                    wearing = str(data["wearing"]).strip().rstrip(".")
+                    if wearing:
+                        data["subject"] = pictures.subject_for(look, wearing)
+                    data["wearing"] = wearing
                 for key in ("subject", "ending", "keep", "picture", "wardrobe", "kleinKeep", "wearing"):
                     if key in data:
                         look[key] = data[key]

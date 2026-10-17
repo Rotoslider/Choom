@@ -119,7 +119,7 @@ holds something (Optic's heart, crossed arms).
 |---|---|
 | Essentials | the loop she talks over, listening, thinking, a long calm loop, a smile, three talking loops |
 | Quiet moments | about 40 small things she does while nobody talks |
-| Expressions | happy, surprised, sad, concerned (main look) |
+| Expressions | happy, surprised, sad, concerned (main look and outfits; an outfit without them borrows its nearest smile, raised brows or head tilt) |
 | Oops | her face at her own mishap |
 | Sleep | dozing off, sleeping, waking, a yawn; needs an asleep look; offered for night outfits too |
 | Windy days | her hair and clothes in the wind, on windy days only; each outfit needs its own |
@@ -195,10 +195,14 @@ An outfit's card also has its **closet words** (see [What the Chooms can ask
 for](#what-the-chooms-can-ask-for)). **Save** applies the lines to clips planned from then on and to
 the look's clips that are already planned; rendered clips keep their prompts.
 
-An outfit also remembers what she wears in it (`wearing`, from "She now wears" when it was made). A
-full body made from the outfit adds what it shows below the waist to those clothes. The card has no
-field for it; to change it, use the API:
-`curl -X POST 127.0.0.1:8767/api/choom/genesis/look -H 'Content-Type: application/json' -d '{"look":"main@dayshop","wearing":"a faded blue chambray work shirt"}'`.
+An outfit's card also has **She wears**: what she wears in it (from "She now wears" when it was
+made; empty on looks made before that, until you fill it in). Changing it and clicking **Save** puts
+the new clothes in the Subject line, unless you edited the Subject in the same save, in which case your
+Subject stands. A full body made from the outfit adds what it shows below the waist to these clothes.
+
+A look also carries **what Klein keeps** of her (`kleinKeep`: her face, Genesis's glasses and motes,
+Optic's headphones and heart), copied from the look it was made from. New looks made from it start
+their prompt with that list, and a full body or asleep picture adds her clothes to it.
 
 #### New look
 
@@ -311,6 +315,10 @@ The glass answers from what's built:
   dress" finds the burgundy one but "a blue silk dress" doesn't find a green one. If two outfits fit
   equally, the glass picks one at random. Night clothes also answer to pajamas, bed and their own
   garments, warm or cold by the weather.
+- **What her closet calls each outfit** (`glass_closet`, and "you change into …") is what she wears in
+  it. A look in her usual clothes, changed some other way, is named by what she holds there or not:
+  Optic's heart-aside look is "your usual clothes, without a glowing fire agate heart". A pose is not
+  clothes, so it stays out.
 
 ![An outfit's closet words on its look card](docs/images/closet-words.jpg)
 
@@ -433,5 +441,3 @@ glass.
   the glass and clips between them.
 - **Moves that need another pose on request:** a Choom can ask to sit by a campfire, but until the
   glass has a seated pose, that request becomes a wish.
-- **Editing what she wears in an outfit** from its card; for now it's the API call under
-  [Looks](#looks).
