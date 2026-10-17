@@ -4,17 +4,23 @@ when she's quiet, then the old videos are cleared away.
     1. tools/make_alive_masks.py   U2-Net cut-outs (Wan2GP's Python), new clips only
     2. tools/make_alive.py         depth, mouth tracking, the relief videos and alive.json (Forge
                                    Neo's Python); only new or changed clips are encoded
-    3. tools/relaunch_when_quiet.sh   the page reloads her clips once no Choom is talking
-    4. make_alive.py --prune       deletes videos of clips no longer in her sequence
+    3. her closet                  closet.json, what she can ask the glass for
+    4. a relaunch job (jobs.py)    tools/relaunch_when_quiet.sh once no Choom is talking, tried again
+                                   until the glass is quiet; then make_alive.py --prune deletes videos
+                                   and caches of clips that aren't hers any more
+
+Each step runs in its own session and writes to studio/logs/build_<choom>.log rather than a pipe, so
+a Studio restart neither kills it nor loses it: the job picks the step up again (jobs.py).
 """
+import json
 import os
 import subprocess
 import time
 
-import json
-
-from config import CLIPS, FORGE_PYTHON, HOLOGRAM, PICTURES, PORTRAITS, TOOLS, WAN2GP, WAN2GP_PYTHON
+from config import CLIPS, FORGE_PYTHON, HOLOGRAM, PICTURES, PORTRAITS, PROJECTS, RUN_TOOLS as TOOLS, WAN2GP, WAN2GP_PYTHON
 from project import Project, base_of, editing
+
+LOGS = PROJECTS / "logs"
 
 
 def in_manifest(cid):
@@ -40,16 +46,76 @@ def problems(proj):
     return out
 
 
-def run(cmd, log, env=None):
-    """Run a step, passing its output to log(line); raises if it fails."""
-    log("$ " + " ".join(str(c) for c in cmd[:3]) + (f" ... ({len(cmd) - 3} more)" if len(cmd) > 3 else ""))
+def home_of(proj):
+    """The pose she falls asleep from, wakes into and changes clothes in (her project's "home")."""
+    return proj.data.get("home") or "main"
+
+
+def env():
+    """What every tool run gets: unbuffered output, and the portraits folder the Studio uses (a test
+    Studio's is elsewhere, so it never writes the real glass)."""
+    return {**os.environ, "PYTHONUNBUFFERED": "1", "HOLOGRAM_PORTRAITS": str(PORTRAITS),
+            "U2NET_HOME": str(WAN2GP / "ckpts" / "rembg")}
+
+
+def steps(proj):
+    """The build's tool runs, in order: (name, command, what its process's command line contains)."""
+    sources = [str(CLIPS / f"{n}.mp4") for n in proj.sequence]
+    return [("masks", [str(WAN2GP_PYTHON), str(TOOLS / "make_alive_masks.py"), proj.id, *sources], "make_alive_masks.py"),
+            ("reliefs", [str(FORGE_PYTHON), str(TOOLS / "make_alive.py"), proj.id, "--home", home_of(proj), *sources],
+             "make_alive.py")]
+
+
+def log_file(cid):
+    LOGS.mkdir(parents=True, exist_ok=True)
+    return LOGS / f"build_{cid}.log"
+
+
+def start(cmd, log_path):
+    """A tool run in its own session (a Studio restart doesn't stop it), its output appended to log_path."""
+    out = open(log_path, "a")
+    out.write(f"\n$ {' '.join(os.path.basename(c) for c in cmd[:3])} ...\n")
+    out.flush()
+    try:
+        return subprocess.Popen(cmd, cwd=HOLOGRAM, stdout=out, stderr=subprocess.STDOUT, env=env(), start_new_session=True)
+    finally:
+        out.close()
+
+
+def finish(cid, clips, started):
+    """After the tools: her closet from the project as it is now (closet words changed during the
+    build count), and the build recorded."""
+    with editing(cid) as p:
+        p.write_closet()
+        p.data["built"] = {"time": time.strftime("%Y-%m-%dT%H:%M:%S"), "clips": clips,
+                           "minutes": round((time.time() - started) / 60, 1)}
+
+
+def keep_list(cid):
+    """studio/logs/keep_<choom>.txt: the clips whose cut-out and depth caches a prune keeps (every
+    clip of hers that isn't dropped), one name per line."""
+    proj = Project.load(cid)
+    LOGS.mkdir(parents=True, exist_ok=True)
+    f = LOGS / f"keep_{cid}.txt"
+    f.write_text("".join(f"{n}\n" for n in sorted(n for n, c in proj.clips.items() if c["status"] != "dropped")))
+    return f
+
+
+def prune_cmd(cid):
+    return [str(FORGE_PYTHON), str(TOOLS / "make_alive.py"), cid, "--prune", "--keep-file", str(keep_list(cid))]
+
+
+def run(cmd, log):
+    """Run a tool to the end, passing its output to log(line); raises if it fails (the command line
+    and still reliefs; the Studio's builds go through jobs.py)."""
+    log("$ " + " ".join(os.path.basename(str(c)) for c in cmd[:3]) + (f" ... ({len(cmd) - 3} more)" if len(cmd) > 3 else ""))
     proc = subprocess.Popen([str(c) for c in cmd], cwd=HOLOGRAM, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                            text=True, env={**os.environ, "PYTHONUNBUFFERED": "1", **(env or {})},
-                            start_new_session=True)  # unbuffered: each clip's line shows as it's written
+                            text=True, env=env(), start_new_session=True)
     for line in proc.stdout:
         log(line.rstrip())
     if proc.wait() != 0:
-        raise RuntimeError(f"{cmd[1]} failed (exit {proc.returncode})")
+        name = os.path.basename(str(cmd[1] if len(cmd) > 1 else cmd[0]))  # the script, or a lone command
+        raise RuntimeError(f"{name} failed (exit {proc.returncode})")
 
 
 def still(cid, color, style="motes", log=print, relaunch=True):
@@ -57,30 +123,38 @@ def still(cid, color, style="motes", log=print, relaunch=True):
     in portraits/manifest.json, so the glass knows her; she shows it until her clips are built."""
     proj = Project.load(cid)
     picture = PICTURES / proj.looks["main"]["picture"]
-    run([WAN2GP_PYTHON, TOOLS / "make_masks.py", cid, picture], log, env={"U2NET_HOME": str(WAN2GP / "ckpts" / "rembg")})
+    run([WAN2GP_PYTHON, TOOLS / "make_masks.py", cid, picture], log)
     run([FORGE_PYTHON, TOOLS / "make_depth.py", cid, picture, proj.data.get("name", cid.title()), color, style], log)
     run([FORGE_PYTHON, TOOLS / "make_landmarks.py", cid], log)
     if relaunch:
-        run([TOOLS / "relaunch_when_quiet.sh"], log)
+        relaunch_now(log)
     log(f"{cid} is on the glass (her still relief until her clips are built)")
 
 
+def relaunch_now(log):
+    """tools/relaunch_when_quiet.sh: True once the glass has reloaded, False if it stayed busy (it
+    waits up to ten minutes for no Choom to be talking)."""
+    proc = subprocess.run([str(TOOLS / "relaunch_when_quiet.sh")], cwd=HOLOGRAM, capture_output=True, text=True, env=env())
+    for line in (proc.stdout + proc.stderr).strip().splitlines():
+        log(line)
+    return proc.returncode == 0
+
+
 def build(cid, log=print, relaunch=True):
+    """The whole build in one go, for the command line when the Studio isn't running (the Studio's
+    build job runs the same steps, see jobs.py)."""
     proj = Project.load(cid)
     trouble = problems(proj)
     if trouble:
         raise RuntimeError("; ".join(trouble))
-    sources = [CLIPS / f"{n}.mp4" for n in proj.sequence]
     started = time.time()
-    run([WAN2GP_PYTHON, TOOLS / "make_alive_masks.py", cid, *sources], log,
-        env={"U2NET_HOME": str(WAN2GP / "ckpts" / "rembg")})
-    run([FORGE_PYTHON, TOOLS / "make_alive.py", cid, *sources], log)
-    proj.write_closet()  # what she can ask the glass for, from the looks just built
-    with editing(cid) as p:
-        p.data["built"] = {"time": time.strftime("%Y-%m-%dT%H:%M:%S"), "clips": len(sources),
-                           "minutes": round((time.time() - started) / 60, 1)}
+    for _, cmd, _ in steps(proj):
+        run(cmd, log)
+    finish(cid, len(proj.sequence), started)
     if relaunch:
-        run([TOOLS / "relaunch_when_quiet.sh"], log)
-        time.sleep(20)  # the page has asked for her new clips before the old videos go
-        run([FORGE_PYTHON, TOOLS / "make_alive.py", cid, "--prune"], log)
-    log(f"{cid}: {len(sources)} clips on the glass")
+        if relaunch_now(log):
+            time.sleep(20)  # the page has asked for her new clips before the old videos go
+            run(prune_cmd(cid), log)
+        else:
+            log("the glass stayed busy: it shows the new clips at its next relaunch (prune after that)")
+    log(f"{cid}: {len(proj.sequence)} clips on the glass")

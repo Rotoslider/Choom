@@ -24,29 +24,86 @@ def minutes(frames):
 
 def make_queue(name, picks):
     """Write queue <name> for picks [(choom id, clip name)] of planned clips; marks them queued.
-    Returns the zip's path."""
+    Returns the zip's path. Everything is checked and the zip written before any clip is marked, so a
+    clip that isn't planned or a picture that's gone stops it with nothing left half queued."""
     template = json.loads(TEMPLATE.read_text())
     tasks, plan, pictures = [], {}, set()
-    for cid in sorted({cid for cid, _ in picks}):
-        with editing(cid) as proj:
-            for _, clip_name in [p for p in picks if p[0] == cid]:
-                clip = proj.clips[clip_name]
-                if clip["status"] != "planned":
-                    raise ValueError(f"{clip_name} is {clip['status']}, not planned")
-                params = dict(template, model_type=CFG["video_model"], prompt=clip["prompt"], seed=clip["seed"],
-                              video_length=clip["frames"], image_start=clip["start"], image_end=clip["end"])
-                tasks.append({"id": len(tasks) + 1, "params": params})
-                plan[str(clip["seed"])] = clip_name
-                pictures.update((clip["start"], clip["end"]))
-                clip.update(status="queued", queue=name)
+    chooms = sorted({cid for cid, _ in picks})
+    for cid in chooms:
+        proj = Project.load(cid)
+        for _, clip_name in [p for p in picks if p[0] == cid]:
+            clip = proj.clips.get(clip_name)
+            if not clip:
+                raise ValueError(f"{cid} has no clip {clip_name}")
+            if clip["status"] != "planned":
+                raise ValueError(f"{clip_name} is {clip['status']}, not planned")
+            for pic in (clip["start"], clip["end"]):
+                if not (PICTURES / pic).is_file():
+                    raise ValueError(f"{clip_name}: its picture {pic} is missing from {PICTURES}")
+            params = dict(template, model_type=CFG["video_model"], prompt=clip["prompt"], seed=clip["seed"],
+                          video_length=clip["frames"], image_start=clip["start"], image_end=clip["end"])
+            tasks.append({"id": len(tasks) + 1, "params": params})
+            plan[str(clip["seed"])] = clip_name
+            pictures.update((clip["start"], clip["end"]))
+    write_zip(name, tasks, plan, {pic: PICTURES / pic for pic in pictures})
+    marked = []
+    try:
+        for cid in chooms:
+            with editing(cid) as proj:
+                for _, clip_name in [p for p in picks if p[0] == cid]:
+                    clip = proj.clips[clip_name]
+                    if clip["status"] != "planned":  # changed since the check above
+                        raise ValueError(f"{clip_name} is {clip['status']}, not planned")
+                    clip.update(status="queued", queue=name)
+                    marked.append(clip_name)
+    except Exception:
+        unqueue(name)  # whatever was marked goes back to planned
+        raise
+    return QUEUES / f"{name}.zip"
+
+
+def write_zip(name, tasks, plan, pictures):
+    """queue/<name>.zip (its tasks and pictures) and queue/<name>_plan.json, written whole and swapped in."""
     QUEUES.mkdir(parents=True, exist_ok=True)
     out = QUEUES / f"{name}.zip"
-    with zipfile.ZipFile(out, "w") as z:
+    part = out.with_suffix(".part")
+    with zipfile.ZipFile(part, "w") as z:
         z.writestr("queue.json", json.dumps(tasks, indent=1))
-        for pic in sorted(pictures):
-            z.write(PICTURES / pic, pic)
+        for arc, src in sorted(pictures.items()):
+            if isinstance(src, bytes):
+                z.writestr(arc, src)
+            else:
+                z.write(src, arc)
+    part.replace(out)
     (QUEUES / f"{name}_plan.json").write_text(json.dumps(plan, indent=1))
-    return out
+
+
+def requeue(name, new_name):
+    """A paused render going on: queue <new_name> with the tasks of queue <name> whose clips are still
+    queued there (the ones it didn't get to), those clips moved to it. Returns how many."""
+    with zipfile.ZipFile(QUEUES / f"{name}.zip") as z:
+        tasks = json.loads(z.read("queue.json"))
+        pics = {n: z.read(n) for n in z.namelist() if n != "queue.json"}
+    plan = json.loads((QUEUES / f"{name}_plan.json").read_text())
+    left = set()
+    for cid in Project.ids():
+        for n, c in Project.load(cid).clips.items():
+            if c["status"] == "queued" and c.get("queue") == name:
+                left.add(n)
+    keep = [t for t in tasks if plan.get(str(t["params"]["seed"])) in left]
+    if not keep:
+        return 0
+    for i, t in enumerate(keep):
+        t["id"] = i + 1
+    used = {t["params"][k] for t in keep for k in ("image_start", "image_end")}
+    write_zip(new_name, keep, {str(t["params"]["seed"]): plan[str(t["params"]["seed"])] for t in keep},
+              {n: b for n, b in pics.items() if n in used})
+    for cid in Project.ids():
+        with editing(cid) as proj:
+            for n in left & set(proj.clips):
+                if proj.clips[n]["status"] == "queued" and proj.clips[n].get("queue") == name:
+                    proj.clips[n]["queue"] = new_name
+    return len(keep)
 
 
 def unqueue(name):
@@ -87,6 +144,23 @@ def progress(name):
             "step": f"{steps[-1]}%" if steps else ""}
 
 
+_unmatched_seen = set()
+
+
+def unmatched(since):
+    """Videos Wan2GP wrote into clips/ since `since` (epoch s) that match no clip: if its output
+    naming ever changes, every clip would look unrendered and go back to planned, so this is said
+    out loud instead (the files are left where they are)."""
+    out = []
+    for f in CLIPS.glob("*.mp4"):
+        if f.stat().st_mtime < since or f.stem.endswith("_tmp"):
+            continue
+        m = OUTPUT.match(f.name)
+        if m or re.match(r"^\d{4}-\d\d-\d\d", f.name):  # a Wan2GP name collect() didn't take (no clip has its seed)
+            out.append(f.name)
+    return sorted(out)
+
+
 def collect():
     """Rename finished Wan2GP outputs in clips/ to their clip names and mark them rendered. A clip
     rendered again (a re-roll) moves its old take to clips/takes/ first. Returns the names collected."""
@@ -100,7 +174,12 @@ def collect():
         m = OUTPUT.match(f.name)
         # Wan2GP writes the video as <name>_tmp.mp4, then adds the sound track into <name>.mp4: leave
         # its temporary file alone, and anything still being written.
-        if not m or int(m.group(1)) not in seeds or f.stem.endswith("_tmp") or time.time() - f.stat().st_mtime < 30:
+        if f.stem.endswith("_tmp") or time.time() - f.stat().st_mtime < 30:
+            continue
+        if not m or int(m.group(1)) not in seeds:
+            if re.match(r"^\d{4}-\d\d-\d\d", f.name) and f.name not in _unmatched_seen:
+                _unmatched_seen.add(f.name)
+                print(f"render: {f.name} in clips/ matches no queued clip (Wan2GP's naming changed?)", flush=True)
             continue
         cid, n = seeds[int(m.group(1))]
         target = CLIPS / f"{n}.mp4"

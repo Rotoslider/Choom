@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 import time
+from pathlib import Path
 
 from config import CFG, PICTURES, WAN2GP, WAN2GP_PYTHON
 from project import base_of, outfit_of
@@ -115,6 +116,13 @@ def run(choom, look_id, source, prompt, count=3, seed=31, log=print, refs=()):
     names, saved in clean/drafts/ as <choom>_<look>_<n>.png. `refs` are more pictures in clean/ for
     Klein to take things from (a dress, shoes, a close-up of her face): picture 2, 3, ... in the
     instruction. The first stays the main subject, so her framing, pose and light are kept."""
+    proc, out = start_klein(choom, look_id, source, prompt, count, seed, refs)
+    return finish_klein(choom, look_id, out, proc.wait(), log)
+
+
+def start_klein(choom, look_id, source, prompt, count=3, seed=31, refs=()):
+    """Start Klein in its own session (the Studio can be restarted meanwhile and pick it up again).
+    Returns (process, its output folder)."""
     settings_file = WAN2GP / "settings" / "flux2_klein_9b_settings.json"
     settings = json.loads(settings_file.read_text()) if settings_file.exists() else {}
     settings.update({"model_type": CFG["picture_model"], "prompt": prompt, "video_prompt_type": "KI",
@@ -129,7 +137,13 @@ def run(choom, look_id, source, prompt, count=3, seed=31, log=print, refs=()):
         proc = subprocess.Popen([str(WAN2GP_PYTHON), "wgp.py", "--process", str(out / "settings.json"),
                                  "--output-dir", str(out)], cwd=WAN2GP, stdout=wlog, stderr=subprocess.STDOUT,
                                 start_new_session=True)
-        code = proc.wait()
+    return proc, out
+
+
+def finish_klein(choom, look_id, out, code, log=print):
+    """Klein's versions from its output folder, moved into clean/drafts/; returns their names."""
+    slug = look_id.replace("@", "_")
+    out = Path(out)
     made = sorted(out.glob("2*.png"), key=os.path.getmtime)
     if code or not made:
         raise RuntimeError(f"Klein made no pictures (exit {code}; see {out / 'wan2gp.log'})")

@@ -8,11 +8,13 @@ import mimetypes
 import re
 import threading
 import time
+import traceback
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import build
+import housekeeping
 import jobs
 import pictures
 import plan
@@ -62,8 +64,6 @@ def wishes(cid):
         return []
 
 
-def colors():
-    manifest = PORTRAITS / "manifest.json"
 def wishes_done(cid):
     """Her wishes that were made (Made it on the Plan page), newest last."""
     try:
@@ -80,7 +80,28 @@ def write_json(path, data):
     part.replace(path)
 
 
+def colors():
+    manifest = PORTRAITS / "manifest.json"
     return {m["id"]: m.get("color") for m in json.loads(manifest.read_text())} if manifest.exists() else {}
+
+
+CHOOM_ID = re.compile(r"^[a-z][a-z0-9]{0,31}$")
+
+
+def choom_ok(cid):
+    """A Choom id the Studio has a project for (never a path)."""
+    return isinstance(cid, str) and bool(CHOOM_ID.match(cid)) and Project.file(cid).exists()
+
+
+def active_queues():
+    with jobs.lock:
+        return [q for j in jobs.jobs if j["kind"] == "render" and j["status"] in jobs.ACTIVE
+                for q in [j["args"]["queue"], *j["args"].get("earlier", [])]]
+
+
+def active_runs():
+    with jobs.lock:
+        return [j["out"] for j in jobs.jobs if j["kind"] == "picture" and j["status"] in jobs.ACTIVE and j.get("out")]
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -159,6 +180,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.fail("no such Choom", 404)
             return self.send_json(details(Project.load(parts[2])))
         if parts[:2] == ["api", "options"] and len(parts) == 4:
+            if not choom_ok(parts[2]):
+                return self.fail("no such Choom", 404)
             return self.send_json({"options": plan.options(Project.load(parts[2]), parts[3])})
         if parts[:2] == ["api", "packs"]:
             lib = plan.library()
@@ -166,17 +189,40 @@ class Handler(BaseHTTPRequestHandler):
                                                                         "seconds": a.get("seconds", 5)} for a in lib["actions"]]})
         if parts[:2] == ["api", "jobs"]:
             with jobs.lock:
-                return self.send_json({"jobs": jobs.recent(40)})
+                return self.send_json({"jobs": jobs.recent(40), "worklist": jobs.state()})
+        if parts[:2] == ["api", "housekeeping"]:
+            days = int(urllib.parse.parse_qs(url.query).get("takes_days", ["30"])[0])
+            report = housekeeping.survey(days, active_queues(), active_runs())
+            return self.send_json({k: ({kk: vv for kk, vv in v.items() if kk != "files"} if k in housekeeping.CATEGORIES else v)
+                                   for k, v in report.items()})
         return self.send_error(404)
 
     # --- POST ----------------------------------------------------------------------------------
+    def same_origin(self):
+        """A request from the Studio page itself (or a tool on this machine), not from another web page
+        open in the browser: any page could otherwise post here, cancel tonight's render say."""
+        origin = self.headers.get("Origin")
+        port = int(CFG["port"])
+        if origin and origin not in (f"http://127.0.0.1:{port}", f"http://localhost:{port}"):
+            return False
+        return self.headers.get("Sec-Fetch-Site", "same-origin") in ("same-origin", "none")
+
     def do_POST(self):
         parts = [p for p in urllib.parse.urlparse(self.path).path.strip("/").split("/") if p]
+        if not self.same_origin():
+            return self.fail("refused: this came from another web page", 403)
+        if "application/json" not in (self.headers.get("Content-Type") or ""):
+            return self.fail("send JSON, with Content-Type: application/json", 415)
         try:
             data = self.body()
         except json.JSONDecodeError:
             return self.fail("bad JSON")
         try:
+            if not isinstance(data, dict):
+                return self.fail("send a JSON object")
+            for key in ("choom",):  # every route that names a Choom names one it has
+                if key in data and not choom_ok(data[key]):
+                    return self.fail(f"no Choom {data[key]}", 404)
             if parts[:2] == ["api", "choom"] and len(parts) == 4 and NAME.match(parts[2]):
                 return self.choom_action(parts[2], parts[3], data)
             if parts == ["api", "render"]:
@@ -192,16 +238,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self.fail("pick at least one look and one action")
                 return self.send_json(plan.many(targets, picks, preview=bool(data.get("preview", True))))
             if parts == ["api", "build"]:
-                proj = Project.load(data["choom"])
-                trouble = build.problems(proj)
-                if trouble:
-                    return self.fail("; ".join(trouble))
-                # A build reads her sequence when it starts, so one already waiting covers this click too.
-                waiting = [j for j in jobs.jobs if j["kind"] == "build" and j["status"] == "waiting"
-                           and j["args"]["choom"] == proj.id]
-                if waiting:
-                    return self.send_json({"job": waiting[0], "already": True})
-                return self.send_json({"job": jobs.add("build", {"choom": proj.id, "relaunch": data.get("relaunch", True)})})
+                return self.start_build(data)
             if parts == ["api", "new-choom"]:
                 return self.new_choom(data)
             if parts == ["api", "still"]:
@@ -214,8 +251,19 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"job": jobs.add("review", {"choom": data["choom"], "clips": data.get("clips", [])})})
             if parts[:2] == ["api", "jobs"] and len(parts) == 4 and parts[3] == "cancel":
                 return self.send_json({"cancelled": jobs.cancel(int(parts[2]))})
+            if parts == ["api", "jobs", "pause"]:
+                return self.send_json({"worklist": jobs.pause()})
+            if parts == ["api", "jobs", "resume"]:
+                return self.send_json({"worklist": jobs.resume()})
+            if parts == ["api", "housekeeping"]:
+                cats = [str(c) for c in data.get("categories", [])]
+                freed = housekeeping.clean(cats, int(data.get("takesDays", 30)), active_queues(), active_runs())
+                return self.send_json({"freed": freed})
         except (KeyError, ValueError) as e:
             return self.fail(str(e))
+        except Exception as e:  # anything else: said, logged, never a dropped connection
+            traceback.print_exc()
+            return self.fail(f"{type(e).__name__}: {e}", 500)
         return self.send_error(404)
 
     def choom_action(self, cid, action, data):
@@ -350,6 +398,8 @@ class Handler(BaseHTTPRequestHandler):
                 jobs.add("picture", {"choom": cid, "look": "main", "source": found[0].name, "prompt": prompt,
                                      "count": int(data.get("count", 3))})
             elif action == "look":
+                if "picture" in data and not (FILE.match(str(data["picture"])) and (PICTURES / str(data["picture"])).is_file()):
+                    return self.fail("a look's picture is a file in the pictures folder")
                 look = proj.looks.setdefault(data["look"], {})
                 # What she wears, changed on the card: the Subject's clothes follow it, unless the Subject
                 # was edited too (then it says what he wrote). An outfit's full body made later builds on it.
@@ -433,7 +483,46 @@ class Handler(BaseHTTPRequestHandler):
             return self.fail("bad queue name")
         render.make_queue(name, picks)
         job = jobs.add("render", {"queue": name, "clips": len(picks)}, not_before=float(data.get("at", 0)))
-        return self.send_json({"job": job})
+        return self.send_json({"job": job, "ahead": self.ahead(job)})
+
+    @staticmethod
+    def ahead(job):
+        """What a new GPU job waits behind: [kind, ...] of GPU jobs running or due before it, and
+        whether the work list is paused."""
+        with jobs.lock:
+            before = [j["kind"] for j in jobs.jobs if j["id"] < job["id"] and jobs.LANES[j["kind"]] == "gpu"
+                      and (j["status"] in jobs.BUSY or (j["status"] == "waiting" and j.get("not_before", 0) <= time.time()))]
+            return {"jobs": before, "paused": jobs.worklist["paused"] or jobs.worklist["pausing"]}
+
+    def start_build(self, data):
+        """Build her sequence: now, at a time (`at`, epoch s), or after the render waiting or running
+        (`after`: "render"). A build reads her sequence when it starts, so one already waiting covers
+        this click too (its time changes to the new one, if one is given)."""
+        proj = Project.load(data["choom"])
+        trouble = build.problems(proj)
+        if trouble:
+            return self.fail("; ".join(trouble))
+        at, after = float(data.get("at") or 0), None
+        if data.get("after") == "render":
+            with jobs.lock:
+                renders = [j for j in jobs.jobs if j["kind"] == "render" and j["status"] in ("waiting", "running", "paused")]
+            if not renders:
+                return self.fail("no render is waiting or running to build after")
+            after = renders[-1]["id"]
+        with jobs.lock:
+            waiting = next((j for j in jobs.jobs if j["kind"] == "build" and j["status"] == "waiting"
+                            and j["args"]["choom"] == proj.id), None)
+            if waiting:
+                if "at" in data or "after" in data:
+                    waiting["not_before"] = at
+                    if after:
+                        waiting["after"] = after
+                    else:
+                        waiting.pop("after", None)
+                    jobs.save()
+                return self.send_json({"job": waiting, "already": True, "ahead": self.ahead(waiting)})
+        job = jobs.add("build", {"choom": proj.id, "relaunch": data.get("relaunch", True)}, not_before=at, after=after)
+        return self.send_json({"job": job, "ahead": self.ahead(job)})
 
 
 def serve():

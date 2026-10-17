@@ -27,6 +27,10 @@ DEFAULTS = {
     "minutes_per_clip": 5.5,  # a five-second clip on an RTX PRO 6000 Blackwell; seven seconds take longer
     "port": 8767,
     "hologram_url": "http://127.0.0.1:8765",
+    # A short Signal message through the Choom app when a scheduled render or build finishes or fails
+    # (notify.py). Off until "url" (the Choom app) and "choom" (whose thread it comes in) are set;
+    # what ends in the quiet hours waits until they're over. dry_run only logs it.
+    "notify": {"url": "", "choom": "", "quiet": [22, 7], "dry_run": False},
 }
 
 
@@ -56,9 +60,10 @@ FORGE_PYTHON = path("forge_python")
 # The glass's own folder; studio.json can point a test Studio elsewhere so it never writes a live
 # Choom's closet or wishes.
 PORTRAITS = path("portraits") if CFG.get("portraits") else HOLOGRAM / "portraits"
-# The build tools and relaunch script; a test Studio points this at stand-ins so it never relaunches
-# the real glass.
-TOOLS = path("tools") if CFG.get("tools") else HOLOGRAM / "tools"
+TOOLS = HOLOGRAM / "tools"  # imported from (clip_roles, closet)
+# Run from (the build tools and the relaunch script): a test Studio points "tools" at stand-ins, so it
+# never relaunches the real glass.
+RUN_TOOLS = path("tools") if CFG.get("tools") else TOOLS
 
 
 def ensure_workspace():
