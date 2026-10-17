@@ -45,6 +45,13 @@ const calibration = await getJSON('/calibration.json');
 const manifest = await getJSON('/portraits/manifest.json');
 
 const lkg = new LookingGlassRenderer({ canvas: document.getElementById('c'), calibration });
+// A lost graphics context (a driver reset, the GPU out of memory: twice on Oct 10) leaves the glass
+// black for good: reload the page after a moment.
+document.getElementById('c').addEventListener('webglcontextlost', (e) => {
+  e.preventDefault();
+  post('error', { message: 'WebGL context lost; reloading the page in 5 s' });
+  setTimeout(() => location.reload(), 5000);
+});
 const renderer = lkg.renderer;
 renderer.setClearColor(0x000000, 1);
 
@@ -77,7 +84,8 @@ const portraits = await Promise.all(manifest.map(async (m) => {
     players: alive ? [makePlayer(), makePlayer()] : null,
     active: 0,
     aliveFrame: 0,
-    role: ROLES[m.id] || '',
+    role: m.role || ROLES[m.id] || '',
+    voice: m.voice || VOICES[m.id] || null,  // a Choom the Studio adds can name hers in the manifest
     color: asColor(color),
     depth: asData(depth),
     mask: asData(mask),
@@ -87,6 +95,21 @@ const portraits = await Promise.all(manifest.map(async (m) => {
     accent: new THREE.Color(m.accent || m.color),
   };
 }));
+
+// Moments she's waiting to play (an expression, her mishap face, a tool look) go stale: one she
+// couldn't play within 90 s (she left the glass, or was asleep) is dropped, not played an hour later
+// when she comes back. They're set as usual; read after that, they're gone.
+const WANT_FRESH_MS = 90 * 1000;
+for (const p of portraits) {
+  for (const key of ['emotion', 'mishapPending', 'toolLook']) {
+    let value = null, at = 0;
+    Object.defineProperty(p, key, {
+      enumerable: true,
+      get: () => (value && performance.now() - at > WANT_FRESH_MS ? (value = null) : value),
+      set: (v) => { value = v; at = performance.now(); },
+    });
+  }
+}
 
 // 3D bodies: a Choom with a GLB at bodies/<id>.glb shows her 3D body instead of the relief.
 // B, or POST /control {"body": true|false}, flips the current Choom between the two. A Choom without
@@ -541,7 +564,8 @@ const ORBITS = [
   { who: 'eve', color: 0xe4eeff, phase: 1.1 * Math.PI },
   { who: 'aloy', color: 0xf4b650, phase: 1.7 * Math.PI },
 ].map((o, k) => ({
-  ...o, rx: ATOM.rx, ry: ATOM.ry, cy: ATOM.cy, speed: ATOM.speed, yaw: 0, pitch: ATOM.pitch,
+  ...o, color: portraits.find((p) => p.id === o.who)?.tint.getHex() ?? o.color,  // each sister's own color
+  rx: ATOM.rx, ry: ATOM.ry, cy: ATOM.cy, speed: ATOM.speed, yaw: 0, pitch: ATOM.pitch,
   roll: k * Math.PI / 4, lean: k % 2 === 0 ? ATOM.lean : -ATOM.lean,
 }));
 const TRAIL = 36;
@@ -641,7 +665,6 @@ function updateOrbs(presence) {
 // A picture she makes, a camera snapshot she checks or an image she's looking at floats up beside
 // her face for a few seconds, framed in her color (above the stage when the room is up). A selfie
 // comes with one of her "look at me" moves when she has them.
-const FRAME_COLOR = { aloy: 0xf4b650, optic: 0x57dbe3, genesis: 0xb79bff, eve: 0xe4eeff };
 const picture = { group: new THREE.Group(), mesh: null, frame: null, t: 0, hold: 0, active: false, low: false };
 picture.group.visible = false;
 scene.add(picture.group);
@@ -658,7 +681,7 @@ function showPicture(imageId, kind, p) {
     picture.mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h),
       new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0, depthWrite: false, depthTest: false }));
     picture.frame = new THREE.Mesh(new THREE.PlaneGeometry(w + 0.024, h + 0.024),
-      new THREE.MeshBasicMaterial({ color: FRAME_COLOR[p.id] ?? 0xffffff, transparent: true, opacity: 0,
+      new THREE.MeshBasicMaterial({ color: p.tint, transparent: true, opacity: 0,  // her color, from the manifest
         blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false }));
     picture.frame.renderOrder = 10;
     picture.mesh.renderOrder = 11;
@@ -731,6 +754,9 @@ let phase = 'in';        // 'in' -> 'idle' -> 'out' -> 'in'
 let phaseT = 0;
 let labelT = 0;
 let listening = false;          // the Portrait's bottom button (or L)
+let listeningAt = 0;            // when it went down: a release that never arrives (a USB hiccup, focus
+const LISTEN_HOLD_MAX_MS = 60000; // lost mid-hold) would keep her listening for good, so a minute at most
+function setListening(on) { if (on && !listening) listeningAt = performance.now(); listening = on; }
 // Donny typing to her or talking into the mic in the Choom app at home. Dropped when her turn
 // starts, or after a while if the "stopped" message never comes.
 let appListening = false;
@@ -848,7 +874,7 @@ let fullAmt = 0;               // 1 during a full-body move: her atom and band s
 let bandT = 0;                 // the scan/compile band's own clock (it races during tool moments)
 let lastActivity = performance.now(); // the last conversation, listening or button press
 let appListenUntil = 0;
-const heard = () => listening || (appListening && performance.now() < appListenUntil);
+const heard = () => (listening && performance.now() - listeningAt < LISTEN_HOLD_MAX_MS) || (appListening && performance.now() < appListenUntil);
 let listenAmt = 0;
 let paused = false;
 let simTime = 0;
@@ -949,7 +975,7 @@ function clipMoods(c) {
 
 // Clips also start and end in a pose (Aloy's finger up or her hand down): the next clip has to start
 // in the pose the last one ended in. A clip that changes pose comes up less often.
-const poseFrom = (c) => c.from || 'main';
+const poseFrom = (c) => (c.bad ? '-' : c.from || 'main');  // a clip that failed to load starts nowhere
 const poseTo = (c) => c.to || 'main';
 // A play() cut short because the waiting clip was swapped for a moment (a tool look, a picture
 // look) is expected, not an error.
@@ -1003,7 +1029,9 @@ function wardrobe(p) {
     try { p.wardrobe = JSON.parse(localStorage.getItem(`wardrobe-${p.id}`)) || null; } catch { p.wardrobe = null; }
   }
   const today = new Date().toDateString();
-  if (!p.wardrobe || p.wardrobe.day !== today) p.wardrobe = { day: today, worn: {}, rested: p.wardrobe?.rested || {}, visit: null };
+  if (!p.wardrobe || p.wardrobe.day !== today) {
+    p.wardrobe = { day: today, worn: {}, rested: p.wardrobe?.rested || {}, restedAny: p.wardrobe?.restedAny || 0, visit: null };
+  }
   return p.wardrobe;
 }
 function saveWardrobe(p) {
@@ -1018,10 +1046,15 @@ function mayWear(p, o) {
   if (now - (w.rested[o] || 0) < VISIT_REST_MS) return false;                     // just took it off
   return ALT_LOOKS.has(o) || (w.worn[o] || 0) < lookClips(p, o) * OUTFIT_DAY_MS_PER_CLIP;
 }
-// Called with each clip she finishes: counts time worn, starts and ends visits.
+// Called with each clip she finishes (at the hand-over, once per clip): counts time worn, starts and
+// ends visits. The end of an outfit's visit starts her rest in her usual clothes (restedAny).
 function noteWorn(p, pose, ms) {
   const w = wardrobe(p), o = outfitOf(pose), now = Date.now();
-  if (w.visit && w.visit.o !== o) { w.rested[w.visit.o] = now; w.visit = null; }
+  if (w.visit && w.visit.o !== o) {
+    w.rested[w.visit.o] = now;
+    if (!ALT_LOOKS.has(w.visit.o) && !/^night/.test(w.visit.o)) w.restedAny = now;
+    w.visit = null;
+  }
   if (o) {
     if (!w.visit) w.visit = { o, start: now };
     w.worn[o] = (w.worn[o] || 0) + ms;
@@ -1060,15 +1093,33 @@ function wantedOutfit(p, want) {
   const outfits = wearable(p).filter((o) => mayWear(p, o));
   const night = nightNow() && nightOutfit(p, outfits);
   if (night) return night;
-  for (const [rule, when] of OUTFIT_RULES) {
-    const o = outfits.find((x) => rule.test(x));
-    if (o && when()) return o;
+  // A visit under way goes on until it's up (or its hours or weather end), not swapped mid-way for
+  // another outfit of the same kind. After an outfit's visit (up now, or within 25 minutes) she's in
+  // her usual clothes (or another look in them), not straight into the next outfit: with three
+  // evening outfits Eve went from one to the next all evening.
+  const w = wardrobe(p);
+  const visiting = w.visit && !ALT_LOOKS.has(w.visit.o) ? w.visit.o : null;
+  const ruleOf = (o) => OUTFIT_RULES.find(([rule]) => rule.test(o))?.[1];
+  if (visiting && outfits.includes(visiting) && (ruleOf(visiting)?.() ?? true)) return visiting;
+  const inUsual = !w.visit || ALT_LOOKS.has(w.visit.o);  // her plain look is her usual clothes too
+  const resting = (visiting && !outfits.includes(visiting)) || (inUsual && Date.now() - (w.restedAny || 0) < VISIT_REST_MS);
+  let pick = null;
+  if (!resting) {
+    // Several outfits for the same hours (Eve's three for evenings) take turns: the one off longest.
+    for (const [rule, when] of OUTFIT_RULES) {
+      const o = outfits.filter((x) => rule.test(x)).sort((a, b) => (w.rested[a] || 0) - (w.rested[b] || 0))[0];
+      if (o && when()) return o;
+    }
+    // One day outfit a day, from the date: picked from all of them, so while it rests she's in her
+    // usual clothes. Picked from the ones she could wear right then, it moved on to the next day outfit
+    // whenever the day's went to rest (Eve wore three on Oct 12).
+    const days = [null, ...wearable(p).filter((x) => /^day/.test(x)).sort()];
+    const d = new Date();
+    let seed = d.getFullYear() * 400 + d.getMonth() * 32 + d.getDate();
+    for (const ch of p.id) seed = (seed * 31 + ch.charCodeAt(0)) % 1000003;
+    pick = days[seed % days.length];
+    if (pick && !outfits.includes(pick)) pick = null;
   }
-  const days = [null, ...outfits.filter((x) => /^day/.test(x)).sort()];
-  const d = new Date();
-  let seed = d.getFullYear() * 400 + d.getMonth() * 32 + d.getDate();
-  for (const ch of p.id) seed = (seed * 31 + ch.charCodeAt(0)) % 1000003;
-  const pick = days[seed % days.length];
   // Her other looks in her usual clothes (Genesis without her glow, Optic without her heart): about a
   // third of the time, decided every twenty minutes, changed on screen with clips made for it.
   const alt = pick === null && outfits.find((o) => ALT_LOOKS.has(o));
@@ -1190,7 +1241,6 @@ function nextClip(p, after) {
   // After a full-body move, cut back to the framing she was in.
   if (isFull(pose)) pose = p.cutFrom || 'main';
   const want = wantedMood(p);
-  if (after >= 0 && clips[after]) noteWorn(p, poseTo(clips[after]), clips[after].frames / (p.alive.fps || 24) * 1000);
   // Time to change clothes (or back into her usual ones before sleep): a cut to her base loop in the
   // other outfit, at a quiet moment.
   const asleep = basePose(pose) === 'asleep';  // asleep, or asleep in her night outfit (asleep@night)
@@ -1253,19 +1303,21 @@ function nextClip(p, after) {
     if (arrived) (p.moments ||= new Set()).add(felt); // played out in full, not hurried
     if (felt >= 0) return felt;
   }
-  // A move she asked for (glass_move), at her next quiet moment: from the pose she's in if she has it
-  // there, else her whole figure (a cut), else on the far side of a pose change, else wherever it is.
+  // A move she asked for (glass_move), at her next quiet moment, in the clothes she has on: from the
+  // pose she's in if she has it there, else her whole figure in these clothes (a cut), else on the far
+  // side of a pose change in these clothes. A move she has only in other clothes doesn't play (it was
+  // a cut into another outfit; server.py tells her it's a wish).
   if (p.moveWanted && performance.now() > p.moveWanted.until) p.moveWanted = null;
-  if (p.moveWanted && (want === 'think' || want === 'idle')) {
-    const asked = clips.map((c, k) => k).filter((k) => p.moveWanted.sources.has(clips[k].source));
+  if (p.moveWanted && free) {
+    const sameClothes = (pz) => outfitOf(pz) === outfitOf(pose);
+    const asked = clips.map((c, k) => k).filter((k) => p.moveWanted.sources.has(clips[k].source) && sameClothes(poseFrom(clips[k])));
     const here = asked.filter((k) => poseFrom(clips[k]) === pose);
-    // Her whole figure in the clothes she has on, else in her usual ones.
-    const wideHere = asked.filter((k) => poseFrom(clips[k]) === fullOf(pose));
-    const wide = wideHere.length ? wideHere : asked.filter((k) => poseFrom(clips[k]) === 'full');
-    const starts = new Set(asked.map((k) => poseFrom(clips[k])));
+    const wide = asked.filter((k) => poseFrom(clips[k]) === fullOf(pose));
+    const starts = new Set(asked.filter((k) => !isFull(poseFrom(clips[k]))).map((k) => poseFrom(clips[k])));
     const toward = clips.findIndex((c) => poseFrom(c) === pose && poseTo(c) !== pose && starts.has(poseTo(c)) && !clipMoods(c).includes('change'));
     if (!here.length && !wide.length && toward >= 0) return toward; // Aloy raises her hand first
-    const from = here.length ? here : wide.length ? wide : asked;
+    const from = here.length ? here : wide;
+    if (!from.length) post('glass', { choom: p.id, missed: [...p.moveWanted.sources][0] || null, why: 'not in the clothes she has on' });
     p.moveWanted = null;
     if (from.length) {
       const k = from[Math.floor(Math.random() * from.length)];
@@ -1276,7 +1328,7 @@ function nextClip(p, after) {
     }
   }
   // A selfie she just made: one of her "look at me" moves (via a pose change if needed).
-  if (p.poseWanted && want !== 'listen' && want !== 'sleep') {
+  if (p.poseWanted && want !== 'sleep' && (want !== 'listen' || !heard())) {
     const full = clips.map((c, k) => k).filter((k) => poseFrom(clips[k]) === fullOf(pose) && clipMoods(clips[k]).includes('pose'));
     const waistUp = clips.some((c) => clipMoods(c).includes('pose') && !isFull(poseFrom(c)));
     if (full.length && !isFull(pose) && (!waistUp || Math.random() < 0.65)) { // full-body (by a cut) two times in three
@@ -1295,7 +1347,7 @@ function nextClip(p, after) {
   // A picture just floated up beside her: she turns to look at it (or down, at one lower right). One
   // that comes up while she talks waits until she's done, if the picture is still showing.
   if (p.lookAt && !picture.active) p.lookAt = null;
-  if ((want === 'think' || want === 'idle') && p.lookAt) {
+  if (free && p.lookAt) {
     const look = p.lookAt;
     p.lookAt = null;
     let looks = all.filter((k) => clipMoods(clips[k]).includes(look) && poseTo(clips[k]) === pose);
@@ -1309,7 +1361,7 @@ function nextClip(p, after) {
       return k;
     }
   }
-  if ((want === 'think' || want === 'idle') && p.toolLook) {
+  if (free && p.toolLook) {
     const look = p.toolLook;
     p.toolLook = null;
     const moments = all.filter((k) => k !== after && poseTo(clips[k]) === pose && look.test(clips[k].source || '') &&
@@ -1355,7 +1407,7 @@ function nextClip(p, after) {
   // looked odd held up most of the time, so it comes up now and then while she talks (about one clip
   // in eight; an expression raises it too) and rarely while she's quiet, and goes back down after a
   // clip or two. Her hand moves are idle clips, so while she talks they join the pool here.
-  const home = clips.some((c) => poseFrom(c) === 'relaxed' && clipMoods(c).includes('talk')) ? 'relaxed' : 'main';
+  const home = p.alive.home || (clips.some((c) => poseFrom(c) === 'relaxed' && clipMoods(c).includes('talk')) ? 'relaxed' : 'main');
   const handMove = (k) => poseTo(clips[k]) !== pose && WAKING_POSES.has(poseTo(clips[k])) && !clipMoods(clips[k]).includes('change');
   if (want === 'talk' && !justMoved) pool.push(...all.filter((k) => handMove(k) && !pool.includes(k)));
   if (!pool.length) pool = fits.length ? fits : all.filter((k) => k !== after);   // the only fitting clip may repeat
@@ -1445,21 +1497,44 @@ function bindAliveTextures(p) {
 for (const p of portraits) {
   if (!p.players) continue;
   p.players.forEach((pl, idx) => {
-    // Her clip videos live only on this machine (not in git): if one can't be loaded, show her still
-    // relief instead of a frozen frame.
+    // Her clip videos live only on this machine (not in git). One that can't be loaded (replaced or
+    // removed by a build before the relaunch, a bad encode) is left out from then on and another
+    // loads in its place; only several failures in a row show her still relief instead.
     pl.video.addEventListener('error', () => {
-      if (!p.alive) return;
-      post('error', { message: `${p.name}'s moving relief is unavailable (${pl.video.currentSrc || 'no source'}); showing her still relief` });
-      p.alive = null;
-      for (const q of p.players) q.video.pause();
-      if (portraits[current] === p) applyPortrait(current);
+      if (!p.alive || pl.clip < 0) return;
+      const bad = p.alive.clips[pl.clip];
+      bad.bad = true;  // poseFrom() puts it nowhere, so nothing picks it again
+      p.videoFails = (p.videoFails || 0) + 1;
+      const left = p.alive.clips.filter((c) => !c.bad).length;
+      if (p.videoFails >= 4 || !left) {
+        post('error', { message: `${p.name}'s moving relief is unavailable (${pl.video.currentSrc || 'no source'}); showing her still relief` });
+        p.alive = null;
+        for (const q of p.players) q.video.pause();
+        if (portraits[current] === p) applyPortrait(current);
+        return;
+      }
+      post('error', { message: `${p.name}: clip ${bad.source || bad.file} can't be played; left out until the next launch` });
+      const active = p.players[p.active] === pl;
+      if (active) {  // the clip she was to play now: her base loop in that pose instead
+        const loop = p.alive.clips.findIndex((c) => !c.bad && poseFrom(c) === (bad.from || 'main') && poseTo(c) === (bad.from || 'main') &&
+                                                    clipMoods(c).includes('talk'));
+        aliveLoad(p, pl, loop >= 0 ? loop : nextClip(p, -1));
+        pl.video.play().catch(videoError);
+      } else {
+        aliveLoad(p, pl, nextClip(p, p.players[p.active].clip));
+      }
     });
+    pl.video.addEventListener('loadeddata', () => { p.videoFails = 0; });
     pl.video.addEventListener('ended', () => {
       if (idx !== p.active) return;
       const next = p.players[1 - idx];
       // The next clip was picked while it loaded; if she has started talking since, swap a laugh or
-      // a long breath for a calm one (the last frame, the same picture, holds while it loads).
-      if (next.clip >= 0 && !suits(p, next.clip)) aliveLoad(p, next, nextClip(p, pl.clip));
+      // a long breath for a calm one (the last frame, the same picture, holds while it loads). A
+      // moment swapped out this way is forgotten, or it would count as fitting any mood later.
+      if (next.clip >= 0 && !suits(p, next.clip)) {
+        p.moments?.delete(next.clip);
+        aliveLoad(p, next, nextClip(p, pl.clip));
+      }
       next.video.currentTime = 0;
       // A little variety so the rotation never settles into a beat: each clip plays at its own
       // speed, and between quiet clips the shared picture may rest a moment.
@@ -1480,6 +1555,8 @@ for (const p of portraits) {
         p.active = 1 - idx;
         p.aliveFrame = 0;
         p.moments?.delete(pl.clip); // that expression or tool moment has played
+        const done = p.alive.clips[pl.clip];
+        if (done) noteWorn(p, poseTo(done), done.frames / (p.alive.fps || 24) * 1000); // once per clip played
         if (clipMoods(p.alive.clips[next.clip]).includes('wake')) p.wokeAt = performance.now();
         if (portraits[current] === p) bindAliveTextures(p);
         else if (stage.mix > 0 || stage.on) bindStageSlot(portraits.indexOf(p));
@@ -1530,7 +1607,14 @@ const STAGE_BACK = [
   { x: 0.47, y: 0.16, z: -0.1, s: 0.42 },
 ];
 // The places behind her, by how many sisters there are; a sister keeps her place when another joins.
+// More than three (a fifth Choom made in the Studio): an arc behind her, smaller the more there are.
 const STAGE_BACKS = { 1: [STAGE_BACK[0]], 2: [STAGE_BACK[0], STAGE_BACK[2]], 3: STAGE_BACK };
+function stageBacks(n) {
+  return (STAGE_BACKS[n] ||= Array.from({ length: n }, (_, k) => {
+    const t = k / (n - 1), lift = Math.sin(Math.PI * t);  // 0 at the sides, 1 in the middle
+    return { x: -0.55 + 1.1 * t, y: 0.14 + 0.26 * lift, z: -0.1 - 0.08 * lift, s: Math.max(0.26, 0.42 * 3 / n) };
+  }));
+}
 const STAGE_LINGER_MS = 3 * 60 * 1000;
 // members: the Chooms in the room (portrait indices), or null for all four.
 const stage = { on: false, until: 0, mix: 0, place: [], shown: [], slots: [], members: null };
@@ -1576,7 +1660,7 @@ function roomMembers(ev, i) {
 // when she can. A Choom not in the room has none, and isn't drawn.
 function stageArrange(front) {
   const back = portraits.map((q, k) => k).filter((k) => k !== front && (!stage.members || stage.members.has(k)));
-  const free = [...(STAGE_BACKS[back.length] || [])];
+  const free = back.length ? [...stageBacks(back.length)] : [];
   const kept = back.filter((k) => {
     const n = free.indexOf(stage.place[k]);
     if (n >= 0) free.splice(n, 1);
@@ -1717,7 +1801,7 @@ function onButton(button, action) {
   if (action === 'press' && button === 'middle') switchTo(current + 1);
   if (button === 'bottom') {
     if (action === 'press' && (speech.busy || speech.queue.length)) stopSpeech(); // talking over her
-    listening = action === 'press';
+    setListening(action === 'press');
   }
 }
 
@@ -1730,11 +1814,18 @@ events.onmessage = (e) => {
   if (ev.type === 'presence') onPresence(ev);
   if (ev.type === 'gaze') onGaze(ev);
   if (ev.type === 'glass') onGlass(ev);
+  if (ev.type === 'mute') setVoice(!ev.muted);  // the app's mute, replayed to a page that just started
+  if (ev.type === 'feed' && ev.state === 'reconnected') {
+    // The server's feed from the Mac dropped and came back: whatever ended meanwhile never arrived.
+    unseenTurns.clear();
+    closeTurn('the Mac feed reconnected');
+  }
   if (ev.type === 'weather') {
     // The weather turns: Genesis, who loves it, glances up at the sky (if she's on the glass).
     const turned = weather.description && ev.description && ev.description !== weather.description;
     weather = ev;
-    if (turned && portraits[current].id === 'genesis' && portraits[current].alive) portraits[current].toolLook = /skycheck/;
+    const p = portraits[current];  // (Genesis has them; any Choom given sky-check clips does it too)
+    if (turned && p.alive?.clips.some((c) => /skycheck/.test(c.source || ''))) p.toolLook = /skycheck/;
   }
 };
 
@@ -1746,7 +1837,7 @@ function onControl(ev) {
   }
   if (ev.action === 'next') switchTo(current + 1);
   if (ev.action === 'prev') switchTo(current - 1);
-  if (typeof ev.listening === 'boolean') listening = ev.listening;
+  if (typeof ev.listening === 'boolean') setListening(ev.listening);
   if (typeof ev.voice === 'boolean') setVoice(ev.voice);
   if (typeof ev.body === 'boolean') setBody(ev.body);
   if (typeof ev.quilt === 'boolean') lkg.mode = ev.quilt ? 1 : 0; // debug: show the raw views
@@ -1765,6 +1856,8 @@ function onControl(ev) {
   if (typeof ev.picture === 'string') showPicture(ev.picture, ev.kind || 'picture', portraits[current]); // debug: a gallery image id
   if (ev.stage === true) stageEnter(current, Array.isArray(ev.room) ? roomMembers(ev, current) : null); // debug: the group stage (room: names)
   if (ev.stage === false) stageExit();
+  if (ev.closeTurn === true) closeTurn('debug');  // debug: as if the end of her turn never arrived
+  if (ev.loseContext === true) renderer.getContext().getExtension('WEBGL_lose_context')?.loseContext(); // debug: the reload
   if (typeof ev.clip === 'number' && portraits[current].players) { // debug: jump to a moving relief clip
     const p = portraits[current];
     const pl = p.players[p.active];
@@ -1775,9 +1868,10 @@ function onControl(ev) {
 }
 
 // ---- The Chooms asking the glass (server.py answers; tools/closet.py matches) ------------------
-// A move she asked for plays at her next quiet moment, if that comes within three minutes; clothes
-// she chose she keeps until bedtime, or until she chooses again.
-const MOVE_FRESH_MS = 180000;
+// A move she asked for plays at her next quiet moment on the glass, if that comes within half an hour
+// (asleep, or off the glass for a while, it used to lapse after three minutes); clothes she chose she
+// keeps until bedtime, or until she chooses again.
+const MOVE_FRESH_MS = 30 * 60 * 1000;
 function onGlass(ev) {
   const p = portraits.find((q) => q.id === String(ev.choom || '').toLowerCase());
   if (!p?.alive) return;
@@ -2092,6 +2186,7 @@ let lastConversation = -Infinity;  // the last chat or room event, or Donny typi
 
 function onChoomEvent(ev) {
   const i = choomIndex(ev.choom);
+  if (lastTurn && lastTurn.index === i) lastTurn.at = performance.now(); // her turn is still alive
   const background = ev.source === 'heartbeat' || ev.source === 'delegation';
   if (ev.source === 'chat' || ev.source === 'group' || ev.event === 'listening') lastActivity = lastConversation = performance.now();
   if (background && ev.event === 'turn_start') {
@@ -2189,7 +2284,7 @@ function onChoomEvent(ev) {
       if (i >= 0 && (ev.source === 'chat' || ev.source === 'group') && performance.now() - (portraits[i].lastShown || 0) > 600000) {
         portraits[i].greet = true;
       }
-      lastTurn = { index: i, open: true };
+      lastTurn = { index: i, open: true, at: performance.now() };
       clocks.set(ev.choom, { choom: ev.choom, source: ev.source, start: performance.now(), firstText: 0, firstVoice: 0,
         gaps: [], lastEnd: 0, pieces: 0, pending: 0, queuedBehind: 0, ended: false });
       if (!speech.busy && !speech.queue.length) {
@@ -2210,7 +2305,7 @@ function onChoomEvent(ev) {
         for (const text of texts) {
           const first = !speech.busy && speech.queue.length === 0;
           for (const piece of speechPieces(text, first)) {
-            speech.queue.push({ text: piece, voice: ev.voice || VOICES[portraits[i].id], index: i, clock: c, feeling: feeling(piece) });
+            speech.queue.push({ text: piece, voice: ev.voice || portraits[i].voice, index: i, clock: c, feeling: feeling(piece) });
             if (c) c.pending++;
           }
         }
@@ -2281,6 +2376,10 @@ async function runSpeech() {
         audio = await (item.pending || fetchSpeech(item));
       } catch (e) {
         post('error', { message: `speech failed: ${e.message}` });
+        if (item.clock) {  // that piece is done with, or the turn's clock never finishes
+          item.clock.pending--;
+          finishClock(item.clock);
+        }
         continue;
       }
       if (epoch !== speech.epoch) break;
@@ -2386,8 +2485,10 @@ window.addEventListener('keydown', (e) => {
   switch (e.code) {
     case 'ArrowLeft': switchTo(current - 1); break;
     case 'ArrowRight': switchTo(current + 1); break;
-    case 'Digit1': case 'Digit2': case 'Digit3': case 'Digit4': switchTo(Number(e.code.slice(-1)) - 1); break;
-    case 'KeyL': listening = true; break;
+    case 'Digit1': case 'Digit2': case 'Digit3': case 'Digit4': case 'Digit5': case 'Digit6': case 'Digit7': case 'Digit8': case 'Digit9':
+      if (Number(e.code.slice(-1)) <= portraits.length) switchTo(Number(e.code.slice(-1)) - 1);
+      break;
+    case 'KeyL': setListening(true); break;
     case 'KeyM': setVoice(!voiceOn); break;
     case 'KeyB': setBody(!portraits[current].showBody); break;
     case 'Space': paused = !paused; break;
@@ -2401,7 +2502,7 @@ window.addEventListener('keydown', (e) => {
   post('tuning', { key: e.code, depth: baseDepth.value, center: lkg.center, paused, choom: portraits[current].name });
   e.preventDefault();
 });
-window.addEventListener('keyup', (e) => { if (e.code === 'KeyL') listening = false; });
+window.addEventListener('keyup', (e) => { if (e.code === 'KeyL') setListening(false); });
 
 const ease = (x) => x * x * (3 - 2 * x);
 let frames = 0;
@@ -2566,6 +2667,19 @@ function sendStatus() {
 }
 setInterval(sendStatus, 2000);
 
+// A turn whose end never arrived (the Mac feed dropped mid-turn) left her thinking for good: no sleep,
+// no screensaver, the stage never folding. After 15 minutes without a word of it, or when the feed
+// reconnects, the turn is closed (never while she's still talking).
+const TURN_LOST_MS = 15 * 60 * 1000;
+function closeTurn(why) {
+  if (!lastTurn?.open || speech.busy || speech.queue.length) return;
+  lastTurn.open = false;
+  mood = 'idle';
+  for (const p of portraits) p.saidFeeling = null;
+  post('turn-closed', { why, choom: portraits[lastTurn.index]?.name || null });
+}
+setInterval(() => { if (lastTurn?.open && performance.now() - lastTurn.at > TURN_LOST_MS) closeTurn('no word of it for 15 minutes'); }, 30000);
+
 // Screensaver: when nobody is talking with them (no conversation, typing or button for two minutes)
 // the Chooms take turns on the glass, three to five minutes each, picked at random, so the tower
 // shows all four going about their quiet moments. Not once she has dozed off at night, not on the
@@ -2576,9 +2690,20 @@ const TURN_MS = [3 * 60 * 1000, 5 * 60 * 1000];
 let turnLength = TURN_MS[0];
 setInterval(() => {
   const now = performance.now();
+  const here = portraits[current];
+  // Bedtime with a Choom on the glass who can't fall asleep (no sleep clips yet, a new one): the glass
+  // goes to one who can, so it dims instead of staying lit and awake all night.
+  if (sleepy() && !stage.on && phase === 'idle' && !canSleep(here)) {
+    const sleepers = portraits.map((q, k) => k).filter((k) => k !== current && canSleep(portraits[k]));
+    if (sleepers.length) {
+      const next = sleepers[Math.floor(Math.random() * sleepers.length)];
+      post('quiet-turn', { from: here.name, to: portraits[next].name, why: 'bedtime' });
+      switchTo(next);
+    }
+    return;
+  }
   if (!QUIET_BEFORE_MS || now - lastActivity < QUIET_BEFORE_MS || now - lastSwitchAt < turnLength) return;
   if (mood !== 'idle' || speech.busy || speech.queue.length || heard() || phase !== 'idle' || sleepy() || stage.on || gaze.looking) return;
-  const here = portraits[current];
   const clip = here.alive && here.players[here.active].clip >= 0 ? here.alive.clips[here.players[here.active].clip] : null;
   if ((clip && (basePose(poseFrom(clip)) === 'asleep' || basePose(poseTo(clip)) === 'asleep')) || now - (here.wokeAt || 0) < 3 * 60 * 1000) return;
   const others = portraits.map((q, k) => k).filter((k) => k !== current);
