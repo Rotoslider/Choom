@@ -1,7 +1,8 @@
 # Chooms in Glass: technical reference
 
 The details behind [the README](../README.md): how each part works, how the moving reliefs are made,
-configuration, and debugging.
+configuration, the Choom app link, and debugging. Constants named here live in the file mentioned
+next to them; the code is the source of truth.
 
 ## Running
 
@@ -11,368 +12,642 @@ configuration, and debugging.
 ./launch.sh stop          # close everything and hand the voice back to the browsers
 ```
 
-At login, `~/.config/autostart/choom-hologram.desktop` runs `launch.sh living` (after 15 s); its
-output goes to `autostart.log`. `launch.sh` finds the Portrait as the display running 1536x2048, starts `server.py` on
-127.0.0.1:8765, starts `tower_ears.py` if its venv exists, and opens a Chrome kiosk window on the
-Portrait with its own profile. Environment:
+`launch.sh` takes these steps in order:
+1. Resolves its real folder, so starting it through a symlink still stops the right processes.
+2. Finds the Portrait as the connected display running 1536x2048.
+3. Stops anything left from a previous launch.
+4. Starts `server.py` on 127.0.0.1:8765.
+5. Starts `tower_ears.py` and `tower_eyes.py` if `.venv-ears` exists.
+6. Starts Glass Studio on 127.0.0.1:8767 if it isn't already running. A relaunch leaves the Studio
+   running, so a render it started keeps its watcher.
+7. Opens a Chrome kiosk window on the Portrait with its own profile (`.chrome-profile`).
+8. Hands the keyboard back to the window that had it (`tools/focus_back.py`), because the kiosk
+   takes focus when it opens.
+
+To start at login, add an autostart entry, e.g. `~/.config/autostart/choom-hologram.desktop` with
+`Exec=/bin/bash -c "sleep 15; <path>/hologram/launch.sh living > <path>/hologram/autostart.log 2>&1"`.
+
+To reload the page without cutting a Choom off, use `tools/relaunch_when_quiet.sh`. It waits (up
+to 10 minutes) until the page reports her idle with nothing queued to say. Glass Studio's build
+uses it.
 
 | Variable | Default | |
 |---|---|---|
 | `CHOOM_URL` | `http://donnys-mac-studio-3.local:3000` | the Choom app |
 | `HOLOGRAM_EARS` | `1` | `0` leaves the tower's microphone off |
 | `HOLOGRAM_EYES` | `1` | `0` leaves the camera off |
+| `HOLOGRAM_STUDIO` | `1` | `0` doesn't start Glass Studio |
 | `HOLOGRAM_DISPLAY_WATCHDOG` | `1` | `0` stops the display watchdog |
-| `HOLOGRAM_CONFIG` | `~/.config/choom-hologram` | Home Assistant files (below) |
+| `HOLOGRAM_CONFIG` | `~/.config/choom-hologram` | the configuration folder (below) |
+| `HOLOGRAM_URL` | `http://127.0.0.1:8765` | where `tower_ears.py` and `tower_eyes.py` find the server |
+| `HOLOGRAM_WELCOME_AFTER_S` | from the Camera tab (20 min) | minutes away before a welcome back, in seconds (for testing) |
 
-Keys on the page: arrow keys or 1-4 switch Choom, hold L = listening, M = mute, `-`/`=` depth,
-`[`/`]` calibration center, H = readout.
+**Configuration folder** (`~/.config/choom-hologram/`, kept out of git). The server picks up its
+files without a restart.
 
-The keys that stay in effect until pressed again (Space = pause, M, B = body, `-`/`=`, `[`/`]`) work
-only while the readout (H) is up, and the readout says PAUSED while paused. The glass takes the
-keyboard when its window opens, so launch.sh hands it back to the window that had it
-(`tools/focus_back.py`): on 2026-10-15 a space typed for the terminal reached the glass right after a
-relaunch and froze every Choom's particles, Optic's and Eve's bands and Aloy's orbs for hours (the
-clips kept playing). Status entries in telemetry.log carry `paused`, and `tuning` entries name the key.
+| File | Read by | Contents |
+|---|---|---|
+| `ha_url`, `ha_token` | server.py | Home Assistant's URL and a long-lived access token (`chmod 600`) |
+| `presence.json` | server.py | presence roles to entities ([Presence](#presence-home-assistant)) |
+| `weather.json` | server.py | weather station sensors ([Weather](#weather)) |
+| `camera.json` | tower_eyes.py, server.py | camera settings from the Choom app's Camera tab ([The glass camera](#the-glass-camera)) |
+| `studio.json` | Glass Studio | the workspace folder ([studio/README.md](../studio/README.md#setup)) |
+
+**Logs** (in `hologram/`): `server.log`, `ears.log`, `eyes.log`, `chrome.log`, `studio/studio.log`,
+and `telemetry.log` (rotated at 50 MB; see [Debugging](#debugging)).
+
+## Keyboard
+
+The glass page's keys:
+
+| Key | Does |
+|---|---|
+| ← → or 1–4 | switch Choom |
+| hold L | listening |
+| H | the readout (fps, clip, depth, calibration, PAUSED) |
+| Space | pause the particles, bands and orbs* |
+| M | mute her voice* |
+| B | toggle the experimental 3D body* |
+| `-` / `=` | depth* |
+| `[` / `]` (Shift for fine steps) | calibration center* |
+
+\* These keys stay in effect until pressed again, so they work only while the readout (H) is up:
+a stray key typed for another window can't freeze the glass. Every key press is logged as `tuning`,
+and status entries carry `paused`.
 
 ## Rendering
 
-`lenticular.js` draws 48 views (an 8x6 quilt, 3360x3360) from an off-axis camera rig and interleaves
-them with the Portrait's factory calibration (`calibration/`, copied from the Portrait's USB drive), so
-Looking Glass Bridge is not needed. `living.js` is the page: each Choom is an RGB-D relief (her color,
-per-pixel depth and cut-out), with idle sway and breathing, her own particles (Aloy's embers and her
-atom of sister orbs, Optic's scan band, Genesis's motes, Eve's code band), and her name for a few
-seconds after she takes the glass.
+`lenticular.js` draws 48 views (an 8x6 quilt, 3360x3360, each view rendered with 4x MSAA) from an
+off-axis camera rig. It interleaves them with the Portrait's factory calibration (`calibration/`), so
+Looking Glass Bridge is not needed. `living.js` is the page. It renders at 30 frames a second: the
+clips are 24 fps, and 60 kept two CPU cores busy for no visible gain.
+
+Each Choom is an RGB-D relief (her colour, per-pixel depth and cut-out) with her own particles:
+- Aloy: embers, and an atom of four orbs in her sisters' colours and her own.
+- Optic: a scan band.
+- Genesis: twinkling motes.
+- Eve: a compile band and code.
+
+Her name shows for a few seconds after she takes the glass.
 
 ## Moving reliefs
 
-Each Choom is a set of short clips made from her own render, every clip starting and ending on the
-same picture of her, so the page can play them in any order without a visible seam.
+Each Choom is a set of short clips made from her own render. Every clip starts and ends on the same
+picture of her, so the page can play them in any order without a visible seam. Glass Studio runs this
+whole pipeline. The steps underneath:
 
-1. **Clean picture.** Her render cleaned up on black with a Flux.2 Klein edit (Wan2GP
+1. **Clean picture.** Her render, cleaned up onto black with a Flux.2 Klein edit (Wan2GP
    `flux2_klein_9b`, `video_prompt_type` `KI`, the render as `image_refs`, 1440x1920, 4 steps).
-2. **Clips.** A Wan2GP queue zip (`queue.json` of tasks with `model_type` `minimax_h3_fl2va_pdd`,
-   `image_prompt_type` `SE`, the clean picture as `image_start` and `image_end`, 832x1104, 124 to 243
-   frames), run headless with `wgp.py --process QUEUE.zip --output-dir DIR`. About 5 minutes a clip.
-   Name each clip `<id>_<action>.mp4`. In prompts, never name an effect you don't want ("no smoke"
-   brings smoke); say "a plain pure black background". Words about breathing ("a deep breath", "a
-   sigh") can bring a cloud of fog; describe what her face does instead. Wording that draws the eye to
-   her face ("leans in", "studies the viewer closely", "scrunches her nose at the viewer") makes the
-   camera push in; end every prompt with "The camera stays locked off, framed exactly as at the start,
-   and never zooms or pushes in." Genesis's motes sometimes fade out for a few seconds and come back
-   (closing her eyes, a pout); Donny likes that as an occasional moment, so her prompts say the motes
-   stay on her, and a few clips ask for the fade on purpose. Five-second clips
-   fail less than seven-second "she stands quietly" loops, which drift into new shots, halos or
-   colour shifts. Seven-second sleep loops come out cleaner than ten-second ones. About one clip in six
-   fails; check every clip on a contact sheet (`idle_sheet.py`: eight frames a row) before using it.
-3. **Cut-outs.** `U2NET_HOME=~/pinokio/api/wan2gp/app/ckpts/rembg ~/pinokio/api/wan2gp/app/venv/bin/python tools/make_alive_masks.py <id> CLIP.mp4 ...`
-   (U2-Net per frame, kept per clip as `alive_masks_<clip>.npz`). U2-Net can lose most of her for a
-   stretch when something busy moves around her (blowing hair); `make_alive.py` adds back anything
-   lit inside her first frame's outline, since every clip starts on her picture. Clips about her
-   particles (`motes`, `windy`, `sparkle` in the name) keep everything lit around her too, frame by
-   frame, so motes that drift off Genesis aren't clipped away.
-4. **Reliefs.** `~/pinokio/api/forge-neo/app/venv/bin/python tools/make_alive.py <id> MAIN.mp4 CLIP.mp4 ...`
-   (main clip first): Depth Anything V2 Large per frame (fused attention, half precision, about 0.2 s a
-   frame; raw depth cached per clip as `alive_depth_<clip>.npy` and read from disk as needed, so
-   memory stays around 2 GB however many clips she has), lined up with the main clip, normalized to
-   the main clip's depth range (kept in `alive.json`), smoothed in time, shaped for the panel, plus
-   MediaPipe mouth tracking per frame. It writes `portraits/<id>/alive_<clip>.mp4` (color, depth and
-   cut-out stacked) and `alive.json`, and only encodes clips that are new or changed, so adding clips
-   costs only the new ones. After the page reloads, `make_alive.py <id> --prune` deletes videos of
-   clips no longer listed. Depth Anything shares the GPU badly with a Wan2GP queue (more than tenfold
-   slower), so new clips are built between queues; a rebuild with every depth cached needs no GPU.
+2. **Clips.** A Wan2GP queue zip, run headless with `wgp.py --process QUEUE.zip --output-dir DIR`
+   (about 5 minutes a clip).
+   - Each task in its `queue.json`: `model_type` `minimax_h3_fl2va_pdd`, `image_prompt_type` `SE`,
+     the clean picture as both `image_start` and `image_end`, 832x1104, 5 to 15 seconds long.
+   - Clips are named `<id>_[<outfit>-]<action>.mp4`.
+3. **Cut-outs.** U2-Net, per frame:
+   ```bash
+   U2NET_HOME=~/pinokio/api/wan2gp/app/ckpts/rembg ~/pinokio/api/wan2gp/app/venv/bin/python \
+     tools/make_alive_masks.py <id> CLIP.mp4 ...
+   ```
+   - Masks are kept per clip as `alive_masks_<clip>.npz`.
+   - U2-Net can lose most of her for a stretch when something busy moves around her (blowing hair).
+     `make_alive.py` adds back anything lit inside her first frame's outline, because every clip
+     starts on her picture.
+   - Clips about her particles (`motes`, `windy`, `sparkle` in the name) keep everything lit around
+     her, frame by frame.
+   - Outfit clips keep any lit area that touches her outline, because U2-Net can take dark knitwear
+     for background.
+4. **Reliefs.** The main clip comes first:
+   ```bash
+   ~/pinokio/api/forge-neo/app/venv/bin/python tools/make_alive.py <id> MAIN.mp4 CLIP.mp4 ...
+   ```
+   For each frame:
+   - Depth Anything V2 Large depth (fused attention, half precision, about 0.2 s a frame). Raw depth
+     is cached per clip as `alive_depth_<clip>.npy` and read from disk as needed, so memory stays
+     around 2 GB whatever the clip count.
+   - The depth is lined up with the main clip and normalized to the main clip's depth range, which
+     is kept in `alive.json`.
+   - It is then smoothed in time and shaped for the panel.
+   - MediaPipe tracks her mouth.
 
-The clip videos and caches stay local (`.gitignore`); without them a Choom shows her still relief.
+   It writes `portraits/<id>/alive_<clip>.mp4` (colour, depth and cut-out stacked) and `alive.json`.
+   It encodes only clips that are new or changed. After the page reloads, `make_alive.py <id> --prune`
+   deletes videos of clips no longer listed. `tools/make_alive_depth.py` caches depth alone, so
+   `make_alive.py` can then run on the CPU beside a render.
 
-**Glass Studio** (`studio/`, [README](../studio/README.md)) runs these steps from a page at
-http://127.0.0.1:8767. It keeps one project file per Choom in the workspace's `studio/` folder (her
-looks, every clip with its prompt, seed and status, and her sequence, the list `make_alive.py` is
-given). It plans clips from `studio/packs.json` with the prompt lessons above built in
-(`studio/prompts.py`), writes Wan2GP queues and renames their outputs by seed, makes each clip's
-contact sheet with automatic checks (`studio/review.py`), and builds a sequence: cut-outs, then
-`make_alive.py`, then `tools/relaunch_when_quiet.sh`, then `--prune`. Renders and builds take turns
-on the GPU. The four Chooms' first 784 clips were adopted with `studio/import_existing.py` from the
-old queues and their seed plans.
+**Two processes on one GPU.**
+- Depth Anything shares the GPU badly with a Wan2GP queue (more than tenfold slower), so builds
+  wait for renders. A rebuild with every depth cached needs no GPU.
+- Never pause a running Wan2GP queue with SIGSTOP: the queue dies.
 
-**Roles.** A clip's action name gives its moods and the pose it starts and ends in (`ROLES` in
-`tools/clip_roles.py`, shared by `make_alive.py` and Glass Studio), or its kind prefix does: `idle_…` (a quiet moment), `relaxed_…` (one with
-Aloy's hand down), `full_…` (a full-body quiet moment), `pose_…` / `fullpose_…` (selfie moves). An
-outfit prefix puts it in other clothes: `evening-relaxed`, `cold-relaxed_glance`. The page picks clips
-by what she is doing:
+**Prompt lessons.** These are built into the Studio's prompts (`studio/prompts.py`):
+- Never name an effect you don't want ("no smoke" brings smoke). Say "a plain pure black background".
+- Words about breathing ("a deep breath", "a sigh") can bring fog; describe what her face does instead.
+- Wording that draws the eye to her face ("leans in", "studies the viewer closely") makes the camera
+  push in. Every prompt ends with "The camera stays locked off, framed exactly as at the start, and
+  never zooms or pushes in."
+- Genesis's motes can fade out for a few seconds and come back. Her prompts say the motes stay on her,
+  and a few clips ask for the fade on purpose.
+- Five-second clips fail less often than seven-second "she stands quietly" loops, which drift into
+  new shots, halos or colour shifts. For sleep loops, seven seconds is cleaner than ten.
+- About one clip in six fails. Check every clip on its contact sheet before it goes on the glass.
+
+The clip videos and caches stay local (`.gitignore`). Without them a Choom shows her still relief.
+
+**Glass Studio** (`studio/`, [README](../studio/README.md)) runs all of this from a page at
+http://127.0.0.1:8767, or from `studio/studio.py` on the command line.
+- It keeps one project file per Choom in the workspace's `studio/` folder: her looks, every clip
+  (prompt, seed, status) and her sequence, which is the list `make_alive.py` is given.
+- It plans clips from `studio/packs.json` and writes the Wan2GP queues.
+- It renames finished renders by seed and makes contact sheets with automatic checks
+  (`studio/review.py`).
+- It builds in order: cut-outs, `make_alive.py`, `tools/relaunch_when_quiet.sh`, then `--prune`.
+- Renders and builds take turns on the GPU.
+
+## Clips, moods and poses
+
+A clip's name gives the moods it plays in and the pose it starts and ends in (`tools/clip_roles.py`,
+shared by `make_alive.py` and the Studio). Named actions are listed in `ROLES`. Other clips are
+named by kind, `<kind>_<what she does>` (`KINDS`):
+
+| Kind | Moods | Pose |
+|---|---|---|
+| `idle_…` | a quiet moment | main |
+| `listen_…` | quiet, listening | main |
+| `talk_…` | a calm loop to talk over (lip sync), also listening and quiet | main |
+| `relaxed_…`, `relaxedtalk_…`, `relaxedlisten_…`, `relaxedpose_…`, `relaxedoops_…`, `relaxedwindy_…` | the same, with Aloy's hand down | relaxed |
+| `full_…` | a full-body quiet moment | full |
+| `pose_…`, `fullpose_…` | a "look at me" move (selfies, asked-for moves; dances and turns are `fullpose_`) | main, full |
+| `oops_…` | a face at her own mishap | main |
+| `windy_…` | hair and clothes in the wind | main |
+| `[<from>-]change_<to>_<what>` | a change of clothes on screen (`usual` for her usual clothes) | from one look to another |
+
+An outfit prefix puts any clip in other clothes, in poses of their own:
+- `evening-relaxed` plays in `relaxed@evening`.
+- `nightcold-fallasleep` plays in `main@nightcold` and ends in `asleep@nightcold`.
+- `dayshop-full_sway` plays in `full@dayshop`.
+
+The page picks clips by what she is doing:
 
 | Mood | Examples | When |
 |---|---|---|
 | idle | base, glance, breath, hum, daydream, giggle, groove | quiet moments, shuffled |
-| talk, think, listen | base, listen, thinkup, longcalm | while she talks, writes, or hears you |
-| happy, surprised, sad, concerned | happy, sad | once, when what you said (or, after she finishes, what she said) feels that way |
-| oops | oops_wince, relaxedoops_jaw | once, after one of her tools fails or she says it didn't come out right (a wince, a frown at herself, an eye roll at the tool; not her sad face) |
-| greet | wave | taking the glass after a while away |
-| sleep, wake, yawn | fallasleep, sleep2, wake, yawn | 11 pm to 7 am after ten quiet minutes; yawns near bedtime |
-| windy | windy, windy_breeze, evening-windy_gust | on windy days, one every few minutes while she's quiet, in the look she has on |
-| pose | relaxedturn, poseheart, fulltwirl | a selfie she just made |
-| picture, picturedown | picturelook, relaxedpicturedown | a picture floats up: she turns to it beside her, or glances down at one lower right (an outfit uses its glance or look-down) |
-| change | fadeout, fadein | an outfit change made on screen (Genesis's motes fading away and back) |
+| talk, think, listen | base, listen, thinkup, longcalm | while she talks, waits on her model, or hears you |
+| happy, surprised, sad, concerned | happy, sad | once, before she answers, when what you said feels that way |
+| oops | oops_wince, relaxedoops_jaw | once, after one of her tools fails or she says it didn't come out right |
+| greet | wave | taking the glass after a long while away |
+| sleep, wake, yawn | fallasleep, sleep2, wake, yawn | night (below); yawns near bedtime and after waking |
+| windy | windy, windy_breeze, evening-windy_gust | on windy days, now and then while she's quiet, in the look she has on |
+| pose | relaxedturn, poseheart, fulltwirl | a selfie she just made, or a move she asked for |
+| picture, picturedown | picturelook, relaxedpicturedown | a picture floats up beside her, or lower right |
+| change | fadeout, fadein, change_night_slip | a change of looks on screen |
 
-Quiet clips play like a shuffled deck: one that played lately waits until most of the others have had
-their turn. As of October 9 each Choom has 135 to 158 clips, about five to six minutes of distinct
-quiet moments in her usual clothes before anything repeats, plus her outfits.
+**Shuffling.** Quiet clips play like a shuffled deck: one that played lately waits until most of
+the others have had their turn. Each Choom has a few hundred clips across her looks, several minutes
+of distinct quiet moments per look; the Studio's tabs count them. While you look at her, a look with
+few listening clips borrows her quiet clips that keep facing forward.
 
-Poses: `main` (her picture), `relaxed` (Aloy with her hand down, reached by `lower`/`raise`; her
-home pose, the raised finger comes up now and then while she talks), `asleep`, and `full` (full-body
-clips made from a full-body picture built from her reference sheet; reached and left with a quick
-camera-cut fade, no lip sync). About one quiet clip in fourteen cuts to a full-body one and back.
-An outfit can have its own full body (`full@dayspandex`, clips named `<choom>_dayspandex-full_sway`):
-in that outfit the glass cuts only to it, and a move she asks for plays there; an outfit without one
-never cuts to her full body, and her asked-for moves play in her usual full body.
+**Poses.**
 
-Outfits: clips in other clothes live in poses of their own (`relaxed@evening`), made from a Klein edit
-of her clean picture. The outfit's name says when she wears it (`OUTFIT_RULES` in `living.js`):
-`cold…` under 45°F, `hot…` over 85°F, `evening…` from 6 to 11 pm, and `day…` outfits take turns with
-her usual clothes, a different one each day, and `night…` from 10 pm until she wakes (all night, no
-visits; `nightwarm…` at 70°F or warmer, `nightcold…` below, chosen when she puts them on and kept
-until morning). She changes with a camera cut at a quiet moment, or a change clip made for that pair of looks
-(`<choom>_[<from>-]change_<to>_<what>`, `usual` for her usual clothes), and back into her usual clothes
-before she sleeps, unless a night outfit has its own asleep look (`asleep@night`, with sleep and wake
-clips named `<choom>_night-fallasleep` and so on): then she sleeps in it. Change clips never play to
-reach an expression or a move, only to change clothes. An outfit needs at least a base loop with the `talk` mood.
-So a dozen clips don't loop for hours, she wears an outfit (or another look) in visits: about 30 s per
-clip it has (3 to 15 minutes), then at least 25 minutes in her usual clothes, and an outfit for at
-most 2 minutes per clip a day. Kept in the kiosk's localStorage across relaunches. While he looks at
-her, a look with few listening clips borrows her quiet clips that keep facing forward, and listening
-clips shuffle like the quiet ones. Outfit clips keep any lit area touching her outline (U2-Net took
-the dark knit of Genesis's sweater for background).
-The Chooms aren't told what they're wearing in the glass, so it doesn't steer their selfies.
-An outfit change can also happen on screen instead of by a cut: a clip that starts in one look and
-ends in the other (Wan2GP's start and end pictures differ) is played for the change. Genesis's plain
-look (`main@plain`, no glowing motes) works this way: `fadeout` / `fadein` clips fade her motes away
-and back, and in her usual clothes she is plain about a third of the time, decided every 20 minutes.
+| Pose | What it is |
+|---|---|
+| `main` | her picture |
+| `relaxed` | Aloy with her hand down: her home pose, reached by `lower` and `raise`; the raised finger comes up now and then while she talks |
+| `asleep` | asleep |
+| `full` | her whole figure, from a full-body picture made from her reference sheet |
+
+Full-body clips are reached and left with a quick camera-cut fade, and have no lip sync. About one
+quiet clip in fourteen cuts to a full-body clip and back (`FULL_IDLE_CHANCE`).
+
+An outfit can have its own full body (`full@dayshop`, clips named `<id>_dayshop-full_<what>`):
+- In that outfit, the glass cuts only to that full body.
+- In an outfit without one, the glass never cuts to full body. A move she asks for then plays in her
+  usual full body.
+
+## Looks and outfits
+
+An outfit's name says when she wears it (`OUTFIT_RULES`, `nightOutfit` and `wantedOutfit` in
+`living.js`):
+
+| Name starts with | Worn |
+|---|---|
+| `night…` | from 10 pm until she wakes, all night (no visits). `nightwarm…` at 70°F or warmer, `nightcold…` below; chosen when she puts them on and kept until morning |
+| `cold…` | under 45°F |
+| `hot…` | over 85°F |
+| `evening…` | 6 to 11 pm |
+| `day…` | takes turns with her usual clothes: one pick a day from the date, held all day |
+| `plain`, `noheart` | looks in her usual clothes (Genesis without her glow, Optic without her heart): about a third of the time, decided every 20 minutes, changed on screen with clips made for it |
+
+The temperature comes from the weather feed ([Weather](#weather)). An outfit is wearable only if it
+has a clip with the `talk` mood.
+
+**Visits.** A dozen clips would loop for hours, so she wears an outfit (or another look) in visits:
+- A visit lasts about 30 s per clip the look has, between 3 and 15 minutes.
+- After a visit she spends at least 25 minutes in her usual clothes.
+- Each outfit has a daily total of 2 minutes per clip. Looks in her usual clothes have no daily
+  total.
+- The wardrobe is kept in the kiosk's localStorage, so a relaunch doesn't reset it.
+
+**Changing.**
+- She changes at a quiet moment, with a camera cut. A change clip made for that pair of looks plays
+  instead when there is one.
+- Change clips play only to change clothes, never to reach an expression or a move.
+- Before sleeping she changes back into her usual clothes. She stays in her night clothes instead
+  when they have their own asleep look (`asleep@nightcold`, with sleep and wake clips such as
+  `<id>_nightcold-fallasleep`).
+
+**Her own choice.** Clothes she chooses herself (`glass_wear`, below) take priority over these rules
+until she goes to sleep, until she chooses again, or until midnight. Night clothes she chose stay on
+to sleep in when they have an asleep look.
+
+Neither the Choom app's prompts nor the glass ever tell the Chooms what they are wearing at a given
+moment, so it doesn't steer the selfies they make. They can ask what is in their closet.
 
 ## Lip sync
 
-HeadAudio (`vendor/headaudio`, MIT) reads mouth shapes from her voice in an audio worklet; loudness
-leads the onsets. A shader opens her jaw along a lens that follows her lip line, lifts her upper lip a
-little, rounds or spreads her lips, and fills the opening with a mouth tinted from her own lips, at
-the mouth tracked on that frame of the clip. Her upper teeth show under the lip whenever she opens
-(shaded, with faint gaps between the front teeth, in her own light), the lower ones on wide sounds. Her audio is delayed 80 ms so voice and lips line up. Every spoken piece logs a
-`lipsync` entry (lag and correlation against the voice heard) to `telemetry.log`.
+HeadAudio (`vendor/headaudio`, MIT) reads mouth shapes from her voice in an audio worklet, and
+loudness leads the onsets. A shader works on the mouth tracked on that frame of the clip:
+- It opens her jaw along a lens that follows her lip line, lifts her upper lip a little, and rounds
+  or spreads her lips.
+- It fills the opening with a mouth tinted from her own lips. Her upper teeth show under the lip
+  whenever she opens; the lower teeth show on wide sounds.
+
+Her audio is delayed 80 ms so voice and lips line up. Every spoken piece logs a `lipsync` entry (lag
+and correlation against the voice heard) to `telemetry.log`.
 
 ## The Choom app link
 
 | Choom app route | Used for |
 |---|---|
-| `GET /api/hologram/events` | the live feed: turns, thinking, tools (with the sister when Aloy delegates), pictures, speakable sentences |
-| `POST /api/hologram/voice` | heartbeat while the hologram speaks, so browsers at home stay quiet |
+| `GET /api/hologram/events` | the live feed: turns, thinking, tools (with the sister when Aloy delegates), failed tools, pictures, speakable sentences, room members, camera and glass requests |
+| `POST /api/hologram/voice` | heartbeat every 10 s while the hologram speaks, so browsers at home stay quiet |
 | `POST /api/hologram/listening` | typing or the mic in the app at home |
-| `POST /api/hologram/talk` | words heard at the tower, into her chat or the group room |
+| `POST /api/hologram/talk` | words heard at the tower, into her chat (`{choom, text}`) or the group room (`{room: true, text}`) |
+| `POST /api/hologram/welcome` | a welcome back (`{awayMinutes, place?}`), and `{done: true}` when it's over |
+| `POST /api/hologram/camera/result` | the hologram's answer to a camera request |
+| `POST /api/hologram/glass/result` | the hologram's answer to a Choom's glass request |
 | `POST /api/stt`, `/api/tts` | speech to text, and her voice |
 | `GET /api/images/<id>` | a picture to float in the glass (served to the page as `/choom-image/<id>`) |
+| `GET /api/weather` | the town weather report |
 
-She speaks only a conversation a browser at home has open (the app marks each sentence `speak`),
-and the app's mute button stops her.
+She speaks only a conversation a browser at home has open (the app marks each sentence `speak`), and
+the app's mute button stops her. Routes that act at home refuse requests from away (ngrok or a public
+address).
 
 ## Talking at the tower
 
-`tower_ears.py` (run with `.venv-ears`) records the speakerphone's microphone through PipeWire,
-finds speech with WebRTC VAD (or anything clearly louder than the room's tracked background), and
-checks how each utterance begins with faster-whisper small.en on the GPU. Only a wake phrase at the
-start counts:
+`tower_ears.py` (run with `.venv-ears`):
+1. Records the speakerphone's microphone through PipeWire (16 kHz).
+2. Finds speech with WebRTC VAD, or anything clearly louder than the room's tracked background.
+3. Checks how each utterance begins with faster-whisper small.en on the GPU.
+
+Only a wake phrase at the start counts ("OK" or "hey" plus a name):
 
 | Say | Goes to |
 |---|---|
 | OK Aloy, OK Optic, OK Genesis, OK Eve | her current 1:1 chat (picked as Signal picks it) |
 | OK Chooms, OK girls, OK everyone | the room set as the Signal room on the Rooms page, or else the room you last spoke in |
 
-A message ends when 90% of the last 2.5 s was quiet (the speakerphone sends exact silence in every
-pause, and pauses between sentences often pass 1.5 s); it can run 45 s. After her answer the
-mic opens for a reply: once her conversation turn has ended and her voice has stopped (a heartbeat
-running beside it doesn't hold it up; a room waits until everyone has finished), a soft rising chime
-plays and the mic listens for 8 s, with a soft low note if it closes unheard. If any Choom starts
-speaking while it's open (her next thought, a sister in the room), the window closes without sending
-anything and opens again with a fresh chime once it's quiet, so a Choom's voice is never sent as his. Short sounds and clips
-that fail a local speech check are dropped, so Whisper can't turn noise into a sentence. Only the
-wake phrase itself interrupts her. Nothing is kept; events go to `telemetry.log` without the words.
+A Choom added later through Glass Studio wakes by her name, or by the spellings in her
+`portraits/manifest.json` entry's `wake` (a regular expression).
 
-Setup: `python3 -m venv .venv-ears && .venv-ears/bin/pip install faster-whisper==1.2.1 ctranslate2==4.8.2 webrtcvad-wheels`.
-Keep the microphone's input level up (`wpctl set-volume @DEFAULT_AUDIO_SOURCE@ 1.0`).
+**Messages.**
+- A bare wake phrase waits 8 s for the words.
+- A message ends when 90% of the last 2.5 s was quiet. The speakerphone sends exact silence in every
+  pause, and pauses between sentences often pass 1.5 s.
+- A message can run 45 s.
+- Short sounds, and audio that fails a local speech check, are dropped, so Whisper can't turn noise
+  into a sentence.
+
+**The reply window.** After her answer the mic opens for your reply:
+- It opens once her conversation turn has ended and her voice has stopped. A heartbeat running beside
+  it doesn't hold it up; a room waits until everyone has finished.
+- A soft rising chime plays and the mic listens for 8 s, with a soft low note if it closes unheard.
+- If any Choom starts speaking while it's open, the window closes without sending anything, and opens
+  again with a fresh chime once it's quiet. A Choom's voice is never sent as yours.
+- Only the wake phrase itself interrupts her.
+
+Nothing is kept; events go to `telemetry.log` without the words. Keep the microphone's input level up
+(`wpctl set-volume @DEFAULT_AUDIO_SOURCE@ 1.0`). `launch.sh stop` also ends the listener's
+`pw-record`, because an orphaned recorder can wedge PipeWire capture for every app (fix:
+`systemctl --user restart wireplumber pipewire pipewire-pulse`).
 
 ## Eye contact
 
 `tower_eyes.py` (same venv; started by `launch.sh`, `HOLOGRAM_EYES=0` to leave it off) watches a USB
-camera mounted at the Portrait's top edge, found by name (a Logitech Brio first; virtual cameras are
-skipped), and waits quietly until one is plugged in. MediaPipe's face landmarker gives his head's
-turn and tilt and where his irises sit; turn plus eyes within 6° of straight on, with his usual tilt
-(learned while he faces the camera), counts as looking at the glass (after 0.5 s; away after 1.5 s).
-Measured at the desk: on the glass his gaze sits within about 3°, the monitors start 9° and 15° out.
-At two feet his face is only a tenth of the Brio's wide frame, too small for MediaPipe (which shrinks
-its input to a small square), so the watcher looks at a square crop: around his face once it has
-found it, else the middle of the frame and each side in turn.
-While he looks, the Choom keeps to her facing-you clips and leans in a little, sometimes with a smile
-as he first looks, and the screensaver waits. Frames are never kept; only changes are sent and logged.
-Test on a video: `.venv-ears/bin/python tower_eyes.py --source clip.mp4 --print`. Setup:
-`.venv-ears/bin/pip install mediapipe opencv-python-headless`.
+camera at the Portrait's top edge, found by name (a Logitech Brio first; virtual cameras are skipped).
+It waits quietly until one is plugged in.
+
+**Gaze.**
+- MediaPipe's face landmarker gives the head's turn and tilt and where the irises sit.
+- Turn plus eyes within `yaw_limit` of straight on (6° by default), with the usual head tilt (learned
+  while you face the camera), counts as looking at the glass.
+- It takes 0.5 s of looking to count, and 1.5 s of looking away.
+- On a desk with the camera on the glass, gaze at the glass sits within about 3° and neighbouring
+  monitors start around 9°. Widen or narrow `yaw_limit` in the Camera tab to fit your desk.
+
+**Small faces.** At two feet a face is about a tenth of the Brio's wide frame, too small for MediaPipe,
+which shrinks its input to a small square. So the watcher looks at a square crop: around the face once
+it has found it, otherwise the middle of the frame and each side in turn.
+
+**Arrivals.** When nobody has been seen for a minute, a face counts only after it has stayed 1.5 s
+(`FACE_AFTER`), so a lone flash of a face wakes nothing. A face back within a minute counts at once.
+The face is gone after 3 s without one.
+
+While you look at her, the Choom keeps to her facing-you clips and leans in a little, and the
+screensaver waits. Frames are never written anywhere; only changes are sent and logged.
+
+Test on a video: `.venv-ears/bin/python tower_eyes.py --source clip.mp4 --print`.
+
+## The glass camera
+
+`tower_eyes.py` also answers on 127.0.0.1:8766:
+- the latest frame as a JPEG (kept in memory only);
+- the camera's state and adjustments;
+- its settings (`camera.json`), applied again whenever the camera starts.
+
+`camera_controls.py` sets the MX Brio's adjustments through V4L2: brightness, contrast, colour,
+sharpness, backlight compensation, exposure, white balance, focus, zoom, pan, tilt and anti-flicker.
+It sets the field of view (65°, 78° or 90°) through Logitech's vendor control unit. The light has no
+control on this model. Turning the camera off (`enabled: false`) releases it: the light goes out, and
+eye contact and the welcome back stop.
+
+**From the Choom app.** No port opens on the NUC:
+1. `lib/glass-camera.ts` sends a `camera_request` event down the hologram feed.
+2. `server.py` asks `tower_eyes.py`.
+3. The server posts the answer to `/api/hologram/camera/result`.
+
+Routes (home only):
+- `GET /api/hologram/camera`: the camera's state.
+- `POST /api/hologram/camera`: settings, `{controls: {...}}` or `{reset_controls: true}`.
+- `GET /api/hologram/camera/frame?overlay=1`: the preview. The overlay marks the face, green while
+  looking at the glass.
+
+**For the Chooms.** They ask for the `"glass"` camera with `ha_get_camera_snapshot`. The snapshot is
+saved and shown like their Home Assistant camera snapshots. It is refused when "Chooms can look
+through this camera" is off.
+
+**Settings** (`camera.json`):
+
+| Key | Default | |
+|---|---|---|
+| `enabled` | `true` | the camera in use at all |
+| `chooms` | `true` | the Chooms may take snapshots |
+| `eye_contact` | `true` | she turns to you when you look |
+| `yaw_limit` | `6.0` | degrees that count as looking at the glass |
+| `welcome`, `welcome_minutes` | `true`, `20` | the welcome back, and how long away first |
+| `controls` | `{}` | the camera's adjustments |
 
 ## Presence (Home Assistant)
 
-`server.py` checks Home Assistant every 5 seconds once these files exist in `~/.config/choom-hologram`
-(no restart needed; they stay out of git):
-
-- `ha_url`: e.g. `http://homeassistant.local:8123`
-- `ha_token`: a long-lived access token (HA profile, Security tab), `chmod 600`
-- `presence.json` (optional): roles to entities, each an entity id (present when it reads home, on,
-  detected or occupied) or `{"entity": ..., "equals": ...}`:
+`server.py` checks Home Assistant every 5 seconds once `ha_url` and `ha_token` exist.
+`presence.json` (optional) maps roles to entities. Each role is either an entity id, present when it
+reads home, on, detected, occupied or true, or `{"entity": ..., "equals": ...}`, present when it
+reads exactly that value:
 
 ```json
-{"home": {"entity": "sensor.phone_wi_fi_connection", "equals": "Home WiFi"},
- "desk": "binary_sensor.desk_zone", "bed": "binary_sensor.bed_zone"}
+{"home": {"entity": "sensor.phone_wi_fi_connection", "equals": "<home network>"},
+ "desk": "binary_sensor.desk_zone", "bed": "binary_sensor.bed_zone",
+ "shop": "binary_sensor.shop_presence"}
 ```
 
-Coming home or sitting at the desk wakes the Choom on the glass and she greets you; getting into bed
-puts the glass to sleep at any hour, getting up wakes it. Leaving counts only after two minutes away.
+- **No `home` role.** The server uses the owner's `person.` entity (the one named for the owner, or
+  the only one).
+- **Arriving and leaving.** Arriving counts at once. Leaving counts only after two minutes absent,
+  because phones drop Wi-Fi now and then.
+- **What each role does.**
+  - Coming home or sitting at the desk wakes the Choom on the glass, and she greets you.
+  - Getting into bed puts the glass to sleep at any hour; getting up wakes it.
+  - Any other role (a shop, a truck) is passed to the welcome back as where you were.
 
-## The glass camera (Settings → Camera)
+## Weather
 
-`tower_eyes.py` also answers on 127.0.0.1:8766: the latest frame as a JPEG (kept in memory only), the
-camera's state and adjustments, and its settings, kept in `camera.json` in the config folder and
-applied again whenever the camera starts. `camera_controls.py` sets the MX Brio's adjustments through
-V4L2 (brightness, contrast, color, sharpness, backlight compensation, exposure, white balance, focus,
-zoom, pan, tilt, anti-flicker) and its field of view (65°, 78° or 90°) through Logitech's vendor
-control unit. Its light has no control on this model; turning the camera off (`enabled: false`) lets
-go of it, which turns the light off and stops eye contact and the welcome back.
+`server.py` reads the town weather from the Choom app every 10 minutes. If `weather.json` maps any of
+`wind`, `gust`, `temperature` and `rain` to Home Assistant sensors, it reads those every 2 minutes
+instead:
 
-The Choom app reaches it without any port opening on the NUC: `lib/glass-camera.ts` sends a
-`camera_request` event down the hologram feed, `server.py` asks `tower_eyes.py` and posts the answer
-to `/api/hologram/camera/result`. Routes (home only): `GET /api/hologram/camera` (state),
-`POST /api/hologram/camera` (settings, `{controls: {...}}`, `{reset_controls: true}`),
-`GET /api/hologram/camera/frame?overlay=1` (the preview; the overlay marks his face, green while he's
-looking at the glass). The Chooms ask for the `"glass"` camera with `ha_get_camera_snapshot`; it's
-saved and shown like their Home Assistant camera snapshots, and refused when the Camera tab's
-"Chooms can look through this camera" is off. Settings also hold eye contact on or off, how wide
-counts as looking (`yaw_limit`), and the welcome back's switch and minutes (read by `server.py`).
+```json
+{"wind": "sensor.station_wind_average_10_minutes", "gust": "sensor.station_wind_gust",
+ "temperature": "sensor.station_temperature", "rain": "sensor.station_precipitation_intensity"}
+```
+
+- **Windy** means a 10-minute average of 12 mph or gusts of 20, held for 20 minutes after the last
+  such reading. While it's windy:
+  - she plays her wind clips now and then, in the look she has on (an outfit needs its own; it's the
+    Studio's Windy days pack);
+  - warm dust drifts through the glass.
+- **Rain** falls through the glass while `rain` (inches an hour) reads above zero. Without a mapped
+  gauge, the town report's description decides. **Snow** follows the report.
+- **A change in the sky** makes Genesis glance up (`skycheck`).
+- **Temperature** picks warm or cold outfits ([Looks and outfits](#looks-and-outfits)).
 
 ## The Chooms asking the glass
 
-The looking-glass skill in the Choom app (`skills/core/looking-glass`) gives each Choom three tools:
-`glass_move` (a move at her next quiet moment), `glass_wear` (clothes from her closet on the glass,
-kept until bedtime) and `glass_closet` (what she has, never what she has on). Like the camera, they
-travel over the hologram feed. `lib/glass-closet.ts` sends a `glass_request` event, then `server.py`
-matches it against her `alive.json` and the closet words Glass Studio writes to
-`portraits/<id>/closet.json`, using `tools/closet.py`. The server sends the page a `glass` event
-naming the clips to pick from, or the outfit, and posts the answer to `/api/hologram/glass/result`.
-- **Moves:** selfie moves, full-body clips, and clips named for a move (dance, wave, kiss). On the
-  page, a move plays from her current pose if she has it there. Otherwise she cuts to her full figure,
-  or goes through a pose change, as Aloy raises her hand first.
-- **Clothes:** an outfit is matched by garment, then colour, and a tie is a coin toss. A chosen
-  outfit takes priority over the time and weather rules until she sleeps or the day ends. It's kept
-  in the page's wardrobe, in localStorage.
-- **Wishes:** a request with no match goes in `portraits/<id>/wishes.json` (not in git), which the
-  Studio shows on its Plan page.
+The looking-glass skill in the Choom app (`skills/core/looking-glass`) gives each Choom four tools:
 
-To ask by hand from the Mac, use `POST /api/hologram/glass {choom, op, what}` (home only). On the
-NUC, use `POST 127.0.0.1:8765/glass` (answered locally). `/control {"glassReset": true}` forgets every
+| Tool | Does |
+|---|---|
+| `glass_move` | a move at her next quiet moment, if that comes within three minutes |
+| `glass_wear` | clothes from her closet on the glass, kept until bedtime unless she changes again |
+| `glass_closet` | what she has (moves and clothes), never what she has on |
+| `glass_wish` | puts clothes or a move she'd like on the wish list, without changing anything |
+
+**How a request travels.** Like the camera, these go over the hologram feed:
+1. `lib/glass-closet.ts` sends a `glass_request` event.
+2. `server.py` matches it with `tools/closet.py` against her `alive.json` and the closet words Glass
+   Studio writes to `portraits/<id>/closet.json`.
+3. The server sends the page a `glass` event naming the clips to pick from, or the outfit.
+4. It posts the answer to `/api/hologram/glass/result`.
+
+**Matching.**
+- **Moves:** selfie moves, full-body clips, and clips named for a move (dance, wave, kiss, and so on).
+  A move plays from her current pose if she has it there. Otherwise she cuts to her whole figure (in
+  the outfit she has on if it has its own full body), or goes through a pose change (Aloy raises her
+  hand first).
+- **Clothes:** only outfits she can wear (with a `talk` clip) are matched.
+  - A garment, colour or fabric she names has to be in the outfit: "a silk slip" never matches a
+    cotton dress.
+  - Scoring is 10 per garment, 3 per colour, 2 per other word.
+  - A tie between warm and cold night clothes goes by the temperature. Any other tie is a coin toss.
+  - The chosen outfit is kept in the page's wardrobe (localStorage).
+- **Wishes:** a move or clothes with no match, or anything asked with `glass_wish`, goes in
+  `portraits/<id>/wishes.json` (not in git). The Studio shows it on its Plan page.
+
+**By hand.** From the Mac, use `POST /api/hologram/glass {choom, op, what}` (home only). On the NUC,
+use `POST 127.0.0.1:8765/glass`, answered locally. `/control {"glassReset": true}` forgets every
 chosen outfit.
 
 ## Welcome back
 
-When Donny sits back down after 20 minutes or more away, the Choom he last talked with one to one
-welcomes him back. `server.py` counts him at the desk while the camera sees his face, or the NUC's
-keyboard or mouse was used in the last 30 seconds (GNOME's idle time) and the camera saw him in the
-last 5 minutes: GNOME also resets its idle time when the screens wake or the monitor layout is
-reapplied, which faked his return while he was out. When nobody has been seen for a minute,
-`tower_eyes.py` reports a face only once it has stayed 1.5 seconds (`FACE_AFTER`): on 2026-10-16 a
-lone flash of a face at 7:05 am, under a second, with nobody in view, woke the screens and Genesis
-welcomed an empty room. A face back within a minute counts at once, so eye contact stays quick.
-On his return it asks the
-Choom app's `POST /api/hologram/welcome {awayMinutes, place?}`. The app picks his most recent genuine
-conversation (`lastUserMessageAt`, skipped if older than 12 hours) and runs her turn there with a note
-(`note: true` on `/api/chat`): saved as a system message the chat window doesn't show, never counted
-as his words. She knows from their conversation where he went ("how did the shop check go?"). Not at
-night (11 pm to 7 am), at most every two hours, not while he's already talking, not in bed. A Home
-Assistant role he was in while away (a shop or truck sensor) is passed on as `place`. Every leaving
-and coming back is logged as `desk` in `telemetry.log`; `HOLOGRAM_WELCOME_AFTER_S` changes the 20
-minutes (for testing); `POST /control {"welcomeTest": 30}` sends one now. After her welcome, the
-tower's mic opens its reply window for her (`tower_ears.py` watches `/status` for it), so he
-can answer without "OK" and her name. The window waits for her answer to him, not for a turn of hers
-in a room (`chat_turns` in `/status` lists 1:1 turns only).
+When you sit back down after a while away (20 minutes by default), the Choom you last talked with one
+to one welcomes you back.
 
-A room running when she welcomes him (one a Choom opened from a heartbeat) stops before its next
-speaker: the welcome calls the room route's `PUT /api/group-chat {pause: true}`, and a Choom whose
-`talk_with_sisters` was running it is told it paused, not finished. When his conversation with her is
-over (the reply window closes unanswered), `tower_ears.py` posts `invited_done`, `server.py` sends
-`POST /api/hologram/welcome {done: true}`, and the room picks up where it stopped (`PUT {resume: true}`
-starts a keep-going run with the Choom who was next speaking first). A room that hadn't reached its
-next speaker yet just carries on; his own message to a paused room takes its place; a pause older than
-an hour is dropped. If the tower never says he's done, the room picks up after 15 minutes once the
-tower has been quiet for 2. Logged as `welcome` (`rooms_paused`) and `rooms` in `telemetry.log`.
+**Being at the desk.** `server.py` counts you at the desk while the camera sees your face, or while
+both of these hold:
+- the NUC's keyboard or mouse was used in the last 30 seconds (GNOME's idle time);
+- the camera saw you in the last 5 minutes.
 
-## Everything else on the page
+GNOME also resets its idle time when the screens wake or the monitor layout is reapplied, so input
+alone doesn't count. Without a camera, input alone decides.
 
-- **Group stage:** a group-room turn brings all four into the glass, the speaker in front (always the
-  one on the glass, drawn over her sisters); while the room is talking, a Choom's 1:1 reply comes to
-  the front of the stage instead of folding it away. Her
-  sisters behind her turned toward her; the turn passes by trading places. It folds back after three
-  quiet minutes or a 1:1 chat.
-- **Tool moments:** the glass flares and she plays a clip that fits the tool (`TOOL_LOOKS`): looking
-  around for a camera or picture, daydreaming for a memory search, a look at the sky for the weather.
-- **Thinking:** while she waits on her model (a heartbeat's tools can take minutes) she plays her base
-  loop and her calm facing clips, with a look up or down at most every 30 seconds.
-- **Pictures:** a picture she makes or analyzes floats beside her face for about ten seconds (a wide
-  one lower right). She turns to it with her picture looks; a look without them (an outfit) uses its
-  glance or look-down clip, and she doesn't look up while it's showing.
-- **Screensaver:** after two quiet minutes, a random Choom takes the glass every 3 to 5 minutes (not
-  while she sleeps, on the stage, or when someone is talking near the tower).
-- **Weather:** wind brings her wind clips (in the look she has on, so an outfit needs its own; the
-  Studio's Windy days pack) and drifting dust; rain and snow fall through the glass, leaning with the wind.
-  Windy means a 10-minute average of 12 mph or gusts of 20, held for 20 minutes after the last such
-  reading, read every 2 minutes from Donny's own weather station when `weather.json` in the config
-  folder maps `wind`, `gust` and `temperature` to Home Assistant sensors (OpenWeather's town readings
-  ran low and never reported gusts). With `rain` mapped to the station's rain rate, it rains on the
-  glass only while the gauge reads some; otherwise the town report decides (its "light rain" once
-  rained on the glass for half an hour of a dry afternoon). A sprinkle too light to register on the
-  gauge stays off the glass.
-- **Background turns:** heartbeats and delegated tasks that start at night run unseen, and so does a
-  heartbeat that starts during a conversation (the stage is up, someone is talking, or a chat in the
-  last three minutes), so it doesn't take the front or float its pictures in the middle of it.
+**The welcome.** On your return the server calls `POST /api/hologram/welcome {awayMinutes, place?}`:
+- The Choom app picks your most recent genuine conversation (`lastUserMessageAt`; skipped if older
+  than 12 hours).
+- It runs her turn there with a note (`note: true` on `/api/chat`). The note is saved as a system
+  message that the chat window doesn't show, and it never counts as your words.
+- She knows from your conversation where you went. A Home Assistant role you were in while away (a
+  shop, a truck) is passed on as `place`.
 
-## Portrait buttons and screens
+**When it's skipped.**
+- At night (11 pm to 7 am). After 4 hours or more away, you are welcomed from 5 am.
+- Within two hours of the last welcome.
+- While you're already talking (a conversation in the last 2 minutes).
+- While you're in bed.
+
+**After she welcomes you.** The tower's reply window opens for her (`tower_ears.py` watches
+`/status`), so you can answer without a wake phrase. The window waits for her answer to you, not for
+a turn of hers in a room.
+
+**Rooms.** A room the Chooms are running when she welcomes you stops before its next speaker:
+1. The Choom app pauses it (`PUT /api/group-chat {pause: true}`).
+2. A Choom whose `talk_with_sisters` was running it is told it paused, not finished.
+3. When your conversation with her is over (the reply window closes unanswered), `tower_ears.py`
+   posts `invited_done` and `server.py` sends `{done: true}`.
+4. The room picks up where it stopped, with the Choom who was next speaking first.
+
+Some cases run differently:
+- A room that hadn't reached its next speaker yet just carries on.
+- Your own message to a paused room takes its place.
+- A pause older than an hour is dropped.
+- If the tower never says you're done, the room picks up after 15 minutes, once the tower has been
+  quiet for 2.
+
+**Logging and tests.** Each leaving and returning is logged as `desk`. Welcomes and skips are logged as
+`welcome`, and paused rooms as `rooms`. `POST /control {"welcomeTest": 30}` sends a real welcome now,
+as if you had been away 30 minutes.
+
+## Portrait buttons
 
 Top = previous Choom, middle = next, hold bottom = listening (also interrupts her). `server.py` claims
-the buttons' input device, which needs this udev rule:
+the buttons' input device with `EVIOCGRAB`, so GNOME's media keys don't see them. It needs this udev
+rule (e.g. `/etc/udev/rules.d/99-looking-glass-portrait.rules`, then
+`sudo udevadm control --reload && sudo udevadm trigger`):
 
 ```
 SUBSYSTEM=="input", KERNEL=="event*", ATTRS{idVendor}=="05df", ATTRS{idProduct}=="16c0", GROUP="plugdev", MODE="0660"
 ```
 
-Only Donny wakes GNOME's blanked screens: the camera seeing him, "OK Eve" (any of them) at the tower,
-or a Portrait button press. The Chooms talking never do (a room they open at night, a heartbeat, a reply
-to his phone). The screens go dark again GNOME's idle delay (Screen Blank, 8 minutes) after the camera
-last saw him or the tower last heard him (his wake phrase or his answer), and the NUC's keyboard and
-mouse were last touched. The server does this part itself, because GNOME never blanks
-screens again that were woken without a touch; not while an app keeps them on (a video playing). If
-GNOME starts its fade to dark while the camera sees him, the server stops it. Each wake and blank is
-logged as `screens` in `telemetry.log`. The server also puts a monitor back in the layout if GNOME
-leaves it connected but off after an input switch.
+## Screens
+
+**Waking.** Only you wake GNOME's blanked screens, the Portrait included:
+- the camera seeing you;
+- a wake phrase at the tower;
+- a Portrait button.
+
+The Chooms' own activity never wakes them: a room they open at night, a heartbeat, a reply to your
+phone.
+
+**Blanking.** The screens go dark again after GNOME's idle delay (Settings → Power → Screen Blank) once
+all three hold:
+- the camera hasn't seen you for that long;
+- the tower hasn't heard you for that long (a wake phrase or a reply);
+- the keyboard and mouse haven't been touched for that long.
+
+The server does this itself, because GNOME never re-blanks screens that were woken without a touch.
+It doesn't blank while an app holds the screens on (a video playing). If GNOME starts its fade to dark
+while the camera sees you, the server stops it.
+
+**Display watchdog.** It puts a monitor back in the layout if GNOME leaves it connected but off after
+an input switch (`display_fix` in telemetry).
+
+Each wake and blank is logged as `screens`.
+
+## Everything else on the page
+
+- **Group stage.**
+  - A room turn brings the Chooms in that room to the glass, from two to four of them. All four come
+    when the room isn't known, as with "OK Chooms".
+  - The speaker stands in front, and her sisters stand smaller behind her, turned toward her. When the
+    turn passes, the two trade places.
+  - A Choom's 1:1 reply during a room comes to the front instead of folding the stage away.
+  - The stage folds back three minutes after the room goes quiet, or when you talk to one of them on
+    her own.
+- **Thinking.** While she waits on her model (a heartbeat's tools can take minutes) she plays her
+  base loop and her calm facing clips, with a look up or down at most every 30 seconds.
+- **Tool moments.** The glass flares and she plays a clip that fits the tool (`TOOL_LOOKS`):
+  - looking around for a camera, a picture or a search;
+  - daydreaming for a memory search;
+  - a look at the sky for the weather;
+  - a playful look while making an image.
+- **Mishaps.** A failed tool (`tool_failed`), or her saying a picture didn't come out right, brings
+  her `oops` face once, at most every two minutes.
+- **Pictures.**
+  - A picture she makes or analyzes floats for about 11 seconds (8 for a camera snapshot), drawn over
+    her. Tall pictures float beside her face, and wide ones lower right.
+  - She turns to it with her picture looks. A look without them (an outfit) uses its glance or
+    look-down clip.
+  - She doesn't look up while a picture is showing.
+- **Expressions.** A feeling in what you said plays before she answers (`FEELINGS` word lists; her
+  own spoken pieces are tagged the same way). An expression never starts mid-sentence. The first chat
+  after 8 hours or more opens with her lighting up.
+- **Night.**
+  - From 11 pm to 7 am, after ten quiet minutes, she yawns, dozes off and the glass dims. She dozes
+    off only if she has a sleep loop and a wake clip.
+  - Typing, talking, a reply, a button or 7 am wakes her.
+  - Heartbeats and delegated tasks that start at night run unseen.
+- **Background turns.** A heartbeat that starts during a conversation also runs unseen, so it doesn't
+  take the front or float its pictures mid-conversation. A conversation means the stage is up, someone
+  is talking, or there was a chat in the last three minutes.
+- **Screensaver.**
+  - After two quiet minutes, a random Choom takes the glass every 3 to 5 minutes.
+  - It doesn't switch while she's asleep or just woke, while the stage is up, while you look at her,
+    or while someone talks near the tower.
+  - A Choom who hasn't been on the glass for 45 minutes greets as she arrives.
 
 ## Debugging
 
-`POST /control` on the server:
+`POST /control` on the server (127.0.0.1:8765):
 
 | Body | Does |
 |---|---|
-| `{"choom": "eve"}` | switch Choom |
+| `{"choom": "eve"}`, `{"action": "next"}` / `"prev"` | switch Choom |
+| `{"listening": true}` | show her listening (`false` to stop) |
+| `{"voice": false}` | mute the glass (`true` to unmute); use it for tests at night |
 | `{"view": 24}` / `{"view": false}` | one of the 48 views full screen / back |
-| `{"quilt": true}` | the raw quilt |
-| `{"clip": 5}` | jump to a clip |
-| `{"stage": true}` | the group stage |
-| `{"sleep": true}`, `{"hour": 22}` | doze now, pretend it's 10 pm (`null` to stop) |
-| `{"weather": {"wind": 25}}` | pretend weather |
+| `{"quilt": true}` | the raw quilt (tile i at column i%8, row i//8 from the bottom) |
+| `{"clip": 5}` | jump to a clip of the Choom on the glass |
+| `{"stage": true, "room": ["Aloy", "Eve"]}` / `{"stage": false}` | the group stage (all four without `room`) |
+| `{"sleep": true}`, `{"hour": 22}` | doze now; pretend it's 10 pm (`null` to stop) |
+| `{"weather": {"wind": 25, "temperature": 40}}` | pretend weather (replaced by the next real reading) |
 | `{"presence": {"bed": true}}` | pretend presence (`null` clears a role) |
+| `{"gaze": true}` | pretend you're looking at the glass |
 | `{"picture": "<image id>"}` | float a gallery picture |
-| `{"gaze": true}` | pretend he's looking at the glass |
-| `{"mouthStyle": 3}`, `{"jaw": 0.6}` | try a mouth style (0 to 3), hold her mouth open (`null` to let go) |
+| `{"glassReset": true}` | forget clothes the Chooms chose |
+| `{"welcomeTest": 30}` | send a real welcome back now |
+| `{"mouthStyle": 3}`, `{"jaw": 0.6}` | try a mouth style (0 to 3); hold her mouth open (`null` to let go) |
+| `{"body": true}` | the experimental 3D body, if `bodies/<id>.glb` exists |
 
-`POST /simulate` injects a Choom-app event, e.g. `{"event": "tool", "choom": "Genesis", "tool": "get_weather"}`.
-`GET /status` shows the page, the feed, weather, presence and the listener's state. `telemetry.log`
-(rotated at 50 MB) records clips, lip sync, latency and listener events. `tools/deinterleave.py`
-rebuilds views from a screen grab, to check depth without standing in front of the Portrait.
+**Other hooks.**
+- `POST /simulate` injects a Choom-app event, e.g. `{"event": "tool", "choom": "Genesis", "tool": "get_weather"}`.
+  Use `"source": "test"` for spoken test lines, so they don't count as your conversation (the voice
+  defaults to hers).
+- `POST /glass` answers a glass request locally, e.g. `{"choom": "genesis", "op": "move", "what": "twirl"}`.
+- `GET /status` shows the page, the feed, weather, presence, camera, the welcome watch and the
+  listener's state.
+
+**Telemetry** (`telemetry.log`, JSON lines, rotated at 50 MB):
+
+| Kind | From | |
+|---|---|---|
+| `status` | page | every 2 s: Choom, mood, clip, fps, voice, paused, queue |
+| `alive-clip`, `choom`, `stage`, `quiet-turn` | page | clips played, Choom switches, the stage, screensaver turns |
+| `latency`, `lipsync`, `speak`, `gap` | page, server | voice timing |
+| `tool`, `picture`, `glass`, `chime`, `tuning`, `button`, `error` | page, server | moments, requests, keys, errors |
+| `ears`, `eyes`, `gaze-seen` | server, page | the tower's listener and camera (never words or frames) |
+| `desk`, `welcome`, `rooms` | server | welcome back |
+| `screens`, `display_fix`, `weather`, `camera` | server | screens, monitor layout, weather changes, camera settings and snapshots |
+
+`tools/deinterleave.py OUT.jpg [view ...]` grabs the Portrait and rebuilds individual views. Use it to
+check depth without standing in front of the glass; run it with a Python that has numpy and Pillow.
 
 ## Still portraits (fallback)
 
@@ -384,5 +659,5 @@ U2NET_HOME=~/pinokio/api/wan2gp/app/ckpts/rembg ~/pinokio/api/wan2gp/app/venv/bi
 ~/pinokio/api/forge-neo/app/venv/bin/python tools/make_landmarks.py
 ```
 
-`body.js` can show a rigged 3D avatar instead (`bodies/<id>.glb`, B toggles); it is kept for
-experiments, but the moving reliefs are what look like the Chooms.
+`body.js` can show a rigged 3D avatar instead (`bodies/<id>.glb`; B with the readout up). It is kept
+for experiments; the moving reliefs are what look like the Chooms.

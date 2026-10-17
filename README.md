@@ -664,9 +664,12 @@ On the app side:
   or to the Signal room.
 - **Welcome back:** `/api/hologram/welcome` has the Choom he last talked with welcome him back when
   he sits down after a while away, from a note in her chat (`note: true` on `/api/chat`: saved as a
-  system message, hidden in the chat window, never counted as his words).
+  system message, hidden in the chat window, never counted as his words). A room the Chooms are running
+  pauses before its next speaker (`PUT /api/group-chat {pause: true}`) and resumes when he's done
+  (`{done: true}` on the welcome route).
 - **Her own mishaps:** a failed tool reaches the hologram as `tool_failed`, so she can make a face.
 - **The glass camera:** Settings → Camera shows the camera on the glass live (for aiming it), its adjustments, and whether the Chooms may use it; they ask for the `"glass"` camera with `ha_get_camera_snapshot` (`lib/glass-camera.ts` asks the hologram over its feed).
+- **The Chooms asking the glass:** the `looking-glass` skill gives each Choom `glass_move`, `glass_wear`, `glass_closet` and `glass_wish` (`lib/glass-closet.ts`, over the same feed). She can play a move she has, wear clothes from her closet on the glass, see what she has (never what she has on), or put something new on the wish list in Glass Studio.
 
 ## Memory System (`memories.db` & `dev.db`)
 
@@ -1880,11 +1883,14 @@ SQLite via Prisma ORM. (dev.db)
 - `GET /api/hologram/voice` - Whether the hologram has the voice (browsers at home stay quiet); `?chat=` / `?room=` reports the open conversation
 - `POST /api/hologram/voice` - Hologram heartbeat (every 10 s while it runs)
 - `POST /api/hologram/mute` - The web app's mute button reaching the hologram
+- `POST /api/hologram/listening` - Typing or the mic in the chat input at home (she turns to listen)
 - `POST /api/hologram/talk` - Words heard at the tower, into her chat or the Signal room
 - `POST /api/hologram/welcome` - The Choom he last talked with welcomes him back (a hidden note in her chat)
 - `GET/POST /api/hologram/camera` - The glass camera's state and settings (Settings → Camera)
 - `GET /api/hologram/camera/frame` - Its current picture (the preview)
 - `POST /api/hologram/camera/result` - The hologram's answer to a camera request
+- `POST /api/hologram/glass` - A glass request by hand (`{choom, op: move|wear|closet|wish, what}`; home only)
+- `POST /api/hologram/glass/result` - The hologram's answer to a Choom's glass request
 
 ### Home Assistant
 - `GET /api/homeassistant` - Server-side proxy to Home Assistant API (avoids CORS). Actions: `test` (connection test), `entities` (browse all), `state` (single entity), `history` (entity history)
