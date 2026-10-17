@@ -1113,6 +1113,15 @@ const canSleep = (p) => p.alive && p.alive.clips.some((c) => clipMoods(c).includ
 
 // A clip that gets her into a mood from the pose she's in: one that starts here, or else the pose
 // change that leads to a pose where one starts (Aloy lowers her hand before she waves or sleeps).
+// Stand-ins for a feeling in a look without its expression clip (every outfit, so far), by clip name.
+const FEEL_LIKE = {
+  happy: /[_-](laugh|softlaugh|smile|grin|giggle|chuckle|proud)\d*\.mp4$/,
+  surprised: /[_-](brows|eyebrow|curious)\d*\.mp4$/,
+  concerned: /[_-](tilt|slowblink)\d*\.mp4$/,
+  sad: /[_-](lookdown|sigh|eyesclose)\d*\.mp4$/,
+  oops: /[_-](shrug|headshake|shy|sigh)\d*\.mp4$/,
+};
+
 function seekClip(p, pose, wanted, after = -1) {
   const clips = p.alive.clips;
   const ks = clips.map((c, k) => k);
@@ -1222,14 +1231,22 @@ function nextClip(p, after) {
   const all = clips.map((c, k) => k).filter((k) => poseFrom(clips[k]) === pose);
   // Saying (or just hearing) something happy, sad, surprised or worried: that expression, once.
   // From another pose she gets there first (Aloy raises her hand, then smiles). Never mid-sentence:
-  // a laughing face fights her lip sync, so a feeling from her own words waits until she's done.
-  if ((want === 'think' || want === 'idle') && p.mishapPending && !p.emotion) {
+  // a laughing face fights her lip sync, so a feeling from her own words waits until she's done
+  // (feelSaid). Him only looking at her (the camera) is no reason to hold a feeling back.
+  const free = want === 'think' || want === 'idle' || (want === 'listen' && !heard());
+  if (free && p.mishapPending && !p.emotion) {
     p.mishapPending = false;
     p.emotion = 'oops';
   }
-  if ((want === 'think' || want === 'idle') && p.emotion) {
-    const felt = seekClip(p, pose, p.emotion, after);
-    const arrived = felt >= 0 && clipMoods(clips[felt]).includes(p.emotion);
+  if (free && p.emotion) {
+    let felt = seekClip(p, pose, p.emotion, after);
+    let arrived = felt >= 0 && clipMoods(clips[felt]).includes(p.emotion);
+    if (felt < 0 && FEEL_LIKE[p.emotion]) {
+      // The expressions are made for her usual clothes; in an outfit, the nearest clip it has.
+      const like = all.filter((k) => k !== after && poseTo(clips[k]) === pose && !/talk_/.test(clips[k].source || '') &&
+                                     FEEL_LIKE[p.emotion].test(clips[k].source || ''));
+      if (like.length) [felt, arrived] = [like[Math.floor(Math.random() * like.length)], true];
+    }
     if (felt < 0 || arrived) p.emotion = null;
     if (arrived) (p.moments ||= new Set()).add(felt); // played out in full, not hurried
     if (felt >= 0) return felt;
@@ -1768,9 +1785,7 @@ function onGlass(ev) {
     w.chosen = { o: ev.wear || null, at: Date.now() };
     saveWardrobe(p);
   }
-  // Swap the waiting clip now, unless the hand-over to it is under way or an expression waits there.
-  const a = p.players?.[p.active], b = p.players?.[1 - p.active];
-  if (p === portraits[current] && a && b && a.clip >= 0 && !a.video.ended && b.video.paused && !p.moments?.has(b.clip)) aliveLoad(p, b, nextClip(p, a.clip));
+  swapWaiting(p);
   post('glass', { choom: p.id, move: ev.name || null, wear: 'wear' in ev ? ev.wear || 'usual' : undefined });
 }
 
@@ -1962,7 +1977,7 @@ function choomIndex(name) {
 }
 
 // Join short sentences into chunks of up to ~260 characters: fewer TTS calls, natural phrasing.
-// What a sentence she says feels like, for an expression clip while she says it. Plain word lists:
+// What a sentence she says feels like, for an expression clip once she's done. Plain word lists:
 // instant, and wrong only in harmless ways (a missed feeling just means her calm face).
 const FEELINGS = [
   ['sad', /\b(sorry to hear|i'm so sorry|so sorry|heartbreaking|passed away|i miss|miss you|grief|lonely|that's rough|unfortunately)\b/i],
@@ -2211,7 +2226,10 @@ function onChoomEvent(ev) {
     case 'turn_end':
     case 'error':
       if (lastTurn && lastTurn.index === i) lastTurn.open = false;
-      if (!speech.busy && !speech.queue.length) mood = 'idle';
+      if (!speech.busy && !speech.queue.length) {
+        mood = 'idle';
+        feelSaid();
+      }
       if (clocks.has(ev.choom)) {
         const c = clocks.get(ev.choom);
         c.ended = true;
@@ -2278,10 +2296,9 @@ async function runSpeech() {
         else if (c.lastEnd) c.gaps.push(now - c.lastEnd);
         c.pieces++;
       }
-      // An expression clip for what she's saying, if this piece feels a certain way.
-      portraits[item.index].emotion = item.feeling || null;
+      // What she's saying feels a certain way: that expression once her turn is over (feelSaid).
+      if (item.feeling) portraits[item.index].saidFeeling = item.feeling;
       await play(audio);
-      portraits[item.index].emotion = null;
       syncReport(c);
       if (c) {
         c.lastEnd = performance.now();
@@ -2302,7 +2319,28 @@ function afterSpeech() {
     mood = 'thinking';
   } else {
     mood = 'idle';
+    feelSaid();
   }
+}
+
+// Her turn is over and she has stopped talking: the feeling of the last thing she said that had one
+// plays now, once. (While she talks it would fight her lip sync; between pieces of a reply still
+// coming in she would be talking again a moment later.)
+function feelSaid() {
+  for (const p of portraits) {
+    if (p.saidFeeling) {
+      p.emotion ||= p.saidFeeling;
+      swapWaiting(p); // the clip queued while she talked would hold it back several seconds
+    }
+    p.saidFeeling = null;
+  }
+}
+
+// Something just became wanted (an expression, a move, clothes): choose the waiting clip again now,
+// unless the hand-over to it is under way or an expression already waits there.
+function swapWaiting(p) {
+  const a = p.players?.[p.active], b = p.players?.[1 - p.active];
+  if (p === portraits[current] && a && b && a.clip >= 0 && !a.video.ended && b.video.paused && !p.moments?.has(b.clip)) aliveLoad(p, b, nextClip(p, a.clip));
 }
 
 function setVoice(on) {
@@ -2314,6 +2352,7 @@ function setVoice(on) {
 function stopSpeech() {
   speech.epoch++;
   speech.queue.length = 0;
+  for (const p of portraits) p.saidFeeling = null; // cut off: no reaction to words she didn't finish
   clocks.clear(); // interrupted turns aren't latency samples
   try { speech.source?.stop(); } catch { /* already stopped */ }
   speech.busy = false;

@@ -586,9 +586,12 @@ Each wake and blank is logged as `screens`.
   - She turns to it with her picture looks. A look without them (an outfit) uses its glance or
     look-down clip.
   - She doesn't look up while a picture is showing.
-- **Expressions.** A feeling in what you said plays before she answers (`FEELINGS` word lists; her
-  own spoken pieces are tagged the same way). An expression never starts mid-sentence. The first chat
-  after 8 hours or more opens with her lighting up.
+- **Expressions.** A feeling in what you said plays before she answers (`FEELINGS` word lists). A
+  feeling in what she says plays once her turn is over and she has stopped talking (the last one she
+  said), never mid-sentence. You looking at her doesn't hold one back. In a look without that
+  expression (most outfits, until the Studio's Expressions pack is rendered for them) she plays its
+  nearest clip instead (`FEEL_LIKE`: a smile or laugh, raised brows, a head tilt, a look down, a shrug).
+  The first chat after 8 hours or more opens with her lighting up.
 - **Night.**
   - From 11 pm to 7 am, after ten quiet minutes, she yawns, dozes off and the glass dims. She dozes
     off only if she has a sleep loop and a wake clip.
