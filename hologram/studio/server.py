@@ -166,12 +166,7 @@ class Handler(BaseHTTPRequestHandler):
                                                                         "seconds": a.get("seconds", 5)} for a in lib["actions"]]})
         if parts[:2] == ["api", "jobs"]:
             with jobs.lock:
-                return self.send_json({"jobs": jobs.recent(40), "worklist": jobs.state()})
-        if parts[:2] == ["api", "housekeeping"]:
-            days = int(urllib.parse.parse_qs(url.query).get("takes_days", ["30"])[0])
-            report = housekeeping.survey(days, active_queues(), active_runs())
-            return self.send_json({k: ({kk: vv for kk, vv in v.items() if kk != "files"} if k in housekeeping.CATEGORIES else v)
-                                   for k, v in report.items()})
+                return self.send_json({"jobs": jobs.recent(40)})
         return self.send_error(404)
 
     # --- POST ----------------------------------------------------------------------------------
@@ -251,14 +246,6 @@ class Handler(BaseHTTPRequestHandler):
             elif action == "plan":
                 library = {(a["pack"], a["key"]): a for a in plan.library()["actions"]}
                 items = [library[(i["pack"], i["key"])] if "pack" in i else i for i in data["items"]]
-            if parts == ["api", "jobs", "pause"]:
-                return self.send_json({"worklist": jobs.pause()})
-            if parts == ["api", "jobs", "resume"]:
-                return self.send_json({"worklist": jobs.resume()})
-            if parts == ["api", "housekeeping"]:
-                cats = [str(c) for c in data.get("categories", [])]
-                freed = housekeeping.clean(cats, int(data.get("takesDays", 30)), active_queues(), active_runs())
-                return self.send_json({"freed": freed})
                 results = plan.add(proj, data["look"], items)
                 return self.send_json({"results": results, "choom": details(proj)})
             elif action == "change":  # a change of clothes on screen, from one look to another

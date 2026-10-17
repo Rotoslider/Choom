@@ -319,8 +319,8 @@ $('#makeSheets').addEventListener('click', attempt(async () => {
 
 function play(name, url = clipUrl(name), label = name) {
   const v = $('#playerVideo');
-  v.src = clipUrl(name);
-  $('#playerName').textContent = name;
+  v.src = url;
+  $('#playerName').textContent = label;
   $('#player').showModal();
   v.play().catch(() => {});
 }
