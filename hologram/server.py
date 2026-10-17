@@ -216,11 +216,7 @@ def display_watchdog():
         entry = {"kind": "display_fix", "time": time.strftime("%Y-%m-%dT%H:%M:%S"), "stuck": stuck,
                  "command": " ".join(cmd[1:]), "ok": result.returncode == 0, "error": result.stderr.strip()[:200]}
         latest["display_fix"] = entry
-        with log_lock:
-            if LOG.exists() and LOG.stat().st_size > LOG_MAX_BYTES:
-                LOG.replace(LOG.with_suffix(".log.1"))  # keep one old log; status lines add ~9 MB a day
-            with LOG.open("a") as f:
-                f.write(json.dumps(entry) + "\n")
+        write_log(entry)
 
 
 # --- Choom app feed -------------------------------------------------------------------------
@@ -390,10 +386,24 @@ def idle_seconds():
         return None
 
 
+def write_log(entry):
+    """One JSON line in telemetry.log. Every writer goes through here (the page's posts, the server's own
+    entries, the display watchdog), so lines never interleave and the log rotates at LOG_MAX_BYTES with one
+    old log kept. Rotation used to live in the display watchdog alone and the log grew to 88 MB."""
+    line = json.dumps(entry) + "\n"
+    with log_lock:
+        try:
+            if LOG.stat().st_size > LOG_MAX_BYTES:
+                LOG.replace(LOG.with_suffix(".log.1"))  # status lines add ~9 MB a day
+        except FileNotFoundError:
+            pass
+        with LOG.open("a") as f:
+            f.write(line)
+
+
 def log_entry(entry):
     entry.setdefault("time", time.strftime("%Y-%m-%dT%H:%M:%S"))
-    with log_lock, LOG.open("a") as f:
-        f.write(json.dumps(entry) + "\n")
+    write_log(entry)
 
 
 def send_welcome(seconds, place):
@@ -887,8 +897,7 @@ class Handler(SimpleHTTPRequestHandler):
         entry.setdefault("time", time.strftime("%Y-%m-%dT%H:%M:%S"))
         latest[entry.get("kind", "unknown")] = entry
         received_at[entry.get("kind", "unknown")] = time.time()
-        with LOG.open("a") as f:
-            f.write(json.dumps(entry) + "\n")
+        write_log(entry)
 
     def _stream_events(self):
         self.send_response(200)
@@ -924,6 +933,15 @@ class Handler(SimpleHTTPRequestHandler):
         pass
 
 
+class Server(ThreadingHTTPServer):
+    def handle_error(self, request, client_address):
+        # The page closing a connection mid-file (a reload, a video swapped out) is routine; anything
+        # else still prints its traceback to server.log.
+        if isinstance(sys.exc_info()[1], (BrokenPipeError, ConnectionResetError)):
+            return
+        super().handle_error(request, client_address)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8765)
@@ -936,4 +954,4 @@ if __name__ == "__main__":
     threading.Thread(target=presence_watch, daemon=True).start()
     threading.Thread(target=welcome_watch, daemon=True).start()
     threading.Thread(target=screen_watch, daemon=True).start()
-    ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()
+    Server(("127.0.0.1", args.port), Handler).serve_forever()

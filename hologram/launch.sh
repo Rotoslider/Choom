@@ -14,6 +14,15 @@ PAGE="${1:-living}"
 
 CHOOM_URL="${CHOOM_URL:-http://donnys-mac-studio-3.local:3000}"
 
+# Logs are appended, so a crash's traceback survives the next relaunch (they were emptied on every one,
+# 44 a week), and each is rotated past 5 MB with one old copy kept. Prints the path for a redirect.
+logto() {
+  local f="$DIR/$1"
+  if [[ -f "$f" && $(stat -c %s "$f") -gt 5000000 ]]; then mv -f "$f" "$f.1"; fi
+  printf '\n== %s launch ==\n' "$(date '+%F %T')" >> "$f"
+  echo "$f"
+}
+
 stop_all() {
   pkill -f -- "--user-data-dir=$PROFILE" || true
   pkill -f -- "$DIR/server.py" || true
@@ -48,20 +57,20 @@ Y=${POS#*+}
 
 stop_all
 sleep 0.5
-nohup python3 "$DIR/server.py" --port "$PORT" > "$DIR/server.log" 2>&1 &
+nohup python3 "$DIR/server.py" --port "$PORT" >> "$(logto server.log)" 2>&1 &
 sleep 0.5
 # The tower's ears ("OK Aloy"), when their venv is set up (see README); HOLOGRAM_EARS=0 turns them off.
 if [[ -x "$DIR/.venv-ears/bin/python" && "${HOLOGRAM_EARS:-1}" != 0 ]]; then
-  nohup "$DIR/.venv-ears/bin/python" "$DIR/tower_ears.py" > "$DIR/ears.log" 2>&1 &
+  nohup "$DIR/.venv-ears/bin/python" "$DIR/tower_ears.py" >> "$(logto ears.log)" 2>&1 &
 fi
 # The tower's eyes (is he looking at the glass?); they wait quietly until a camera is plugged in.
 if [[ -x "$DIR/.venv-ears/bin/python" && "${HOLOGRAM_EYES:-1}" != 0 ]]; then
-  nohup "$DIR/.venv-ears/bin/python" "$DIR/tower_eyes.py" > "$DIR/eyes.log" 2>&1 &
+  nohup "$DIR/.venv-ears/bin/python" "$DIR/tower_eyes.py" >> "$(logto eyes.log)" 2>&1 &
 fi
 # Glass Studio (studio/README.md) on port 8767, if it isn't already up. Relaunches leave it running,
 # so a render it started keeps its watcher; HOLOGRAM_STUDIO=0 turns it off.
 if [[ "${HOLOGRAM_STUDIO:-1}" != 0 ]] && ! pgrep -f -- "^python3 .*studio/studio\.py serve" > /dev/null; then
-  setsid nohup python3 "$DIR/studio/studio.py" serve > "$DIR/studio/studio.log" 2>&1 < /dev/null &
+  setsid nohup python3 "$DIR/studio/studio.py" serve >> "$(logto studio/studio.log)" 2>&1 < /dev/null &
 fi
 
 # The glass takes the keyboard when its window opens; give it back to the window that had it (a space
@@ -79,6 +88,6 @@ nohup google-chrome \
   --ignore-gpu-blocklist \
   --disable-features=HardwareMediaKeyHandling,Translate \
   --autoplay-policy=no-user-gesture-required \
-  "http://127.0.0.1:$PORT/$PAGE.html" > "$DIR/chrome.log" 2>&1 &
+  "http://127.0.0.1:$PORT/$PAGE.html" >> "$(logto chrome.log)" 2>&1 &
 
 echo "Opening $PAGE on the Portrait at +$X+$Y"
