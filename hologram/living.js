@@ -1116,7 +1116,7 @@ const canSleep = (p) => p.alive && p.alive.clips.some((c) => clipMoods(c).includ
 // Stand-ins for a feeling in a look without its expression clip (every outfit, so far), by clip name.
 const FEEL_LIKE = {
   happy: /[_-](laugh|softlaugh|smile|grin|giggle|chuckle|proud)\d*\.mp4$/,
-  surprised: /[_-](brows|eyebrow|curious)\d*\.mp4$/,
+  surprised: /[_-](brows|eyebrow|curious|surprised)\d*\.mp4$/,
   concerned: /[_-](tilt|slowblink)\d*\.mp4$/,
   sad: /[_-](lookdown|sigh|eyesclose)\d*\.mp4$/,
   oops: /[_-](shrug|headshake|shy|sigh)\d*\.mp4$/,
@@ -1177,7 +1177,9 @@ const THINK_LOOK_GAP_MS = 30000;
 function suits(p, k) {
   const want = wantedMood(p);
   const c = p.alive.clips[k];
-  return clipMoods(c).includes(want) || (p.moments?.has(k) && want !== 'listen' && want !== 'sleep') ||
+  // A moment (expression, tool look) plays out, except into sleep or while he types or talks to her:
+  // him only looking at her (the camera) doesn't cut it short.
+  return clipMoods(c).includes(want) || (p.moments?.has(k) && want !== 'sleep' && (want !== 'listen' || !heard())) ||
          joinsMood(want, c) ||
          ((p.emotion || p.poseWanted || p.moveWanted || chosenOutfit(p) !== undefined) && poseFrom(c) !== poseTo(c)); // on her way to an expression, a move or her clothes
 }
