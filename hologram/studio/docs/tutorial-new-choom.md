@@ -279,7 +279,7 @@ Once she's on the glass she can ask for her own moves and clothes: `glass_move("
 `glass_wear("my red dress")`, `glass_closet()` to see what she has, and `glass_wish("…")` for
 something she'd like made. These come from the looking-glass skill in the Choom app. Anything she
 asks for and hasn't got appears as a wish at the top of Plan & render, with a button to start making
-it, so her ideas become your list. See
+it, so her ideas become your list; **Made it** moves one to her list of wishes that came true. See
 [What the Chooms can ask for](../README.md#what-the-chooms-can-ask-for).
 
 ### Ideas that need more than the Studio has yet

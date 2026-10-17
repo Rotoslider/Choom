@@ -146,9 +146,10 @@ The flags (background, push-in, color, seam, cut) are hints from the automatic c
 in six fails. Here 15 of 16 came out clean; the seven-second long calm loop pushed in, lost her motes
 and snapped back at the end, was flagged four ways, and was dropped.
 
-Use **Keep** (K), **Drop** (D), or **Re-roll** (R). A re-roll goes back into the plan with a new seed;
-change its wording or length there if you like, then render it again. The old take is kept in
-`clips/takes/`.
+Use **Keep** (K), **Drop** (D), or **Re-roll** (R); the keyboard moves on to the next card. A re-roll
+goes back into the plan with a new seed; change its wording or length there if you like, then render
+it again. The old take is kept in `clips/takes/`, and once the new one lands its card shows
+**Earlier takes**: watch the old one, or **Use it** to bring it back if the new take came out worse.
 
 ## 7. Put the outfit on the glass
 
@@ -188,9 +189,12 @@ wears the outfit.
 2. Under **What she wears below the waist**, say what Klein should add below the outfit's picture:
    *the dress falling to her ankles, and strappy silver heels*. Her top comes from the outfit's
    picture; words about it would change it and be said twice in the new look's subject line.
-3. Check the instruction keeps her signature things. A look made from another look often has no Klein
-   line of its own, so the instruction keeps only "her face, expression, hair and pose": add her
-   glasses, her motes, and the dress itself.
+3. Check the instruction keeps her signature things. It starts from the outfit's **What Klein
+   keeps** (on its look card; an outfit inherits it from the look it was made from): for the burgundy
+   dress that's her face, glasses, hair and motes, and the Studio adds "and her clothes". A full body
+   stands relaxed, so anything in that list about her arms, hands or pose is left out (Eve's crossed
+   arms), and what she holds stays without how she holds it (Optic's heart). Add anything else by
+   hand.
 
    ![The full-body form for the burgundy dress](images/outfit-full-body.jpg)
 
@@ -253,4 +257,8 @@ light"), then render the clips.
   that would steer every picture they make. They can see what their closet holds with
   `glass_closet`, and change into an outfit with `glass_wear` once it's built. Clothes they ask for
   and don't have yet show up as wishes on the Plan page; **New outfit** on a wish starts this
-  tutorial with her words in "She now wears".
+  tutorial with her words in "She now wears". Once it's on the glass, **Made it** moves the wish to
+  her list of wishes that came true.
+- **Expressions and Oops for the outfit** give her real faces in it; without them she borrows the
+  outfit's nearest clip (a smile, raised brows). **Plan for many looks at once** on the Plan page
+  plans them for all her outfits in one step, with a preview of the render time.
