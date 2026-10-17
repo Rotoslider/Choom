@@ -308,3 +308,7 @@ button.small { padding: 3px 10px; font-size: 12px; }
 .wishes-done .wish span { color: var(--muted); }
 .takes { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; font-size: 12px; margin: 2px 0 6px; }
 .take { display: inline-flex; gap: 2px; }
+.ask-input { display: grid; gap: 4px; color: var(--muted); font-size: 12px; margin: 8px 0 14px; }
+.ask-input input { background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font: 13px var(--mono); }
+button.primary.danger { background: var(--warn); }
+.look-card .row { flex-wrap: wrap; }

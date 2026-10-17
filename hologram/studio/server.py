@@ -21,7 +21,7 @@ import plan
 import prompts
 import render
 from config import CFG, CLIPS, PICTURES, PORTRAITS, SHEETS, WORKSPACE, ensure_workspace
-from project import STATUSES, Project, base_of, editing, next_seeds, outfit_of
+from project import STATUSES, LookHasDropped, Project, base_of, editing, next_seeds, outfit_of
 
 WEB = Path(__file__).resolve().parent / "web"
 NAME = re.compile(r"^[a-z0-9][a-z0-9_@\-]*$")
@@ -295,6 +295,17 @@ class Handler(BaseHTTPRequestHandler):
                 status = proj.use_take(data["name"], int(data["index"]))
                 jobs.add("review", {"choom": cid, "clips": [data["name"]]})
                 return self.send_json({"status": status, "choom": details(proj)})
+            elif action == "deletelook":  # a look out of her project (refused while clips use it)
+                try:
+                    gone = proj.delete_look(data["look"], bool(data.get("withDropped")))
+                except LookHasDropped as e:  # only dropped clips use it: the page asks before they go too
+                    return self.send_json({"error": str(e), "dropped": e.count}, 409)
+                proj.write_closet()
+                return self.send_json({"deleted": gone, "choom": details(proj)})
+            elif action == "renameoutfit":  # an outfit, its looks, clips and files under a new name
+                names = proj.rename_outfit(data["from"], data["to"], built_clips(cid))
+                proj.write_closet()
+                return self.send_json({"renamed": names, "choom": details(proj)})
             elif action == "plan":
                 library = {(a["pack"], a["key"]): a for a in plan.library()["actions"]}
                 items = [library[(i["pack"], i["key"])] if "pack" in i else i for i in data["items"]]

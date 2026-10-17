@@ -235,6 +235,14 @@ clothes to it, and a full body, which stands relaxed, leaves out what the list s
 hands or pose (Eve's "her arms crossed in front of her" would keep her arms crossed in every full
 body) and keeps what she holds without how she holds it (Optic's heart). The prompt is shown before
 Klein runs, so either can still be changed by hand.
+**Rename outfit** (on an outfit's cards) gives the outfit a new name: all its looks (`main@`,
+`relaxed@`, `full@`, `asleep@`), its clips and their files in `clips/`, sheets and earlier takes move
+to it, change-of-clothes clips into it too, since a clip's name says which look it's in. The name
+starts with when she wears it (day, hot, evening, cold or night), so a rename can change that. It's
+refused while any of its clips is queued, placed on the glass or built: take them off the glass and
+build first. **Delete look** takes a look out of her project (its picture file stays in `clean/`).
+It's refused for her main look and while clips that aren't dropped use it; if only dropped clips use
+it, the page asks before deleting them with it. Both ask in the page before doing anything.
 
 #### New look
 

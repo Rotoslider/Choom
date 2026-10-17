@@ -849,8 +849,62 @@ function renderLooks() {
         el('label', {}, 'Keep line', keep), el('label', {}, 'Loop ending', ending),
         kleinKeep ? el('label', { tip: 'What Klein keeps of her when a new look starts from this one (an outfit, its full body, her asleep): her face and what makes her herself, like Genesis\'s glasses and motes or Optic\'s headphones and heart. Outfits made from this look inherit it. A full body adds her clothes and leaves out her arms, hands and pose, since it stands relaxed' }, 'What Klein keeps', kleinKeep) : null,
         closet && el('label', { tip: 'Words she can ask for this outfit by (“my red dress”): the garment, its colour. Read from what she wears unless you change them; empty goes back to those' }, 'Closet words', closet),
-        el('div', { className: 'row' }, save)));
+        el('div', { className: 'row' }, save, ...lookTools(look))));
   }));
+}
+
+// Renaming an outfit (all its looks, clips and their files move; project.rename_outfit) and deleting a
+// look (project.delete_look), each confirmed in the page first.
+function lookTools(look) {
+  const o = look.split('@')[1];
+  return [
+    o ? el('button', { className: 'ghost', type: 'button', onclick: attempt(() => renameOutfit(o)), tip: `Give the outfit ${o} a new name: its looks, clips and their files all move. The name starts with when she wears it (day, hot, evening, cold, night). Not while its clips are on the glass` }, 'Rename outfit') : null,
+    look !== 'main' ? el('button', { className: 'ghost', type: 'button', onclick: attempt(() => deleteLook(look)), tip: 'Take this look out of her project (its picture file stays). Not while clips that aren\'t dropped use it' }, 'Delete look') : null,
+  ].filter(Boolean);
+}
+async function renameOutfit(o) {
+  const looks = Object.keys(state.choom.looks).filter((l) => l.split('@')[1] === o);
+  const to = await ask({ title: `Rename the outfit ${o}`, text: `Its looks (${looks.join(', ')}), its clips and their files get the new name. It starts with when she wears it: day, hot, evening, cold or night.`, input: 'New name', value: o, ok: 'Rename' });
+  if (!to || to === o) return;
+  const r = await api(`/api/choom/${state.cid}/renameoutfit`, { from: o, to: to.trim().toLowerCase() });
+  state.choom = r.choom;
+  toast(`${o} is ${to} now: ${looks.length} looks and ${Object.keys(r.renamed).length} clips renamed`);
+  render();
+}
+async function deleteLook(look) {
+  if (!(await ask({ title: `Delete ${look}?`, text: 'It goes from her project; its picture file stays in clean/. Clips that use it have to be dropped (or removed from the plan) first.', ok: 'Delete', danger: true }))) return;
+  let r;
+  try {
+    r = await api(`/api/choom/${state.cid}/deletelook`, { look });
+  } catch (e) {
+    if (!/dropped clip/.test(e.message)) throw e;
+    if (!(await ask({ title: `Delete ${look} and its dropped clips?`, text: `${e.message}, with their history. Their files stay in clips/.`, ok: 'Delete both', danger: true }))) return;
+    r = await api(`/api/choom/${state.cid}/deletelook`, { look, withDropped: true });
+  }
+  state.choom = r.choom;
+  toast(`${look} deleted${r.deleted.length ? `, with ${r.deleted.length} dropped clip${r.deleted.length > 1 ? 's' : ''}` : ''}`);
+  render();
+}
+// A question in the page (the browser's own confirm and prompt can't be styled or tested): resolves
+// to true, the typed text, or null when cancelled.
+function ask({ title, text, input, value = '', ok = 'OK', danger = false }) {
+  const d = $('#askDialog');
+  $('#askTitle').textContent = title;
+  $('#askText').textContent = text || '';
+  $('#askLabel').hidden = !input;
+  $('#askInputName').textContent = input || '';
+  $('#askInput').value = value;
+  $('#askOk').textContent = ok;
+  $('#askOk').classList.toggle('danger', danger);
+  return new Promise((resolve) => {
+    const done = (v) => { d.close(); $('#askOk').onclick = $('#askCancel').onclick = d.onclose = null; resolve(v); };
+    $('#askOk').onclick = () => done(input ? $('#askInput').value : true);
+    $('#askCancel').onclick = () => done(null);
+    d.onclose = () => resolve(null);
+    $('#askInput').onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); $('#askOk').click(); } };
+    d.showModal();
+    (input ? $('#askInput') : $('#askOk')).focus();
+  });
 }
 
 // A look with no picture and no versions waiting: a new Choom whose first Klein versions were all

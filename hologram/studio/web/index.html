@@ -204,6 +204,13 @@
 
 <dialog id="zoom"><img id="zoomImg" alt=""></dialog>
 
+<dialog id="askDialog" class="small-dialog">
+  <h2 id="askTitle"></h2>
+  <p id="askText"></p>
+  <label id="askLabel" class="ask-input" hidden><span id="askInputName"></span> <input id="askInput" autocomplete="off"></label>
+  <div class="row-end"><button id="askCancel" class="ghost" type="button">Cancel</button><button id="askOk" class="primary" type="button"></button></div>
+</dialog>
+
 <div id="tip" class="tip" role="tooltip" hidden></div>
 <div id="toast" class="toast" role="status" hidden></div>
 <script src="/web/studio.js"></script>

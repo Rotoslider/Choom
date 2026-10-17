@@ -22,10 +22,11 @@ import contextlib
 import fcntl
 import json
 import os
+import re
 import sys
 import time
 
-from config import CLIPS, PICTURES, PORTRAITS, PROJECTS, TOOLS
+from config import CLIPS, PICTURES, PORTRAITS, PROJECTS, SHEETS, TOOLS
 
 sys.path.insert(0, str(TOOLS))
 import closet  # noqa: E402
@@ -35,6 +36,14 @@ STATUSES = ("planned", "queued", "rendered", "kept", "dropped")
 NOT_CHOOMS = {"jobs", "worklist", "notify", "schedule"}  # json files in studio/ that aren't Choom projects
 BUILD_MINUTES_PER_CLIP = 2.5  # masks, depth and relief of one new clip in a build (October 2026 builds)
 TAKES = CLIPS / "takes"  # earlier takes of re-rolled clips (render.collect)
+WHEN_WORDS = ("cold", "hot", "evening", "day", "night")  # an outfit's name starts with when she wears it
+
+
+class LookHasDropped(ValueError):
+    """A look that only dropped clips use: deleting it deletes them too, so the page asks first."""
+    def __init__(self, count):
+        super().__init__(f"{count} dropped clip{'s use' if count > 1 else ' uses'} this look; {'they' if count > 1 else 'it'}'d be deleted with it")
+        self.count = count
 
 
 def take_name(name, path):
@@ -217,6 +226,86 @@ class Project:
         elif clip["status"] == "kept" and h.get("onGlass") and name not in self.sequence:
             self.sequence.append(name)
         return clip["status"]
+
+    # --- deleting and renaming looks ------------------------------------------------------------
+    def delete_look(self, look_id, with_dropped=False):
+        """Take a look out of her project; its picture stays in clean/. Never her main look, and not while
+        clips that aren't dropped start or end in it. Clips all dropped go too, but only when asked
+        (with_dropped), since their history goes with them. Returns the clips that went."""
+        if look_id == "main":
+            raise ValueError("her main look stays")
+        if look_id not in self.looks:
+            raise ValueError(f"she has no look {look_id}")
+        users = [n for n, c in self.clips.items() if look_id in (c["from"], c["to"])]
+        live = [n for n in users if self.clips[n]["status"] != "dropped"]
+        if live:
+            raise ValueError(f"{len(live)} clip{'s use' if len(live) > 1 else ' uses'} {look_id} "
+                             f"({', '.join(live[:3])}{' …' if len(live) > 3 else ''}): drop them, or remove planned ones, first")
+        if users and not with_dropped:
+            raise LookHasDropped(len(users))
+        for n in users:
+            del self.clips[n]
+        del self.looks[look_id]
+        self.data.get("drafts", {}).pop(look_id, None)
+        return users
+
+    def rename_outfit(self, old, new, built=()):
+        """Give an outfit a new name: all its looks (main@, relaxed@, full@, asleep@), its clips and
+        their files (clips/, sheets, earlier takes) move to it, change-of-clothes clips into it too,
+        since a clip's name says which look it's in. The name starts with when she wears it (cold, hot,
+        evening, day, night), so renaming can change that. Not while any of its clips is queued, placed
+        on the glass or built (the glass plays them by name): take them off and build first. Returns
+        {old clip name: new}."""
+        if not re.fullmatch(r"[a-z0-9]+", new or ""):
+            raise ValueError("an outfit's name is lower-case letters and digits")
+        if not new.startswith(WHEN_WORDS):
+            raise ValueError(f"an outfit's name starts with when she wears it: {', '.join(WHEN_WORDS)}")
+        looks = [lid for lid in self.looks if outfit_of(lid) == old]
+        if not looks:
+            raise ValueError(f"she has no outfit {old}")
+        if new == old or any(outfit_of(lid) == new for lid in self.looks):
+            raise ValueError(f"she already has an outfit called {new}")
+        relook = lambda lid: f"{base_of(lid)}@{new}" if outfit_of(lid) == old else lid  # noqa: E731
+        into = re.compile(rf"(?<=[-_])change_{re.escape(old)}(?=_|$)")
+        names = {}
+        for n in self.clips:
+            m = f"{self.id}_{new}-" + n[len(f"{self.id}_{old}-"):] if n.startswith(f"{self.id}_{old}-") else n
+            m = into.sub(f"change_{new}", m)
+            if m != n:
+                names[n] = m
+        built = set(built)
+        blocked = [n for n in names if self.clips[n]["status"] == "queued" or n in self.sequence or n in built]
+        if blocked:
+            raise ValueError(f"{len(blocked)} of its clips are queued, on the glass or built ({', '.join(blocked[:3])}"
+                             f"{' …' if len(blocked) > 3 else ''}): take them off the glass and build first, or keep the name")
+        clash = [m for m in names.values() if m in self.clips and m not in names]
+        if clash:
+            raise ValueError(f"she already has a clip called {clash[0]}")
+        for n, m in names.items():
+            _, start, end = roles(self.id, m)
+            c = self.clips[n]
+            if (start, end) != (relook(c["from"]), relook(c["to"])):
+                raise ValueError(f"{m} would be read as {start} to {end}, not {relook(c['from'])} to {relook(c['to'])}")
+        for n, m in names.items():
+            for src, dst in ((CLIPS / f"{n}.mp4", CLIPS / f"{m}.mp4"), (SHEETS / f"{n}.jpg", SHEETS / f"{m}.jpg")):
+                if src.exists():
+                    src.rename(dst)
+            if TAKES.is_dir():
+                for t in TAKES.glob(f"{n}_*.mp4"):
+                    if re.fullmatch(re.escape(n) + r"_\d{8}-\d{6}b?\.mp4", t.name):
+                        t.rename(TAKES / (m + t.name[len(n):]))
+            c = self.clips.pop(n)
+            c["from"], c["to"] = relook(c["from"]), relook(c["to"])
+            for h in c.get("history", []):
+                if (h.get("take") or "").startswith(n + "_"):
+                    h["take"] = m + h["take"][len(n):]
+            self.clips[m] = c
+        for lid in looks:
+            self.looks[relook(lid)] = self.looks.pop(lid)
+            drafts = self.data.get("drafts", {})
+            if lid in drafts:
+                drafts[relook(lid)] = drafts.pop(lid)
+        return names
 
     def place(self, name, on=True):
         """Put a kept clip on the glass, or take it off (her main idle always stays, first)."""
