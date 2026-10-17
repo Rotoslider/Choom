@@ -100,6 +100,8 @@ quiet moments she has in it before one repeats.
 
 - Drag a clip in to add it, out to take it off, or onto another to swap them. Her main idle always
   stays first.
+- Or tap the **+** on a clip to put it on the glass, **−** to take it off (it shows on hover, and
+  always on a phone or tablet, where there's no drag and drop).
 - **Put all on the glass** adds a look's kept clips at once.
 - Hover over a clip to play it; double-click to watch it large.
 - The bar at the top says what changed since the last build, and anything that has to be fixed
