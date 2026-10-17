@@ -44,6 +44,10 @@ to report in. Glass Studio's build uses it. Exit codes:
 | `1` | still busy after 10 minutes; not relaunched |
 | `2` | the launch failed: `launch.sh` failed (no Portrait at 1536x2048, say) or no new page within 40 s |
 
+Two relaunches at the same moment can leave duplicate processes. When several scripts or tools may
+relaunch, wrap each in the same lock, e.g. `flock /tmp/glass-relaunch.lock tools/relaunch_when_quiet.sh`;
+`launch.sh` lets go of the lock it was handed (step 2), so it is free again as soon as the relaunch ends.
+
 **Recovery.** The server watches the rest:
 - **The page:** it posts its status every 2 s, also with the screens dark. If none comes for a minute
   (Chrome crashed, the page froze), the server relaunches everything with `launch.sh`. Not in the
@@ -76,7 +80,7 @@ files without a restart.
 | `presence.json` | server.py | presence roles to entities ([Presence](#presence-home-assistant)) |
 | `weather.json` | server.py | weather station sensors ([Weather](#weather)) |
 | `camera.json` | tower_eyes.py, server.py | camera settings from the Choom app's Camera tab ([The glass camera](#the-glass-camera)) |
-| `studio.json` | Glass Studio | the workspace folder ([studio/README.md](../studio/README.md#setup)) |
+| `studio.json` | Glass Studio | the workspace folder and the Studio's settings, such as the morning summary ([studio/README.md](../studio/README.md#setup)) |
 
 **Logs** (in `hologram/`): `server.log`, `ears.log`, `eyes.log`, `chrome.log` and `studio/studio.log`
 are appended on every launch (each starts with a `== <time> launch ==` line) and rotated past 5 MB
@@ -89,7 +93,7 @@ The glass page's keys:
 
 | Key | Does |
 |---|---|
-| ← → or 1–4 | switch Choom |
+| ← → or 1–9 | switch Choom |
 | hold L | listening |
 | H | the readout (fps, clip, depth, calibration, PAUSED) |
 | Space | pause the particles, bands and orbs* |
@@ -157,9 +161,12 @@ whole pipeline. The steps underneath:
    - MediaPipe tracks her mouth.
 
    It writes `portraits/<id>/alive_<clip>.mp4` (colour, depth and cut-out stacked) and `alive.json`.
-   It encodes only clips that are new or changed. After the page reloads, `make_alive.py <id> --prune`
-   deletes videos of clips no longer listed. `tools/make_alive_depth.py` caches depth alone, so
-   `make_alive.py` can then run on the CPU beside a render.
+   It encodes only clips that are new or changed; a re-encoded clip gets a new name
+   (`alive_<clip>_v2.mp4`), so the running page never plays a new take with the old take's mouth track.
+   Caches and videos are written to a `.part` file and swapped in, so a stopped build can't leave a
+   cut-short file behind. After the page reloads, `make_alive.py <id> --prune` deletes videos of clips
+   no longer listed, their depth and mask caches, and leftover `.part` files. `tools/make_alive_depth.py`
+   caches depth alone, so `make_alive.py` can then run on the CPU beside a render.
 
 **Two processes on one GPU.**
 - Depth Anything shares the GPU badly with a Wan2GP queue (more than tenfold slower), so builds
@@ -187,8 +194,9 @@ http://127.0.0.1:8767, or from `studio/studio.py` on the command line.
 - It plans clips from `studio/packs.json` and writes the Wan2GP queues.
 - It renames finished renders by seed and makes contact sheets with automatic checks
   (`studio/review.py`).
-- It builds in order: cut-outs, `make_alive.py`, `tools/relaunch_when_quiet.sh`, then `--prune`.
-- Renders and builds take turns on the GPU.
+- It builds in order: cut-outs, `make_alive.py`, then a relaunch at a quiet moment (retried until the
+  glass is quiet; a busy glass doesn't fail the build), and `--prune` only after the relaunch.
+- Renders and builds take turns on the GPU; builds can be scheduled for a time or after a render.
 
 ## Clips, moods and poses
 
@@ -219,7 +227,7 @@ The page picks clips by what she is doing:
 |---|---|---|
 | idle | base, glance, breath, hum, daydream, giggle, groove | quiet moments, shuffled |
 | talk, think, listen | base, listen, thinkup, longcalm | while she talks, waits on her model, or hears you |
-| happy, surprised, sad, concerned | happy, sad | once, before she answers, when what you said feels that way |
+| happy, surprised, sad, concerned | happy, sad | once: before she answers, when what you said feels that way; after she finishes, when what she said did (an outfit without them plays its nearest clip) |
 | oops | oops_wince, relaxedoops_jaw | once, after one of her tools fails or she says it didn't come out right |
 | greet | wave | taking the glass after a long while away |
 | sleep, wake, yawn | fallasleep, sleep2, wake, yawn | night (below); yawns near bedtime and after waking |
@@ -238,7 +246,7 @@ few listening clips borrows her quiet clips that keep facing forward.
 | Pose | What it is |
 |---|---|
 | `main` | her picture |
-| `relaxed` | Aloy with her hand down: her home pose, reached by `lower` and `raise`; the raised finger comes up now and then while she talks |
+| `relaxed` | Aloy with her hand down: her home pose (set per Choom in the Studio, written to `alive.json` as `home`), reached by `lower` and `raise`; the raised finger comes up now and then while she talks |
 | `asleep` | asleep |
 | `full` | her whole figure, from a full-body picture made from her reference sheet |
 
@@ -247,8 +255,8 @@ quiet clip in fourteen cuts to a full-body clip and back (`FULL_IDLE_CHANCE`).
 
 An outfit can have its own full body (`full@dayshop`, clips named `<id>_dayshop-full_<what>`):
 - In that outfit, the glass cuts only to that full body.
-- In an outfit without one, the glass never cuts to full body. A move she asks for then plays in her
-  usual full body.
+- In an outfit without one, the glass never cuts to full body, and a full-body move she asks for
+  doesn't play there (her answer says which clothes have it).
 
 ## Looks and outfits
 
@@ -293,8 +301,9 @@ are defaults. Copy `glass-settings.example.json` to `glass-settings.json` beside
   when they have their own asleep look (`asleep@nightcold`, with sleep and wake clips such as
   `<id>_nightcold-fallasleep`).
 
-**Her own choice.** Clothes she chooses herself (`glass_wear`, below) take priority over these rules
-until she goes to sleep, until she chooses again, or until midnight. Night clothes she chose stay on
+**Her own choice.** Clothes she chooses herself (`glass_wear`, below) take priority over these rules,
+the day outfit and the 10 pm night clothes included, until she goes to sleep, until she chooses again,
+or at most until midnight. Night clothes she chose stay on
 to sleep in when they have an asleep look.
 
 Neither the Choom app's prompts nor the glass ever tell the Chooms what they are wearing at a given
@@ -316,7 +325,7 @@ and correlation against the voice heard) to `telemetry.log`.
 
 | Choom app route | Used for |
 |---|---|
-| `GET /api/hologram/events` | the live feed: turns, thinking, tools (with the sister when Aloy delegates), failed tools, pictures, speakable sentences, room members, camera and glass requests |
+| `GET /api/hologram/events` | the live feed: turns, thinking, tools (with the sister when Aloy delegates), failed tools, pictures, speakable sentences, room members, camera and glass requests; a new subscriber gets the app's mute first when it's muted |
 | `POST /api/hologram/voice` | heartbeat every 10 s while the hologram speaks, so browsers at home stay quiet |
 | `POST /api/hologram/listening` | typing or the mic in the app at home |
 | `POST /api/hologram/talk` | words heard at the tower, into her chat (`{choom, text}`) or the group room (`{room: true, text}`) |
@@ -581,9 +590,12 @@ a turn of hers in a room.
 Some cases run differently:
 - A room that hadn't reached its next speaker yet just carries on.
 - Your own message to a paused room takes its place.
-- A pause older than an hour is dropped.
+- A pause request older than 15 minutes is dropped, and a room's new run clears one left from an
+  earlier run.
+- A welcome that fails (the chat can't be reached) resumes the rooms it paused at once.
 - If the tower never says you're done, the room picks up after 15 minutes (`ROOMS_PAUSED_S` in
-  `server.py`), once the tower has been quiet for 2.
+  `server.py`, once the tower has been quiet for 2). The Choom app does the same on its own after 15
+  minutes without the hologram's done.
 
 **Logging and tests.** Each leaving and returning is logged as `desk`. Welcomes and skips are logged as
 `welcome`, and paused rooms as `rooms`. `POST /control {"welcomeTest": 30}` sends a real welcome now,
@@ -629,7 +641,7 @@ Each wake and blank is logged as `screens`.
 ## Everything else on the page
 
 - **Group stage.**
-  - A room turn brings the Chooms in that room to the glass, from two to four of them. All four come
+  - A room turn brings the Chooms in that room to the glass, however many there are. All of them come
     when the room isn't known, as with "OK Chooms".
   - The speaker stands in front, and her sisters stand smaller behind her, turned toward her. When the
     turn passes, the two trade places.
@@ -739,7 +751,8 @@ Each wake and blank is logged as `screens`.
 | `recovery`, `feed` | server | a page relaunch or a helper restarted or stopped (also in `recovery.log`); the Choom feed reconnecting |
 
 `tools/deinterleave.py OUT.jpg [view ...]` grabs the Portrait and rebuilds individual views. Use it to
-check depth without standing in front of the glass; run it with a Python that has numpy and Pillow.
+check depth without standing in front of the glass; run it with a Python that has numpy and Pillow. It
+finds the calibration in `calibration/` as the server does (`HOLOGRAM_CALIBRATION` names one).
 
 ## Still portraits (fallback)
 

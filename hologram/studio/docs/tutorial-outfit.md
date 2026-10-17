@@ -159,13 +159,16 @@ time, drag one out to take it off, or drop one onto another to swap them. Hover 
 
 ![The new look's kept clips, ready to go on the glass](images/outfit-8-glass.jpg)
 
-The bar at the top shows what changed since the glass was last built. Click **Build and put on the
+The bar at the top shows what changed since the glass was last built, and warns about the easy
+misses: a look whose kept clips are none of them on the glass (with **Put them on the glass**), or an
+outfit's full body placed while the outfit itself has no talk loop on the glass yet. Under each look's
+name a line says how many clips are kept, placed and still to build. Click **Build and put on the
 glass**:
 
 ![The build bar with the new clips waiting](images/outfit-9-build.jpg)
 
 1. The Studio makes the new clips' cut-outs and depth. Only new clips are processed; that takes about
-   a minute each.
+   2½ minutes each.
 2. The glass reloads at its next quiet moment, when no Choom is talking. If the Chooms are busy in a
    room, it tries again every few minutes.
 

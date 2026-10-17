@@ -19,11 +19,12 @@ happening in the Choom app: listening, thinking, using tools, changing clothes, 
   her mouth follows the words. While the glass is running, browsers at home stay quiet, so each reply
   is heard once.
 - **Moods.** She listens while you type or use the mic, looks thoughtful while her model works, and
-  shows happy, surprised, sad or concerned when the conversation calls for it. When one of her tools
-  fails she makes a face of her own.
+  shows happy, surprised, sad or concerned when the conversation calls for it: before she answers what
+  you said, and once she has finished saying something that feels that way (in an outfit without that
+  expression, its nearest look). When one of her tools fails she makes a face of her own.
 - **Tool moments and pictures.** Each tool she uses has a fitting look. A picture she makes or
   analyzes floats beside her for a few seconds.
-- **Group stage.** In a group room, the Chooms in that room share the glass (two to four of them).
+- **Group stage.** In a group room, the Chooms in that room share the glass, however many there are.
   The speaker stands in front, and the speakers trade places as the turn passes.
 
 **Looks and clothes**
@@ -33,9 +34,10 @@ happening in the Choom app: listening, thinking, using tools, changing clothes, 
   changes with a camera cut or a change-of-clothes clip.
 - **Full body.** Now and then the glass cuts to her whole figure. An outfit can have its own full
   body, used only while she wears it.
-- **Their own choices.** The Chooms can ask the glass for a move or for clothes from their closet.
-  A move plays in the clothes she has on. Anything they don't have yet goes on a wish list in Glass
-  Studio.
+- **Their own choices.** The Chooms can ask the glass for a move or for clothes from their closet,
+  their usual clothes included ("my cream blouse"). Clothes she picks take priority until bedtime. A
+  move plays in the clothes she has on, at her next quiet moment on the glass within half an hour.
+  Anything they don't have yet goes on a wish list in Glass Studio.
 
 **Talking at the tower, and being seen**
 - **Wake phrases.** Say "OK Aloy" (or Optic, Genesis, Eve) and she comes to the glass and listens.
@@ -90,11 +92,14 @@ The Choom app runs on another machine (here a Mac Studio). The hologram reaches 
 4. **Choom app.** `export CHOOM_URL=http://<choom-host>:3000` (the default is in `launch.sh`).
 5. **Home Assistant (optional).** Put `ha_url`, `ha_token`, `presence.json` and `weather.json` in
    `~/.config/choom-hologram/` ([Presence](docs/reference.md#presence-home-assistant), [Weather](docs/reference.md#weather)).
-6. **Start.** Run `./launch.sh`; `./launch.sh stop` closes everything. To start at login, point an
+6. **Install settings (optional).** Sleep hours, the night-clothes hour, temperature thresholds,
+   evening hours and outfit visit lengths have defaults; to change them, copy
+   `glass-settings.example.json` to `glass-settings.json` ([Looks and outfits](docs/reference.md#looks-and-outfits)).
+7. **Start.** Run `./launch.sh`; `./launch.sh stop` closes everything. To start at login, point an
    autostart entry at `tools/autostart.sh`, which waits for the Portrait ([Running](docs/reference.md#running)).
    While it runs, the server relaunches a page that stops reporting and keeps the tower's listener and
    camera running ([Recovery](docs/reference.md#running)).
-7. **Glass Studio.** Point `~/.config/choom-hologram/studio.json` at a workspace folder and open
+8. **Glass Studio.** Point `~/.config/choom-hologram/studio.json` at a workspace folder and open
    http://127.0.0.1:8767 ([studio/README.md](studio/README.md)). `launch.sh` starts the Studio if it
    isn't running.
 
@@ -145,11 +150,15 @@ configuration files, the Choom app routes, debugging hooks and telemetry.
 [Glass Studio](studio/README.md) is where clips, looks, outfits and new Chooms are made, at
 http://127.0.0.1:8767 on the GPU machine.
 1. **Plan.** It plans clips from a library of actions that have worked on the glass.
-2. **Render.** It renders them with Wan2GP, now or at a scheduled time.
+2. **Render.** It renders them with Wan2GP, now or at a scheduled time. The work list can be paused
+   after the item it's on, and resumed.
 3. **Review.** It shows each clip as a contact sheet, with automatic checks for the usual failures
-   (fog, a camera push-in, a colour shift, a seam, a cut).
-4. **Arrange and build.** You arrange each look's clips and build them onto the glass, which
-   reloads when she is quiet.
+   (fog, a camera push-in, a colour shift, a seam, a cut). An earlier take can be brought back.
+4. **Arrange and build.** You arrange each look's clips and build them onto the glass (now, at a time,
+   or after the render), which reloads when she is quiet. Each look shows how far it is from the glass.
+
+A short summary can come by Signal through the Choom app when the night's work is done, held until
+morning so it never wakes anyone ([studio README](studio/README.md#setup)).
 
 Each clip's prompt, seed and decision is kept in that Choom's project file.
 

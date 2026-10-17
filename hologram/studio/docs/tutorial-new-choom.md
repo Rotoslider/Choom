@@ -196,9 +196,11 @@ about 40; your own make up the rest.
 
 ### Expressions, oops faces and selfie moves
 
-The **Expressions** pack plays when the conversation feels happy, surprised, sad or concerning. The
+The **Expressions** pack plays when the conversation feels happy, surprised, sad or concerning:
+before she answers what you said, and once she has finished saying something that feels that way. The
 **Oops** pack plays after one of her tools fails: a wince, a rueful shake of the head, not her sad
-face. **Selfie moves** play with a picture she makes of herself. **Picture looks** turn her toward a
+face. Both can be planned for her outfits too (**Plan for many looks at once** does every outfit in one
+step); an outfit without them borrows its nearest clip, a smile or raised brows. **Selfie moves** play with a picture she makes of herself. **Picture looks** turn her toward a
 picture floating beside her.
 
 ### Windy days

@@ -262,8 +262,8 @@ rendered clip uses, a look's picture, versions a look is waiting on, or a queue 
 **A morning summary on Signal** (optional): when a scheduled render or build, or a run of them, has
 finished or failed, the Studio sends one short message through the Choom app, in one Choom's Signal
 thread. It lists what ran, anything that failed and why, and how many clips wait for review and how
-many are flagged. Anything that ends between 10 pm and 7 am waits until 7. Turn it on in
-`studio.json` (see Setup).
+many are flagged. Anything that ends in the quiet hours (10 pm to 7 am unless you set them) waits
+until they're over. Turn it on in `studio.json` (see Setup).
 
 ### Looks
 
@@ -277,7 +277,9 @@ Each look has its picture and three lines:
 
 An outfit's card also has its **closet words** (see [What the Chooms can ask
 for](#what-the-chooms-can-ask-for)). **Save** applies the lines to clips planned from then on and to
-the look's clips that are already planned; rendered clips keep their prompts.
+the look's clips that are already planned; rendered clips keep their prompts. Clips already queued in a
+render (a scheduled one too) keep the prompt they were queued with: Save says how many, and cancelling
+that render and rendering again uses the new lines.
 
 An outfit's card also has **She wears**: what she wears in it (from "She now wears" when it was
 made; empty on looks made before that, until you fill it in). Changing it and clicking **Save** puts
@@ -398,20 +400,26 @@ looking-glass skill):
 
 | Tool | What it does |
 |---|---|
-| `glass_move("a little dance")` | plays a move at her next quiet moment, once |
+| `glass_move("a little dance")` | plays a move once, in the clothes she has on, at her next quiet moment on the glass within half an hour |
 | `glass_wear("my red dress")` | changes her clothes at her next quiet moment; she keeps them on until bedtime, or until she changes again |
 | `glass_closet()` | lists her moves and the clothes in her closet, never what she has on |
 | `glass_wish("a midnight-blue silk slip dress")` | puts clothes or a move she'd like on her wish list; nothing changes on the glass |
 
 The glass answers from what's built:
 - **Moves** are her selfie moves, her full-body clips, and clips named for a move: a dance, a wave,
-  a kiss, a curtsy. "Spin around" finds a twirl, and "flip my hair" finds a hair flip.
+  a kiss, a curtsy. "Spin around" finds a twirl, and "flip my hair" finds a hair flip. A move plays only
+  in the clothes she has on: one she has only in an outfit is answered "only in" those clothes, and one
+  only in clothes she can't wear yet becomes a wish. Answers name the move as something she does
+  ("blow a kiss", "walk the runway").
 - **Clothes** match an outfit's **closet words**. They're read from what she wears in the look
   ("dress, burgundy, red"), and you can change them on the look's card; empty goes back to the ones
   read from her clothes. A garment, colour or fabric she names must be in the outfit, so "the red
   dress" finds the burgundy one but "a blue silk dress" doesn't find a green one. If two outfits fit
   equally, the glass picks one at random. Night clothes also answer to pajamas, bed and their own
   garments, warm or cold by the weather.
+- **Her usual clothes** can be asked for by description as well as by "my usual clothes": "my
+  wireframe dress", "my cream blouse". A tie with them goes to them. "Own" beside a garment means that
+  garment ("my own green dress" is her green dress).
 - **What her closet calls each outfit** (`glass_closet`, and "you change into …") is what she wears in
   it. A look in her usual clothes, changed some other way, is named by what she holds there or not:
   Optic's heart-aside look is "your usual clothes, without a glowing fire agate heart". A pose is not
@@ -474,14 +482,15 @@ you leave out uses the default in `config.py`:
   "picture_model": "flux2_klein_9b",
   "minutes_per_clip": 5.5,
   "port": 8767,
-  "notify": {"url": "http://your-mac.local:3000", "choom": "Aloy", "quiet": [22, 7], "dry_run": false}
+  "notify": {"url": "http://your-mac.local:3000", "choom": "Aloy", "quiet": ["22:00", "07:00"], "dry_run": false}
 }
 ```
 
 `minutes_per_clip` only sets the time estimates on the page. `notify` sends the morning summary:
 - **url:** the Choom app; empty turns it off.
 - **choom:** whose Signal thread it comes in, by name or id.
-- **quiet:** the hours it holds messages.
+- **quiet:** when it holds messages, from the first time to the second: whole hours (`[22, 7]`) or
+  `"HH:MM"` (`["22:00", "07:10"]` lands the summary just after a 7 am briefing).
 - **dry_run:** writes the message to `studio/studio.log` instead of sending it.
 
 Settings for testing:

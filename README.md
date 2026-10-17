@@ -18,7 +18,7 @@ All 116 tools are organized into 27 modular **skills** with progressive disclosu
 - **Image Generation**: Stable Diffusion Forge integration with selfie mode, LoRA support, and LLM-guided sizing
 - **Text-to-Speech**: Streaming TTS via Chatterbox/Fatterbox with per-Choom voice selection. **Per-message playback**: every Choom response in 1:1 chats and group rooms gets a play/stop button — audio is generated on demand in the author's voice and cached to disk, so past conversations (including rooms the Chooms ran on their own) can be listened to any time. **Mute silences everything**: the mute button broadcasts to a global audio-player registry — the 1:1 stream, room queues, per-message playback, and any player orphaned by page navigation (a long agentic turn survives leaving the page by design; its TTS instance is disposed on unmount so it can't keep talking where the new page's mute button can't reach it)
 - **Speech-to-Text**: Whisper-based transcription with push-to-talk, toggle, and VAD modes
-- **Looking Glass Hologram**: The Chooms as moving 3D reliefs in a Looking Glass Portrait. Whoever is talking comes to the glass and speaks in her own voice with lip sync, expressions and moments that fit what she is doing; all four share a stage in group rooms; you can talk to them at the tower ("OK Aloy", "OK Chooms"). See [Looking Glass Hologram](#looking-glass-hologram)
+- **Looking Glass Hologram**: The Chooms as moving 3D reliefs in a Looking Glass Portrait. Whoever is talking comes to the glass and speaks in her own voice with lip sync, expressions and moments that fit what she is doing; the Chooms in a group room share a stage; you can talk to them at the tower ("OK Aloy", "OK Chooms"). See [Looking Glass Hologram](#looking-glass-hologram)
 - **Signal Bridge**: Two-way messaging through Signal, including voice transcription, image delivery, and image forwarding for vision analysis. **Continuous conversation across surfaces**: a Signal message continues the Choom's most-recently-active 1:1 chat — the one you had open on the web — instead of starting a fresh, context-less thread. Heartbeat/briefing/automation output lives in the Choom's persistent `[Autonomous]` chat, which never hijacks Signal routing: replying to a heartbeat continues your real conversation, and the Choom knows what she just said through the cross-session awareness block. **Cross-surface routing**: an un-addressed Signal message (no name) goes to whichever Choom you most recently had a *genuine* conversation with on **any** surface, web or Signal — so chatting with Eve on the web then texting carries the thread to Eve. Heartbeats and self-followups are ignored for this (they can't hijack who answers); name a Choom to switch. Group scratch chats (archived) and per-task delegation chats are excluded, so jumping into a group room or a delegation and back never hijacks your 1:1 thread; `group:` Signal messages route to the shared room on their own path
 - **Smart Home (Home Assistant)**: Full integration with Home Assistant for reading sensors, controlling lights/switches/climate, viewing history trends, and ambient home awareness. Three-layer environmental awareness: system prompt injection (every LLM call knows the current home state), heartbeat monitoring (periodic checks with intelligent reasoning), and conditional automations (trigger actions based on sensor thresholds). Includes an Entity Browser in Settings and works from both the web UI and Signal. See the [Smart Home Guide](#smart-home-home-assistant-1) for setup and usage
 - **Scheduled Tasks**: Cron-driven morning briefings, weather checks, aurora forecasts, health heartbeats, and YouTube music downloads. Custom heartbeats support **per-task model routing** — assign a fast/cheap model to simple tasks (selfies, reminders) while keeping the Choom's primary model for complex work
@@ -1006,6 +1006,13 @@ demand from the live Choom list (with `choom_commons/drafts/` and
 letter into her inbox (plus an image from this turn or a workspace file), and
 **`check_inbox`** reads what is new and marks it seen (`.seen.json`). The wake-up
 preamble says `check_inbox`.
+
+### Unit tests
+
+`npx jest` in `nextjs-app/` runs the unit tests. `jest.setup.js` makes any request to localhost or the
+home network fail inside a test, so a test can never reach the running app, the memory server, TTS or
+Home Assistant: a route under test that posts a notification would otherwise reach Signal for real. A
+test that needs such a call stubs `global.fetch` itself.
 
 ### Testing against real Chooms
 
