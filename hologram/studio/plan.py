@@ -9,7 +9,8 @@ import re
 from pathlib import Path
 
 import prompts
-from project import base_of, next_seeds, outfit_of, roles
+from config import CFG
+from project import Project, base_of, editing, next_seeds, outfit_of, roles
 
 PACKS_FILE = Path(__file__).resolve().parent / "packs.json"
 KIND_PREFIX = {
@@ -82,6 +83,50 @@ def options(proj, look_id):
                     "hands": a.get("hands", False), "name": name, "have": have,
                     "numbered": "names" not in a, "ending": a.get("ending")})
     return out
+
+
+def many(targets, picks, preview=True):
+    """One plan for many looks at once (Expressions and Oops for every outfit): for each (choom, look)
+    in targets, the picked library actions [(pack, key)] that come in that look and she has no clip
+    for yet. A clip she already has is never planned again under a number. preview: what would be
+    planned and how long it takes to render; otherwise plan it, one look at a time so every clip gets
+    a seed of its own. Returns {"looks": [{choom, look, plan, have, blocked}], "clips", "minutes",
+    "results"}."""
+    picks = {(p, k) for p, k in picks}
+    by_key = {(a["pack"], a["key"]): a for a in library()["actions"]}
+    out, clips, minutes = [], 0, 0.0
+    for cid, look_id in targets:
+        proj = Project.load(cid)
+        if look_id not in proj.looks:
+            raise ValueError(f"{cid} has no look {look_id}")
+        fresh, have, blocked = [], [], []
+        for o in options(proj, look_id):
+            if (o["pack"], o["key"]) not in picks:
+                continue
+            if o["have"]:
+                have.append(o["name"])
+                continue
+            _, start, end = roles(cid, o["name"])
+            missing = [p for p in (start, end) if not proj.looks.get(p, {}).get("picture")]
+            if missing:
+                blocked.append(f"{o['name']}: needs a picture for {' and '.join(missing)}")
+                continue
+            fresh.append(o)
+        frames = [prompts.SECONDS[int(o["seconds"])][0] for o in fresh]
+        clips += len(fresh)
+        minutes += sum(CFG["minutes_per_clip"] * f / 124 for f in frames)
+        out.append({"choom": cid, "look": look_id, "plan": [o["name"] for o in fresh], "have": have,
+                    "blocked": blocked, "items": [(o["pack"], o["key"]) for o in fresh]})
+    results = []
+    if not preview:
+        for entry in out:
+            if entry["items"]:
+                with editing(entry["choom"]) as proj:
+                    results += [(entry["choom"], name, message)
+                                for name, message in add(proj, entry["look"], [by_key[i] for i in entry["items"]])]
+    for entry in out:
+        del entry["items"]
+    return {"looks": out, "clips": clips, "minutes": round(minutes), "results": results}
 
 
 def prompt_for(proj, start, end, text, seconds, ending=None):

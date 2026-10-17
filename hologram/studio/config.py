@@ -53,8 +53,12 @@ SHEETS = PROJECTS / "sheets"
 WAN2GP = path("wan2gp")
 WAN2GP_PYTHON = WAN2GP / "venv" / "bin" / "python"
 FORGE_PYTHON = path("forge_python")
-PORTRAITS = HOLOGRAM / "portraits"
-TOOLS = HOLOGRAM / "tools"
+# The glass's own folder; studio.json can point a test Studio elsewhere so it never writes a live
+# Choom's closet or wishes.
+PORTRAITS = path("portraits") if CFG.get("portraits") else HOLOGRAM / "portraits"
+# The build tools and relaunch script; a test Studio points this at stand-ins so it never relaunches
+# the real glass.
+TOOLS = path("tools") if CFG.get("tools") else HOLOGRAM / "tools"
 
 
 def ensure_workspace():

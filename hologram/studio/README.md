@@ -129,6 +129,15 @@ holds something (Optic's heart, crossed arms).
 | Picture looks | turning to a picture beside her |
 | Pose changes | moving between her two waist-up poses |
 
+**Plan for many looks at once** plans the same library actions in many looks in one step, for
+instance Expressions and Oops in every outfit. Tick actions (a pack's box ticks all of it) and looks
+(**her outfits** and **every Choom's outfits** tick the waist-up outfits), then **Preview**: each
+look shows how many clips it would get, how many of those actions it already has, and any it can't
+have yet for want of a picture, with the total and its render time. Nothing is planned until you
+click **Plan N clips**. A look never gets an action it already has (no numbered copies), so planning
+the same set again plans only what's new. The clips then sit in each Choom's Planned list; render
+them from there.
+
 **Write your own clip** takes any move that ends where it began: a dance, turning her back to you and
 turning around again, a kiss. Choose what the glass uses it for (quiet moment, look-at-me move,
 talking loop, oops face, or **Windy day**, which plays only when it's windy) and a length of 5 to 15

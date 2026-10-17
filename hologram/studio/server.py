@@ -143,7 +143,9 @@ class Handler(BaseHTTPRequestHandler):
         if parts[:2] == ["api", "options"] and len(parts) == 4:
             return self.send_json({"options": plan.options(Project.load(parts[2]), parts[3])})
         if parts[:2] == ["api", "packs"]:
-            return self.send_json({"packs": plan.library()["packs"]})
+            lib = plan.library()
+            return self.send_json({"packs": lib["packs"], "actions": [{"pack": a["pack"], "key": a["key"], "text": a["text"],
+                                                                        "seconds": a.get("seconds", 5)} for a in lib["actions"]]})
         if parts[:2] == ["api", "jobs"]:
             with jobs.lock:
                 return self.send_json({"jobs": jobs.recent(40)})
@@ -161,6 +163,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self.choom_action(parts[2], parts[3], data)
             if parts == ["api", "render"]:
                 return self.start_render(data)
+            if parts == ["api", "plan-many"]:
+                # Library actions for many looks at once: previewed first, then planned.
+                targets = [(str(c), str(l)) for c, l in data.get("targets", [])]
+                bad = [c for c, _ in targets if not NAME.match(c) or not Project.file(c).exists()]
+                if bad:
+                    return self.fail(f"no Choom {bad[0]}")
+                picks = [(str(p), str(k)) for p, k in data.get("items", [])]
+                if not targets or not picks:
+                    return self.fail("pick at least one look and one action")
+                return self.send_json(plan.many(targets, picks, preview=bool(data.get("preview", True))))
             if parts == ["api", "build"]:
                 proj = Project.load(data["choom"])
                 trouble = build.problems(proj)

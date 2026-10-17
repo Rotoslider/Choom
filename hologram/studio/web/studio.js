@@ -496,6 +496,81 @@ $('#changeAdd').addEventListener('click', attempt(async () => {
   render();
 }));
 
+// --- Plan for many looks at once ------------------------------------------------------------------
+// Library actions for many looks in one step (Expressions and Oops for every outfit): tick actions and
+// looks, preview what each look gets and how long it renders, then plan. plan.many on the server skips
+// what a look already has, so planning twice never makes numbered copies.
+const many = { packs: null, actions: [], looks: {}, picked: new Set(), targets: new Set(), preview: null };
+const manyKey = (cid, look) => `${cid}|${look}`;
+const outfitLook = (l) => l.includes('@') && waistUp(l);
+$('#manyPlan').addEventListener('toggle', attempt(async () => { if ($('#manyPlan').open) await renderMany(true); }));
+async function renderMany(reload = false) {
+  if (!many.packs || reload) {
+    const lib = await api('/api/packs');
+    many.packs = lib.packs;
+    many.actions = lib.actions || [];
+    const chooms = await Promise.all(state.chooms.map((c) => api(`/api/choom/${c.id}`)));
+    many.looks = Object.fromEntries(chooms.map((d) => [d.id, lookOrder(d.looks)]));
+    many.names = Object.fromEntries(chooms.map((d) => [d.id, d.name]));
+  }
+  const changed = () => { many.preview = null; renderMany(); };
+  // Actions, pack by pack: the pack's box ticks all of it.
+  $('#manyPacks').replaceChildren(...many.packs.map((p) => {
+    const acts = many.actions.filter((a) => a.pack === p.id);
+    const ids = acts.map((a) => `${a.pack}|${a.key}`);
+    const all = el('input', { type: 'checkbox', checked: ids.length && ids.every((i) => many.picked.has(i)) });
+    all.indeterminate = !all.checked && ids.some((i) => many.picked.has(i));
+    all.addEventListener('change', () => { ids.forEach((i) => (all.checked ? many.picked.add(i) : many.picked.delete(i))); changed(); });
+    return el('details', { className: 'many-pack', open: ids.some((i) => many.picked.has(i)) },
+      el('summary', {}, el('label', { onclick: (e) => e.stopPropagation() }, all, ` ${p.title}`), el('small', { className: 'muted' }, ` ${acts.length}`)),
+      ...acts.map((a) => {
+        const id = `${a.pack}|${a.key}`;
+        const box = el('input', { type: 'checkbox', checked: many.picked.has(id) });
+        box.addEventListener('change', () => { box.checked ? many.picked.add(id) : many.picked.delete(id); changed(); });
+        return el('label', { className: 'many-act', tip: a.text }, box, ` ${a.key}`, el('small', { className: 'muted' }, ` ${a.seconds} s`));
+      }));
+  }));
+  // Looks, Choom by Choom, with quick picks for outfits.
+  const pickLooks = (fn) => () => { many.targets.clear(); for (const [cid, looks] of Object.entries(many.looks)) looks.filter((l) => fn(cid, l)).forEach((l) => many.targets.add(manyKey(cid, l))); changed(); };
+  $('#manyQuick').replaceChildren(
+    el('button', { className: 'ghost small', type: 'button', onclick: pickLooks((cid, l) => cid === state.cid && outfitLook(l)), tip: `Every outfit of ${state.choom.name}'s, waist up` }, `${state.choom.name}'s outfits`),
+    el('button', { className: 'ghost small', type: 'button', onclick: pickLooks((cid, l) => outfitLook(l)), tip: 'Every waist-up outfit of every Choom' }, "Every Choom's outfits"),
+    el('button', { className: 'ghost small', type: 'button', onclick: pickLooks(() => false) }, 'None'));
+  $('#manyLooks').replaceChildren(...Object.entries(many.looks).map(([cid, looks]) => el('div', { className: 'many-choom' },
+    el('b', {}, many.names[cid] || cid),
+    el('div', { className: 'many-chips' }, ...looks.map((l) => {
+      const box = el('input', { type: 'checkbox', checked: many.targets.has(manyKey(cid, l)) });
+      box.addEventListener('change', () => { box.checked ? many.targets.add(manyKey(cid, l)) : many.targets.delete(manyKey(cid, l)); changed(); });
+      return el('label', { className: 'chip-check' }, box, ` ${l}`);
+    })))));
+  // What it would plan.
+  const body = () => ({ targets: [...many.targets].map((k) => k.split('|')), items: [...many.picked].map((k) => k.split('|')) });
+  const preview = el('button', {
+    type: 'button', disabled: !many.targets.size || !many.picked.size, tip: 'Show what each look gets, before anything is planned',
+    onclick: attempt(async () => { many.preview = await api('/api/plan-many', { ...body(), preview: true }); renderMany(); }),
+  }, 'Preview');
+  const p = many.preview;
+  const hours = (m) => (m < 90 ? `${m} min` : `${(m / 60).toFixed(1)} h`);
+  const go = p && p.clips ? el('button', {
+    className: 'primary', type: 'button', tip: 'Plan them all; render from the Planned list of each Choom (or Render now / Schedule there)',
+    onclick: attempt(async () => {
+      const r = await api('/api/plan-many', { ...body(), preview: false });
+      const skipped = r.results.filter(([, n]) => !n);
+      toast(`${r.results.length - skipped.length} clips planned in ${r.looks.filter((e) => e.plan.length).length} looks${skipped.length ? `; ${skipped.length} skipped` : ''}`, !!skipped.length);
+      await refresh();
+      many.preview = await api('/api/plan-many', { ...body(), preview: true });
+      renderMany();
+    }),
+  }, `Plan ${p.clips} clips`) : null;
+  $('#manyPreview').replaceChildren(...[el('div', { className: 'row' }, preview, go,
+    p ? el('span', { className: 'muted' }, p.clips ? `${p.clips} clips · about ${hours(p.minutes)} of rendering` : 'Nothing new to plan: they have these already') : el('span', { className: 'muted' }, `${many.picked.size} actions × ${many.targets.size} looks ticked`)),
+    p ? el('div', { className: 'many-table' }, ...p.looks.map((e) => el('div', { className: 'many-row' },
+      el('span', {}, el('b', {}, many.names[e.choom] || e.choom), ` ${e.look}`),
+      el('span', { tip: e.plan.map((n) => short(e.choom, n)).join(', ') }, e.plan.length ? `${e.plan.length} to plan` : 'nothing new'),
+      el('span', { className: 'muted', tip: e.have.map((n) => short(e.choom, n)).join(', ') }, e.have.length ? `has ${e.have.length}` : ''),
+      e.blocked.length ? el('span', { className: 'problem', tip: e.blocked.join('\n') }, `${e.blocked.length} need a picture first`) : el('span', {})))) : null].filter(Boolean));
+}
+
 function renderPlanned() {
   const c = state.choom;
   const planned = Object.keys(c.clips).filter((n) => c.clips[n].status === 'planned');
