@@ -746,6 +746,104 @@ def presence_watch():
         time.sleep(5)
 
 
+# --- Crash recovery -------------------------------------------------------------------------------
+# The page posts its status every 2 s, also with the screens dark. When none has come for PAGE_SILENT_S
+# (Chrome crashed, the page froze, its graphics were lost for good), launch.sh relaunches everything; it
+# stops this server too, so it runs in a session of its own. Not while this launch is still starting, not
+# while launch.sh is running anyway, and at most once per PAGE_RELAUNCH_EVERY_S (kept in recovery.log,
+# since each relaunch starts a new server). Only the living page is watched: first-light is a test scene.
+STARTED_AT = time.time()
+PAGE_SILENT_S = 60
+PAGE_RELAUNCH_EVERY_S = 10 * 60
+STARTING_S = 120
+RECOVERY_LOG = HERE / "recovery.log"
+# The tower's helpers, kept running one of each: (script, the variable that turns it off in launch.sh).
+HELPERS = (("tower_ears.py", "HOLOGRAM_EARS", "ears.log"), ("tower_eyes.py", "HOLOGRAM_EYES", "eyes.log"))
+HELPER_RESTARTS = 3              # at most this many restarts of one helper ...
+HELPER_WINDOW_S = 10 * 60        # ... in this long; then it's left down (and logged)
+
+
+def recovery_note(entry):
+    """A line in recovery.log (what was done and when) and in telemetry.log."""
+    entry = {"time": time.strftime("%Y-%m-%dT%H:%M:%S"), **entry}
+    with open(RECOVERY_LOG, "a") as f:
+        f.write(json.dumps(entry) + "\n")
+    write_log({"kind": "recovery", **entry})
+
+
+def last_page_relaunch():
+    try:
+        for line in reversed(RECOVERY_LOG.read_text().splitlines()):
+            entry = json.loads(line)
+            if entry.get("action") == "page relaunch":
+                return time.mktime(time.strptime(entry["time"], "%Y-%m-%dT%H:%M:%S"))
+    except (OSError, ValueError, KeyError):
+        pass
+    return 0.0
+
+
+def pids_of(script):
+    out = subprocess.run(["pgrep", "-f", "--", str(HERE / script)], capture_output=True, text=True).stdout
+    return [int(p) for p in out.split() if int(p) != os.getpid()]
+
+
+def page_watch():
+    while True:
+        time.sleep(10)
+        try:
+            now = time.time()
+            if now - STARTED_AT < STARTING_S:
+                continue
+            page = ((latest.get("start") or {}).get("page")) or "living"
+            silent = now - received_at.get("status", STARTED_AT)
+            if page != "living" or silent < PAGE_SILENT_S:
+                continue
+            if now - last_page_relaunch() < PAGE_RELAUNCH_EVERY_S:
+                continue
+            if subprocess.run(["pgrep", "-f", "--", r"launch\.sh( |$)"], capture_output=True).returncode == 0:
+                continue  # a relaunch is under way (also "./launch.sh living" from relaunch_when_quiet.sh)
+            recovery_note({"action": "page relaunch", "silent_s": round(silent)})
+            subprocess.Popen([str(HERE / "launch.sh"), "living"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True)
+        except Exception as e:
+            latest["page_watch_error"] = f"{type(e).__name__}: {e}"
+
+
+def helper_watch():
+    """Exactly one tower_ears and one tower_eyes: a dead one is started again (logs appended), a second one
+    is stopped (the newer). launch.sh starts them; this keeps them up between relaunches."""
+    restarts = {}
+    python = HERE / ".venv-ears" / "bin" / "python"
+    while True:
+        time.sleep(30)
+        try:
+            if time.time() - STARTED_AT < STARTING_S or not python.exists():
+                continue
+            for script, switch, log_name in HELPERS:
+                if os.environ.get(switch, "1") == "0":
+                    continue
+                pids = pids_of(script)
+                if len(pids) > 1:
+                    ages = {p: float((Path("/proc") / str(p) / "stat").read_text().split()[21]) for p in pids}
+                    for extra in sorted(pids, key=lambda p: ages[p])[1:]:  # keep the one started first
+                        os.kill(extra, 15)
+                        recovery_note({"action": "stopped a second", "helper": script, "pid": extra})
+                elif not pids:
+                    recent = [t for t in restarts.get(script, []) if time.time() - t < HELPER_WINDOW_S]
+                    if len(recent) >= HELPER_RESTARTS:
+                        latest[f"{script}_down"] = f"died {len(recent)} times in {HELPER_WINDOW_S // 60} min; left down"
+                        continue
+                    restarts[script] = recent + [time.time()]
+                    with open(HERE / log_name, "a") as log:
+                        log.write(f"\n== {time.strftime('%Y-%m-%d %H:%M:%S')} restarted by server.py ==\n")
+                        log.flush()
+                        subprocess.Popen([str(python), str(HERE / script)], stdin=subprocess.DEVNULL, stdout=log,
+                                         stderr=subprocess.STDOUT, start_new_session=True, close_fds=True)
+                    recovery_note({"action": "restarted", "helper": script})
+        except Exception as e:
+            latest["helper_watch_error"] = f"{type(e).__name__}: {e}"
+
+
 def synthesize(text, voice):
     """WAV bytes for `text` in `voice`, via the Choom app (which cleans text and calls Chatterbox)."""
     body = json.dumps({"text": text, "voice": voice}).encode()
@@ -962,4 +1060,6 @@ if __name__ == "__main__":
     threading.Thread(target=presence_watch, daemon=True).start()
     threading.Thread(target=welcome_watch, daemon=True).start()
     threading.Thread(target=screen_watch, daemon=True).start()
+    threading.Thread(target=page_watch, daemon=True).start()
+    threading.Thread(target=helper_watch, daemon=True).start()
     Server(("127.0.0.1", args.port), Handler).serve_forever()
