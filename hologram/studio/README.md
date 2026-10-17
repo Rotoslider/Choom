@@ -142,10 +142,10 @@ holds something (Optic's heart, crossed arms).
 | Oops | her face at her own mishap |
 | Sleep | dozing off, sleeping, waking, a yawn; needs an asleep look; offered for night outfits too |
 | Windy days | her hair and clothes in the wind, on windy days only; each outfit needs its own |
-| Selfie moves | look-at-me moves for a picture she made |
+| Selfie moves | look-at-me moves for a picture she made (her usual looks and outfits; an outfit without them cuts to its full body or to her usual look's moves) |
 | Full body | moves and twirls for a full-body look |
 | Big moves | longer full-body moves, 7 to 15 seconds: dances, turning her back to you, a curtsy, tai chi |
-| Picture looks | turning to a picture beside her |
+| Picture looks | turning to a picture beside her (usual looks and outfits; an outfit without them glances its way with a quiet clip) |
 | Pose changes | moving between her two waist-up poses |
 
 **Plan for many looks at once** plans the same library actions in many looks in one step, for
