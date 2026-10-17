@@ -555,6 +555,51 @@ EOF
 A timestamp back means it worked; an `error` naming ImageIO means the native
 build is still in use.
 
+### Updating signal-cli
+
+`upgrade-signal-cli.sh` and the bridge README's manual procedure are for the
+systemd install on Linux; on the Mac the daemon runs the JVM build from
+`~/.local/opt` under launchd, so the swap is by hand. The bridge's 09:00 check
+messages you when a release is out; read its notes and the issues page first.
+Done this way for 0.14.7 → 0.14.9 on 2026-10-16:
+
+```bash
+V=0.14.9
+cd ~/.local/opt
+curl -sSLfO https://github.com/AsamK/signal-cli/releases/download/v$V/signal-cli-$V.tar.gz
+shasum -a 256 signal-cli-$V.tar.gz   # compare with the digest on the release page
+tar xzf signal-cli-$V.tar.gz && rm signal-cli-$V.tar.gz
+
+cd ~/Projects/Choom/nextjs-app/services/signal-bridge
+./servicectl.sh stop signal-bridge; ./servicectl.sh stop signal-cli-daemon
+B=~/.local/share/signal-cli-upgrade-$(date +%F); mkdir -p $B
+cp -Rp ~/.local/share/signal-cli $B/signal-cli-data      # account data, first
+cp -p .env $B/bridge.env; cp -p ~/Library/LaunchAgents/com.choom.signal-cli-daemon.plist $B/
+sed -i "" "s|signal-cli-[0-9.]*/bin|signal-cli-$V/bin|" \
+  ~/Library/LaunchAgents/com.choom.signal-cli-daemon.plist .env
+./servicectl.sh start signal-cli-daemon; sleep 10; ./servicectl.sh start signal-bridge
+```
+
+The plist has to be edited because `launchctl kickstart` reuses the loaded
+copy; `stop`/`start` (bootout/bootstrap) rereads it. Keep the backups out of
+the repo: `.env.bak` is not gitignored. Check through the socket:
+
+```bash
+python3 -c 'import socket,json; s=socket.socket(socket.AF_UNIX); s.connect("/tmp/signal-cli-socket"); s.sendall(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"version\"}\n"); print(s.makefile().readline())'
+```
+
+and look for `Started JSON-RPC server` in `data/logs/signal-cli-daemon.log`.
+To roll back, put the old version back in the plist and `.env` and stop/start
+again; the old directory stays in `~/.local/opt`. Leave the Homebrew copy
+alone: nothing runs it (it is the native build without AWT, see above).
+
+**Restarting the bridge reloads reminders**, and before 2026-10-16 that
+deleted any reminder made in the web app: Python 3.11 reads its `...Z` time as
+aware, comparing it with naive `now` raised, and the restore path removed the
+entry. Fixed in `scheduler.py` (`_parse_remind_at`, and a failed restore keeps
+the entry). After a restart, `Restored N pending reminders` in `bridge.log`
+should match the `reminders` in `bridge-config.json`.
+
 ### Settings look blank after moving a service to another host
 
 Not lost — unresolvable. Dropdowns are populated from whatever the service

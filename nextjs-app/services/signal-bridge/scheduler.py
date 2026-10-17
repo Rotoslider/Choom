@@ -58,6 +58,16 @@ def _note_written_line(created_at: Optional[str], now: datetime) -> str:
     return f"[You wrote this note on {when} — {ago}.]"
 
 
+def _parse_remind_at(value: str) -> datetime:
+    """A reminder's remind_at as naive local time, which the scheduler compares
+    against datetime.now(). The web app writes UTC with a Z; Python 3.11+ reads
+    that as an aware datetime, and comparing it with a naive one raises."""
+    remind_at = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if remind_at.tzinfo is not None:
+        remind_at = datetime.fromtimestamp(remind_at.timestamp())
+    return remind_at
+
+
 class ScheduledTaskManager:
     """Manages scheduled tasks, heartbeats, and cron jobs"""
 
@@ -363,7 +373,7 @@ class ScheduledTaskManager:
 
         for r in reminders:
             try:
-                remind_at = datetime.fromisoformat(r["remind_at"])
+                remind_at = _parse_remind_at(r["remind_at"])
                 if remind_at <= now:
                     # Expired while bridge was down — fire immediately
                     self.send_message_to_owner(
@@ -388,8 +398,9 @@ class ScheduledTaskManager:
                     self.add_one_time_task(task_id, send_reminder, remind_at)
                     restored += 1
             except Exception as e:
+                # Kept, not removed: _check_new_reminders tries it again. Removing
+                # it here once deleted a birthday reminder on a plain restart.
                 logger.warning(f"Failed to restore reminder {r.get('id')}: {e}")
-                remove_reminder(r.get("id", ""))
 
         if restored:
             logger.info(f"Restored {restored} pending reminders from config")
@@ -414,12 +425,7 @@ class ScheduledTaskManager:
                 pass
 
             try:
-                remind_at = datetime.fromisoformat(r["remind_at"].replace("Z", "+00:00"))
-                # Convert to naive local time if timezone-aware
-                if remind_at.tzinfo is not None:
-                    import time as _time
-                    utc_ts = remind_at.timestamp()
-                    remind_at = datetime.fromtimestamp(utc_ts)
+                remind_at = _parse_remind_at(r["remind_at"])
 
                 if remind_at <= now:
                     # Past due — fire immediately
@@ -3101,20 +3107,28 @@ Be practical. Only work on things that can actually be accomplished with the too
             return (0,)
 
     def _installed_signal_cli_version(self):
-        """Read the installed signal-cli version from the systemd ExecStart path,
-        falling back to the highest version directory found in /opt."""
-        svc = "/etc/systemd/system/signal-cli-daemon.service"
-        try:
-            if os.path.exists(svc):
-                with open(svc) as f:
-                    m = re.search(r"signal-cli-(\d+\.\d+\.\d+)", f.read())
-                    if m:
-                        return m.group(1)
-        except Exception as e:
-            logger.debug(f"Could not read service file for signal-cli version: {e}")
+        """Read the installed signal-cli version from the daemon's service file
+        (systemd on Linux, the launchd plist on macOS), then from SIGNAL_CLI_PATH,
+        falling back to the highest version directory in /opt or ~/.local/opt.
+        Before the plist and ~/.local/opt were read, the Mac always found None
+        and skipped the check, so 0.14.8 and 0.14.9 came and went unannounced."""
+        for svc in ("/etc/systemd/system/signal-cli-daemon.service",
+                    os.path.expanduser("~/Library/LaunchAgents/com.choom.signal-cli-daemon.plist")):
+            try:
+                if os.path.exists(svc):
+                    with open(svc) as f:
+                        m = re.search(r"signal-cli-(\d+\.\d+\.\d+)", f.read())
+                        if m:
+                            return m.group(1)
+            except Exception as e:
+                logger.debug(f"Could not read {svc} for signal-cli version: {e}")
+
+        m = re.search(r"signal-cli-(\d+\.\d+\.\d+)/", config.SIGNAL_CLI_PATH or "")
+        if m:
+            return m.group(1)
 
         versions = []
-        for path in glob.glob("/opt/signal-cli-*"):
+        for path in glob.glob("/opt/signal-cli-*") + glob.glob(os.path.expanduser("~/.local/opt/signal-cli-*")):
             m = re.search(r"signal-cli-(\d+\.\d+\.\d+)$", path)
             if m:
                 versions.append(m.group(1))
@@ -3173,15 +3187,27 @@ Be practical. Only work on things that can actually be accomplished with the too
                 return
 
             script = os.path.join(os.path.dirname(__file__), "upgrade-signal-cli.sh")
+            if config._IS_MACOS:
+                # upgrade-signal-cli.sh is systemd-only
+                apply = (
+                    f"When ready, on the Mac follow \"Updating signal-cli\" in MAC-SETUP.md: "
+                    f"unpack the JVM build into ~/.local/opt, point the daemon plist and "
+                    f"SIGNAL_CLI_PATH at it, restart both services. The old version stays "
+                    f"in ~/.local/opt for rollback."
+                )
+            else:
+                apply = (
+                    f"When ready, on the NUC run:\n"
+                    f"  sudo {script} {latest}\n\n"
+                    f"It backs up the current install and auto-rolls-back if the daemon "
+                    f"fails to come up. The old version stays in /opt for instant rollback."
+                )
             message = (
                 f"signal-cli {latest} is available (you have {current}).\n\n"
                 f"Not auto-applied — review first:\n"
                 f"• Release notes: https://github.com/AsamK/signal-cli/releases/tag/v{latest}\n"
                 f"• Issues: https://github.com/AsamK/signal-cli/issues\n\n"
-                f"When ready, on the NUC run:\n"
-                f"  sudo {script} {latest}\n\n"
-                f"It backs up the current install and auto-rolls-back if the daemon "
-                f"fails to come up. The old version stays in /opt for instant rollback."
+                + apply
             )
             self.send_message_to_owner(message, include_audio=False, choom_name="System")
 

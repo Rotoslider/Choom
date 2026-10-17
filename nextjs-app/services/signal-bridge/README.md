@@ -466,6 +466,29 @@ print(sock.makefile('r').readline())
 sock.close()
 ```
 
+### "Linked device will be unlinked" (your own number)
+
+A different warning, and the keepalive does not cover it. The keepalive
+refreshes the Choom's number (`SIGNAL_PHONE_NUMBER`), which signal-cli runs as
+a primary device. The original setup (Step 2 above) also linked signal-cli to
+**your** number as a secondary device. On the Mac Studio that device is named
+"Mac Studio Choom". Nothing uses it any more: the daemon runs only the Choom's
+number, and your number is just the recipient. Signal unlinks a linked device
+that has not connected for about 30 days and warns on your phone first. It
+had last connected on Sep 9 when the warning came on 2026-10-16.
+
+To keep it, sign in once as that device. This lists your devices without
+receiving any messages, and the Last seen date on "this device" turns to today:
+
+```bash
+~/.local/opt/signal-cli-0.14.9/bin/signal-cli --config ~/.local/share/signal-cli \
+  -a +1YOUR_NUMBER listDevices
+```
+
+Or let it go: unlink it from your phone (Settings → Linked Devices). Then the
+Choom's number stays your only link to the bridge, and the Mac stops holding a
+device on your account.
+
 ### Reference
 
 - [signal-cli issue #1728](https://github.com/AsamK/signal-cli/issues/1728) — original discussion of the inactivity warning
