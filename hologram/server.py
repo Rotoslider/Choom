@@ -232,16 +232,40 @@ def display_watchdog():
 
 # --- Choom app feed -------------------------------------------------------------------------
 choom_feed = {"state": "starting", "url": CHOOM_URL}
+app_mute = {}  # the Choom app's mute as last heard: {"muted": bool}, replayed to a page that just started
+
+
+def replay_state():
+    """State that only reaches the page when it changes, for a page that has just (re)started: its mute
+    (every build relaunches the glass, which came back talking while the app was muted), Donny's presence,
+    whether he's looking at the glass, and the weather (sent every 2 minutes anyway)."""
+    events = []
+    if "muted" in app_mute:
+        events.append({"type": "mute", "muted": app_mute["muted"]})
+    if latest.get("presence"):
+        events.append(latest["presence"])
+    if latest.get("gaze"):
+        events.append({"type": "gaze", **latest["gaze"]})
+    if latest.get("weather"):
+        events.append(latest["weather"])
+    return events
 
 
 def follow_choom():
-    """Relay the Choom app's /api/hologram/events to the page; reconnect whenever it drops."""
+    """Relay the Choom app's /api/hologram/events to the page; reconnect whenever it drops. After a drop
+    the page hears "reconnected": a turn whose end was lost with the feed would otherwise leave her
+    thinking (no sleep, no screensaver) until the next turn."""
+    dropped = False
     while True:
         try:
             request = urllib.request.Request(f"{CHOOM_URL}/api/hologram/events",
                                              headers={"Accept": "text/event-stream"})
             with urllib.request.urlopen(request, timeout=45) as response:  # the feed pings every 15 s
                 choom_feed.update(state="connected", since=time.strftime("%H:%M:%S"))
+                if dropped:
+                    broadcast({"type": "feed", "state": "reconnected"})
+                    log_entry({"kind": "feed", "state": "reconnected"})
+                    dropped = False
                 last_kind = {}  # per conversation: the last event type passed on
                 for raw in response:
                     line = raw.decode("utf-8", "replace").strip()
@@ -263,6 +287,8 @@ def follow_choom():
                     if event.get("type") == "glass_request":  # a Choom asking the glass (answered here)
                         threading.Thread(target=answer_glass, args=(event,), daemon=True).start()
                         continue
+                    if event.get("type") == "mute" and isinstance(event.get("muted"), bool):
+                        app_mute["muted"] = event["muted"]
                     source = event.get("source")
                     if source == "heartbeat" and event.get("chatId"):
                         autonomous_chats.add(event["chatId"])
@@ -287,6 +313,7 @@ def follow_choom():
                     broadcast({**event, "type": "choom", "event": event.get("type")})
         except Exception as e:  # network drop, app restart, timeout
             choom_feed.update(state=f"disconnected ({type(e).__name__})")
+        dropped = True
         time.sleep(3)
 
 
@@ -977,16 +1004,19 @@ class Handler(SimpleHTTPRequestHandler):
             self.end_headers()
             return
         if self.path == "/eyes":
-            # tower_eyes.py: Donny looking at the glass or away, or a camera plugged in or out. Only
-            # those changes are passed on and logged; no picture ever leaves tower_eyes.py.
-            if "camera" in entry:
+            # tower_eyes.py: Donny looking at the glass or away, his face there or gone, a camera plugged
+            # in or out. It sends the whole state on each change and every 30 s; only changes are passed
+            # to the page and logged. Only that state comes here: the pictures it serves go to the Choom
+            # app (its Camera tab, the Chooms' snapshots) through answer_camera, and none is ever kept.
+            if "camera" in entry and entry["camera"] != latest.get("eyes_camera"):
                 latest["eyes_camera"] = entry["camera"]
                 self._log({"kind": "eyes", "camera": entry["camera"]})
-            else:
+            if "looking" in entry or "face" in entry:
                 gaze = {"looking": entry.get("looking") is True, "face": entry.get("face") is True}
-                latest["gaze"] = gaze
-                broadcast({"type": "gaze", **gaze})
-                self._log({"kind": "eyes", **gaze})
+                if gaze != latest.get("gaze"):
+                    latest["gaze"] = gaze
+                    broadcast({"type": "gaze", **gaze})
+                    self._log({"kind": "eyes", **gaze})
             self.send_response(204)
             self.end_headers()
             return
@@ -1021,6 +1051,8 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream")
         self.end_headers()
         q = queue.Queue()
+        for event in replay_state():  # what a page that just started can't know yet
+            q.put(json.dumps(event))
         with clients_lock:
             clients.add(q)
         try:

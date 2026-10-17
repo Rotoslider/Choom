@@ -51,6 +51,8 @@ FACE_AFTER = 1.5          # seconds a face must stay before he counts as arrived
                           # flash of a face at 7:05 am (nobody in view) woke the screens and Genesis welcomed no one
 FACE_BACK_S = 60.0        # he was here this recently: a face counts at once (he only turned away or leaned out)
 FACE_RUN_GAP = 0.5        # seconds between frames with a face that start a new run
+RESEND_S = 30.0           # the whole state again this often: a lost post, or the server restarting alone, left it
+                          # sure he was at the desk (face true) and it kept waking the screens
 CONFIG = Path(os.environ.get("HOLOGRAM_CONFIG", Path.home() / ".config" / "choom-hologram")) / "camera.json"
 PORT = 8766
 DEFAULTS = {
@@ -145,6 +147,7 @@ class Eyes:
         self.lock = threading.Lock()
         self.frame, self.frame_at, self.face_box, self.last_gaze = None, 0.0, None, None
         self.camera_name, self.controls = None, None
+        self.posted_at = float("-inf")  # when the state was last sent
         self.wake = threading.Event()       # a setting changed: the camera loop looks again at once
 
     def gaze(self, frame, now):
@@ -207,8 +210,9 @@ class Eyes:
             held = now - self.since[key]
             if at_glass != self.looking and held >= (LOOK_AFTER if at_glass else AWAY_AFTER):
                 self.looking, changed = at_glass, True
-        if changed:
-            post({"looking": self.looking, "face": self.face})
+        if changed or now - self.posted_at >= RESEND_S:
+            post({"looking": self.looking, "face": self.face, "camera": self.camera_name})
+            self.posted_at = now
         return changed
 
     def run_camera(self):
