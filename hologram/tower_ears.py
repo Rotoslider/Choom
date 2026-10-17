@@ -44,13 +44,20 @@ FOLLOW_UP_S = 8                  # after her answer, how long the mic stays open
 # 1.6 s every few sentences, which cut messages off mid-thought; only long thinking stops go past 2.5 s.
 SENTENCE_QUIET = 83
 MAX_SPEECH_S = 45                # the longest single message (the app's speech-to-text splits long ones)
-ROOM = "Chooms"                  # "OK Chooms" / "OK girls" / "OK everyone": the group room
+# Speech under these many seconds (counted in voiced frames: each capture also carries 300 ms before it and
+# the quiet that ended it, so its whole length never fell under the old limits) is a click, a knock or a
+# cough, not words: dropped before Whisper. A reply as short as "yes" is about 0.4 s of voice.
+MIN_VOICED_S = 0.2
+MIN_REPLY_VOICED_S = 0.3
+ROOM = "Chooms"                  # "OK Chooms" / "OK girls": the group room
 NAMES = {                        # what Whisper may write for each name
     "Aloy": r"aloy|aloi|eloy|eloi|aloe|alloy|alloi|a loy|aloya|aloha",
     "Optic": r"optic|optik|optics|optick",
     "Genesis": r"genesis|genisis|jenesis",
     "Eve": r"eve|eva|eave|evie",
-    ROOM: r"chooms?|choom's|chums|chumps|girls|gals|everyone|everybody",   # all of them: the group room
+    # All of them: the group room. Not "everyone": "Okay, everyone..." on a call or a video near the tower
+    # would send the rest of the sentence to their room.
+    ROOM: r"chooms?|choom's|chums|chumps|girls|gals",
 }
 
 # A Choom added later (Glass Studio) wakes by her name, or by the spellings in her manifest entry's
@@ -182,7 +189,7 @@ class Ears:
     def utterance(self, start_within=None, quiet_frames=25, close_if_speaking=False):
         """The next stretch of speech (with 300 ms before it), or None if none starts in time. It ends
         after quiet_frames of silence (25 = 750 ms, enough for "OK Aloy"; 40 for whole sentences)."""
-        ring, voiced, speech, silent_run = [], [], None, 0
+        ring, voiced, speech, silent_run, voiced_n = [], [], None, 0, 0
         recent = collections.deque(maxlen=quiet_frames)
         deadline = time.time() + start_within if start_within else None
         while True:
@@ -208,7 +215,7 @@ class Ears:
                 ring = (ring + [frame])[-10:]
                 voiced = (voiced + [is_speech])[-10:]
                 if sum(voiced) >= 6:
-                    speech = list(ring)
+                    speech, voiced_n = list(ring), sum(voiced)
                     if time.time() - self.voice_told > 20:  # someone is talking nearby: hold the screensaver
                         self.voice_told = time.time()
                         tell_hologram("voice")
@@ -216,16 +223,19 @@ class Ears:
                     return None
                 continue
             speech.append(frame)
+            voiced_n += is_speech
             # It ends when nine tenths of the last quiet_frames were quiet: a stray "speech" frame in
             # the room's background can't hold it open, and a short breath doesn't end it.
             recent.append(not is_speech)
             silent_run = sum(recent) if len(recent) == quiet_frames else 0
             if silent_run >= 0.9 * quiet_frames or len(speech) >= MAX_SPEECH_S * RATE // FRAME:
                 pcm = b"".join(speech)
-                self.last_capture = {"seconds": round(len(pcm) / 2 / RATE, 1),
+                self.last_capture = {"seconds": round(len(pcm) / 2 / RATE, 1), "voiced": round(voiced_n * FRAME / RATE, 2),
                                      "ended": "quiet" if silent_run >= 0.9 * quiet_frames else f"{MAX_SPEECH_S} s cap",
                                      "floor": round(self.floor, 1)}
-                return pcm if len(pcm) >= int(0.4 * RATE) * 2 else self.utterance(start_within and max(deadline - time.time(), 0.1), quiet_frames)
+                if voiced_n * FRAME / RATE >= MIN_VOICED_S:
+                    return pcm
+                return self.utterance(start_within and max(deadline - time.time(), 0.1), quiet_frames, close_if_speaking)
 
     def wake(self, pcm):
         """(Choom, rest of what was said) if the utterance opens with a wake phrase."""
@@ -340,9 +350,9 @@ class Ears:
                     if not rest:
                         pcm = None
                         continue
-            # In the reply window, a sound under 0.8 s (a cough, a door, the end of a word on the TV)
-            # isn't a reply: keep listening without bothering speech-to-text.
-            short = follow_up and len(pcm) < int(0.8 * RATE) * 2
+            # In the reply window, a sound with under MIN_REPLY_VOICED_S of voice (a cough, a door, the end
+            # of a word on the TV) isn't a reply: keep listening without bothering speech-to-text.
+            short = follow_up and self.last_capture.get("voiced", 1.0) < MIN_REPLY_VOICED_S
             sent = None if short else self.send(choom, pcm, rest)
             if sent is None:
                 empty += 1
