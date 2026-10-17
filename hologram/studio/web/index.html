@@ -21,6 +21,10 @@
     <span class="dot"></span><span id="jobsText">Idle</span>
   </button>
 </header>
+<div id="pausedBanner" class="paused-banner" role="status" hidden>
+  <span id="pausedText"></span>
+  <button id="resumeButton" type="button" class="primary" data-tip="Start the work list again: a render paused partway goes on from the clips it hadn't rendered">Resume</button>
+</div>
 
 <main id="main">
   <section class="intro" id="intro">
@@ -169,7 +173,13 @@
 </main>
 
 <aside id="jobsPanel" class="jobs-panel" hidden>
-  <div class="jobs-head"><h3>Work</h3><button id="jobsClose" class="ghost" type="button" aria-label="Close" data-tip="Close the work list">✕</button></div>
+  <div class="jobs-head"><h3>Work</h3>
+    <div class="row">
+      <button id="pauseButton" class="ghost" type="button" data-tip="Pause the work list after the item it's on (a render, after the clip it's on)">Pause</button>
+      <button id="cleanupButton" class="ghost" type="button" data-tip="Disk use, and files nothing uses any more">Clean up…</button>
+      <button id="jobsClose" class="ghost" type="button" aria-label="Close" data-tip="Close the work list">✕</button>
+    </div>
+  </div>
   <div id="jobsList"></div>
 </aside>
 
@@ -203,6 +213,22 @@
 </dialog>
 
 <dialog id="zoom"><img id="zoomImg" alt=""></dialog>
+
+<dialog id="pauseDialog" class="small-dialog">
+  <h2>Pause the work list?</h2>
+  <p id="pauseWhat"></p>
+  <p class="hint">Waiting jobs stay waiting, and nothing new starts on the GPU until you resume, even when a scheduled time comes. Checks of clips already made carry on.</p>
+  <div class="row-end"><button id="pauseCancel" class="ghost" type="button">Keep working</button><button id="pauseConfirm" class="primary" type="button">Pause</button></div>
+</dialog>
+
+<dialog id="cleanupDialog" class="small-dialog wide-dialog">
+  <h2>Clean up</h2>
+  <p id="cleanupDisk" class="muted">Measuring…</p>
+  <div id="cleanupList" class="cleanup-list"></div>
+  <label class="cleanup-days">Old takes: older than <input id="cleanupDays" type="number" min="1" value="30"> days</label>
+  <p class="hint">Never deleted: anything a kept, planned, queued or rendered clip uses, a look's picture, versions a look is waiting on, or a queue a job still uses. Deleting can't be undone.</p>
+  <div class="row-end"><button id="cleanupClose" class="ghost" type="button">Close</button><button id="cleanupGo" class="primary" type="button" disabled>Delete the ticked</button></div>
+</dialog>
 
 <dialog id="askDialog" class="small-dialog">
   <h2 id="askTitle"></h2>

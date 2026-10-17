@@ -11,20 +11,26 @@
     python3 studio/studio.py keep|drop CHOOM CLIP ...    decide on rendered clips
     python3 studio/studio.py place|remove CHOOM CLIP ... put kept clips on the glass, or take them off
     python3 studio/studio.py build CHOOM [--no-relaunch]   build her sequence and reload the glass
+
+render and build go through the Studio's work list when it's running (so they take their turn on the
+GPU); otherwise they run here.
     python3 studio/studio.py import [CHOOM ...]          adopt clips made before the Studio
 
 Settings: ~/.config/choom-hologram/studio.json (see config.py). The Studio page does all of this too.
 """
+import json
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import build  # noqa: E402
 import plan  # noqa: E402
 import render  # noqa: E402
-from config import WAN2GP_PYTHON  # noqa: E402
+from config import CFG, WAN2GP_PYTHON  # noqa: E402
 from project import Project, editing  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
@@ -64,10 +70,27 @@ def plan_cmd(args):
             print(f"{name or '-':40} {message}")
 
 
+def studio(path, body):
+    """POST to the running Studio; None if it isn't running."""
+    url = f"http://127.0.0.1:{CFG['port']}{path}"
+    req = urllib.request.Request(url, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        raise SystemExit(json.load(e).get("error", str(e)))
+    except (urllib.error.URLError, ConnectionError):
+        return None
+
+
 def render_cmd(args):
     chooms = [a for a in args if not a.startswith("--")]
     name = args[args.index("--queue") + 1] if "--queue" in args else time.strftime("studio_%Y%m%d-%H%M%S")
     chooms = [c for c in chooms if c != name]
+    sent = studio("/api/render", {"chooms": chooms, "queue": name})
+    if sent is not None:  # the Studio's work list renders it, in turn with its other GPU work
+        print(f"queued in the Studio as job {sent['job']['id']} ({sent['job']['args']['clips']} clips); follow it on the page")
+        return
     picks = [(cid, n) for cid in chooms for n, c in Project.load(cid).clips.items() if c["status"] == "planned"]
     if not picks:
         raise SystemExit("nothing planned")
@@ -125,7 +148,11 @@ def main():
     elif cmd in ("place", "remove"):
         place(cmd == "place", args)
     elif cmd == "build":
-        build.build(args[0], relaunch="--no-relaunch" not in args)
+        sent = studio("/api/build", {"choom": args[0], "relaunch": "--no-relaunch" not in args})
+        if sent is not None:
+            print(f"queued in the Studio as job {sent['job']['id']}" + (" (one was already waiting)" if sent.get("already") else ""))
+        else:
+            build.build(args[0], relaunch="--no-relaunch" not in args)
     elif cmd == "import":
         subprocess.run([sys.executable, str(HERE / "import_existing.py"), *args], check=True)
     else:

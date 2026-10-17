@@ -301,7 +301,7 @@ lowering and raising her hand. The video model handles them; the glass doesn't p
 | The Studio page doesn't open | Is it running? `python3 studio/studio.py serve` from the hologram folder; is port 8767 free? |
 | Klein made no pictures | The work list's error, and `clean/drafts/run_*/wan2gp.log`; check the `wan2gp` path in studio.json |
 | Make pictures says the prompt names different clothes | Klein reads only the instruction: make it name the same clothes as "She now wears" |
-| A render hasn't started | The work list: it may be scheduled for later, or waiting behind another GPU job |
+| A render hasn't started | The work list: it may be scheduled for later, waiting behind another GPU job, or the work list is paused (a banner says so; **Resume**) |
 | A render stops partway | `queue/<name>.log`. Clips that didn't render go back to planned; render them again |
 | Build fails | The work list shows the failing step's output; check `forge_python` in studio.json |
 | She isn't on the glass | Did *Put her on the glass* finish? `portraits/manifest.json` should list her |

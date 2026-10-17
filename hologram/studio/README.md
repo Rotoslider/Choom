@@ -105,10 +105,16 @@ quiet moments she has in it before one repeats.
 - The bar at the top says what changed since the last build, and anything that has to be fixed
   first: every waist-up look on the glass needs a loop she can talk over (its base loop), and every
   clip needs its file.
-- **Build and put on the glass** makes cut-outs, depth and reliefs for the new clips only, reloads the
-  glass once no Choom is talking, and then clears the old videos. A build reads her sequence when it
-  starts, so there is never more than one waiting build per Choom: clicking again while one waits
-  adds nothing, and changes made while a build runs go into the next one.
+- **Build and put on the glass** makes cut-outs, depth and reliefs for the new clips only. The glass
+  reloads at its next quiet moment (no Choom talking), and after that the videos and caches of clips
+  that aren't hers any more are cleared away. A build can also wait: **Schedule** builds at a time
+  (11 pm, say), and **After the render** builds as soon as the render waiting or running now has
+  finished. A build reads her sequence when it starts, so there is never more than one waiting build
+  per Choom: clicking again while one waits adds nothing (a new time replaces the old one), and changes
+  made while a build runs go into the next one.
+- **Home pose** (for a Choom with a relaxed look): the pose she falls asleep from, wakes into and
+  changes clothes in. Aloy's is relaxed, hand down. It's kept in her project (`"home"`); clips planned
+  from then on take it, and the next build puts it on the glass.
 
 An outfit can only be worn once its waist-up look has a loop she can talk over on the glass. Its full
 body (`full@<outfit>`) plays only while she wears the outfit, so build the outfit's waist-up clips
@@ -193,21 +199,69 @@ checks, while the rest keep rendering.
 
 ![The work list: a render running and another waiting for 11 pm](docs/images/outfit-6-rendering.jpg)
 
-Everything the Studio does runs as a job in one of two lanes:
+Everything the Studio does runs as a job in one of three lanes:
 
 | Lane | Jobs | |
 |---|---|---|
 | GPU | renders, Klein pictures, builds, a new Choom's still relief | one at a time, in order |
 | CPU | contact sheets and checks | beside whatever the GPU is doing |
+| Glass | reloading the glass after a build | waits for a quiet moment |
 
-A scheduled job waits with its start time shown ("waiting at 11:00 PM"). Waiting and running jobs stay
-at the top of the list, above the finished ones. **Cancel** stops a job; cancelling a render stops
-Wan2GP and puts the clips it hadn't rendered back in the plan.
+A scheduled job shows what it waits for ("waiting until 11:00 PM", "waiting until the render has
+finished"). Waiting, running and paused jobs stay at the top of the list, above the finished ones. The
+pill in the corner says what's happening: rendering 12/44, building, pausing, paused.
 
-Jobs are kept in `studio/jobs.json`, so they survive a reload of the page and a restart of the
-Studio. A render keeps going if the Studio stops, and the Studio watches it again when it restarts;
-a render that finished meanwhile counts as done if every clip arrived. Other jobs that were running
-when the Studio stopped are marked failed; start them again from the page.
+**Cancel** stops a job. The tool it runs is stopped (asked first, then made to stop if it hasn't within
+30 seconds), and the lane stays taken ("stopping…") until it really has, so nothing new starts beside
+it on the GPU. Cancelling a render puts the clips it hadn't rendered back in the plan.
+
+**Pause** (in the work list's header) pauses the work list. It can't stop a tool halfway without
+losing its work, so it says what will happen first and waits for the item that's running to finish:
+
+- **A render** stops once the clip it's on has landed. Its other clips stay queued in the paused job.
+- **A build or Klein pictures** finish, then the GPU lane holds.
+- **Nothing more starts on the GPU** until you press **Resume**, even when a scheduled time comes; the
+  checks of clips already made carry on.
+
+A banner across the page says pausing or paused. **Resume** carries on: a paused render goes on from
+the clips it hadn't rendered (as a new queue, `<name>-r2`). The pause is kept in
+`studio/worklist.json`, so it outlasts a restart of the Studio.
+
+**Reloading the glass** after a build is a job of its own. It waits up to ten minutes for no Choom to
+be talking; if the glass stays busy (a room the Chooms run at night, say), it tries again five minutes
+later, instead of failing the build. Several builds share one waiting reload. Once the glass has
+reloaded, `make_alive.py --prune` deletes the old videos, and the cut-out and depth caches of clips
+she no longer has (dropped ones, ones re-rolled away).
+
+Jobs are kept in `studio/jobs.json`, and every tool runs in its own session with its process kept in
+its job, so jobs survive a reload of the page and a restart of the Studio:
+- **A render, a build or Klein pictures keep going** while the Studio is down, and it watches them again
+  when it restarts (it checks the process really is that tool before trusting it).
+- **A build picks up at the step it was on** (that step runs once more and only redoes what didn't get
+  done). A build's output goes to `studio/logs/build_<choom>.log`.
+- **Klein's pictures arrive in the look's versions as usual.** If Klein never started, its versions are
+  marked failed rather than left "making".
+- **A render that finished meanwhile** counts as done if every clip arrived.
+- **A render paused partway** stays paused.
+
+If Wan2GP ever writes videos the Studio can't match to a clip (its naming changed, say), the render
+fails and names the files instead of quietly planning the clips again.
+
+**Clean up…** (in the work list's header) shows disk use and what nothing uses any more:
+- videos of dropped clips
+- old takes older than a number of days
+- Klein versions no look is waiting on
+- finished render queues
+- cut-out and depth caches of clips she no longer has (about 230 MB a clip)
+
+Tick what to delete; a second click confirms. Never deleted: anything a kept, planned, queued or
+rendered clip uses, a look's picture, versions a look is waiting on, or a queue a job still uses.
+
+**A morning summary on Signal** (optional): when a scheduled render or build, or a run of them, has
+finished or failed, the Studio sends one short message through the Choom app, in one Choom's Signal
+thread. It lists what ran, anything that failed and why, and how many clips wait for review and how
+many are flagged. Anything that ends between 10 pm and 7 am waits until 7. Turn it on in
+`studio.json` (see Setup).
 
 ### Looks
 
@@ -416,11 +470,29 @@ you leave out uses the default in `config.py`:
   "video_model": "minimax_h3_fl2va_pdd",
   "picture_model": "flux2_klein_9b",
   "minutes_per_clip": 5.5,
-  "port": 8767
+  "port": 8767,
+  "notify": {"url": "http://your-mac.local:3000", "choom": "Aloy", "quiet": [22, 7], "dry_run": false}
 }
 ```
 
-`minutes_per_clip` only sets the time estimates on the page.
+`minutes_per_clip` only sets the time estimates on the page. `notify` sends the morning summary:
+- **url:** the Choom app; empty turns it off.
+- **choom:** whose Signal thread it comes in, by name or id.
+- **quiet:** the hours it holds messages.
+- **dry_run:** writes the message to `studio/studio.log` instead of sending it.
+
+Settings for testing:
+- `portraits` and `tools` point a test Studio at its own portraits folder and stand-in build tools,
+  so it never writes or relaunches the real glass.
+- `relaunch_retry_s` (default 300) sets how long a reload waits after finding the glass busy.
+
+The API answers only the Studio page and tools on this machine. A POST must send JSON
+(`Content-Type: application/json`), and one from another web page (another `Origin`) is refused. To
+use it from a terminal:
+
+```
+curl -X POST 127.0.0.1:8767/api/jobs/pause -H 'Content-Type: application/json' -d '{}'
+```
 
 The workspace holds four folders. Back it up; clips take hours to make.
 
@@ -449,6 +521,9 @@ python3 studio/studio.py build optic [--no-relaunch]   # put her sequence on the
 python3 studio/studio.py import [CHOOM ...]            # adopt clips made before the Studio
 ```
 
+While the Studio is running, `render` and `build` go into its work list, so they take their turn on the
+GPU and show on the page; otherwise they run in the terminal.
+
 `import` (`studio/import_existing.py`) reads the old render queues (`queue/<name>.zip` with
 `<name>_plan.json`) for each clip's prompt and seed, and the glass's `alive.json` for what's on the
 glass.
@@ -467,8 +542,10 @@ glass.
 | `render.py` | Wan2GP queue zips (`templates/h3_task.json`), the headless run, collecting outputs by seed |
 | `review.py` | contact sheets and automatic checks (needs numpy) |
 | `pictures.py` | Klein edits for new looks (outfits, full body, asleep, new pictures, a new Choom) |
-| `build.py` | still reliefs for new Chooms; masks, depth and reliefs; relaunch; prune |
-| `jobs.py` | the GPU and CPU work lists |
+| `build.py` | still reliefs for new Chooms; the build's steps (masks, depth and reliefs), her closet, relaunch, prune |
+| `jobs.py` | the work list: GPU, CPU and glass lanes, pause and resume, picking jobs up after a restart |
+| `notify.py` | the morning summary on Signal |
+| `housekeeping.py` | disk use and what nothing uses any more |
 | `import_existing.py` | adopts clips made before the Studio |
 | `web/` | the page |
 | `docs/` | the tutorials and their screenshots |

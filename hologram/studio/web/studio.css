@@ -308,7 +308,30 @@ button.small { padding: 3px 10px; font-size: 12px; }
 .wishes-done .wish span { color: var(--muted); }
 .takes { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; font-size: 12px; margin: 2px 0 6px; }
 .take { display: inline-flex; gap: 2px; }
+
+/* The work list paused, clean-up, build scheduling */
+.jobs-pill.paused .dot { background: var(--warn); }
+.jobs-head .row { display: flex; gap: 6px; align-items: center; }
+.paused-banner { display: flex; gap: 14px; align-items: center; justify-content: space-between; padding: 10px 28px;
+  background: color-mix(in srgb, var(--warn) 14%, var(--panel)); border-bottom: 1px solid color-mix(in srgb, var(--warn) 45%, transparent); color: var(--fg); font-size: 14px; }
+.small-dialog { width: min(520px, calc(100vw - 32px)); padding: 20px 22px; border: 1px solid var(--line-2); border-radius: 14px; background: var(--panel-2); color: var(--fg); }
+.small-dialog.wide-dialog { width: min(640px, calc(100vw - 32px)); }
+.small-dialog::backdrop { background: #000b; }
+.small-dialog h2 { font-size: 18px; margin: 0 0 10px; }
+.small-dialog p { margin: 0 0 12px; }
+.cleanup-list { display: grid; gap: 8px; margin: 12px 0; }
+.cleanup-list .check { display: flex; gap: 8px; align-items: center; font-size: 14px; }
+.cleanup-days { display: flex; gap: 8px; align-items: center; color: var(--muted); font-size: 13px; margin-bottom: 8px; }
+.cleanup-days input { width: 5em; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; }
+.build-actions { display: grid; gap: 8px; justify-items: end; }
+.build-actions .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: end; }
+.build-actions input[type=time] { background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; }
+.home-pose select { background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px; margin-left: 4px; }
 .ask-input { display: grid; gap: 4px; color: var(--muted); font-size: 12px; margin: 8px 0 14px; }
 .ask-input input { background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font: 13px var(--mono); }
 button.primary.danger { background: var(--warn); }
 .look-card .row { flex-wrap: wrap; }
+/* On the glass: a tap puts a clip on or takes it off (no drag and drop on a phone) */
+.tile .flip { position: absolute; left: 3px; top: 3px; z-index: 2; width: 22px; height: 22px; padding: 0; border-radius: 50%; border: 1px solid var(--line-2); background: #000b; color: var(--fg); font: 600 14px/1 var(--sans); cursor: pointer; opacity: 0; transition: opacity .15s; }
+.tile:hover .flip, .tile .flip:focus-visible { opacity: 1; }
+@media (hover: none) { .tile .flip { opacity: 1; } }

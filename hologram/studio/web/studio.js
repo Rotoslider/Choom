@@ -152,7 +152,7 @@ function renderHead() {
       ? `${c.sequence.length - c.glass.added.length + c.glass.removed.length} clips on the glass (${c.sequence.length} once built)`
       : `${c.sequence.length} clips on the glass`, `${Object.keys(c.looks).length} looks`,
     counts.rendered ? `${counts.rendered} to review` : null, counts.planned ? `${counts.planned} planned` : null,
-    counts.queued ? `${counts.queued} rendering` : null,
+    counts.queued ? queuedSummary(c) : null,
     state.renderLater ? 'newer changes show when you leave the field you’re editing or save it' : null,
   ].filter(Boolean).join(' · ');
 }
@@ -343,13 +343,34 @@ function renderGlass() {
     + (building ? ' A build is running now; changes made since it started go in with the next one.' : '');
   const build = el('button', { className: 'primary', type: 'button', disabled: !!c.problems.length || !(added.length || removed.length), tip: 'Cut-outs, depth and reliefs for new clips (only new ones are encoded), then the glass reloads once nobody is talking' },
     'Build and put on the glass');
-  build.addEventListener('click', attempt(async () => {
-    const r = await api('/api/build', { choom: state.cid });
-    toast(r.already
-      ? 'A build for her is already waiting; it reads her sequence when it starts, so it will include this'
-      : 'Building: cut-outs, depth and reliefs for the new clips, then the glass reloads when she is quiet');
+  const startBuild = (body) => attempt(async () => {
+    const r = await api('/api/build', { choom: state.cid, ...body });
+    const j = r.job;
+    const when = j.after ? 'after the render' : j.not_before > Date.now() / 1000 ? `at ${clock(j.not_before)}` : '';
+    toast(r.already ? `A build for her is already waiting${when ? ` (now ${when})` : ''}; it reads her sequence when it starts, so it includes this`
+      : when ? `Build scheduled ${when}; it reads her sequence when it starts`
+        : startWords(r, 'Building: cut-outs, depth and reliefs for the new clips, then the glass reloads when she is quiet'));
     pollJobs();
-  }));
+  })();
+  build.addEventListener('click', () => startBuild({}));
+  const buildAt = el('input', { type: 'time', value: '23:00', tip: 'Build at this time' });
+  const renderAhead = state.jobs.some((j) => j.kind === 'render' && ['waiting', 'running', 'paused'].includes(j.status));
+  const buildBox = el('div', { className: 'build-actions' }, build,
+    el('div', { className: 'row' },
+      el('span', { className: 'muted' }, 'or at'), buildAt,
+      el('button', { className: 'ghost', type: 'button', disabled: !!c.problems.length, tip: 'Build at this time (tonight, say); the GPU takes turns, so it waits for any render running then', onclick: () => {
+        const [h, m] = buildAt.value.split(':').map(Number);
+        const t = new Date(); t.setHours(h, m, 0, 0);
+        if (t < new Date()) t.setDate(t.getDate() + 1);
+        startBuild({ at: Math.round(t / 1000) });
+      } }, 'Schedule'),
+      renderAhead ? el('button', { className: 'ghost', type: 'button', disabled: !!c.problems.length, tip: 'Build as soon as the render waiting or running now has finished', onclick: () => startBuild({ after: 'render' }) }, 'After the render') : null));
+  const scheduled = state.jobs.find((j) => j.kind === 'build' && j.status === 'waiting' && j.args.choom === state.cid);
+  const home = c.looks.relaxed ? el('label', { className: 'muted home-pose', tip: 'The pose she falls asleep from, wakes into and changes clothes in (Aloy keeps her hand down: relaxed). Clips planned from now on take it; built clips at the next build' },
+    'Home pose ', el('select', { onchange: attempt(async (e) => {
+      state.choom = (await api(`/api/choom/${state.cid}/home`, { pose: e.target.value })).choom;
+      toast(`Her home pose is ${e.target.value}; build to put it on the glass`);
+    }) }, ...['main', 'relaxed'].map((v) => el('option', { value: v, selected: (c.home || 'main') === v }, v)))) : null;
   if (!c.inManifest) {
     const hasMain = !!c.looks.main?.picture;
     const kept = c.sequence.length;
@@ -371,8 +392,10 @@ function renderGlass() {
     el('div', { className: 'changes' }, el('div', {}, changes),
       ...c.problems.map((p) => el('div', { className: 'problem' }, p)),
       ...readinessWarnings(),
-      c.built ? el('div', { className: 'muted' }, `Last built ${c.built.time.replace('T', ' ')} (${c.built.clips} clips, ${c.built.minutes} min)`) : null),
-    build);
+      scheduled ? el('div', { className: 'muted' }, `A build is waiting${scheduled.after ? ' for the render to finish' : scheduled.not_before > Date.now() / 1000 ? ` for ${clock(scheduled.not_before)}` : ' for the GPU'}.`) : null,
+      c.built ? el('div', { className: 'muted' }, `Last built ${c.built.time.replace('T', ' ')} (${c.built.clips} clips, ${c.built.minutes} min)`) : null,
+      home),
+    buildBox);
 
   const looks = lookOrder(c.looks);
   $('#glassLooks').replaceChildren(...looks.map((look) => {
@@ -494,6 +517,19 @@ function tile(name, on) {
   });
   t.addEventListener('mouseleave', () => { clearTimeout(hover); $('video', t)?.remove(); });
   t.addEventListener('dblclick', () => play(name));
+  // A tap instead of a drag (a phone or tablet has no drag and drop here): + puts it on, − takes it off.
+  if (!main) {
+    t.append(el('button', {
+      className: 'flip', type: 'button', 'aria-label': on ? 'Take it off the glass' : 'Put it on the glass',
+      tip: on ? 'Take it off the glass' : 'Put it on the glass', textContent: on ? '−' : '+',
+      onclick: attempt(async (e) => {
+        e.stopPropagation();
+        state.choom = (await api(`/api/choom/${state.cid}/place`, { names: [name], on: !on })).choom;
+        toast(`${short(state.cid, name)} ${on ? 'off' : 'on'} the glass; build to make it so`);
+        renderGlass();
+      }),
+    }));
+  }
   return t;
 }
 
@@ -723,14 +759,14 @@ function renderPlanned() {
   const list = $('#planned');
   list.replaceChildren(
     ...(planned.length ? planned.map(plannedItem) : [el('p', { className: 'muted' }, 'Nothing planned. Pick actions on the left.')]),
-    queued.length ? el('p', { className: 'muted' }, `${queued.length} rendering now`) : null);
+    queued.length ? el('p', { className: 'muted' }, queuedSummary(c)) : null);
   const minutes = Math.round(planned.reduce((a, n) => a + state.minutesPerClip * (c.clips[n].frames || 124) / 124, 0));
   const box = $('#renderBox');
   if (!planned.length) { box.replaceChildren(); return; }
   const when = el('input', { type: 'time', value: '23:00' });
   const go = (at) => attempt(async () => {
-    await api('/api/render', { chooms: [state.cid], at });
-    toast(at ? `Queued for ${new Date(at * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'Rendering started');
+    const r = await api('/api/render', { chooms: [state.cid], at });
+    toast(at ? `Queued for ${clock(at)}` : startWords(r, 'Rendering started'));
     await refresh();
     pollJobs();
   })();
@@ -829,7 +865,9 @@ function renderLooks() {
           ...(wearsChanged ? { wearing: wears.value } : {}),
           ...(kleinKeep && kleinKeep.value.trim() !== (l.kleinKeep || '') ? { kleinKeep: kleinKeep.value.trim().replace(/[,. ]+$/, '') } : {}),
         })).choom;
-        toast(`${look} saved; clips planned from now on use it`);
+        const inQueue = Object.values(state.choom.clips).filter((k) => k.status === 'queued' && (k.from === look || k.to === look)).length;
+        toast(`${look} saved; clips planned from now on use it` + (inQueue
+          ? `. ${inQueue} of its clips are already queued to render and keep their old prompt (cancel that render and render again to use the new one)` : ''));
         if (wearsChanged) renderLooks(); // the Subject now names the new clothes
         else markClean(save.closest('.look-card'));
       }),
@@ -1143,21 +1181,50 @@ $('#ncCreate').addEventListener('click', attempt(async () => {
 }));
 
 // --- Jobs -----------------------------------------------------------------------------------------
-const STATE_WORDS = { waiting: 'waiting', running: 'running', done: 'done', failed: 'failed', cancelled: 'cancelled' };
+const STATE_WORDS = { waiting: 'waiting', running: 'running', done: 'done', failed: 'failed', cancelled: 'cancelled',
+  paused: 'paused', cancelling: 'stopping…' };
+const LIVE = ['waiting', 'running', 'paused', 'cancelling'];
+const GPU = ['render', 'build', 'picture', 'still'];
+const clock = (t) => new Date(t * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+// Where a queue's render stands, for the clips queued in it.
+function queueWords(queue) {
+  const job = state.jobs.find((j) => j.kind === 'render' && LIVE.includes(j.status) && [j.args.queue, ...(j.args.earlier || [])].includes(queue));
+  if (!job) return 'queued';
+  if (job.status === 'running') return 'rendering now';
+  if (job.status === 'paused' || state.worklist?.paused) return 'queued, the work list is paused';
+  if (job.not_before > Date.now() / 1000) return `queued, render at ${clock(job.not_before)}`;
+  return 'queued, waiting for the GPU';
+}
+function queuedSummary(c) {
+  const groups = {};
+  for (const k of Object.values(c.clips)) if (k.status === 'queued') { const w = queueWords(k.queue); groups[w] = (groups[w] || 0) + 1; }
+  return Object.entries(groups).map(([w, n]) => `${n} ${w}`).join(' · ');
+}
+// What a job just started waits behind, in words (the server says what's ahead of it).
+function startWords(r, now) {
+  if (r.ahead?.paused) return 'Queued; the work list is paused, so it starts when you resume';
+  if (r.ahead?.jobs?.length) return `Queued; it starts after the ${r.ahead.jobs[0]}${r.ahead.jobs.length > 1 ? ` and ${r.ahead.jobs.length - 1} more` : ''} ahead of it on the GPU`;
+  return now;
+}
 async function pollJobs() {
   try {
     const was = state.jobs.filter((j) => j.status === 'running');
     const before = was.map((j) => j.id).join() + `:${was.find((j) => j.kind === 'render')?.progress?.done ?? ''}`;
-    state.jobs = (await api('/api/jobs')).jobs;
+    const res = await api('/api/jobs');
+    state.jobs = res.jobs;
+    state.worklist = res.worklist || {};
     const running = state.jobs.filter((j) => j.status === 'running');
     const waiting = state.jobs.filter((j) => j.status === 'waiting');
     const pill = $('#jobsButton');
     const r = running.find((j) => j.kind === 'render');
     const lastFailed = state.jobs.length && state.jobs[state.jobs.length - 1].status === 'failed';
-    pill.className = `jobs-pill${running.length ? ' busy' : lastFailed ? ' failed' : ''}`;
-    $('#jobsText').textContent = r ? `Rendering ${r.progress?.done ?? 0}/${r.progress?.total || r.args.clips}`
-      : running.length ? `${running[0].kind === 'build' ? 'Building' : 'Checking'}…`
-        : waiting.length ? `${waiting.length} waiting` : lastFailed ? 'Last job failed' : 'Idle';
+    const wl = state.worklist;
+    pill.className = `jobs-pill${wl.paused ? ' paused' : running.length ? ' busy' : lastFailed ? ' failed' : ''}`;
+    $('#jobsText').textContent = wl.paused ? `Paused${waiting.length ? ` · ${waiting.length} waiting` : ''}`
+      : r ? `${wl.pausing ? 'Pausing · ' : 'Rendering '}${r.progress?.done ?? 0}/${r.progress?.total || r.args.clips}`
+        : running.length ? `${wl.pausing ? 'Pausing · ' : ''}${{ build: 'Building', picture: 'Klein', still: 'Still relief', relaunch: 'Reloading the glass', review: 'Checking' }[running[0].kind] || 'Working'}…`
+          : waiting.length ? `${waiting.length} waiting` : lastFailed ? 'Last job failed' : 'Idle';
+    renderPaused();
     renderJobs();
     // Refresh her clips when work starts or ends, or when a render lands another clip.
     const after = running.map((j) => j.id).join() + `:${r?.progress?.done ?? ''}`;
@@ -1167,21 +1234,22 @@ async function pollJobs() {
 setInterval(pollJobs, 8000);
 
 function renderJobs() {
+  $('#pauseButton').textContent = state.worklist?.paused || state.worklist?.pausing ? 'Resume' : 'Pause';
   const newest = [...state.jobs].reverse();
-  const live = newest.filter((j) => ['waiting', 'running'].includes(j.status));  // a long render stays on top of its reviews
+  const live = newest.filter((j) => LIVE.includes(j.status));  // a long render stays on top of its reviews
   $('#jobsList').replaceChildren(...[...live, ...newest.filter((j) => !live.includes(j))].slice(0, 15).map((j) => {
     const p = j.progress || {};
     const pct = p.total ? Math.round(100 * p.done / p.total) : 0;
     const what = j.kind === 'render' ? `${j.args.clips} clips (${j.args.queue})` : j.args.choom || '';
-    const when = j.status === 'waiting' && j.not_before > Date.now() / 1000
-      ? ` at ${new Date(j.not_before * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : '';
+    const when = j.status !== 'waiting' ? '' : j.after ? ' until the render has finished'
+      : j.not_before > Date.now() / 1000 ? ` until ${clock(j.not_before)}` : '';
     return el('div', { className: `job ${j.status}` },
       el('div', { className: 'row' }, el('span', {}, el('span', { className: 'kind' }, j.kind), ` ${what}`),
         el('span', { className: 'state' }, `${STATE_WORDS[j.status]}${when}${j.status === 'running' && p.total ? ` · ${p.done}/${p.total} ${p.step || ''}` : ''}`)),
       j.kind === 'render' && j.status === 'running' ? el('div', { className: 'bar' }, el('i', { style: `width:${pct}%` })) : null,
       j.error ? el('div', { className: 'state' }, j.error) : null,
       j.log?.length && j.status !== 'done' ? el('pre', {}, j.log.slice(-8).join('\n')) : null,
-      ['waiting', 'running'].includes(j.status) ? el('div', {}, el('button', {
+      ['waiting', 'running', 'paused'].includes(j.status) ? el('div', {}, el('button', {
         className: 'ghost', type: 'button', onclick: attempt(async () => { await api(`/api/jobs/${j.id}/cancel`, {}); pollJobs(); }),
         tip: j.kind === 'render' ? 'Stop Wan2GP; clips not rendered yet go back to planned' : 'Cancel this job',
       }, 'Cancel')) : null);
@@ -1190,6 +1258,81 @@ function renderJobs() {
 }
 $('#jobsButton').addEventListener('click', () => { $('#jobsPanel').hidden = !$('#jobsPanel').hidden; renderJobs(); });
 $('#jobsClose').addEventListener('click', () => { $('#jobsPanel').hidden = true; });
+
+// The work list's pause: what's on the GPU finishes its item (a render, the clip it's on), then
+// nothing more starts there until it's resumed.
+function renderPaused() {
+  const wl = state.worklist || {};
+  $('#pausedBanner').hidden = !(wl.paused || wl.pausing);
+  if (!(wl.paused || wl.pausing)) return;
+  const r = state.jobs.find((j) => j.kind === 'render' && j.status === 'running');
+  const other = state.jobs.find((j) => GPU.includes(j.kind) && j.status === 'running');
+  const held = state.jobs.filter((j) => GPU.includes(j.kind) && ['waiting', 'paused'].includes(j.status)).length;
+  $('#pausedText').textContent = wl.pausing
+    ? (r ? `Pausing: the render stops once the clip it's on has landed (clip ${(r.progress?.done ?? 0) + 1} of ${r.progress?.total || r.args.clips}).`
+      : `Pausing: the ${other?.kind || 'job'} running now finishes first.`)
+    : `The work list is paused${held ? `: ${held} job${held === 1 ? '' : 's'} waiting` : ''}. Nothing starts on the GPU until you resume.`;
+}
+async function resumeWork() {
+  state.worklist = (await api('/api/jobs/resume', {})).worklist;
+  toast('Resumed: the work list carries on');
+  pollJobs();
+}
+$('#resumeButton').addEventListener('click', attempt(resumeWork));
+$('#pauseButton').addEventListener('click', attempt(async () => {
+  if (state.worklist?.paused || state.worklist?.pausing) return resumeWork();
+  await pollJobs();  // what's running right now, not as of the last poll
+  const r = state.jobs.find((j) => j.kind === 'render' && j.status === 'running');
+  const other = state.jobs.find((j) => GPU.includes(j.kind) && j.status === 'running');
+  const mins = Math.round(state.minutesPerClip || 6);
+  $('#pauseWhat').textContent = r
+    ? `The render finishes the clip it's on (clip ${(r.progress?.done ?? 0) + 1} of ${r.progress?.total || r.args.clips}, up to about ${mins} minutes), then stops. Its other clips stay queued and render when you resume.`
+    : other ? `The ${{ build: 'build', picture: 'Klein pictures', still: 'still relief' }[other.kind] || other.kind} running now finishes first (it can't stop halfway without starting over), then the work list holds.`
+      : 'Nothing is running on the GPU now, so it pauses straight away.';
+  $('#pauseDialog').showModal();
+}));
+$('#pauseCancel').addEventListener('click', () => $('#pauseDialog').close());
+$('#pauseConfirm').addEventListener('click', attempt(async () => {
+  $('#pauseDialog').close();
+  state.worklist = (await api('/api/jobs/pause', {})).worklist;
+  toast(state.worklist.paused ? 'Paused: nothing starts on the GPU until you resume' : 'Pausing: it stops when the item it is on is finished');
+  pollJobs();
+}));
+
+// Clean-up: what nothing uses any more, and disk use.
+const CLEAN_WORDS = { dropped: 'Videos of dropped clips', takes: 'Old takes (re-rolls replaced them)', drafts: 'Klein versions no look is waiting on',
+  queues: 'Finished render queues', caches: 'Cut-out and depth caches of clips she no longer has' };
+const gb = (b) => (b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.max(0, Math.round(b / 1e6))} MB`);
+async function surveyCleanup() {
+  $('#cleanupGo').disabled = true;
+  $('#cleanupGo').textContent = 'Delete the ticked';
+  delete $('#cleanupGo').dataset.armed;
+  const r = await api(`/api/housekeeping?takes_days=${Number($('#cleanupDays').value) || 30}`);
+  $('#cleanupDisk').textContent = `Workspace ${gb(r.disk.workspace)} · portraits ${gb(r.disk.portraits)} · ${gb(r.disk.free)} free of ${gb(r.disk.total)}`;
+  $('#cleanupList').replaceChildren(...Object.keys(CLEAN_WORDS).map((k) => el('label', { className: 'check' },
+    el('input', { type: 'checkbox', value: k, disabled: !r[k].count, onchange: () => {
+      const ticked = $$('#cleanupList input:checked');
+      $('#cleanupGo').disabled = !ticked.length;
+    } }),
+    ` ${CLEAN_WORDS[k]}: ${r[k].count ? `${r[k].count} · ${gb(r[k].bytes)}` : 'nothing'}`)));
+  state.cleanup = r;
+}
+$('#cleanupButton').addEventListener('click', attempt(async () => { $('#cleanupDialog').showModal(); await surveyCleanup(); }));
+$('#cleanupDays').addEventListener('change', attempt(surveyCleanup));
+$('#cleanupClose').addEventListener('click', () => $('#cleanupDialog').close());
+$('#cleanupGo').addEventListener('click', attempt(async () => {
+  const cats = $$('#cleanupList input:checked').map((i) => i.value);
+  const go = $('#cleanupGo');
+  if (!go.dataset.armed) {  // a second click deletes: the dialog itself is the confirmation
+    const n = cats.reduce((a, k) => a + state.cleanup[k].count, 0), b = cats.reduce((a, k) => a + state.cleanup[k].bytes, 0);
+    go.dataset.armed = '1';
+    go.textContent = `Really delete ${n} files (${gb(b)})?`;
+    return;
+  }
+  const r = await api('/api/housekeeping', { categories: cats, takesDays: Number($('#cleanupDays').value) || 30 });
+  toast(`Freed ${gb(Object.values(r.freed).reduce((a, b) => a + b, 0))}`);
+  await surveyCleanup();
+}));
 
 // --- Tooltips -------------------------------------------------------------------------------------
 let tipTimer = null;

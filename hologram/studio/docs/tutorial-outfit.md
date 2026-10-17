@@ -121,7 +121,8 @@ fog; "leans in" makes the camera push in). To change what a clip does, or how lo
 Click **Render now**, or set a time and **Schedule** it for tonight. The glass runs slower while the
 GPU renders, so night is kinder. The work list at the top right shows progress: the running render
 with its count, and a scheduled one waiting with its start time. Click it for details, or to
-**Cancel** (anything not yet rendered goes back to planned).
+**Cancel** (anything not yet rendered goes back to planned). **Pause** in its header lets the clip
+being rendered finish, then holds the work list until you **Resume**; the rest of the clips wait.
 
 ![The work list: a render running and another waiting for 11 pm](images/outfit-6-rendering.jpg)
 
@@ -164,11 +165,13 @@ glass**:
 
 1. The Studio makes the new clips' cut-outs and depth. Only new clips are processed; that takes about
    a minute each.
-2. The glass reloads once no Choom is talking.
+2. The glass reloads at its next quiet moment, when no Choom is talking. If the Chooms are busy in a
+   room, it tries again every few minutes.
 
-A build waits its turn on the GPU behind any render, and it reads her clips when it starts: clicking
-again while it waits adds nothing, and changes you make while it runs go into the next build. The
-number on her button at the top changes when the build lands.
+To build later instead, set a time and click **Schedule**, or click **After the render** to build as
+soon as tonight's render has finished. A build waits its turn on the GPU behind any render, and it
+reads her clips when it starts: clicking again while it waits adds nothing, and changes you make while
+it runs go into the next build. The number on her button at the top changes when the build lands.
 
 The outfit appears at its hour, in short visits, with a camera cut each way (or a change-of-clothes
 clip, step 9).

@@ -133,7 +133,7 @@ def tick(jobs, jobs_lock, now=None):
                    and j["kind"] in TRACKED + ("review",)) for j in jobs if j["kind"] != "relaunch")
     with _lock:
         if state["run"] and state["run"]["jobs"] and not busy:
-            state["held"].append({"at": now, "message": compose(state["run"])})
+            state["held"] = (state["held"] + [{"at": now, "message": compose(state["run"])}])[-10:]  # off, they'd pile up
             state["run"] = None
             save()
         elif state["run"] and not state["run"]["jobs"] and not busy and now - state["run"]["opened"] > 3600:
