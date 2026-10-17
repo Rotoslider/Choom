@@ -177,6 +177,26 @@ def xrandr_outputs():
     return outputs
 
 
+def standard_layout(outputs):
+    """The xrandr command for the standard layout: the primary monitor at the left, the other monitors to
+    its right, the Portrait at the far right. The Portrait is never made primary (GNOME's top bar and
+    notifications would land on the glass), and no output is listed twice: with no primary flagged, or the
+    flag on the Portrait, the alphabetical first output (DP-3, the Portrait) became primary and was listed
+    twice."""
+    portrait = next((n for n, o in outputs.items() if o["portrait"]), None)
+    others = sorted(n for n in outputs if n != portrait)
+    primary = next((n for n in others if outputs[n]["primary"]), None) or (others[0] if others else None)
+    order = ([primary] if primary else []) + [n for n in others if n != primary] + ([portrait] if portrait else [])
+    cmd, x = ["xrandr"], 0
+    for n in order:
+        w, h = (1536, 2048) if n == portrait else (outputs[n]["preferred"] or (0, 0))
+        if w == 0:
+            continue
+        cmd += ["--output", n, "--mode", f"{w}x{h}", "--pos", f"{x}x0"] + (["--primary"] if n == primary else [])
+        x += w
+    return cmd
+
+
 def display_watchdog():
     """Re-enable a monitor GNOME left switched off. When a monitor comes back from another input
     (the switch to the Mac), GNOME can settle the layout before the monitor is ready and leave it
@@ -201,16 +221,7 @@ def display_watchdog():
         stuck = [n for n, t in off_since.items() if n in outputs and now - t >= 6]
         if not stuck or now - last_fix < 30:
             continue
-        primary = next((n for n, o in outputs.items() if o["primary"]), None) or sorted(outputs)[0]
-        portrait = next((n for n, o in outputs.items() if o["portrait"]), None)
-        order = [primary] + sorted(n for n in outputs if n not in (primary, portrait)) + ([portrait] if portrait else [])
-        cmd, x = ["xrandr"], 0
-        for n in order:
-            w, _h = (1536, 2048) if n == portrait else (outputs[n]["preferred"] or (0, 0))
-            if w == 0:
-                continue
-            cmd += ["--output", n, "--mode", f"{w}x{_h}", "--pos", f"{x}x0"] + (["--primary"] if n == primary else [])
-            x += w
+        cmd = standard_layout(outputs)
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
         last_fix = now
         entry = {"kind": "display_fix", "time": time.strftime("%Y-%m-%dT%H:%M:%S"), "stuck": stuck,
