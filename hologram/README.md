@@ -27,13 +27,15 @@ happening in the Choom app: listening, thinking, using tools, changing clothes, 
   The speaker stands in front, and the speakers trade places as the turn passes.
 
 **Looks and clothes**
-- **Outfits.** Day outfits take turns with her usual clothes. There are outfits for hot and cold
-  weather, for the evening, and warm or cold night clothes from 10 pm. She wears an outfit in short
-  visits and changes with a camera cut or a change-of-clothes clip.
+- **Outfits.** One day outfit a day takes turns with her usual clothes. There are outfits for hot
+  and cold weather, for the evening (several take turns), and warm or cold night clothes from 10 pm.
+  She wears an outfit in short visits with at least 25 minutes in her usual clothes between them, and
+  changes with a camera cut or a change-of-clothes clip.
 - **Full body.** Now and then the glass cuts to her whole figure. An outfit can have its own full
   body, used only while she wears it.
 - **Their own choices.** The Chooms can ask the glass for a move or for clothes from their closet.
-  Anything they don't have yet goes on a wish list in Glass Studio.
+  A move plays in the clothes she has on. Anything they don't have yet goes on a wish list in Glass
+  Studio.
 
 **Talking at the tower, and being seen**
 - **Wake phrases.** Say "OK Aloy" (or Optic, Genesis, Eve) and she comes to the glass and listens.

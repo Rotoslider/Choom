@@ -234,7 +234,7 @@ An outfit's name says when she wears it (`OUTFIT_RULES`, `nightOutfit` and `want
 | `cold…` | under 45°F |
 | `hot…` | over 85°F |
 | `evening…` | 6 to 11 pm |
-| `day…` | takes turns with her usual clothes: one pick a day from the date, held all day |
+| `day…` | takes turns with her usual clothes: one pick a day from the date, held all day (while it rests, she's in her usual clothes, not another day outfit) |
 | `plain`, `noheart` | looks in her usual clothes (Genesis without her glow, Optic without her heart): about a third of the time, decided every 20 minutes, changed on screen with clips made for it |
 
 The temperature comes from the weather feed ([Weather](#weather)). An outfit is wearable only if it
@@ -242,7 +242,12 @@ has a clip with the `talk` mood.
 
 **Visits.** A dozen clips would loop for hours, so she wears an outfit (or another look) in visits:
 - A visit lasts about 30 s per clip the look has, between 3 and 15 minutes.
-- After a visit she spends at least 25 minutes in her usual clothes.
+- A visit goes on until it's up (or its hours or weather end); it isn't swapped mid-way for another
+  outfit of the same kind.
+- After an outfit's visit she spends at least 25 minutes in her usual clothes (her `plain` or
+  `noheart` look counts as usual clothes) before the next outfit.
+- Several outfits for the same hours (Eve's three evening outfits) take turns: the one off longest
+  comes next.
 - Each outfit has a daily total of 2 minutes per clip. Looks in her usual clothes have no daily
   total.
 - The wardrobe is kept in the kiosk's localStorage, so a relaunch doesn't reset it.
@@ -446,7 +451,7 @@ The looking-glass skill in the Choom app (`skills/core/looking-glass`) gives eac
 
 | Tool | Does |
 |---|---|
-| `glass_move` | a move at her next quiet moment, if that comes within three minutes |
+| `glass_move` | a move at her next quiet moment on the glass, if that comes within half an hour |
 | `glass_wear` | clothes from her closet on the glass, kept until bedtime unless she changes again |
 | `glass_closet` | what she has (moves and clothes), never what she has on |
 | `glass_wish` | puts clothes or a move she'd like on the wish list, without changing anything |
@@ -460,9 +465,9 @@ The looking-glass skill in the Choom app (`skills/core/looking-glass`) gives eac
 
 **Matching.**
 - **Moves:** selfie moves, full-body clips, and clips named for a move (dance, wave, kiss, and so on).
-  A move plays from her current pose if she has it there. Otherwise she cuts to her whole figure (in
-  the outfit she has on if it has its own full body), or goes through a pose change (Aloy raises her
-  hand first).
+  A move plays in the clothes she has on: from her current pose if she has it there, else as a cut to
+  her whole figure in those clothes, else through a pose change in them (Aloy raises her hand first).
+  A move she has only in other clothes doesn't play; the page logs a `glass` entry with `missed`.
 - **Clothes:** only outfits she can wear (with a `talk` clip) are matched.
   - A garment, colour or fabric she names has to be in the outfit: "a silk slip" never matches a
     cotton dress.
@@ -580,6 +585,10 @@ Each wake and blank is logged as `screens`.
   - a playful look while making an image.
 - **Mishaps.** A failed tool (`tool_failed`), or her saying a picture didn't come out right, brings
   her `oops` face once, at most every two minutes.
+- **While you only look at her** (the camera, no typing or talking), expressions, mishap faces, tool
+  moments, picture looks and selfie moves still play and play out.
+- **Waiting moments expire.** An expression, mishap face or tool look she couldn't play within 90 s
+  (she left the glass, or was asleep) is dropped, not played when she comes back.
 - **Pictures.**
   - A picture she makes or analyzes floats for about 11 seconds (8 for a camera snapshot), drawn over
     her. Tall pictures float beside her face, and wide ones lower right.
@@ -597,6 +606,8 @@ Each wake and blank is logged as `screens`.
     off only if she has a sleep loop and a wake clip.
   - Typing, talking, a reply, a button or 7 am wakes her.
   - Heartbeats and delegated tasks that start at night run unseen.
+  - At bedtime a Choom on the glass who can't sleep (no sleep clips yet) hands it to one who can, so
+    the glass dims instead of staying lit.
 - **Background turns.** A heartbeat that starts during a conversation also runs unseen, so it doesn't
   take the front or float its pictures mid-conversation. A conversation means the stage is up, someone
   is talking, or there was a chat in the last three minutes.
@@ -605,6 +616,17 @@ Each wake and blank is logged as `screens`.
   - It doesn't switch while she's asleep or just woke, while the stage is up, while you look at her,
     or while someone talks near the tower.
   - A Choom who hasn't been on the glass for 45 minutes greets as she arrives.
+- **Safeguards.**
+  - A clip that can't be played (removed or replaced by a build before the relaunch, a bad encode) is
+    left out until the next launch and another plays; only four failures in a row show her still relief.
+  - A turn whose end never arrives (the Mac feed dropped mid-turn) is closed after 15 minutes without a
+    word of it, or as soon as the server's feed reconnects (`feed` event), so she can sleep again.
+  - The bottom button held (or L) counts as listening for a minute at most, in case the release is lost.
+  - A lost WebGL context reloads the page after 5 s.
+  - The app's mute is replayed to a page that just started, so a relaunch doesn't unmute the glass.
+- **A fifth Choom.** Her frame and orb colours come from `manifest.json` (`color`), her voice from
+  `voice` there if set, the stage arranges any number of sisters on an arc behind the speaker, number
+  keys go to 9, and her home pose comes from `alive.json` (`home`) when the build writes it.
 
 ## Debugging
 
@@ -628,6 +650,8 @@ Each wake and blank is logged as `screens`.
 | `{"welcomeTest": 30}` | send a real welcome back now |
 | `{"mouthStyle": 3}`, `{"jaw": 0.6}` | try a mouth style (0 to 3); hold her mouth open (`null` to let go) |
 | `{"body": true}` | the experimental 3D body, if `bodies/<id>.glb` exists |
+| `{"closeTurn": true}` | close an open turn as if its end were lost (the watchdog's path) |
+| `{"loseContext": true}` | lose the WebGL context (the page reloads after 5 s) |
 
 **Other hooks.**
 - `POST /simulate` injects a Choom-app event, e.g. `{"event": "tool", "choom": "Genesis", "tool": "get_weather"}`.
@@ -642,7 +666,8 @@ Each wake and blank is logged as `screens`.
 | Kind | From | |
 |---|---|---|
 | `status` | page | every 2 s: Choom, mood, clip, fps, voice, paused, queue |
-| `alive-clip`, `choom`, `stage`, `quiet-turn` | page | clips played, Choom switches, the stage, screensaver turns |
+| `alive-clip`, `choom`, `stage`, `quiet-turn` | page | clips played, Choom switches, the stage, screensaver turns (`why: bedtime` for a hand-over to a Choom who can sleep) |
+| `turn-closed` | page | a turn closed by the watchdog or a feed reconnect |
 | `latency`, `lipsync`, `speak`, `gap` | page, server | voice timing |
 | `tool`, `picture`, `glass`, `chime`, `tuning`, `button`, `error` | page, server | moments, requests, keys, errors |
 | `ears`, `eyes`, `gaze-seen` | server, page | the tower's listener and camera (never words or frames) |
