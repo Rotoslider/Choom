@@ -2155,19 +2155,23 @@ function noteTalk(id) {
 // Presence from Home Assistant (server.py, once it has a token): home, at the desk, in bed. Coming
 // home or sitting down at the desk wakes whoever is on the glass and she greets him (Aloy waves, the
 // others smile); getting into bed puts the glass to sleep whatever the hour, and getting up wakes it.
+// From 11 pm to 5 am only coming home does: up for the kitchen and back to bed, or a minute at the
+// desk, leaves her asleep (typing, talking and the buttons still wake her).
+const MORNING_FROM = setting('morningFrom', 5);
 function onPresence(next) {
   const was = presence;
   const pick = (role) => (role in next ? next[role] : presence[role]); // roles not reported stay as they were
   presence = { home: pick('home'), desk: pick('desk'), bed: pick('bed') };
-  const arrived = (was.home === false && presence.home === true) || (was.desk === false && presence.desk === true);
-  const gotUp = was.bed === true && presence.bed === false;
+  const night = hourNow() >= SLEEP_FROM || hourNow() < MORNING_FROM;
+  const arrived = (was.home === false && presence.home === true) || (!night && was.desk === false && presence.desk === true);
+  const gotUp = !night && was.bed === true && presence.bed === false;
   if (arrived || gotUp) lastActivity = performance.now();
   if (arrived && presence.bed !== true) {
     const p = portraits[current];
     if (p.alive?.clips.some((c) => clipMoods(c).includes('greet'))) p.greet = true;
     else if (p.alive) p.toolLook = /smile|bright/;
   }
-  post('presence-seen', { ...presence, arrived, gotUp });
+  post('presence-seen', { ...presence, arrived, gotUp, night });
 }
 fetch('/status', { cache: 'no-store' }).then((r) => r.json()).then((st) => { if (st.presence) onPresence(st.presence); }).catch(() => {});
 

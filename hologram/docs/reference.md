@@ -480,12 +480,11 @@ reads exactly that value:
 
 ```json
 {"home": {"entity": "sensor.phone_wi_fi_connection", "equals": "<home network>"},
- "desk": "binary_sensor.desk_zone", "bed": "binary_sensor.bed_zone",
- "kitchen": "binary_sensor.kitchen_zone", "shop": "binary_sensor.shop_presence"}
+ "shop": "binary_sensor.shop_presence",
+ "bed": {"entity": "binary_sensor.bed_zone", "zone": true, "after": 180, "away_after": 300},
+ "desk": {"entity": "binary_sensor.office_zone", "zone": true, "after": 60},
+ "kitchen": {"entity": "binary_sensor.kitchen_zone", "zone": true, "after": 180}}
 ```
-
-A room sensor with zones (Donny's Everything Presence Lite, a mmWave radar) gives several roles at
-once, one zone each: bed, desk (his office zone) and kitchen.
 
 - **No `home` role.** The server uses the `person.` entity named by a `"person"` key
   (`{"person": "person.donny", "desk": ...}`), else the only person in Home Assistant, else the one
@@ -494,19 +493,29 @@ once, one zone each: bed, desk (his office zone) and kitchen.
   Home Assistant (a DHCP reservation). When it moves, presence and the weather station stop.
 - **A page that has just started** gets the current presence at once (it only reached the page when it
   changed).
-- **Arriving and leaving.** Arriving counts at once. Leaving counts only after two minutes absent,
-  because phones drop Wi-Fi now and then. A place you've left for another ends at once: out of bed and
-  at the desk means not in bed, so your morning welcome isn't skipped as "in bed". Home never ends early.
+- **Arriving and leaving.** Arriving counts at once, or after `after` seconds present in a row. Leaving
+  counts after two minutes absent (phones drop Wi-Fi now and then), or after `away_after` seconds.
+  When the server starts, what Home Assistant says counts at once, so a relaunch keeps it.
+- **Zones** (`"zone": true`) are the zones of one room sensor, such as Donny's Everything Presence Lite,
+  a mmWave radar with bed, office and kitchen zones. You're in one zone at a time:
+  - A zone ends only once you've been seen in another zone since you left it. A tracking radar loses
+    someone lying or sitting still, and that must not count as getting up.
+  - Settling in another zone (present for its `after`) ends the one you left at once. Up and at the
+    desk means out of bed.
+  - Donny's timings fit his room. The office chair touches the bed, so bed needs 3 minutes there; a
+    brush of the bed zone as he stands up doesn't count. A trip to the kitchen and back under 5 minutes
+    leaves him in bed. Desk needs a minute, so walking through the office doesn't count. Kitchen needs
+    3 minutes, so passing through it to the east door isn't "in the kitchen".
 - **An entity that's gone** (renamed or removed in Home Assistant) leaves only its role unknown; the
   others go on. `/status` `presence_state` names it ("not found in Home Assistant").
 - **What each role does.**
   - Coming home or sitting at the desk wakes the Choom on the glass, and she greets you.
   - Getting into bed puts the glass to sleep at any hour; getting up wakes it.
+  - From 11 pm to 5 am only coming home wakes her. Up in the night and back to bed, or a minute at the
+    desk, leaves her asleep; typing, talking and the buttons still wake her (`sleepFrom`, `morningFrom`).
   - Any other role (a shop, a truck, the kitchen) is passed to the welcome back as where you were.
-- **A radar zone and someone lying still.** A tracking radar can lose someone who lies still, so asleep
-  in bed may read as up now and then. Its only effect is the Choom waking on the dark glass; she dozes
-  off again after 10 quiet minutes at night. A longer zone timeout in Home Assistant (the sensor's
-  "Bed Timeout") holds bed through it.
+  - The welcome back is skipped while you're in bed. That's checked as the camera sees you: no other
+    zone reads you, and the bed zone does or still counts you.
 
 ## Weather
 

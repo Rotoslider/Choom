@@ -569,7 +569,7 @@ def welcome_watch():
             why = ("night" if not (WELCOME_HOURS[0] <= hour < WELCOME_HOURS[1] or morning) else
                    "welcomed lately" if time.time() - last_welcome < WELCOME_EVERY_S else
                    "already talking" if time.time() - last_conversation[0] < 120 else
-                   "in bed" if presence.get("bed") is True else None)
+                   "in bed" if latest.get("in_bed_now") else None)
             if why:
                 log_entry({"kind": "welcome", "minutes": round(away / 60), "skipped": why})
             else:
@@ -805,13 +805,16 @@ def presence_watch():
     entity, or the phone's Wi-Fi), and at the desk or in bed (zones of a presence sensor).
     presence.json maps roles to entities, e.g. {"home": {"entity": "sensor.phone_wi_fi_connection",
     "equals": "<home network>"}, "desk": "binary_sensor.desk_zone", "bed": "binary_sensor.bed_zone"}.
+    A role can also say {"entity": ..., "zone": true, "after": 180, "away_after": 300}: one zone of a
+    room sensor, present only after 180 s there in a row, gone after 300 s away (see below).
     Without a "home" role, "home" is the person entity named by "person" (e.g. "person.donny"), else the
     only person in Home Assistant, else one named like HOLOGRAM_OWNER (default "donny"). Checks every 5 s.
     Waits quietly (and picks the files up without a restart) until ha_url and ha_token exist. ha_url should
     be an address that doesn't change: a hostname, or an IP the router always gives Home Assistant (a DHCP
     reservation), since presence and the weather station stop when it moves."""
     last, entities, resolved_at = None, {}, 0.0
-    shown, absent_since = {}, {}  # what the page was told per role, and since when a role has read absent
+    shown, on_since, absent_since = {}, {}, {}  # what the page was told per role; since when it has read present, absent
+    seen_away = set()  # zones he's been seen out of (in another zone) since they read absent
     while True:
         try:
             url_file, token_file, map_file = HA_CONFIG / "ha_url", HA_CONFIG / "ha_token", HA_CONFIG / "presence.json"
@@ -834,7 +837,7 @@ def presence_watch():
                         if named or len(people) == 1:
                             entities["home"] = (named or people)[0]["entity_id"]
                 resolved_at = time.time()
-            now, missing = {}, []
+            now, gone = {}, []
             for role, spec in entities.items():
                 # A role is an entity id (present when it reads home/on/detected/occupied), or
                 # {"entity": ..., "equals": value} (present when it reads exactly that, e.g. the
@@ -846,29 +849,54 @@ def presence_watch():
                     if e.code != 404:
                         raise
                     raw = ""  # renamed or removed in Home Assistant: that role is unknown, the others go on
-                    missing.append(entity)
+                    gone.append(entity)
                 if raw.lower() in ("unavailable", "unknown", ""):
                     now[role] = None
                 elif isinstance(spec, dict) and "equals" in spec:
                     now[role] = raw == spec["equals"]
                 else:
                     now[role] = raw.lower() in PRESENT_STATES
-            # Arriving counts at once; leaving only after AWAY_GRACE_S of absence in a row. A place he's
-            # left for another (out of bed and at the desk) ends at once: in bed would skip his welcome.
-            # Not home: the phone's Wi-Fi drops while he sits at the desk.
-            seen = dict(now)
-            for role, value in now.items():
+            t, seen = time.time(), dict(now)  # seen: what the sensors say this moment
+            option = lambda role, key, default: (entities[role].get(key, default)
+                                                 if isinstance(entities[role], dict) else default)
+            zones = [role for role in now if option(role, "zone", False)]
+            # Arriving counts once it has read present "after" seconds in a row (at once by default, and
+            # when the server starts, so a relaunch keeps what was true): getting up from the office chair
+            # brushes the bed zone.
+            for role, value in seen.items():
+                if not value:
+                    on_since.pop(role, None)
+                elif shown.get(role) is False:
+                    on_since.setdefault(role, t)
+                    if t - on_since[role] < option(role, "after", 0):
+                        now[role] = False
+            settled = dict(now)
+            # Leaving counts after "away_after" seconds absent (two minutes by default: phones drop Wi-Fi
+            # now and then). A zone of a room sensor ends only once he's been seen in another zone since:
+            # a radar loses someone lying or sitting still. It ends at once when he has settled in another
+            # zone (up and at the desk: in bed would skip his welcome).
+            for role, value in seen.items():
                 if value is False and shown.get(role) is True:
-                    absent_since.setdefault(role, time.time())
-                    elsewhere = role != "home" and any(v for r, v in seen.items() if r not in ("home", role))
-                    if time.time() - absent_since[role] < AWAY_GRACE_S and not elsewhere:
+                    absent_since.setdefault(role, t)
+                    held = t - absent_since[role] < option(role, "away_after", AWAY_GRACE_S)
+                    if role in zones:
+                        if any(seen.get(r) for r in zones if r != role):
+                            seen_away.add(role)
+                        held = (held or role not in seen_away) and not any(settled.get(r) for r in zones if r != role)
+                    if held:
                         now[role] = True
                         continue
                 absent_since.pop(role, None)
+                seen_away.discard(role)
             shown = dict(now)
+            # In bed this moment, for the welcome back: no other zone reads him (getting up into the office,
+            # the bed zone still reads him for a few seconds), and the bed does, or still counts him (the
+            # radar has lost him lying still).
+            latest["in_bed_now"] = (not any(seen.get(r) for r in zones if r != "bed")
+                                    and (seen.get("bed") is True or now.get("bed") is True))
             latest["presence_state"] = "watching " + ", ".join(
                 f"{role}: {spec['entity'] if isinstance(spec, dict) else spec}" for role, spec in entities.items()) + (
-                f"; not found in Home Assistant: {', '.join(missing)}" if missing else "")
+                f"; not found in Home Assistant: {', '.join(gone)}" if gone else "")
             if now != last:
                 entry = {"type": "presence", **now, "time": time.strftime("%Y-%m-%dT%H:%M:%S")}
                 latest["presence"] = entry
