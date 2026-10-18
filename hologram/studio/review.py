@@ -8,6 +8,8 @@ ways clips go wrong on the glass, measured on small grey frames:
     color       her light or colour drifts away from her picture's
     seam        a loop's last frame doesn't come back to its first (a visible jump each time it ends)
     cut         a sudden jump mid-clip (a new shot)
+A clip arriving from the empty glass is measured backwards; on or off the glass skips color and cut,
+and going to or from a place skips color (her light changes on purpose).
 Flags are hints for the review page; you decide. Needs numpy, so run it with Wan2GP's Python:
     ~/pinokio/api/wan2gp/app/venv/bin/python studio/review.py aloy [CLIP ...] [--all] [--force]
 """
@@ -30,6 +32,7 @@ BG = 0.045               # darker than this is empty black glass (make_depth.BG_
 LIMITS = {"background": 0.06, "push-in": 1.15, "color": 0.15, "seam": 0.009, "cut": 15}
 LOOSE = {"background": 0.3, "push-in": 1.6, "color": 0.3, "seam": 0.009, "cut": 40}
 BUSY = re.compile(r"motes|windy|sparkle|glow|fade|heart")
+POSES = ("main", "relaxed", "full", "asleep")  # plan.POSES without gone; any other look is a place or the empty glass
 
 
 def frames_of(src, w=W, h=H):
@@ -50,8 +53,13 @@ def loose(name, clip):
     return clip["from"].split("@")[0] == "full" or clip["from"] != clip["to"] or bool(BUSY.search(name))
 
 
-def measure(src, loop=True, lenient=False):
+def measure(src, loop=True, lenient=False, arrives=False, leaves=False, moves=False):
+    """arrives: the clip starts on the empty glass, so it's measured backwards, against the frame she's
+    in. leaves (on or off the glass): her colour and the frame steps go to black on purpose, so only
+    the background and push-in can flag. moves (to or from a place): her light changes on purpose."""
     f = frames_of(src)
+    if arrives:
+        f = f[::-1]
     luma = f.max(axis=3)
     her = luma > BG
     first = her[0]
@@ -66,7 +74,7 @@ def measure(src, loop=True, lenient=False):
     area = her.reshape(len(f), -1).sum(axis=1).astype(np.float32)
     growth = float(np.percentile(area, 95) / max(area[0], 1))
     # Her colour inside her first outline, against the first frame.
-    tint = np.stack([f[i][first].mean(axis=0) for i in range(len(f))])
+    tint = np.stack([f[i][first].mean(axis=0) for i in range(len(f))]) if first.any() else np.zeros((1, 3))
     color = float(np.abs(tint - tint[0]).max())
     # Frame-to-frame change; the seam is the step from the last frame back to the first.
     steps = np.abs(np.diff(luma, axis=0)).mean(axis=(1, 2))
@@ -76,8 +84,14 @@ def measure(src, loop=True, lenient=False):
     m = {"background": round(background, 4), "push-in": round(growth, 3), "color": round(color, 3),
          "seam": round(seam, 4), "cut": round(cut, 1)}
     limits = LOOSE if lenient else LIMITS
-    flags = [k for k, v in m.items() if v > limits[k] and (k != "seam" or loop)]
+    skip = {"seam"} if not loop else set()
+    skip |= {"color", "cut"} if leaves else {"color"} if moves else set()
+    flags = [k for k, v in m.items() if v > limits[k] and k not in skip]
     return m, flags
+
+
+def odd(pose):
+    return pose.split("@")[0] not in POSES
 
 
 def sheet(src, out, count=8, w=208, h=276):
@@ -117,7 +131,9 @@ def check(cid, names, force=False):
             continue
         if not fresh or force:
             sheet(src, out)
-        m, flags = measure(src, loop=clip["from"] == clip["to"], lenient=loose(name, clip))
+        start, end = clip["from"], clip["to"]
+        m, flags = measure(src, loop=start == end, lenient=loose(name, clip), arrives=start == "gone",
+                           leaves="gone" in (start, end), moves=start != end and (odd(start) or odd(end)))
         results[name] = pending[name] = (m, flags)
         print(f"{name}: {', '.join(flags) or 'clean'}  {m}", flush=True)
         if len(pending) >= 20:

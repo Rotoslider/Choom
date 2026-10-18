@@ -20,8 +20,9 @@ const api = async (path, body) => {
     const r = await fetch(path, post ? {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     } : { cache: 'no-store' });
-    const data = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(data.error || `${r.status} ${r.statusText}`);
+    const data = await r.json().catch(() => null);
+    if (!r.ok) throw new Error(data?.error || `${r.status} ${r.statusText}`);
+    if (!data) throw new Error(`The Studio's answer to ${path} couldn't be read`);
     return data;
   } finally {
     if (post) writes++;
@@ -72,7 +73,7 @@ async function loadChooms() {
   state.cleanPrompt = data.cleanPrompt;
   const nav = $('#chooms');
   nav.replaceChildren(...state.chooms.map((c) => {
-    const b = el('button', { type: 'button', onclick: () => openChoom(c.id), tip: `${c.name}: ${c.onGlass} clips on the glass${c.counts.rendered ? `, ${c.counts.rendered} to review` : ''}${c.counts.planned ? `, ${c.counts.planned} planned` : ''}` },
+    const b = el('button', { type: 'button', onclick: attempt(() => openChoom(c.id)), tip: `${c.name}: ${c.onGlass} clips on the glass${c.counts.rendered ? `, ${c.counts.rendered} to review` : ''}${c.counts.planned ? `, ${c.counts.planned} planned` : ''}` },
       el('span', { className: 'swatch' }), c.name, el('small', {}, `${c.onGlass}`));
     b.style.setProperty('--c', c.color || '#9fb4ff');
     b.dataset.id = c.id;
@@ -86,7 +87,7 @@ async function loadChooms() {
       el('p', { className: 'muted' }, 'Clips made before the Studio can be adopted with python3 studio/studio.py import.'));
     return;
   }
-  openChoom(state.chooms.some((c) => c.id === state.cid) ? state.cid : state.chooms[0].id);
+  openChoom(state.chooms.some((c) => c.id === state.cid) ? state.cid : state.chooms[0].id).catch((e) => toast(e.message, true));
 }
 
 async function openChoom(cid, keepScroll = false, background = false) {

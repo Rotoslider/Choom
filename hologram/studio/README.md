@@ -79,6 +79,9 @@ clip. The automatic checks flag the ways clips go wrong on the glass:
 The limits were set on the four Chooms' first 784 clips: they flag 38 of the 46 clips dropped by
 eye (the other 8 were dropped for taste) and about 5% of the keepers. Clips that move a lot on
 purpose (full body, wind, particles, a look changing on screen) are checked with looser limits.
+A clip that walks on or appears from the empty glass is measured backwards, against the frame she's
+in. Clips on or off the glass skip **color** and **cut**, because she goes to black on purpose.
+Going to or from a place skips **color**, because the light on her changes (a fire flickering up).
 About one clip in six fails, so watch them all.
 
 - **Keep** (K), **Drop** (D) or **Re-roll** (R). Space plays the clip; the arrow keys move between

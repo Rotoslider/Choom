@@ -99,6 +99,17 @@ def active_queues():
                 for q in [j["args"]["queue"], *j["args"].get("earlier", [])]]
 
 
+def finite(obj):
+    """NaN and infinity as null: Python writes them, but a browser's JSON.parse refuses the whole answer."""
+    if isinstance(obj, float):
+        return obj if obj == obj and abs(obj) != float("inf") else None
+    if isinstance(obj, dict):
+        return {k: finite(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [finite(v) for v in obj]
+    return obj
+
+
 def active_runs():
     with jobs.lock:
         return [j["out"] for j in jobs.jobs if j["kind"] == "picture" and j["status"] in jobs.ACTIVE and j.get("out")]
@@ -110,7 +121,10 @@ class Handler(BaseHTTPRequestHandler):
 
     # --- replies -------------------------------------------------------------------------------
     def send_json(self, obj, status=200):
-        body = json.dumps(obj).encode()
+        try:
+            body = json.dumps(obj, allow_nan=False).encode()
+        except ValueError:
+            body = json.dumps(finite(obj)).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
