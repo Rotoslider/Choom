@@ -168,6 +168,7 @@ function layerMaterial({ segX, segY, edgeThreshold, useMask, own = false }) {
       mouthStyle: { value: 3 },                           // 0 lower lip only; 1 both lips; 2 a hint of teeth; 3 her teeth
       mouthShape: { value: new THREE.Vector3() },        // jaw open, lips round, lips wide (0..1)
       bottomFade: { value: 0 },                           // on the group stage: fade out her lowest part
+      flip: { value: 0 },                                 // 1: mirrored (a seat at the campfire circle)
       texSize: { value: new THREE.Vector2(1536, 2048) },
       packed: { value: 0 },                               // 1: colorMap is a moving relief video
       edgeThreshold: { value: edgeThreshold },
@@ -195,18 +196,21 @@ const PACKED_GLSL = /* glsl */ `
 
 const LAYER_VERT = /* glsl */ `
     uniform sampler2D depthMap;
-    uniform float focus, depthScale, faceZ;
+    uniform float focus, depthScale, faceZ, flip;
     uniform vec2 texel;
     varying vec2 vUv;
     varying float vEdge;
     ${PACKED_GLSL}
     void main() {
-      vUv = uv;
-      float d = depthAt(depthMap, uv);
-      float dl = depthAt(depthMap, uv - vec2(texel.x, 0.0));
-      float dr = depthAt(depthMap, uv + vec2(texel.x, 0.0));
-      float dd = depthAt(depthMap, uv - vec2(0.0, texel.y));
-      float du = depthAt(depthMap, uv + vec2(0.0, texel.y));
+      // Mirrored, her picture is read right to left; everything after works in her picture's own
+      // coordinates (vUv), so her mouth and motes mirror with her.
+      vec2 tuv = flip > 0.5 ? vec2(1.0 - uv.x, uv.y) : uv;
+      vUv = tuv;
+      float d = depthAt(depthMap, tuv);
+      float dl = depthAt(depthMap, tuv - vec2(texel.x, 0.0));
+      float dr = depthAt(depthMap, tuv + vec2(texel.x, 0.0));
+      float dd = depthAt(depthMap, tuv - vec2(0.0, texel.y));
+      float du = depthAt(depthMap, tuv + vec2(0.0, texel.y));
       vEdge = max(max(abs(d - dl), abs(d - dr)), max(abs(d - dd), abs(d - du)));
       vec3 p = position;
       p.z = (d - focus) * depthScale + faceZ;
@@ -426,7 +430,8 @@ const [plateMesh, frontMesh] = [[plateMaterial, 192, 256], [frontMaterial, 384, 
 // On the group stage the speaker always stands in front. Her sisters are drawn first (renderOrder -1)
 // and their depth is cleared before her, so no part of a sister can cover her: Eve's dark lower body
 // reached forward past the speaker's shoulders and cut into her.
-frontMesh.onBeforeRender = (renderer) => { if (stage.mix > 0) renderer.clearDepth(); };
+// Around the campfire it's real depth instead: the seats sit where they sit, the ends nearest you.
+frontMesh.onBeforeRender = (renderer) => { if (stage.mix > 0 && !circle.on) renderer.clearDepth(); };
 portrait.scale.setScalar(0.94);
 scene.add(portrait);
 
@@ -992,7 +997,12 @@ const WAKING_POSES = new Set(['main', 'relaxed']);
 // body (to_campfire), stays a while and gets up again (from_campfire); see nextClip. "gone" is the
 // empty glass: on a quiet turn the one leaving walks off into it and the next walks on from it.
 const POSES = new Set(['main', 'relaxed', 'full', 'asleep', 'gone']);
-const isPlace = (pose) => !POSES.has(pose.split('@')[0]);
+// Her seats at the campfire circle (the group stage after dark; see circleArrange): "circle" faces
+// you across the fire (a middle seat), "circleside" is turned in toward the middle from the right (an
+// end seat; at the left end it's mirrored). Not places: she sits there only while the circle is on.
+const SEAT_LOOKS = ['circle', 'circleside'];
+const isSeat = (pose) => SEAT_LOOKS.includes(pose.split('@')[0]);
+const isPlace = (pose) => !POSES.has(pose.split('@')[0]) && !isSeat(pose);
 const PLACE_STAY_MS = setting('placeMinutes', 10) * 60000;
 const goes = (c) => clipMoods(c).includes('go');  // on the way to a place or the empty glass, and back
 const LOOKS_AWAY = /glance|look|sidelook|shoulder|daydream|horizon|lookup|lookdown|hunter|skycheck|scan|turn|dreamy|thinkdown|picture/;  // the framings she lives in (not asleep, not full-body)
@@ -1261,6 +1271,9 @@ const THINK_LOOK_GAP_MS = 30000;
 function suits(p, k) {
   const want = wantedMood(p);
   const c = p.alive.clips[k];
+  // In her seat at the campfire circle, seatClip chose by who's talking: a sister's clip always fits,
+  // and the one talking talks in her loop, not turned away in a listening clip.
+  if (p.seat && poseFrom(c) === p.seat) return p !== portraits[current] || !/listen/.test(c.source || '') || want !== 'talk';
   // A moment (expression, tool look) plays out, except into sleep or while he types or talks to her:
   // him only looking at her (the camera) doesn't cut it short.
   return clipMoods(c).includes(want) || (p.moments?.has(k) && want !== 'sleep' && (want !== 'listen' || !heard())) ||
@@ -1285,6 +1298,12 @@ function nextClip(p, after) {
     }
     pose = p.alive.home || 'main';
   }
+  // At the campfire circle she stays in her seat (seatClip); out of it, the glass cuts to her home pose.
+  if (p.seat) {
+    const k = seatClip(p, after);
+    if (k >= 0) return k;
+  }
+  if (isSeat(pose)) pose = p.alive.home || 'main';
   const want = wantedMood(p);
   // Time to change clothes (or back into her usual ones before sleep): a cut to her base loop in the
   // other outfit, at a quiet moment. Her places are in her usual clothes: asked to go to one, she
@@ -1766,6 +1785,276 @@ function bindStageSlot(j) {
   if (p.alive) u.texSize.value.set(p.alive.texSize[0], p.alive.texSize[1]);
 }
 
+// ---- The campfire circle ----------------------------------------------------------------------
+// After dark, or when one of them asks for the fire, the group stage becomes a campfire circle, laid
+// out like Donny's photo of their camping trip: the Chooms in the room sit in an open arc on the far
+// side of a fire, the middle seats facing you, the ends turned in, and the fire nearest you. Nobody
+// changes seats when the turn passes: her sisters turn to whoever is talking (their listening clips),
+// the firelight is brightest on her and the whole circle drifts a little toward her. Each sits in her
+// own seat clips (her look "circle" or "circleside", see SEAT_LOOKS); if one in the room has none,
+// the room keeps the standing stage.
+const CIRCLE_FROM = setting('circleFrom', 19);    // after dark (local hour), until morningFrom
+const CIRCLE_ASKED_MS = 60 * 60 * 1000;          // one of them asked for the fire: for the next hour
+// Seats by how many sit, left to right on the glass (end seats are turned in; see circleArrange).
+const CIRCLE_SEATS = {
+  2: [{ x: -0.36, y: -0.12, z: 0, s: 0.62, end: true }, { x: 0.36, y: -0.12, z: 0, s: 0.62, end: true }],
+  3: [{ x: -0.44, y: -0.16, z: 0.03, s: 0.54, end: true }, { x: 0, y: 0.08, z: -0.1, s: 0.48 },
+      { x: 0.44, y: -0.16, z: 0.03, s: 0.54, end: true }],
+  4: [{ x: -0.5, y: -0.2, z: 0.04, s: 0.5, end: true }, { x: -0.18, y: 0.08, z: -0.1, s: 0.44 },
+      { x: 0.18, y: 0.08, z: -0.1, s: 0.44 }, { x: 0.5, y: -0.2, z: 0.04, s: 0.5, end: true }],
+};
+const FIRE_AT = { x: 0, y: -0.6, z: 0.1 };
+// Who sits where, left to right on the glass: as in the photo (Aloy, Eve, Genesis), Optic between Eve and
+// Genesis when all four sit. A Choom not listed sits after them.
+const CIRCLE_ORDER = setting('circleOrder', ['aloy', 'eve', 'optic', 'genesis']);
+// standIn (debug): Chooms without seats sit in their usual clips, to try the layout.
+// folding: the room went quiet around the fire; her sisters stay hidden while the stage folds away.
+const circle = { on: false, asked: 0, standIn: false, pan: 0, flicker: 1, dim: 0, shown: 0, folding: false };
+
+// Her loop in a seat, if she has one (built from her Studio look of that name).
+const seatLoop = (q, look) => (q.alive ? q.alive.clips.findIndex((c) => poseFrom(c) === look && poseTo(c) === look &&
+                                                                        clipMoods(c).includes('talk')) : -1);
+const canSit = (q) => SEAT_LOOKS.some((look) => seatLoop(q, look) >= 0);
+
+// Whether the room sits around the fire: after dark, or asked for, and every Choom in it has a seat.
+function circleWanted() {
+  const ks = portraits.map((q, k) => k).filter((k) => !stage.members || stage.members.has(k));
+  if (ks.length < 2 || !CIRCLE_SEATS[ks.length]) return false;
+  if (circle.standIn) return true;
+  if (!ks.every((k) => canSit(portraits[k]))) return false;
+  const h = hourNow();
+  return h >= CIRCLE_FROM || h < MORNING_FROM || performance.now() - circle.asked < CIRCLE_ASKED_MS;
+}
+
+// Everyone in the room to her seat, in CIRCLE_ORDER. An end
+// seat takes her turned-in look, a middle seat her facing one, else whichever she has. The turned-in
+// look faces the middle from the right; on the left half it's mirrored.
+function circleArrange() {
+  const rank = (k) => (CIRCLE_ORDER.includes(portraits[k].id) ? CIRCLE_ORDER.indexOf(portraits[k].id) : CIRCLE_ORDER.length + k);
+  const ks = portraits.map((q, k) => k).filter((k) => !stage.members || stage.members.has(k)).sort((a, b) => rank(a) - rank(b));
+  const seats = CIRCLE_SEATS[ks.length] || [];
+  portraits.forEach((q, k) => {
+    const n = ks.indexOf(k);
+    if (n < 0 || !seats[n]) {
+      stage.place[k] = null;
+      q.seat = null;
+      return;
+    }
+    const seat = seats[n];
+    const order = seat.end ? ['circleside', 'circle'] : ['circle', 'circleside'];
+    const look = circle.standIn && !canSit(q) ? null : order.find((l) => seatLoop(q, l) >= 0) || null;
+    stage.place[k] = { ...seat, look, flip: look === 'circleside' && seat.x < 0 ? 1 : 0 };
+    q.seat = look;
+    if (k !== current) bindStageSlot(k);
+  });
+}
+
+// Start her on a clip now (not when the one playing ends): into her seat, or back to her own poses.
+function reseat(q) {
+  const a = q.players[q.active];
+  const k = nextClip(q, a.clip);
+  aliveLoad(q, a, k);
+  aliveLoad(q, q.players[1 - q.active], nextClip(q, k));
+  q.aliveFrame = 0;
+  a.video.play().catch(videoError);
+  return a;
+}
+
+// The circle on or off (or rearranged, `again`, when someone joins): a camera cut. Everything fades
+// out, everyone sits down (or gets up) and the glass fades back in on the new framing.
+function circleSet(on, again = false) {
+  if (on === circle.on && !again) return;
+  const sat = portraits.filter((q) => q.seat);
+  circle.on = on;
+  circle.folding = !on && !stage.on;
+  cutFade = { t: 0, shown: false };
+  setTimeout(() => {
+    if (circle.on) circleArrange();
+    else {
+      for (const q of portraits) q.seat = null;
+      if (stage.on) {
+        stage.place = [];
+        stageArrange(current);
+      }
+    }
+    // Seated or standing, nobody slides there: the new framing starts in place.
+    portraits.forEach((q, k) => { if (stage.place[k]) stage.shown[k] = { ...stage.place[k] }; });
+    let waiting = false;  // for her first frame in the new framing
+    for (const q of new Set([...sat, ...portraits.filter((x) => x.seat)])) {
+      if (!q.alive || !q.players) continue;
+      const a = reseat(q);
+      if (q === portraits[current]) {
+        bindAliveTextures(q);
+        followAliveMouth(q);
+        waiting = true;
+        a.video.requestVideoFrameCallback(() => { if (cutFade) cutFade.shown = true; });
+      } else if (stage.place[portraits.indexOf(q)]) bindStageSlot(portraits.indexOf(q));
+    }
+    if (cutFade && !waiting) cutFade.shown = true;
+  }, CUT_OUT_S * 1000);
+  post('circle', { on, members: portraits.filter((q, k) => !stage.members || stage.members.has(k)).map((q) => q.name),
+                   standIn: circle.standIn || undefined });
+}
+
+// What she plays in her seat: her talk loop on her turn; turned toward whoever is talking while a
+// sister talks (a facing seat has a listening clip each way: listen_left, listen_right); else her
+// loop, a quiet moment now and then (a laugh, a sip, a look into the fire).
+function seatClip(p, after) {
+  const clips = p.alive.clips, look = p.seat;
+  const here = clips.map((c, k) => k).filter((k) => poseFrom(clips[k]) === look && poseTo(clips[k]) === look);
+  if (!here.length) return -1;
+  const pick = (ks) => {
+    const fresh = ks.filter((k) => k !== after);
+    return (fresh.length ? fresh : ks)[Math.floor(Math.random() * (fresh.length || ks.length))];
+  };
+  const src = (k) => clips[k].source || '';
+  const listening = here.filter((k) => /listen/.test(src(k)));
+  const loops = here.filter((k) => clipMoods(clips[k]).includes('talk') && !/listen/.test(src(k)));
+  const moments = here.filter((k) => !listening.includes(k) && !loops.includes(k));
+  const want = wantedMood(p);
+  if (p === portraits[current]) {
+    if (want === 'talk' || want === 'think' || want === 'listen' || !moments.length || Math.random() < 0.6) return pick(loops.length ? loops : here);
+    return pick(moments);
+  }
+  if ((mood === 'speaking' || mood === 'thinking') && listening.length) {
+    const me = stage.place[portraits.indexOf(p)], them = stage.place[current];
+    let side = me && them ? (them.x < me.x ? 'left' : 'right') : null;  // on the glass
+    if (side && me.flip) side = side === 'left' ? 'right' : 'left';     // in her mirrored picture
+    const toward = listening.filter((k) => src(k).includes(`listen_${side}`));
+    const either = listening.filter((k) => !/listen_(left|right)/.test(src(k)));
+    if (toward.length || either.length) return pick(toward.length ? toward : either);
+  }
+  return pick(moments.length && Math.random() < 0.45 ? moments : loops.length ? loops : here);
+}
+
+// The fire, drawn by the glass (not a clip): flames from three crossed planes of rising noise, so it
+// has body from every view, a warm pool of light under it, and sparks drifting up. Everyone around
+// it flickers with it (circle.flicker).
+const FLAME_FRAG = /* glsl */ `
+    uniform float time, opacity, seed, flicker;
+    varying vec2 vUv;
+    float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+    float vnoise(vec2 q) {
+      vec2 i = floor(q), f = fract(q);
+      f = f * f * (3.0 - 2.0 * f);
+      return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
+    }
+    float fbm(vec2 p) {
+      float v = 0.0, a = 0.5;
+      for (int i = 0; i < 5; i++) { v += a * vnoise(p); p *= 2.03; a *= 0.5; }
+      return v;
+    }
+    void main() {
+      float y = vUv.y, x = (vUv.x - 0.5) * 2.0;
+      // Rising turbulence bends the flames; slower noise tears tongues off their tops (the bed stays whole).
+      float n1 = fbm(vec2(vUv.x * 4.0 + seed, y * 3.0 - time * 2.0));
+      float n2 = fbm(vec2(vUv.x * 9.0 - seed, y * 6.5 - time * 3.3));
+      float turb = 0.6 * n1 + 0.4 * n2;
+      float tongues = fbm(vec2(vUv.x * 6.0 + seed * 2.0, y * 2.2 - time * 2.6));
+      // Hottest low in the middle, cooling upward and outward.
+      float spread = abs(x + (n1 - 0.5) * 0.9 * y) * (1.0 + 2.2 * y * y);
+      float heat = (1.08 - 1.2 * y) - 1.1 * spread + (turb - 0.5) * (1.5 + 1.6 * y);
+      heat -= smoothstep(0.25, 0.9, y) * (1.0 - tongues);
+      heat = clamp(heat * 1.35, 0.0, 1.0) * smoothstep(0.0, 0.04, y);
+      // Embers glowing in lumps at its foot.
+      float lumps = vnoise(vec2(vUv.x * 14.0, time * 1.2 + 3.0));
+      float ember = smoothstep(0.1, 0.0, y) * smoothstep(0.8, 0.3, abs(x)) * lumps * lumps * 1.6;
+      // Mostly orange: deep red at the edges, yellow-white only at its heart.
+      vec3 col = mix(vec3(0.45, 0.04, 0.0), vec3(1.0, 0.36, 0.03), smoothstep(0.05, 0.45, heat));
+      col = mix(col, vec3(1.0, 0.68, 0.18), smoothstep(0.5, 0.85, heat));
+      col = mix(col, vec3(1.0, 0.93, 0.7), smoothstep(0.88, 1.0, heat));
+      col = col * pow(heat, 1.2) + vec3(0.9, 0.22, 0.03) * ember * (1.0 - heat);
+      gl_FragColor = vec4(col * opacity * flicker, 1.0);
+    }`;
+const POOL_FRAG = /* glsl */ `
+    uniform float opacity, flicker;
+    varying vec2 vUv;
+    void main() {
+      vec2 d = (vUv - 0.5) * 2.0;  // -1..1 across the plane: nothing left at its edges
+      float r = dot(d, d);
+      float glow = exp(-3.5 * r) * (1.0 - smoothstep(0.55, 1.0, r));
+      gl_FragColor = vec4(vec3(1.0, 0.45, 0.12) * glow * 0.33 * opacity * flicker, 1.0);
+    }`;
+const PLAIN_VERT = /* glsl */ `
+    varying vec2 vUv;
+    void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+const fire = { group: new THREE.Group(), flames: [], mats: [] };
+{
+  const additive = { blending: THREE.AdditiveBlending, transparent: true, depthWrite: false };
+  const pool = new THREE.ShaderMaterial({ uniforms: { opacity: { value: 0 }, flicker: { value: 1 } },
+                                          vertexShader: PLAIN_VERT, fragmentShader: POOL_FRAG, ...additive });
+  const poolMesh = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 0.42), pool);
+  poolMesh.position.set(0, 0.04, -0.06);
+  fire.group.add(poolMesh);
+  fire.mats.push(pool);
+  for (let i = 0; i < 3; i++) {
+    const m = new THREE.ShaderMaterial({ uniforms: { time: { value: 0 }, opacity: { value: 0 }, seed: { value: i * 3.7 }, flicker: { value: 1 } },
+                                         vertexShader: PLAIN_VERT, fragmentShader: FLAME_FRAG, side: THREE.DoubleSide, ...additive });
+    const flame = new THREE.Mesh(new THREE.PlaneGeometry(0.3, 0.34), m);
+    flame.position.y = 0.16;
+    flame.rotation.y = (i * Math.PI) / 3;
+    fire.group.add(flame);
+    fire.mats.push(m);
+  }
+  // Sparks: each rises on its own cycle, swaying, and fades out as it goes (all in the shader).
+  const SPARKS = 48;
+  const seeds = new Float32Array(SPARKS * 3);
+  for (let i = 0; i < SPARKS * 3; i++) seeds[i] = Math.random();
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(seeds, 3));
+  const sparks = new THREE.ShaderMaterial({
+    uniforms: { time: { value: 0 }, opacity: { value: 0 } },
+    vertexShader: /* glsl */ `
+      uniform float time;
+      varying float vLife;
+      void main() {
+        vec3 s = position;                                  // three random numbers per spark
+        float life = fract(time * (0.18 + 0.22 * s.x) + s.y);
+        vec3 p = vec3((s.z - 0.5) * 0.12 + sin(time * (1.0 + s.x) + s.y * 6.28) * 0.03 * life,
+                      0.08 + life * (0.55 + 0.3 * s.z),
+                      (s.x - 0.5) * 0.1);
+        vLife = life;
+        gl_PointSize = mix(4.0, 1.5, life);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+      }`,
+    fragmentShader: /* glsl */ `
+      uniform float opacity;
+      varying float vLife;
+      void main() {
+        float r = length(gl_PointCoord - 0.5);
+        if (r > 0.5) discard;
+        float a = smoothstep(0.5, 0.0, r) * (1.0 - vLife) * smoothstep(0.0, 0.08, vLife);
+        gl_FragColor = vec4(vec3(1.0, 0.55, 0.15) * a * opacity, 1.0);
+      }`,
+    ...additive,
+  });
+  const points = new THREE.Points(geo, sparks);
+  points.frustumCulled = false;
+  fire.group.add(points);
+  fire.mats.push(sparks);
+  fire.group.visible = false;
+  scene.add(fire.group);
+}
+
+// Every frame: the fire burns while the circle is up, and the circle drifts toward whoever is talking.
+function updateFire(dt) {
+  const shown = circle.on ? ease(stage.mix) : 0;
+  circle.shown = (circle.shown || 0) + (shown - (circle.shown || 0)) * Math.min(dt * 3, 1);
+  fire.group.visible = circle.shown > 0.01;
+  if (!fire.group.visible) return;
+  const t = simTime;
+  circle.flicker = 1 + 0.06 * Math.sin(t * 7.3) + 0.04 * Math.sin(t * 13.1 + 1.3) + 0.05 * Math.sin(t * 3.1 + Math.sin(t * 1.7));
+  const seat = stage.place[current];
+  const target = circle.on && seat ? -seat.x * 0.25 : 0;
+  circle.pan += (target - circle.pan) * Math.min(dt * 0.8, 1);
+  fire.group.position.set(FIRE_AT.x + circle.pan, FIRE_AT.y, FIRE_AT.z);
+  for (const m of fire.mats) {
+    m.uniforms.opacity.value = circle.shown * (1 - circle.dim);
+    if (m.uniforms.time) m.uniforms.time.value = t;
+    if (m.uniforms.flicker) m.uniforms.flicker.value = circle.flicker;
+  }
+}
+
 // The Chooms in a room, from a group turn's member names (the Choom app sends them): the speaker
 // always, and null (all four) when the event doesn't say.
 function roomMembers(ev, i) {
@@ -1778,6 +2067,7 @@ function roomMembers(ev, i) {
 // Who stands where: the one in front, and the others in the room behind her, each keeping her place
 // when she can. A Choom not in the room has none, and isn't drawn.
 function stageArrange(front) {
+  if (circle.on) return circleArrange();
   const back = portraits.map((q, k) => k).filter((k) => k !== front && (!stage.members || stage.members.has(k)));
   const free = back.length ? [...stageBacks(back.length)] : [];
   const kept = back.filter((k) => {
@@ -1803,7 +2093,8 @@ function stageEnter(i, members = null) {
     // Already up ("OK Chooms" shows all four): the room's turn says who's in it.
     if (members && [...members].sort().join() !== [...(stage.members || [])].sort().join()) {
       stage.members = members;
-      stageArrange(current);
+      if (circle.on || circleWanted()) circleSet(circleWanted(), true);
+      else stageArrange(current);
     }
     return;
   }
@@ -1832,6 +2123,7 @@ function stageEnter(i, members = null) {
   });
   orbGroup.visible = band.visible = false;
   post('stage', { on: true, front: portraits[front].name });
+  if (circleWanted()) circleSet(true);
 }
 
 // The room is still talking (a room turn in the last two minutes): a Choom's 1:1 reply joins the stage
@@ -1844,6 +2136,7 @@ function stageExit() {
   if (!stage.on) return;
   stage.on = false;
   post('stage', { on: false });
+  circleSet(false);
 }
 
 // Every frame: the stage folds in or out, and everyone eases toward her place.
@@ -1851,6 +2144,7 @@ function updateStage(dt) {
   if (stage.on && performance.now() > stage.until && mood === 'idle' && !speech.busy && !speech.queue.length) stageExit();
   const was = stage.mix;
   stage.mix = Math.min(1, Math.max(0, stage.mix + (stage.on ? dt : -dt) / 1.4));
+  if (stage.on || stage.mix === 0) circle.folding = false;
   if (was > 0 && stage.mix === 0) {
     // Folded away: her sisters stop playing, and her own orbs or band come back.
     for (const slot of stage.slots) if (slot) slot.mesh.visible = false;
@@ -1876,15 +2170,21 @@ function updateStage(dt) {
     if (!slot) return;
     slot.mesh.visible = j !== current;
     if (!slot.mesh.visible) return;
-    slot.mesh.position.set(at.x, at.y + Math.sin(simTime * 0.9 + j * 1.7) * 0.006, at.z);
+    // Around the fire she sits still in her seat (no floating), the circle drifting with circle.pan.
+    const seated = circle.on && place.look;
+    slot.mesh.position.set(at.x + (circle.on ? circle.pan : 0), at.y + (seated ? 0 : Math.sin(simTime * 0.9 + j * 1.7) * 0.006), at.z);
     slot.mesh.scale.setScalar(0.94 * at.s);
-    // Turned a little toward whoever is talking (less so while nobody is).
+    // Turned a little toward whoever is talking (less so while nobody is; seated, her clips turn her).
     const attentive = mood === 'idle' ? 0.5 : 1;
-    slot.mesh.rotation.y = Math.max(-0.3, Math.min(0.3, (front.x - at.x) * 0.65)) * attentive;
+    const turn = circle.on ? 0.1 : 0.3;
+    slot.mesh.rotation.y = Math.max(-turn, Math.min(turn, (front.x - at.x) * 0.65)) * attentive;
     const u = slot.material.uniforms;
-    u.opacity.value = m;
-    u.glow.value = 0.72 * (1 - 0.45 * sleepAmt);
+    u.opacity.value = circle.folding ? 0 : m * (1 - circle.dim);
+    // By the fire the light on her flickers with it, a little dimmer than on the one talking.
+    u.glow.value = (circle.on ? 0.82 * circle.flicker : 0.72) * (1 - 0.45 * sleepAmt);
     u.depthScale.value = shared.depthScale.value * 0.8;
+    u.flip.value = place.flip || 0;
+    u.bottomFade.value = seated ? 0 : 0.5;  // a seat shows her whole figure
   });
 }
 
@@ -1897,6 +2197,16 @@ function switchTo(i, force = false) {
   if (stage.on && stage.mix >= 1 && phase === 'idle' && next !== current) {
     const last = current;
     stage.members?.add(next);
+    if (circle.on) {
+      const joined = !stage.place[next];
+      current = next;
+      if (joined) circleSet(circleWanted(), true);
+      if (stage.place[last]) bindStageSlot(last);
+      applyPortrait(next);
+      labelT = 0;
+      post('choom', { choom: portraits[next].name, stage: true, circle: true });
+      return;
+    }
     stage.place[last] = stage.place[next];
     stage.place[next] = STAGE_FRONT;
     current = next;
@@ -1977,6 +2287,17 @@ function onControl(ev) {
   if (typeof ev.picture === 'string') showPicture(ev.picture, ev.kind || 'picture', portraits[current]); // debug: a gallery image id
   if (ev.stage === true) stageEnter(current, Array.isArray(ev.room) ? roomMembers(ev, current) : null); // debug: the group stage (room: names)
   if (ev.stage === false) stageExit();
+  if (ev.circle === true) { // debug: the campfire circle now (room: names; standIn: seatless Chooms sit in their usual clips)
+    circle.asked = performance.now();
+    circle.standIn = ev.standIn === true;
+    if (!stage.on) stageEnter(current, Array.isArray(ev.room) ? roomMembers(ev, current) : null);
+    else circleSet(circleWanted(), true);
+  }
+  if (ev.circle === false) {
+    circle.asked = 0;
+    circle.standIn = false;
+    circleSet(false);
+  }
   if (ev.quietTurn) { // debug: a quiet turn now, to a Choom by name (or the next one)
     const k = portraits.findIndex((q) => q.id === String(ev.quietTurn).toLowerCase());
     if (k !== current) quietTurn(k >= 0 ? k : (current + 1) % portraits.length);
@@ -2000,6 +2321,15 @@ const MOVE_FRESH_MS = 30 * 60 * 1000;
 function onGlass(ev) {
   const p = portraits.find((q) => q.id === String(ev.choom || '').toLowerCase());
   if (!p?.alive) return;
+  // The campfire circle asked for: while the room is talking, everyone sits down around the fire (and
+  // the next hour's group stage starts there). Not in a room, she goes to her own campfire if she has
+  // one (the server sends it as a move).
+  if (ev.circle && (stage.on || roomActive())) {
+    circle.asked = performance.now();
+    if (stage.on) circleSet(circleWanted());
+    post('glass', { choom: p.id, circle: true, seated: circle.on });
+    return;
+  }
   if (Array.isArray(ev.move)) p.moveWanted = { sources: new Set(ev.move), until: performance.now() + MOVE_FRESH_MS };
   if ('wear' in ev) {
     const w = wardrobe(p);
@@ -2661,7 +2991,10 @@ renderer.setAnimationLoop((now) => {
     presence = 1 - ease(Math.min(phaseT / 0.45, 1));
     if (phaseT >= 0.45) {
       // Faded over to another Choom while the stage comes up: she takes the front, the last one her spot.
-      if (stage.on && stage.place[pending] !== STAGE_FRONT) {
+      // Around the fire she keeps her seat; one who wasn't in the room joins it (or, seatless, ends it).
+      const joining = stage.on && circle.on && !stage.place[pending];
+      if (joining) stage.members?.add(pending);
+      if (stage.on && !circle.on && stage.place[pending] !== STAGE_FRONT) {
         stage.members?.add(pending);
         stage.place[current] = stage.place[pending];
         stage.place[pending] = STAGE_FRONT;
@@ -2669,7 +3002,8 @@ renderer.setAnimationLoop((now) => {
       }
       current = pending;
       pending = null;
-      if (stage.on) stageArrange(current);
+      if (joining) circleSet(circleWanted(), true);
+      else if (stage.on) stageArrange(current);
       applyPortrait(current);
       phase = 'in';
       phaseT = 0;
@@ -2694,14 +3028,17 @@ renderer.setAnimationLoop((now) => {
   // Idle life: slow sway, a little float, breathing depth.
   const tau = Math.PI * 2;
   updateStage(dt);
+  updateFire(dt);
   const sm = ease(stage.mix);
   const front = stage.shown[current] || STAGE_FRONT;
+  const seated = circle.on && stage.place[current]?.look;  // in her seat at the campfire circle
   portrait.rotation.y = Math.sin(simTime * tau / 9.0) * 0.045;
-  portrait.position.x = front.x * sm;
-  portrait.position.y = Math.sin(simTime * tau / 6.5) * 0.012 + front.y * sm;
+  portrait.position.x = (front.x + (circle.on ? circle.pan : 0)) * sm;
+  portrait.position.y = Math.sin(simTime * tau / 6.5) * (seated ? 0.003 : 0.012) + front.y * sm;
   portrait.position.z = 0.06 * listenAmt + 0.025 * level + front.z * sm;
   portrait.scale.setScalar(0.94 * (1 + (front.s - 1) * sm));
-  frontMaterial.uniforms.bottomFade.value = 0.22 * sm;
+  frontMaterial.uniforms.bottomFade.value = seated ? 0 : 0.22 * sm;
+  frontMaterial.uniforms.flip.value = circle.on ? stage.place[current]?.flip || 0 : 0;
   const breath = 1 + Math.sin(simTime * tau / 4.6) * 0.035;
   shared.depthScale.value = baseDepth.value * breath * (0.25 + 0.75 * presence);
   // A camera cut: fade out, hold dark until the new framing's first frame, fade in.
@@ -2717,7 +3054,9 @@ renderer.setAnimationLoop((now) => {
     if (cutFade && cutFade.t > 3) cutFade = null; // never stay dark if a clip fails to start
   }
   shared.opacity.value = presence * (1 - cutDim);
+  circle.dim = circle.on || circle.shown > 0.01 ? cutDim : 0;  // the circle's own cuts dim everyone
   shared.glow.value = 1 + 0.22 * listenAmt + 0.3 * level + thinking * 0.06 * Math.sin(simTime * 3.2) + 0.2 * toolBoost;
+  if (circle.shown > 0.01) shared.glow.value *= 1 + (circle.flicker - 1) * circle.shown;  // the firelight on her
 
   if (body) {
     body.update({
@@ -2749,7 +3088,7 @@ renderer.setAnimationLoop((now) => {
   if (orbGroup.visible) updateOrbs(presence * (1 - 0.6 * sleepAmt) * (1 - fullAmt));
   particleMaterial.uniforms.time.value = simTime;
   updateWeather(paused ? 0 : dt, simTime, presence * (1 - 0.7 * sleepAmt));
-  particleMaterial.uniforms.opacity.value = presence * (0.85 + 0.4 * listenAmt + 0.5 * level);
+  particleMaterial.uniforms.opacity.value = presence * (0.85 + 0.4 * listenAmt + 0.5 * level) * (1 - 0.6 * (circle.shown || 0));  // the fire's sparks instead
 
   if (band.visible) {
     const cycle = style === 'scan' ? (bandT % 5) / 5 : 0.5 + 0.5 * Math.sin(bandT * tau / 9);

@@ -254,6 +254,7 @@ few listening clips borrows her quiet clips that keep facing forward.
 | `full` | her whole figure, from a full-body picture made from her reference sheet |
 | a place (`campfire`) | somewhere she goes and stays a while, framed wide: any look in her Studio project that isn't one of the others and has no outfit; its look's `from` (her full body) is where she gets there from |
 | `gone` | the empty glass (a black picture) she walks off into and on from |
+| a seat (`circle`, `circleside`) | her seat at the campfire circle, framed wide: `circle` faces you across the fire (a middle seat), `circleside` is turned in toward the middle from the right (an end seat, mirrored at the left end); made like a place, but she's there only while the circle is on |
 
 Full-body clips are reached and left with a quick camera-cut fade, and have no lip sync. About one
 quiet clip in fourteen cuts to a full-body clip and back (`FULL_IDLE_CHANCE`).
@@ -286,6 +287,30 @@ a Choom is straight back in her home loop, and on the group stage nobody stays g
 only what's lit in these clips (an empty frame stays empty), lines up depth on the frames she's in, and
 gives them no lip sync. They're in her usual clothes only.
 
+**The campfire circle.** The group stage becomes a campfire circle (`circleWanted`) when it's after dark
+(`circleFrom`, 7 pm, until `morningFrom`) or one of them asked for the fire in the last hour, and every
+Choom in the room has a seat loop. The room sits in an open arc on the far side of the fire, left to right
+in `circleOrder` (Aloy, Eve, Optic, Genesis, as in the photo of their camping trip):
+- **Seats** (`CIRCLE_SEATS`, 2 to 4): the ends nearer and turned in (`circleside`, mirrored on the left
+  half by the shader's `flip`), the middle seats further back and facing you (`circle`); each falls back
+  to the other look if she has only one.
+- **The fire** is drawn by the glass, not rendered: three crossed planes of rising noise (`FLAME_FRAG`)
+  with embers at the foot, a soft pool of light and sparks. Everyone's light flickers with it
+  (`circle.flicker`), the one talking a little brighter.
+- **The turn passing:** nobody moves seats. Her sisters play their listening clips turned her way (a
+  facing seat has `listen_left` and `listen_right`), and the circle drifts toward her (`circle.pan`).
+  Around the fire there's real depth: the speaker isn't drawn over her sisters as on the standing stage.
+- **Going in and out** is a camera cut (`circleSet`): everyone fades, sits down (or gets up) and fades
+  back in. A Choom joining the room gets a seat; one without seat clips ends the circle (back to the
+  standing stage). The stage folding away ends it too.
+- **Asked for:** glass_move with the fire and a group word ("let's all sit around the fire",
+  `closet.wants_circle`). In a room it starts the circle; outside one she goes to her own campfire if
+  she has one.
+
+Seat clips: `<seat>` (her loop; she talks over it with lip sync), `<seat>listen` (turned toward the
+middle), `<seat>listen_left` / `listen_right` (a facing seat), and quiet moments `<seat>_<what>`. They
+never play outside the circle, and aren't moves to ask for.
+
 ## Looks and outfits
 
 An outfit's name says when she wears it (`OUTFIT_RULES`, `nightOutfit` and `wantedOutfit` in
@@ -306,7 +331,8 @@ has a clip with the `talk` mood.
 **Install settings.** The hours, temperatures and visit lengths on this page (sleep 11 pm to 7 am,
 night clothes from 10 pm, 70°F for warm night clothes, cold under 45°F, hot over 85°F, evening 6 to 11
 pm, visits of 30 s per clip between 3 and 15 minutes, 25 minutes' rest, a daily 2 minutes per clip,
-mornings from 5 am for getting up, 10 minutes at a place) are defaults. Copy `glass-settings.example.json` to `glass-settings.json` beside `living.html`
+mornings from 5 am for getting up, 10 minutes at a place, the campfire circle from 7 pm and its seat
+order) are defaults. Copy `glass-settings.example.json` to `glass-settings.json` beside `living.html`
 (gitignored), change what you like and relaunch; anything left out keeps its default.
 
 **Visits.** A dozen clips would loop for hours, so she wears an outfit (or another look) in visits:
@@ -606,6 +632,10 @@ The looking-glass skill in the Choom app (`skills/core/looking-glass`) gives eac
   fire" finds the campfire). The answer says where she'll be ("go to your campfire ... You stay about
   ten minutes"), and `glass_closet` lists it as "go to your campfire". Walking on and off isn't asked
   for.
+- **The campfire circle:** a request with the fire and a group word (together, all, everyone, us,
+  sisters, circle, let's) from a Choom with a seat sends `circle` (and her own campfire as a move, if
+  she has one). The answer says the room sits around the fire while they talk, for the next hour, if
+  everyone in it has a seat; without a seat or a campfire it's a wish.
 - **Moves:** selfie moves, full-body clips, and clips named for a move (dance, wave, kiss, and so on).
   A move plays in the clothes she has on: from her current pose if she has it there, else as a cut to
   her whole figure in those clothes, else through a pose change in them (Aloy raises her hand first).
@@ -734,6 +764,8 @@ Each wake and blank is logged as `screens`.
 - **Group stage.**
   - A room turn brings the Chooms in that room to the glass, however many there are. All of them come
     when the room isn't known, as with "OK Chooms".
+  - After dark (or asked for) a room of two to four with seats sits around a campfire instead (The
+    campfire circle, above).
   - The speaker stands in front, and her sisters stand smaller behind her, turned toward her. When the
     turn passes, the two trade places.
   - A Choom's 1:1 reply during a room comes to the front instead of folding the stage away.
@@ -807,6 +839,7 @@ Each wake and blank is logged as `screens`.
 | `{"clip": 5}` | jump to a clip of the Choom on the glass |
 | `{"stage": true, "room": ["Aloy", "Eve"]}` / `{"stage": false}` | the group stage (all four without `room`) |
 | `{"quietTurn": "genesis"}` | a screensaver turn now, to that Choom (walking off and on if both can) |
+| `{"circle": true, "room": ["aloy", "eve", "genesis"], "standIn": true}` / `{"circle": false}` | the campfire circle now (`standIn`: Chooms without seats sit in their usual clips, to try the layout) |
 | `{"sleep": true}`, `{"hour": 22}` | doze now; pretend it's 10 pm (`null` to stop) |
 | `{"weather": {"wind": 25, "temperature": 40}}` | pretend weather (replaced by the next real reading) |
 | `{"presence": {"bed": true}}` | pretend presence (`null` clears a role) |
@@ -835,7 +868,7 @@ Each wake and blank is logged as `screens`.
 | Kind | From | |
 |---|---|---|
 | `status` | page | every 2 s: Choom, mood, clip, fps, voice, paused, queue |
-| `alive-clip`, `choom`, `stage`, `quiet-turn` | page | clips played, Choom switches, the stage, screensaver turns (`why: bedtime` for a hand-over to a Choom who can sleep; `walkOff`, `walkOn` when she walks off or the next walks on) |
+| `alive-clip`, `choom`, `stage`, `circle`, `quiet-turn` | page | clips played, Choom switches, the stage and the campfire circle (`members`), screensaver turns (`why: bedtime` for a hand-over to a Choom who can sleep; `walkOff`, `walkOn` when she walks off or the next walks on) |
 | `turn-closed` | page | a turn closed by the watchdog or a feed reconnect |
 | `latency`, `lipsync`, `speak`, `gap` | page, server | voice timing |
 | `tool`, `picture`, `glass`, `chime`, `tuning`, `button`, `error` | page, server | moments, requests, keys, errors |

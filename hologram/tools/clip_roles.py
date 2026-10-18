@@ -134,6 +134,8 @@ def home_pose(cid):
 # Poses every Choom may have; any other look of hers without an outfit is a place she goes to and
 # stays a while (Genesis's campfire: sitting on the ground by a fire), reached from her full body (its
 # look's "from") by a clip that sits her down. "gone" is the empty glass she walks off into and on from.
+# Her seats at the campfire circle (circle, circleside; closet.SEATS) get their roles the same way, but
+# have no clips to get there: the glass cuts to them (living.js seatClip).
 POSES = ("main", "relaxed", "full", "asleep", "gone")
 
 

@@ -14,7 +14,7 @@ from project import Project, base_of, editing, next_seeds, outfit_of, roles
 
 PACKS_FILE = Path(__file__).resolve().parent / "packs.json"
 KIND_PREFIX = {
-    "moment": {"main": "idle_", "relaxed": "relaxed_", "full": "full_", "place": "{place}_"},
+    "moment": {"main": "idle_", "relaxed": "relaxed_", "full": "full_", "place": "{place}_", "seat": "{place}_"},
     "talk": {"main": "talk_", "relaxed": "relaxedtalk_"},
     "listen": {"main": "listen_", "relaxed": "relaxedlisten_"},
     "oops": {"main": "oops_", "relaxed": "relaxedoops_"},
@@ -29,13 +29,16 @@ def library():
 
 
 POSES = ("main", "relaxed", "full", "asleep", "gone")  # clip_roles.POSES; any other look is a place
+SEATS = ("circle", "circleside")  # her seats at the campfire circle (living.js SEAT_LOOKS): made like places
 
 
 def look_kind(look_id):
-    """Which packs suit a look: "outfit" for her waist-up looks in other clothes, "place" for one of
-    her places (sitting by her campfire), else its pose (an outfit's full body, full@dayspandex, gets
-    the full-body packs)."""
+    """Which packs suit a look: "outfit" for her waist-up looks in other clothes, "seat" for her seat
+    at the campfire circle, "place" for one of her places (sitting by her campfire), else its pose (an
+    outfit's full body, full@dayspandex, gets the full-body packs)."""
     base = base_of(look_id)
+    if base in SEATS:
+        return "seat"
     if base not in POSES:
         return "place"
     return "outfit" if outfit_of(look_id) and base != "full" else base
@@ -45,7 +48,7 @@ def action_name(action, look_id):
     """The clip's action part for this look (idle_glance, relaxedlisten, evening-idle_glance,
     to_campfire), or None if the action doesn't come in this pose."""
     base, outfit = base_of(look_id), outfit_of(look_id)
-    pose = "place" if look_kind(look_id) == "place" else base
+    pose = look_kind(look_id) if look_kind(look_id) in ("place", "seat") else base
     if "names" in action:
         name = action["names"].get(pose)
     else:
@@ -91,6 +94,8 @@ def options(proj, look_id):
         if (not kinds & set(pack["for"]) or not all(look in proj.looks for look in pack.get("needs", []))
                 or (pack.get("usual") and outfit_of(look_id))):
             continue
+        if a.get("looks") and base_of(look_id) not in a["looks"]:
+            continue  # for one seat only (a facing seat listens left and right)
         part = action_name(a, look_id)
         if not part:
             continue

@@ -111,6 +111,10 @@ MOVE_NAMES = {
 }
 # Words in a place's description that say nothing about it ("... looking up at the viewer").
 PLACE_FILLER = {"viewer", "looking", "toward", "towards", "beside", "small", "held", "drawn", "their", "while", "whole"}
+# Her seats at the campfire circle (the group stage after dark; clip_roles.SEATS): the room's, not
+# moves of hers. A request for the fire with any of these words asks for the whole room around it.
+SEATS = ("circle", "circleside")
+TOGETHER = {"together", "all", "everyone", "everybody", "us", "we", "sisters", "group", "circle", "gather"}
 MOVE_FRESH_S = 180  # a move she asked for plays within three minutes, or not at all
 
 
@@ -254,6 +258,8 @@ def moves(cid, alive, closet):
         word = move_word(cid, src)
         if c.get("moods") == ["windy"]:
             continue  # weather, not a move: it plays on windy days only
+        if c.get("from", "").split("@")[0] in SEATS:
+            continue  # her seat at the campfire circle
         if c.get("moods") == ["go"]:
             if c.get("to") in spots:
                 out.setdefault(c["to"], []).append(src)
@@ -275,7 +281,20 @@ def as_you(text):
     return re.sub(r"\bshe\b", "you", re.sub(r"\bher\b", "your", text))
 
 
+def can_sit(alive):
+    """Whether she has a seat at the campfire circle on the glass (a loop in one of her seat looks)."""
+    return any(c.get("from") in SEATS and c.get("to") == c.get("from") and "talk" in c.get("moods", [])
+               for c in alive.get("clips", []))
+
+
 # ---- Requests ----------------------------------------------------------------------------------
+def wants_circle(request):
+    """A request for the campfire circle: the fire, and all of them ("let's all sit around the fire")."""
+    asked = set(words(request))
+    together = bool(asked & TOGETHER) or bool(re.search(r"\blet'?s\b|\blet us\b", (request or "").lower()))
+    return together and any("fire" in w for w in asked)
+
+
 def match_move(request, available, spots=None):
     """The moves a request asks for: [(word, sources)], best first (ties all kept), or []. spots: her
     places, found by the words of their description too ("sit by the fire" finds her campfire)."""

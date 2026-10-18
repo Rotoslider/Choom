@@ -341,7 +341,8 @@ class Project:
         data = {"usual": usual, "looks": looks,
                 "moves": {n: c["tags"] for n, c in sorted(self.clips.items()) if c.get("tags")},
                 # Her places (sitting by her campfire): where she is and how, for her request and the answer.
-                "places": {lid: look["does"] for lid, look in sorted(self.looks.items()) if look.get("does")}}
+                "places": {lid: look["does"] for lid, look in sorted(self.looks.items())
+                           if look.get("does") and lid not in closet.SEATS}}
         text = json.dumps(data, indent=1) + "\n"
         if not f.exists() or f.read_text() != text:
             part = f.with_suffix(".part")  # swapped in whole: the glass's server reads it any moment
@@ -385,10 +386,11 @@ class Project:
                                 f"yet: {waist[0] if waist else f'main@{o}'} has no loop she can talk over on the glass "
                                 f"(Essentials), so {'they never play' if len(on) > 1 else 'it never plays'}")
         # A place on the glass she can't get to: nothing placed that takes her there (to_campfire), so it
-        # never plays. (The `to_` clip starts in her full body, so it's counted there.)
+        # never plays. (The `to_` clip starts in her full body, so it's counted there.) Her seats at the
+        # campfire circle need no way there: the glass cuts to them.
         into = {self.clips[n]["to"] for n in seq if n in self.clips and self.clips[n]["from"] != self.clips[n]["to"]}
         for lid in self.looks:
-            if self.looks[lid].get("does") and looks[lid]["placed"] and lid not in into:
+            if self.looks[lid].get("does") and looks[lid]["placed"] and lid not in into and lid not in closet.SEATS:
                 warnings.append(f"{lid} is on the glass, but nothing takes her there: put to_{lid} on the glass too "
                                 f"(A place), or she never goes")
         return {"looks": looks, "outfits": outfits, "warnings": warnings}

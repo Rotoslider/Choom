@@ -690,6 +690,25 @@ def glass_answer(request):
     if op == "wish":  # something new she'd like, asked for as a wish: nothing changes on the glass
         closet.add_wish(PORTRAITS, cid, "move" if request.get("kind") == "move" else "wear", what)
         return {"ok": True, "done": False, "message": f"\"{what}\" is on Donny's wish list in Glass Studio now."}
+    if op == "move" and closet.wants_circle(what):
+        # The campfire circle: the whole room sits around one fire (living.js circleWanted) while they
+        # talk in a room, for the next hour, if everyone in it has a seat there. Not in a room, she goes
+        # to her own campfire if she has one.
+        sit = closet.can_sit(alive)
+        own = next((w for w in spots if "fire" in w or "fire" in spots[w]), None)
+        if sit:
+            broadcast({"type": "glass", "choom": cid, "circle": True,
+                       **({"move": sorted(moves[own]), "name": own} if own else {})})
+            return {"ok": True, "done": True,
+                    "message": "When you're talking with your sisters in a room, the glass sits you all around a "
+                               "campfire together for the next hour, as long as everyone in the room has a seat "
+                               "there (Donny makes them in Glass Studio)." +
+                               (f" Outside a room you go to your {own} on your own." if own else "")}
+        if not own:
+            closet.add_wish(PORTRAITS, cid, "move", what)
+            return {"ok": True, "done": False,
+                    "message": f"There's no seat for you by a campfire on the glass yet. \"{what}\" is on Donny's "
+                               "wish list in Glass Studio now.", "moves": names}
     if op == "move":
         found = closet.match_move(what, moves, spots)
         if not found:

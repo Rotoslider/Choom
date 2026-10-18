@@ -167,6 +167,7 @@ holds something (Optic's heart, crossed arms).
 | Pose changes | moving between her two waist-up poses; shown only for a Choom with a second pose (Aloy's `relaxed`), which the Studio can't make yet |
 | A place | in a place look: her loop there (she can talk in it), listening, quiet moments, and the clips to sit down from her full body (`to_`) and get up (`from_`); edit those two to say what appears and goes (the fire flickering up as she sits) |
 | Walking on and off | in her full body (walk off, walk on) and main look (vanish, appear), once she has the empty glass; her usual clothes only |
+| Campfire circle | in a seat look (`circleside`, `circle`): her loop to talk over, listening (toward the middle; a facing seat each way), and quiet moments by the fire. Everyone in a group room needs at least the loop for the room to sit around the fire |
 
 **Plan for many looks at once** plans the same library actions in many looks in one step, for
 instance Expressions and Oops in every outfit. Tick actions (a pack's box ticks all of it) and looks
@@ -332,6 +333,7 @@ it, the page asks before deleting them with it. Both ask in the page before doin
 | Asleep | her with her eyes closed, for the sleep clips: `asleep` from her usual clothes, `asleep@<outfit>` from a night outfit |
 | A place | somewhere she goes and stays a while, from her full body: name it (`campfire`) and say where she is and how ("sitting on the ground beside a small campfire, her knees drawn up and her hands held out toward the flames, looking up at the viewer") |
 | The empty glass | a black picture for walking on and off (`gone`); made at once, no Klein |
+| A seat at the campfire circle | made as A place named `circleside` (sitting, turned three-quarters toward the left of the picture: an end seat) or `circle` (facing the viewer: a middle seat), from her full body. Say "warm orange light falls on her from the lower left" but leave the word campfire out of the Klein prompt, or Klein draws a fire in (the glass draws its own); a fire that slips in comes out with a second pass on that draft ("Remove the flames and the glowing ground ...", started from the draft). Clothes can come from a picture added as a reference (her camping clothes from the trip photo) |
 | A new picture for a look she has | replaces a look's picture, for a truer colour or a better likeness |
 
 - **Starts from:** the picture Klein edits. Any of her waist-up looks works, an outfit too (Genesis's
@@ -434,6 +436,10 @@ The glass answers from what's built:
   need be, cuts to her full body, and she sits down; she stays about ten minutes (`placeMinutes`),
   talking from there if spoken to, then gets up and the glass cuts back. Bedtime, the group stage and
   his turning to another Choom end it sooner. Asked again while she's there, she stays longer.
+- **The campfire circle** answers to the fire and a group word: "let's all sit around the fire".
+  While the room is talking it sits them all around the glass's campfire for the next hour, if every
+  Choom in the room has a seat (Campfire circle); outside a room she goes to her own campfire if she
+  has one.
 - **Clothes** match an outfit's **closet words**. They're read from what she wears in the look
   ("dress, burgundy, red"), and you can change them on the look's card; empty goes back to the ones
   read from her clothes. A garment, colour or fabric she names must be in the outfit, so "the red
@@ -593,5 +599,8 @@ glass.
   render the clips but can't yet add the entry.
 - **Places in other clothes.** A place is in her usual clothes; asked to go there in an outfit, she
   changes first. `campfire@evening` isn't read as a place yet.
+- **The campfire circle as a ring.** The circle is an open arc (everyone faces you across the fire).
+  A full ring, with one sitting with her back to you and the circle turning to each new speaker, would
+  need a profile and a back view of each Choom.
 - **Places by themselves.** She goes to a place only when she asks for it. A place she visits on her
   own now and then (by the fire on evenings) would need hours for it, like an outfit's name gives.
