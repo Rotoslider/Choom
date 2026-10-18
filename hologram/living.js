@@ -1590,7 +1590,7 @@ const offGlass = (p) => p.players[p.active].clip >= 0 && poseTo(p.alive.clips[p.
 
 function aliveStart(p) {
   const a = p.players[p.active];
-  if (p.arrive || offGlass(p)) backOn(p, p.arrive && p.alive.clips.some((c) => poseFrom(c) === 'gone'));
+  if (p.arrive || offGlass(p)) backOn(p, p.arrive);
   p.arrive = false;
   if (a.clip < 0) aliveLoad(p, a, 0);
   a.video.play().catch(videoError);
@@ -1642,7 +1642,7 @@ for (const p of portraits) {
       if (p.leaving != null && pl.clip >= 0 && poseTo(p.alive.clips[pl.clip]) === 'gone') {
         const to = p.leaving;
         p.leaving = null;
-        portraits[to].arrive = true;
+        portraits[to].arrive = canArrive(portraits[to]);
         switchTo(to);
         return;
       }
@@ -2852,20 +2852,22 @@ setInterval(() => {
   quietTurn(next);
 }, 15000);
 
-// A quiet turn: the one on the glass walks off (or vanishes) and the next walks on (or appears), when
-// she can leave from where she is and the next can come on; else the usual fade. /control
+// A quiet turn: the one on the glass walks off (or vanishes) if she can from where she is, and the
+// next walks on (or appears) if she can; either half without the other is a fade. /control
 // {"quietTurn": "genesis"} tries one now.
+const canArrive = (q) => Boolean(q.alive?.clips.some((c) => poseFrom(c) === 'gone'));
 function quietTurn(next) {
   const here = portraits[current];
   const clip = here.alive && here.players[here.active].clip >= 0 ? here.alive.clips[here.players[here.active].clip] : null;
   const pose = clip ? poseTo(clip) : 'main';
-  const canLeave = here.alive?.clips.some((c) => poseTo(c) === 'gone' && (poseFrom(c) === pose || poseFrom(c) === fullOf(pose)));
-  const canArrive = portraits[next].alive?.clips.some((c) => poseFrom(c) === 'gone');
-  post('quiet-turn', { from: here.name, to: portraits[next].name, ...(canLeave && canArrive ? { walk: true } : {}) });
-  if (canLeave && canArrive) {
+  const canLeave = Boolean(here.alive?.clips.some((c) => poseTo(c) === 'gone' && (poseFrom(c) === pose || poseFrom(c) === fullOf(pose))));
+  post('quiet-turn', { from: here.name, to: portraits[next].name, ...(canLeave ? { walkOff: true } : {}),
+                       ...(canArrive(portraits[next]) ? { walkOn: true } : {}) });
+  if (canLeave) {
     here.leaving = next;
     here.leavingAt = performance.now();
   } else {
+    portraits[next].arrive = canArrive(portraits[next]);
     switchTo(next);
   }
 }

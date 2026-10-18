@@ -384,6 +384,13 @@ class Project:
                 warnings.append(f"{' and '.join(on)} {'are' if len(on) > 1 else 'is'} on the glass, but she can't wear {o} "
                                 f"yet: {waist[0] if waist else f'main@{o}'} has no loop she can talk over on the glass "
                                 f"(Essentials), so {'they never play' if len(on) > 1 else 'it never plays'}")
+        # A place on the glass she can't get to: nothing placed that takes her there (to_campfire), so it
+        # never plays. (The `to_` clip starts in her full body, so it's counted there.)
+        into = {self.clips[n]["to"] for n in seq if n in self.clips and self.clips[n]["from"] != self.clips[n]["to"]}
+        for lid in self.looks:
+            if self.looks[lid].get("does") and looks[lid]["placed"] and lid not in into:
+                warnings.append(f"{lid} is on the glass, but nothing takes her there: put to_{lid} on the glass too "
+                                f"(A place), or she never goes")
         return {"looks": looks, "outfits": outfits, "warnings": warnings}
 
     def summary(self):

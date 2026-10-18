@@ -127,27 +127,47 @@ def read_clip(src):
     return fps, [f[:, x0:x0 + cw] for f in frames]
 
 
+def mouth_at(landmarker, bgr, box=None):
+    """Her mouth in one frame (texture UV, v up, and texture pixels), or None if no face is found. box:
+    (x0, y0, size) of a square to look in, for a face too small to find in the whole frame."""
+    h, w = bgr.shape[:2]
+    x0, y0, cw, ch = (box[0], box[1], box[2], box[2]) if box else (0, 0, w, h)
+    found = landmarker.detect(mp.Image(image_format=mp.ImageFormat.SRGB,
+                                       data=np.ascontiguousarray(cv2.cvtColor(bgr[y0:y0 + ch, x0:x0 + cw], cv2.COLOR_BGR2RGB)))).face_landmarks
+    if not found:
+        return None
+    lm = found[0]
+    px = lambda k: (x0 + lm[k].x * cw, y0 + lm[k].y * ch)
+    (lx, ly), (rx, ry) = px(LEFT_CORNER), px(RIGHT_CORNER)
+    (ux, uy), (dx, dy) = px(UPPER_INNER), px(LOWER_INNER)
+    cx, cy = (ux + dx) / 2, (uy + dy) / 2
+    return [cx / w, 1 - cy / h, math.dist((lx, ly), (rx, ry)) / 2,
+            math.dist(px(UPPER_OUTER), px(LOWER_OUTER)) / 2, math.dist((cx, cy), px(CHIN)),
+            -math.atan2(ry - ly, rx - lx),
+            math.dist((ux, uy), (dx, dy)) / 2,   # half the gap her lips already have
+            cy - (ly + ry) / 2]                  # how far her mouth corners curve up (a smile)
+
+
+def face_box(landmarker, bgr):
+    """A square around her face where the landmarker finds it, for a wide shot whose face it misses in
+    the whole frame (Genesis by her campfire): squares half the frame wide, over its top two thirds."""
+    h, w = bgr.shape[:2]
+    size = w // 2
+    for y0 in range(0, int(h * 0.67) - size // 2, size // 4):
+        for x0 in range(0, w - size + 1, size // 4):
+            if mouth_at(landmarker, bgr, (x0, y0, size)):
+                return x0, y0, size
+    return None
+
+
 def mouth_track(landmarker, frames, required=True):
     """Her mouth on every frame (texture UV, v up, and texture pixels), gaps filled and lightly smoothed.
-    Not required (a wide shot at a place, her face small): no face anywhere means no lip sync."""
-    h, w = frames[0].shape[:2]
-    mouths = []
-    for bgr in frames:
-        found = landmarker.detect(mp.Image(image_format=mp.ImageFormat.SRGB,
-                                           data=cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))).face_landmarks
-        if not found:
-            mouths.append(None)
-            continue
-        lm = found[0]
-        px = lambda k: (lm[k].x * w, lm[k].y * h)
-        (lx, ly), (rx, ry) = px(LEFT_CORNER), px(RIGHT_CORNER)
-        (ux, uy), (dx, dy) = px(UPPER_INNER), px(LOWER_INNER)
-        cx, cy = (ux + dx) / 2, (uy + dy) / 2
-        mouths.append([cx / w, 1 - cy / h, math.dist((lx, ly), (rx, ry)) / 2,
-                       math.dist(px(UPPER_OUTER), px(LOWER_OUTER)) / 2, math.dist((cx, cy), px(CHIN)),
-                       -math.atan2(ry - ly, rx - lx),
-                       math.dist((ux, uy), (dx, dy)) / 2,   # half the gap her lips already have
-                       cy - (ly + ry) / 2])                 # how far her mouth corners curve up (a smile)
+    Not required (a wide shot at a place, her face small): it looks again in a square around her face
+    found in the first frame, and no face there either means no lip sync."""
+    mouths = [mouth_at(landmarker, bgr) for bgr in frames]
+    if not required and not any(mouths):
+        box = face_box(landmarker, frames[0])
+        mouths = [mouth_at(landmarker, bgr, box) for bgr in frames] if box else mouths
     n = len(mouths)
     known = [i for i, m in enumerate(mouths) if m is not None]
     if not known:
@@ -277,9 +297,11 @@ def main():
         if particles(src) or at_place(start, end):
             masks |= lit
         # On and off the empty glass: only what's lit can be her, so an empty frame stays empty (U2-Net
-        # finds something in a black frame).
+        # finds something in a black frame), and all that's lit is her: the motes she scatters into or
+        # gathers from were mostly cut away (Genesis's appear, 2026-10-18).
         if "gone" in (start, end):
             masks &= np.stack([cv2.dilate(f.astype(np.uint8), np.ones((15, 15), np.uint8)) > 0 for f in lit])
+            masks |= lit
         # Outfit clips: anything lit that touches her outline is her (or her clothes). U2-Net took the
         # dark knit of Genesis's sweater, where it runs off the bottom-left of the frame, for background
         # in whole stretches of a clip, the first frame included, so the outline rule couldn't help.

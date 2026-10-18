@@ -276,10 +276,11 @@ never play by chance. In the build a place keeps everything lit (the fire, not j
 lines up its depth with its own first frame, like a full body.
 
 **Walking off and on.** On a screensaver turn the one on the glass walks off (from her full body, after
-a cut) or vanishes (from her waist-up look), when she has such a clip from where she is and the next
-Choom has one back from `gone`. The turn passes when her clip ends on the empty glass (the fade has
-nothing left to fade), and the next one walks on or appears, then the glass cuts to her home look. If
-either can't, or she hasn't got off within 30 s, it's the usual fade. A turn passing any other way (a
+a cut) or vanishes (from her waist-up look), if she has such a clip from where she is. The turn passes
+when her clip ends on the empty glass (the fade has nothing left to fade). The next one walks on or
+appears if she has a clip from `gone`, then the glass cuts to her home look. Each half works without
+the other (a Choom without the clips fades out or in as before), and if she hasn't got off within
+30 s, the turn passes with the fade. A turn passing any other way (a
 reply, a button) or him talking to her cancels it; back on the glass any other way after walking off,
 a Choom is straight back in her home loop, and on the group stage nobody stays gone. The build keeps
 only what's lit in these clips (an empty frame stays empty), lines up depth on the frames she's in, and
@@ -778,7 +779,7 @@ Each wake and blank is logged as `screens`.
   - It doesn't switch while she's asleep or just woke, while the stage is up, while you look at her,
     or while someone talks near the tower.
   - A Choom who hasn't been on the glass for 45 minutes greets as she arrives.
-  - The one leaving walks off and the next walks on, when both have the clips (Walking off and on,
+  - The one leaving walks off and the next walks on, each if she has the clips (Walking off and on,
     under Clips, moods and poses). No turn passes while a Choom is at one of her places.
 - **Safeguards.**
   - A clip that can't be played (removed or replaced by a build before the relaunch, a bad encode) is
@@ -834,7 +835,7 @@ Each wake and blank is logged as `screens`.
 | Kind | From | |
 |---|---|---|
 | `status` | page | every 2 s: Choom, mood, clip, fps, voice, paused, queue |
-| `alive-clip`, `choom`, `stage`, `quiet-turn` | page | clips played, Choom switches, the stage, screensaver turns (`why: bedtime` for a hand-over to a Choom who can sleep) |
+| `alive-clip`, `choom`, `stage`, `quiet-turn` | page | clips played, Choom switches, the stage, screensaver turns (`why: bedtime` for a hand-over to a Choom who can sleep; `walkOff`, `walkOn` when she walks off or the next walks on) |
 | `turn-closed` | page | a turn closed by the watchdog or a feed reconnect |
 | `latency`, `lipsync`, `speak`, `gap` | page, server | voice timing |
 | `tool`, `picture`, `glass`, `chime`, `tuning`, `button`, `error` | page, server | moments, requests, keys, errors |
