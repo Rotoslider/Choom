@@ -154,7 +154,7 @@ holds something (Optic's heart, crossed arms).
 | Full body | moves and twirls for a full-body look |
 | Big moves | longer full-body moves, 7 to 15 seconds: dances, turning her back to you, a curtsy, tai chi |
 | Picture looks | turning to a picture beside her (usual looks and outfits; an outfit without them glances its way with a quiet clip) |
-| Pose changes | moving between her two waist-up poses |
+| Pose changes | moving between her two waist-up poses; shown only for a Choom with a second pose (Aloy's `relaxed`), which the Studio can't make yet |
 
 **Plan for many looks at once** plans the same library actions in many looks in one step, for
 instance Expressions and Oops in every outfit. Tick actions (a pack's box ticks all of it) and looks

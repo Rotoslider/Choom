@@ -21,8 +21,8 @@
      "about": "Longer full-body moves, 7 to 15 seconds: dances, a slow turn with her back to you, a curtsy. They play now and then like her other full-body moments. Long clips drift more, so watch them closely."},
     {"id": "pictures", "title": "Picture looks", "for": ["main", "relaxed", "outfit"],
      "about": "Turning to a picture floating beside her face, or glancing down at one lower right."},
-    {"id": "poses", "title": "Pose changes", "for": ["main"],
-     "about": "Moving between her main and relaxed pictures (Aloy lowering and raising her hand). Needs both pictures."}
+    {"id": "poses", "title": "Pose changes", "for": ["main"], "needs": ["relaxed"],
+     "about": "Moving between her main and relaxed pictures (Aloy lowering and raising her hand). Shown only for a Choom with both."}
   ],
   "actions": [
     {"pack": "essentials", "key": "base", "names": {"main": "base", "relaxed": "relaxed"},
