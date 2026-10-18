@@ -29,7 +29,8 @@ happening in the Choom app: listening, thinking, using tools, changing clothes, 
 
 **Looks and clothes**
 - **Outfits.** One day outfit a day takes turns with her usual clothes. There are outfits for hot
-  and cold weather, for the evening (several take turns), and warm or cold night clothes from 10 pm.
+  and cold weather, for the evening (several take turns), and warm or cold night clothes from 10 pm
+  to 7 am.
   She wears an outfit in short visits with at least 25 minutes in her usual clothes between them, and
   changes with a camera cut or a change-of-clothes clip.
 - **Full body.** Now and then the glass cuts to her whole figure. An outfit can have its own full
@@ -52,7 +53,8 @@ happening in the Choom app: listening, thinking, using tools, changing clothes, 
 
 **Days, nights and weather**
 - **Sleep.** Late at night, after a quiet spell, she dozes off and the glass dims. She wakes when you
-  talk to her, or in the morning. She sleeps in her night clothes when they have their own asleep look.
+  talk to her, or in the morning. She sleeps in her night clothes when they have their own asleep look,
+  and changes out of them once she's up after 7 am.
 - **Weather.** On windy days her hair and clothes blow in the wind and dust drifts through the glass.
   Rain and snow fall through it while they fall outside.
 - **Home Assistant presence.** She greets you when you come home. Optional desk and bed sensors add

@@ -265,7 +265,7 @@ An outfit's name says when she wears it (`OUTFIT_RULES`, `nightOutfit` and `want
 
 | Name starts with | Worn |
 |---|---|
-| `night…` | from 10 pm until she wakes, all night (no visits). `nightwarm…` at 70°F or warmer, `nightcold…` below; chosen when she puts them on and kept until morning |
+| `night…` | from 10 pm to 7 am, all night (no visits). `nightwarm…` at 70°F or warmer, `nightcold…` below; chosen when she puts them on and kept until morning. She also sleeps in them when he's in bed by day, and changes out of them once she's awake again (before Oct 18 a night outfit she was in by day stayed on all day: Eve after a relaunch, Genesis after his nap) |
 | `cold…` | under 45°F |
 | `hot…` | over 85°F |
 | `evening…` | 6 to 11 pm |

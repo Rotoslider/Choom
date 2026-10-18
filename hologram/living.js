@@ -1001,9 +1001,10 @@ const basePose = (pose) => pose.split('@')[0];
 // to only while she wears that outfit.
 const isFull = (pose) => basePose(pose) === 'full';
 const fullOf = (pose) => (outfitOf(pose) ? `full@${outfitOf(pose)}` : 'full');
-// Night clothes, from 10 pm until she wakes: nightwarm… when it's 70°F or warmer, nightcold… below
+// Night clothes, from 10 pm until 7 am: nightwarm… when it's 70°F or warmer, nightcold… below
 // (his station), any other night… outfit either way. Chosen when she first puts them on and kept until
-// morning, so a cooling night doesn't change her pajamas at 2 am.
+// morning, so a cooling night doesn't change her pajamas at 2 am. Put on to sleep by day (he naps),
+// they're kept only until 10 pm, so the night's own pick still goes by that night's temperature.
 const NIGHT_FROM = setting('nightClothesFrom', 22), NIGHT_WARM_F = setting('nightWarmF', 70);
 const nightNow = () => { const h = hourNow(); return h >= NIGHT_FROM || h < SLEEP_UNTIL; };
 const msUntilHour = (hour) => { const d = new Date(), t = new Date(d); t.setHours(hour, 0, 0, 0); if (t <= d) t.setDate(t.getDate() + 1); return t - d; };
@@ -1013,7 +1014,7 @@ function nightOutfit(p, outfits) {
   if (p.nightPick && performance.now() < p.nightPick.until && nights.includes(p.nightPick.o)) return p.nightPick.o;
   const t = weather.temperature, warm = typeof t === 'number' ? t >= NIGHT_WARM_F : null;
   const o = (warm !== null && nights.find((x) => (warm ? /warm/ : /cold/).test(x))) || nights.find((x) => !/warm|cold/.test(x)) || nights[0];
-  p.nightPick = { o, until: performance.now() + msUntilHour(SLEEP_UNTIL) };
+  p.nightPick = { o, until: performance.now() + msUntilHour(nightNow() ? SLEEP_UNTIL : NIGHT_FROM) };
   return o;
 }
 const COLD_BELOW_F = setting('coldBelowF', 45), HOT_ABOVE_F = setting('hotAboveF', 85);
@@ -1049,7 +1050,10 @@ function saveWardrobe(p) {
 const lookClips = (p, o) => p.alive.clips.filter((c) => outfitOf(poseFrom(c)) === o).length;
 const visitLength = (p, o) => Math.min(VISIT_MAX_MS, Math.max(VISIT_MIN_MS, lookClips(p, o) * VISIT_S_PER_CLIP * 1000));
 function mayWear(p, o) {
-  if (/^night/.test(o)) return true;  // all night long
+  // All night long, and only at night: a night outfit she's in by day (woken from a nap, or still in
+  // it from last night after a relaunch) would go on as a visit with no hours to end it. Eve put
+  // her pajamas back on at 8 am and wore them all day (2026-10-18).
+  if (/^night/.test(o)) return nightNow();
   const w = wardrobe(p), now = Date.now();
   if (w.visit && w.visit.o === o) return now - w.visit.start < visitLength(p, o);  // wearing it: until the visit is up
   if (now - (w.rested[o] || 0) < VISIT_REST_MS) return false;                     // just took it off
