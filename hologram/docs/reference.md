@@ -507,14 +507,18 @@ reads exactly that value:
   whenever Donny moved and read empty in between, sometimes for an hour, and a moving sleeper showed up
   as short ghost readings in the office and kitchen zones too.
   - It counts once it's the last place you were seen, for its `after`, with no other zone holding you
-    45 s or more since.
+    45 s or more since. The other zones count together for this: walking out the east door on Oct 18
+    the office and kitchen read Donny by turns for over a minute, neither for 45 s on its own, and a
+    single blip in the bed on the way out counted 3 minutes later with him outside (his phone still
+    on the Wi-Fi). Ghosts at night are single blips between bed readings, so they don't add up.
   - It ends only when you settle in another zone, or when home ends. Rolling over, lying still, ghost
     readings and a short trip out of bed leave you in bed.
 - **Donny's timings fit his room.** The office chair touches the bed, so bed needs 3 minutes; a brush of
   the bed zone as he stands up doesn't count. Desk needs a minute, so walking through the office doesn't
   count. Kitchen needs 3 minutes, so passing through it to the east door isn't "in the kitchen". Replayed
   against the first night's history: in bed 4 minutes after lying down, held until 7:07 when he'd been
-  making coffee for 3 minutes, at the desk at 7:14.
+  making coffee for 3 minutes, at the desk at 7:14. Against Oct 18's morning: out the door at 9:17 with
+  no bed, back in through the kitchen at 12:28.
 - **An entity that's gone** (renamed or removed in Home Assistant) leaves only its role unknown; the
   others go on. `/status` `presence_state` names it ("not found in Home Assistant").
 - **What each role does.**
