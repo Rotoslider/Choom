@@ -94,7 +94,8 @@ def describe(j):
     a, p = j["args"], j.get("progress") or {}
     if j["kind"] == "render":
         total = p.get("total") or a.get("clips", "?")
-        return f"Render: {p['done']} of {total} clips" if p.get("done") else f"Render of {total} clips"
+        partly = p.get("done") and p["done"] != total  # "Render: 50 of 73 clips", but not "73 of 73"
+        return f"Render: {p['done']} of {total} clips" if partly else f"Render of {total} clips"
     if j["kind"] == "build":
         return f"Build {str(a.get('choom', '?')).title()}"
     return f"{j['kind'].title()} {a.get('choom', '')}".strip()
