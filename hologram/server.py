@@ -834,36 +834,47 @@ def presence_watch():
                         if named or len(people) == 1:
                             entities["home"] = (named or people)[0]["entity_id"]
                 resolved_at = time.time()
-            now = {}
+            now, missing = {}, []
             for role, spec in entities.items():
                 # A role is an entity id (present when it reads home/on/detected/occupied), or
                 # {"entity": ..., "equals": value} (present when it reads exactly that, e.g. the
                 # phone's Wi-Fi network at home).
                 entity = spec["entity"] if isinstance(spec, dict) else spec
-                raw = str(ha_get(base, token, f"/api/states/{entity}").get("state", ""))
+                try:
+                    raw = str(ha_get(base, token, f"/api/states/{entity}").get("state", ""))
+                except urllib.error.HTTPError as e:
+                    if e.code != 404:
+                        raise
+                    raw = ""  # renamed or removed in Home Assistant: that role is unknown, the others go on
+                    missing.append(entity)
                 if raw.lower() in ("unavailable", "unknown", ""):
                     now[role] = None
                 elif isinstance(spec, dict) and "equals" in spec:
                     now[role] = raw == spec["equals"]
                 else:
                     now[role] = raw.lower() in PRESENT_STATES
-            # Arriving counts at once; leaving only after AWAY_GRACE_S of absence in a row.
+            # Arriving counts at once; leaving only after AWAY_GRACE_S of absence in a row. A place he's
+            # left for another (out of bed and at the desk) ends at once: in bed would skip his welcome.
+            # Not home: the phone's Wi-Fi drops while he sits at the desk.
+            seen = dict(now)
             for role, value in now.items():
                 if value is False and shown.get(role) is True:
                     absent_since.setdefault(role, time.time())
-                    if time.time() - absent_since[role] < AWAY_GRACE_S:
+                    elsewhere = role != "home" and any(v for r, v in seen.items() if r not in ("home", role))
+                    if time.time() - absent_since[role] < AWAY_GRACE_S and not elsewhere:
                         now[role] = True
                         continue
                 absent_since.pop(role, None)
             shown = dict(now)
             latest["presence_state"] = "watching " + ", ".join(
-                f"{role}: {spec['entity'] if isinstance(spec, dict) else spec}" for role, spec in entities.items())
+                f"{role}: {spec['entity'] if isinstance(spec, dict) else spec}" for role, spec in entities.items()) + (
+                f"; not found in Home Assistant: {', '.join(missing)}" if missing else "")
             if now != last:
                 entry = {"type": "presence", **now, "time": time.strftime("%Y-%m-%dT%H:%M:%S")}
                 latest["presence"] = entry
                 broadcast(entry)
                 last = now
-        except Exception as e:  # HA restarting, network drop, a renamed entity
+        except Exception as e:  # HA restarting, a network drop
             latest["presence_state"] = f"error: {type(e).__name__}: {e}"
             time.sleep(30)
             continue

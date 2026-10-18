@@ -481,8 +481,11 @@ reads exactly that value:
 ```json
 {"home": {"entity": "sensor.phone_wi_fi_connection", "equals": "<home network>"},
  "desk": "binary_sensor.desk_zone", "bed": "binary_sensor.bed_zone",
- "shop": "binary_sensor.shop_presence"}
+ "kitchen": "binary_sensor.kitchen_zone", "shop": "binary_sensor.shop_presence"}
 ```
+
+A room sensor with zones (Donny's Everything Presence Lite, a mmWave radar) gives several roles at
+once, one zone each: bed, desk (his office zone) and kitchen.
 
 - **No `home` role.** The server uses the `person.` entity named by a `"person"` key
   (`{"person": "person.donny", "desk": ...}`), else the only person in Home Assistant, else the one
@@ -492,11 +495,18 @@ reads exactly that value:
 - **A page that has just started** gets the current presence at once (it only reached the page when it
   changed).
 - **Arriving and leaving.** Arriving counts at once. Leaving counts only after two minutes absent,
-  because phones drop Wi-Fi now and then.
+  because phones drop Wi-Fi now and then. A place you've left for another ends at once: out of bed and
+  at the desk means not in bed, so your morning welcome isn't skipped as "in bed". Home never ends early.
+- **An entity that's gone** (renamed or removed in Home Assistant) leaves only its role unknown; the
+  others go on. `/status` `presence_state` names it ("not found in Home Assistant").
 - **What each role does.**
   - Coming home or sitting at the desk wakes the Choom on the glass, and she greets you.
   - Getting into bed puts the glass to sleep at any hour; getting up wakes it.
-  - Any other role (a shop, a truck) is passed to the welcome back as where you were.
+  - Any other role (a shop, a truck, the kitchen) is passed to the welcome back as where you were.
+- **A radar zone and someone lying still.** A tracking radar can lose someone who lies still, so asleep
+  in bed may read as up now and then. Its only effect is the Choom waking on the dark glass; she dozes
+  off again after 10 quiet minutes at night. A longer zone timeout in Home Assistant (the sensor's
+  "Bed Timeout") holds bed through it.
 
 ## Weather
 
