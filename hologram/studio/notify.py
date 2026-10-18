@@ -13,6 +13,7 @@ ends while it's open, and closes once nothing is running or due on the GPU or th
 State (the open run, finished runs held for the message, the last ones sent) is kept in studio/notify.json.
 """
 import json
+import re
 import threading
 import time
 import urllib.request
@@ -22,6 +23,7 @@ from project import Project
 
 STATE_FILE = PROJECTS / "notify.json"
 TRACKED = ("render", "build", "picture", "still")
+BUILT = re.compile(r"wrote alive\.json: (\d+) clips \((\d+) encoded\)")  # make_alive's last word
 _lock = threading.Lock()
 state = {"run": None, "held": [], "sent": []}
 
@@ -53,13 +55,23 @@ def job_started(job):
                 save()
 
 
+def built(job):
+    """A build's progress with what it put on the glass: {"clips": 531, "encoded": 115}. On 2026-10-18
+    the summary said "Build Genesis: done" for 115 new clips."""
+    progress = dict(job.get("progress") or {})
+    found = [m for m in map(BUILT.search, job.get("log") or []) if m] if job["kind"] == "build" else []
+    if found:
+        progress.update(clips=int(found[-1][1]), encoded=int(found[-1][2]))
+    return progress
+
+
 def job_ended(job):
     with _lock:
         run = state["run"]
         if run and job["kind"] in TRACKED and job["status"] in ("done", "failed", "cancelled", "paused"):
             run["jobs"] = [j for j in run["jobs"] if j["id"] != job["id"]] + [{
                 "id": job["id"], "kind": job["kind"], "status": job["status"], "args": job["args"],
-                "error": (job.get("error") or "")[:200], "progress": job.get("progress") or {}}]
+                "error": (job.get("error") or "")[:200], "progress": built(job)}]
             save()
 
 
@@ -97,7 +109,8 @@ def describe(j):
         partly = p.get("done") and p["done"] != total  # "Render: 50 of 73 clips", but not "73 of 73"
         return f"Render: {p['done']} of {total} clips" if partly else f"Render of {total} clips"
     if j["kind"] == "build":
-        return f"Build {str(a.get('choom', '?')).title()}"
+        what = f" ({p['encoded']} new or changed clips, {p['clips']} in all)" if "encoded" in p else ""
+        return f"Build {str(a.get('choom', '?')).title()}{what}"
     return f"{j['kind'].title()} {a.get('choom', '')}".strip()
 
 

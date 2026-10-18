@@ -877,6 +877,8 @@ let sleepAmt = 0;              // 1 while she sleeps: the glass dims and slows
 let fullAmt = 0;               // 1 during a full-body move: her atom and band step aside
 let bandT = 0;                 // the scan/compile band's own clock (it races during tool moments)
 let lastActivity = performance.now(); // the last conversation, listening or button press
+let lastVoiceNearby = 0;  // someone talking near the tower (tower_ears): no quiet turn now, but it never
+                          // keeps her awake (2026-10-18 it woke her as he turned over in bed at night)
 let appListenUntil = 0;
 const heard = () => (listening && performance.now() - listeningAt < LISTEN_HOLD_MAX_MS) || (appListening && performance.now() < appListenUntil);
 let listenAmt = 0;
@@ -1866,7 +1868,7 @@ function onControl(ev) {
   if (typeof ev.hour === 'number' || ev.hour === null) debugHour = ev.hour;
   if (typeof ev.sleep === 'boolean') debugSleep = ev.sleep;
   if (ev.glassReset === true) for (const p of portraits) if (p.alive && wardrobe(p).chosen) { wardrobe(p).chosen = null; saveWardrobe(p); } // forget clothes they chose
-  if (ev.activity === true) lastActivity = performance.now(); // someone talking near the tower (tower_ears)
+  if (ev.activity === true) lastVoiceNearby = performance.now(); // someone talking near the tower (tower_ears)
   if (ev.chime === 'open' || ev.chime === 'close') chime(ev.chime);  // the tower's reply window
   if (typeof ev.gaze === 'boolean') onGaze({ looking: ev.gaze, face: true }); // debug: pretend he's looking
   if (typeof ev.mouthStyle === 'number') frontMaterial.uniforms.mouthStyle.value = ev.mouthStyle; // try a mouth
@@ -2725,7 +2727,7 @@ setInterval(() => {
     }
     return;
   }
-  if (!QUIET_BEFORE_MS || now - lastActivity < QUIET_BEFORE_MS || now - lastSwitchAt < turnLength) return;
+  if (!QUIET_BEFORE_MS || now - Math.max(lastActivity, lastVoiceNearby) < QUIET_BEFORE_MS || now - lastSwitchAt < turnLength) return;
   if (mood !== 'idle' || speech.busy || speech.queue.length || heard() || phase !== 'idle' || sleepy() || stage.on || gaze.looking) return;
   const clip = here.alive && here.players[here.active].clip >= 0 ? here.alive.clips[here.players[here.active].clip] : null;
   if ((clip && (basePose(poseFrom(clip)) === 'asleep' || basePose(poseTo(clip)) === 'asleep')) || now - (here.wokeAt || 0) < 3 * 60 * 1000) return;

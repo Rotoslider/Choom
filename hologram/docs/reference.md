@@ -481,7 +481,7 @@ reads exactly that value:
 ```json
 {"home": {"entity": "sensor.phone_wi_fi_connection", "equals": "<home network>"},
  "shop": "binary_sensor.shop_presence",
- "bed": {"entity": "binary_sensor.bed_zone", "zone": true, "after": 180, "away_after": 300},
+ "bed": {"entity": "binary_sensor.bed_zone", "zone": true, "stays": true, "after": 180},
  "desk": {"entity": "binary_sensor.office_zone", "zone": true, "after": 60},
  "kitchen": {"entity": "binary_sensor.kitchen_zone", "zone": true, "after": 180}}
 ```
@@ -498,19 +498,31 @@ reads exactly that value:
   When the server starts, what Home Assistant says counts at once, so a relaunch keeps it.
 - **Zones** (`"zone": true`) are the zones of one room sensor, such as Donny's Everything Presence Lite,
   a mmWave radar with bed, office and kitchen zones. You're in one zone at a time:
-  - A zone ends only once you've been seen in another zone since you left it. A tracking radar loses
-    someone lying or sitting still, and that must not count as getting up.
-  - Settling in another zone (present for its `after`) ends the one you left at once. Up and at the
-    desk means out of bed.
-  - Donny's timings fit his room. The office chair touches the bed, so bed needs 3 minutes there; a
-    brush of the bed zone as he stands up doesn't count. A trip to the kitchen and back under 5 minutes
-    leaves him in bed. Desk needs a minute, so walking through the office doesn't count. Kitchen needs
-    3 minutes, so passing through it to the east door isn't "in the kitchen".
+  - A radar blinks. A gap under 25 s doesn't break a stretch in a zone, unless another zone read you
+    during it, and `after` is one stretch.
+  - Settling in another zone (it starts to count) ends the one you left at once. Up and at the desk
+    means out of bed.
+- **A zone that stays** (`"stays": true`, the bed) works differently. The Lite's LD2450 radar tracks
+  movement and loses someone lying still. On the first night the bed zone blinked on for 15 to 90 s
+  whenever Donny moved and read empty in between, sometimes for an hour, and a moving sleeper showed up
+  as short ghost readings in the office and kitchen zones too.
+  - It counts once it's the last place you were seen, for its `after`, with no other zone holding you
+    45 s or more since.
+  - It ends only when you settle in another zone, or when home ends. Rolling over, lying still, ghost
+    readings and a short trip out of bed leave you in bed.
+- **Donny's timings fit his room.** The office chair touches the bed, so bed needs 3 minutes; a brush of
+  the bed zone as he stands up doesn't count. Desk needs a minute, so walking through the office doesn't
+  count. Kitchen needs 3 minutes, so passing through it to the east door isn't "in the kitchen". Replayed
+  against the first night's history: in bed 4 minutes after lying down, held until 7:07 when he'd been
+  making coffee for 3 minutes, at the desk at 7:14.
 - **An entity that's gone** (renamed or removed in Home Assistant) leaves only its role unknown; the
   others go on. `/status` `presence_state` names it ("not found in Home Assistant").
 - **What each role does.**
   - Coming home or sitting at the desk wakes the Choom on the glass, and she greets you.
   - Getting into bed puts the glass to sleep at any hour; getting up wakes it.
+  - A sound near the tower (tower_ears thinks someone is talking) holds off the Chooms' quiet turns,
+    but never keeps her awake or wakes her: the first night it woke her each time Donny turned over.
+    It's logged as a count (`ears` `voice`) at most every 5 minutes.
   - From 11 pm to 5 am only coming home wakes her. Up in the night and back to bed, or a minute at the
     desk, leaves her asleep; typing, talking and the buttons still wake her (`sleepFrom`, `morningFrom`).
   - Any other role (a shop, a truck, the kitchen) is passed to the welcome back as where you were.

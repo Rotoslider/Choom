@@ -261,9 +261,11 @@ rendered clip uses, a look's picture, versions a look is waiting on, or a queue 
 
 **A morning summary on Signal** (optional): when a scheduled render or build, or a run of them, has
 finished or failed, the Studio sends one short message through the Choom app, in one Choom's Signal
-thread. It lists what ran, anything that failed and why, what's still going as it's sent (running,
-paused, waiting for another job, or scheduled for later), and how many clips wait for review and how
-many are flagged. Anything that ends in the quiet hours (10 pm to 7 am unless you set them) waits
+thread. It lists what ran (a build says how many clips it put on the glass: "Build Genesis (115 new
+or changed clips, 531 in all)"), anything that failed and why, what's still going as it's sent
+(running, paused, waiting for another job, or scheduled for later), and how many clips wait for review
+and how many are flagged. Jobs you start right away don't open a run; they're listed when they end
+while a scheduled one's run is open. Anything that ends in the quiet hours (10 pm to 7 am unless you set them) waits
 until they're over. Turn it on in `studio.json` (see Setup).
 
 ### Looks

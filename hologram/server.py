@@ -429,6 +429,7 @@ ROOMS_PAUSED_S = 15 * 60         # a room paused for a welcome picks up again af
 rooms_paused = [0.0]             # never says he's done (not while he's talking at it)
 ears_at = [0.0]                  # tower_ears' last word (a wake, a window, what he said)
 tower_talk = {"open": False, "at": 0.0}  # a conversation at the tower under way (relaunch_when_quiet waits for it)
+voice_heard = {"count": 0, "at": 0.0}  # tower_ears' "someone is talking nearby" since the last log entry
 TOWER_TALK_STALE_S = 180         # open with no word from tower_ears for this long: it died mid-conversation
 
 
@@ -798,6 +799,79 @@ def ha_get(base, token, path):
 
 PRESENT_STATES = ("home", "on", "detected", "occupied", "true")
 AWAY_GRACE_S = 120  # gone only after two minutes of absence: phones drop Wi-Fi now and then
+ZONE_GAP_S = 25     # a radar zone blinks off between readings: a gap this short doesn't end a stretch
+ZONE_SOLID_S = 45   # a stretch this long in a zone is him; a ghost reading (the radar's echo of him
+                    # moving in bed, shown in another zone) lasted 15 to 35 s on 2026-10-18
+
+
+class Presence:
+    """Home Assistant's readings, debounced into what the page is told, role by role.
+    - Any role: arriving counts after "after" seconds present (at once by default), leaving after
+      "away_after" seconds absent (two minutes: phones drop Wi-Fi now and then). What it reads when
+      the server starts counts at once, so a relaunch keeps it.
+    - A zone of a room sensor ("zone": true) is where he is in the room. A radar blinks, so a gap
+      under ZONE_GAP_S doesn't break a stretch, unless another zone read him meanwhile (turning over
+      at the edge of the bed, office and bed blinked by turns), and "after" is one stretch. Settling
+      in another zone (it starts to count) ends it at once.
+    - A zone that "stays" (the bed) is different, because a tracking radar loses someone lying still:
+      the bed zone blinked on for 15 to 90 s whenever he moved and read empty in between, all night.
+      It counts once it has been the last place he was seen for "after" seconds (no other zone held
+      him ZONE_SOLID_S since), and it ends only when he settles in another zone or leaves home."""
+
+    def __init__(self):
+        self.shown, self.on_since, self.last_on, self.absent_since = {}, {}, {}, {}
+        self.place, self.place_at = None, 0.0  # the last place he was seen, and since when
+
+    def update(self, t, seen, entities):
+        """seen: role -> True/False/None (unknown) as read at time t. Returns what to tell the page."""
+        option = lambda role, key, default: (entities[role].get(key, default)
+                                             if isinstance(entities.get(role), dict) else default)
+        zones = [role for role in seen if option(role, "zone", False)]
+        stays = [role for role in zones if option(role, "stays", False)]
+        for role, value in seen.items():
+            if value:
+                self.on_since.setdefault(role, t)
+                self.last_on[role] = t
+            elif role in self.on_since and (role not in zones or t - self.last_on[role] >= ZONE_GAP_S
+                                            or any(seen.get(other) for other in zones if other != role)):
+                del self.on_since[role]
+        # A stretch runs from its first reading to its last (a gap only counts once it's bridged).
+        stretch = lambda role: self.last_on[role] - self.on_since[role] if role in self.on_since else -1.0
+        solid = [role for role in zones if role not in stays and stretch(role) >= ZONE_SOLID_S]
+        place = (max(solid, key=lambda role: self.on_since[role]) if solid
+                 else next((role for role in stays if seen.get(role)), self.place))
+        if place != self.place:
+            self.place, self.place_at = place, t
+        now = {}
+        for role, value in seen.items():
+            was = self.shown.get(role)
+            if value is None or was is None:  # unknown, or the server has just started: as it reads
+                now[role] = value
+            elif was:
+                now[role] = True  # leaving is decided below
+            elif role in stays:
+                now[role] = self.place == role and t - self.place_at >= option(role, "after", 0)
+            else:
+                now[role] = stretch(role) >= option(role, "after", 0)
+        settled = {role for role in zones if now[role] and self.shown.get(role) is False}
+        for role, value in seen.items():
+            if not (self.shown.get(role) and now[role]):
+                self.absent_since.pop(role, None)
+            elif role in zones and settled - {role}:
+                now[role] = False  # he's settled in another zone
+            elif role in stays:
+                now[role] = now.get("home") is not False
+            elif value:
+                self.absent_since.pop(role, None)
+            else:
+                self.absent_since.setdefault(role, t)
+                now[role] = t - self.absent_since[role] < option(role, "away_after", AWAY_GRACE_S)
+        self.shown = dict(now)
+        # In bed this moment, for the welcome back: no other zone reads him (getting up into the office,
+        # the bed zone still reads him for a few seconds), and the bed does, or still counts him.
+        self.in_bed_now = (not any(seen.get(role) for role in zones if role != "bed")
+                           and (seen.get("bed") is True or now.get("bed") is True))
+        return now
 
 
 def presence_watch():
@@ -805,16 +879,15 @@ def presence_watch():
     entity, or the phone's Wi-Fi), and at the desk or in bed (zones of a presence sensor).
     presence.json maps roles to entities, e.g. {"home": {"entity": "sensor.phone_wi_fi_connection",
     "equals": "<home network>"}, "desk": "binary_sensor.desk_zone", "bed": "binary_sensor.bed_zone"}.
-    A role can also say {"entity": ..., "zone": true, "after": 180, "away_after": 300}: one zone of a
-    room sensor, present only after 180 s there in a row, gone after 300 s away (see below).
+    A role can also say {"entity": ..., "after": 60, "away_after": 300}, and "zone": true (one zone of a
+    room sensor) and "stays": true (the bed): see Presence.
     Without a "home" role, "home" is the person entity named by "person" (e.g. "person.donny"), else the
     only person in Home Assistant, else one named like HOLOGRAM_OWNER (default "donny"). Checks every 5 s.
     Waits quietly (and picks the files up without a restart) until ha_url and ha_token exist. ha_url should
     be an address that doesn't change: a hostname, or an IP the router always gives Home Assistant (a DHCP
     reservation), since presence and the weather station stop when it moves."""
     last, entities, resolved_at = None, {}, 0.0
-    shown, on_since, absent_since = {}, {}, {}  # what the page was told per role; since when it has read present, absent
-    seen_away = set()  # zones he's been seen out of (in another zone) since they read absent
+    debounce = Presence()
     while True:
         try:
             url_file, token_file, map_file = HA_CONFIG / "ha_url", HA_CONFIG / "ha_token", HA_CONFIG / "presence.json"
@@ -856,44 +929,8 @@ def presence_watch():
                     now[role] = raw == spec["equals"]
                 else:
                     now[role] = raw.lower() in PRESENT_STATES
-            t, seen = time.time(), dict(now)  # seen: what the sensors say this moment
-            option = lambda role, key, default: (entities[role].get(key, default)
-                                                 if isinstance(entities[role], dict) else default)
-            zones = [role for role in now if option(role, "zone", False)]
-            # Arriving counts once it has read present "after" seconds in a row (at once by default, and
-            # when the server starts, so a relaunch keeps what was true): getting up from the office chair
-            # brushes the bed zone.
-            for role, value in seen.items():
-                if not value:
-                    on_since.pop(role, None)
-                elif shown.get(role) is False:
-                    on_since.setdefault(role, t)
-                    if t - on_since[role] < option(role, "after", 0):
-                        now[role] = False
-            settled = dict(now)
-            # Leaving counts after "away_after" seconds absent (two minutes by default: phones drop Wi-Fi
-            # now and then). A zone of a room sensor ends only once he's been seen in another zone since:
-            # a radar loses someone lying or sitting still. It ends at once when he has settled in another
-            # zone (up and at the desk: in bed would skip his welcome).
-            for role, value in seen.items():
-                if value is False and shown.get(role) is True:
-                    absent_since.setdefault(role, t)
-                    held = t - absent_since[role] < option(role, "away_after", AWAY_GRACE_S)
-                    if role in zones:
-                        if any(seen.get(r) for r in zones if r != role):
-                            seen_away.add(role)
-                        held = (held or role not in seen_away) and not any(settled.get(r) for r in zones if r != role)
-                    if held:
-                        now[role] = True
-                        continue
-                absent_since.pop(role, None)
-                seen_away.discard(role)
-            shown = dict(now)
-            # In bed this moment, for the welcome back: no other zone reads him (getting up into the office,
-            # the bed zone still reads him for a few seconds), and the bed does, or still counts him (the
-            # radar has lost him lying still).
-            latest["in_bed_now"] = (not any(seen.get(r) for r in zones if r != "bed")
-                                    and (seen.get("bed") is True or now.get("bed") is True))
+            now = debounce.update(time.time(), now, entities)
+            latest["in_bed_now"] = debounce.in_bed_now
             latest["presence_state"] = "watching " + ", ".join(
                 f"{role}: {spec['entity'] if isinstance(spec, dict) else spec}" for role, spec in entities.items()) + (
                 f"; not found in Home Assistant: {', '.join(gone)}" if gone else "")
@@ -1112,8 +1149,14 @@ class Handler(SimpleHTTPRequestHandler):
                 threading.Thread(target=resume_rooms, args=("tower",), daemon=True).start()
             if event in ("window", "window_closed"):  # the reply window opening, or closing unheard
                 broadcast({"type": "control", "chime": "open" if event == "window" else "close"})
-            if event == "voice":  # someone is talking near the tower: no screensaver turn now (not logged)
+            if event == "voice":  # someone is talking near the tower: no screensaver turn now
                 broadcast({"type": "control", "activity": True})
+                # Counted, and logged at most every 5 minutes: how often the tower thinks it hears
+                # talking (a build's fans, him turning over in bed at night?).
+                voice_heard["count"] += 1
+                if time.time() - voice_heard["at"] >= 300:
+                    log_entry({"kind": "ears", "event": "voice", "count": voice_heard["count"]})
+                    voice_heard.update(count=0, at=time.time())
                 self.send_response(204)
                 self.end_headers()
                 return
