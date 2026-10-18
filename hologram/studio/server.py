@@ -329,11 +329,17 @@ class Handler(BaseHTTPRequestHandler):
                 # computer, `upload`), and one is picked later; the look it starts from gives the new
                 # look its description.
                 base, kind = data["base"], data.get("kind", "outfit")
+                if kind == "gone":
+                    # The empty glass, for walking on and off: a black picture, made at once.
+                    if "gone" in proj.looks:
+                        return self.fail("she already has the empty glass (gone)")
+                    pictures.gone(proj)
+                    return self.send_json({"choom": details(proj)})
                 if not proj.looks.get(base, {}).get("picture"):
                     return self.fail(f"no {base} picture to start from")
                 if kind not in pictures.KINDS:
-                    return self.fail("a new look is an outfit, full body, asleep, or a new picture for a look she has")
-                if kind != "redo" and base_of(base) in ("full", "asleep"):
+                    return self.fail("a new look is an outfit, full body, asleep, a place, the empty glass, or a new picture for a look she has")
+                if kind not in ("redo", "place") and base_of(base) in ("full", "asleep"):
                     return self.fail("a new look starts from one of her waist-up looks")
                 if kind == "outfit":
                     if data["when"] not in pictures.WHEN:
@@ -346,6 +352,15 @@ class Handler(BaseHTTPRequestHandler):
                     if outfit_of(base) and not outfit_of(base).startswith("night"):
                         return self.fail("she sleeps in her usual clothes or a night outfit")
                     look_id = f"asleep@{outfit_of(base)}" if outfit_of(base) else "asleep"
+                elif kind == "place":
+                    # A place she goes to and stays a while (sitting by her campfire), named by him.
+                    look_id = re.sub(r"[^a-z0-9]", "", data.get("name", "").lower())
+                    if not look_id or look_id in pictures.NOT_PLACES or look_id[0].isdigit():
+                        return self.fail("give the place a name of its own: letters and digits (campfire, chair)")
+                    if not proj.looks.get("full", {}).get("picture"):
+                        return self.fail("a place needs her full body first: she sits down from it and gets up into it")
+                    if not data.get("wearing", "").strip():
+                        return self.fail("say where she is and how (sitting on the ground beside a small campfire ...)")
                 else:
                     look_id = data.get("look", "")
                     if not proj.looks.get(look_id, {}).get("picture"):
@@ -368,14 +383,16 @@ class Handler(BaseHTTPRequestHandler):
                 source = saved.pop("start", proj.looks[base]["picture"])
                 refs = list(saved.values())
                 wearing = data.get("wearing", "").strip()
-                keep = proj.looks[base].get("kleinKeep", "")
+                keep = proj.looks[base].get("kleinKeep", "") or (proj.looks["main"].get("kleinKeep", "") if kind == "place" else "")
                 default = {"outfit": lambda: pictures.outfit_prompt(wearing, keep), "full": lambda: pictures.full_prompt(keep, wearing),
-                           "asleep": lambda: pictures.asleep_prompt(keep), "redo": lambda: pictures.TRUE_COLOR_PROMPT}[kind]
+                           "asleep": lambda: pictures.asleep_prompt(keep), "place": lambda: pictures.place_prompt(wearing, keep),
+                           "redo": lambda: pictures.TRUE_COLOR_PROMPT}[kind]
                 prompt = (data.get("prompt") or "").strip() or default()
                 # The form as he filled it in (when, name, versions too): a discard puts it back to try again.
                 proj.data.setdefault("drafts", {})[look_id] = {"base": base, "kind": kind, "wearing": wearing, "prompt": prompt,
                                                                "pictures": [], "status": "making", "count": int(data.get("count", 3)),
                                                                **({"when": data["when"], "name": data.get("name", "")} if kind == "outfit" else {}),
+                                                               **({"name": look_id} if kind == "place" else {}),
                                                                **({"upload": True} if data.get("upload") else {}),
                                                                **({"replace": True} if kind == "redo" else {}),
                                                                **({"refs": refs} if refs else {})}

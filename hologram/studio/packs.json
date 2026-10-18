@@ -22,7 +22,11 @@
     {"id": "pictures", "title": "Picture looks", "for": ["main", "relaxed", "outfit"],
      "about": "Turning to a picture floating beside her face, or glancing down at one lower right."},
     {"id": "poses", "title": "Pose changes", "for": ["main"], "needs": ["relaxed"],
-     "about": "Moving between her main and relaxed pictures (Aloy lowering and raising her hand). Shown only for a Choom with both."}
+     "about": "Moving between her main and relaxed pictures (Aloy lowering and raising her hand). Shown only for a Choom with both."},
+    {"id": "places", "title": "A place", "for": ["place"],
+     "about": "A place she goes to and stays a while, about ten minutes (sitting by her campfire), when she asks for it. She gets there from her full body: the glass cuts to it and she sits down (to_), and gets up again to leave (from_). Needs the loop she can talk over before the glass takes her there. Edit how she gets there and back to say what appears and goes (the fire flickering up as she sits)."},
+    {"id": "walk", "title": "Walking on and off", "for": ["full", "main"], "needs": ["gone"], "usual": true,
+     "about": "On a quiet turn the one leaving walks off (or vanishes) and the next walks on (or appears), instead of a fade. Walking is from her full body; vanishing and appearing from her waist-up picture. Needs the empty glass (New look: the empty glass)."}
   ],
   "actions": [
     {"pack": "essentials", "key": "base", "names": {"main": "base", "relaxed": "relaxed"},
@@ -152,6 +156,35 @@
     {"pack": "poses", "key": "lower", "names": {"main": "lower"}, "ending": "She ends with her arms relaxed at her sides.",
      "text": "She slowly lowers her raised hand down to her side and relaxes her shoulders, still smiling at the viewer."},
     {"pack": "poses", "key": "raise", "names": {"main": "raise"}, "ending": "She ends in her main pose, facing the viewer.",
-     "text": "She raises her hand back into her main pose, smiling at the viewer, as if about to make a point."}
+     "text": "She raises her hand back into her main pose, smiling at the viewer, as if about to make a point."},
+
+    {"pack": "places", "key": "base", "names": {"place": "{place}"},
+     "text": "She stays where she is, {does}, looking at the viewer with a calm, soft smile, blinking naturally, her head moving only very slightly."},
+    {"pack": "places", "key": "listen", "names": {"place": "{place}listen"},
+     "text": "She stays where she is, {does}, listening to the viewer attentively with her lips closed: a small nod, a pause, then another small nod."},
+    {"pack": "places", "key": "glance", "kind": "moment",
+     "text": "She stays where she is, {does}, glances off to one side as if she heard something in the distance, then turns back to the viewer with a soft smile."},
+    {"pack": "places", "key": "smile", "kind": "moment",
+     "text": "She stays where she is, {does}, and her face slowly breaks into a warm smile at the viewer, then settles."},
+    {"pack": "places", "key": "settle", "kind": "moment",
+     "text": "She stays where she is, {does}, shifting a little to get comfortable, then settles back exactly as she was."},
+    {"pack": "places", "key": "lookdown", "kind": "moment",
+     "text": "She stays where she is, {does}, looks down for a quiet moment, thinking, then lifts her eyes back to the viewer."},
+    {"pack": "places", "key": "hum", "kind": "moment",
+     "text": "She stays where she is, {does}, humming softly to herself with her lips closed, swaying very slightly."},
+    {"pack": "places", "key": "to", "names": {"place": "to_{place}"}, "seconds": 7, "ending": "She ends there, facing the viewer.",
+     "text": "Starting from standing, she moves into place with an easy, unhurried motion and ends {does}."},
+    {"pack": "places", "key": "from", "names": {"place": "from_{place}"}, "seconds": 7,
+     "ending": "She ends standing relaxed, facing the viewer, her whole body in view.",
+     "text": "She gets up from where she is with an easy, unhurried motion."},
+
+    {"pack": "walk", "key": "walkoff", "names": {"full": "walkoff"}, "ending": "The frame ends empty: a plain pure black background.",
+     "text": "She turns to her left and walks out of the frame with an easy, unhurried step."},
+    {"pack": "walk", "key": "walkon", "names": {"full": "walkon"}, "ending": "She ends standing relaxed, facing the viewer, her whole body in view.",
+     "text": "The frame starts empty, a plain pure black background. She walks into the frame from the left with an easy, unhurried step, stops in the middle and turns to face the viewer."},
+    {"pack": "walk", "key": "vanish", "names": {"main": "vanish"}, "ending": "The frame ends empty: a plain pure black background.",
+     "text": "She smiles at the viewer, then her whole figure softly dissolves into drifting sparkles of light that fade away."},
+    {"pack": "walk", "key": "appear", "names": {"main": "appear"}, "ending": "She ends facing the viewer with a soft smile.",
+     "text": "The frame starts empty, a plain pure black background. Drifting sparkles of light gather in the middle and form her figure."}
   ]
 }

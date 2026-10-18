@@ -107,20 +107,46 @@ ROLES = {
 # Her home pose: the one she falls asleep from, wakes into and changes clothes in. "main" unless her
 # Studio project says otherwise ("home": Aloy's is "relaxed", hand down). The Studio and the build
 # pass it; home_pose() reads it from her project for anything that doesn't.
-_homes = {}
+_projects = {}
 
 
-def home_pose(cid):
+def _project(cid):
+    """Her Studio project's home pose and places, read again only when the file changes."""
     try:
         sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "studio"))
         from config import PROJECTS  # stdlib only; works under any of the Pythons the tools run in
         f = PROJECTS / f"{cid}.json"
         stamp = f.stat().st_mtime
-        if _homes.get(cid, (None,))[0] != stamp:
-            _homes[cid] = (stamp, json.loads(f.read_text()).get("home") or "main")
-        return _homes[cid][1]
+        if _projects.get(cid, (None,))[0] != stamp:
+            data = json.loads(f.read_text())
+            places = {look: spec.get("from") or "full" for look, spec in data.get("looks", {}).items()
+                      if "@" not in look and look not in POSES}
+            _projects[cid] = (stamp, data.get("home") or "main", places)
+        return _projects[cid][1:]
     except Exception:
-        return "main"
+        return "main", {}
+
+
+def home_pose(cid):
+    return _project(cid)[0]
+
+
+# Poses every Choom may have; any other look of hers without an outfit is a place she goes to and
+# stays a while (Genesis's campfire: sitting on the ground by a fire), reached from her full body (its
+# look's "from") by a clip that sits her down. "gone" is the empty glass she walks off into and on from.
+POSES = ("main", "relaxed", "full", "asleep", "gone")
+
+
+def places(cid):
+    """{place: the pose she gets there from}, from her Studio project: {"campfire": "full"}."""
+    return _project(cid)[1]
+
+
+# Clips between her and the empty glass, named by kind (walkoff, walkon2, vanish_motes): walking out of
+# her full-body frame and back in, or (waist-up) vanishing and appearing, Genesis's motes scattering and
+# gathering. The glass plays them on a quiet turn: the one leaving walks off, the next one walks on.
+# Each kind: the frame she's in, and whether she leaves it (else she comes into it).
+GONE = {"walkoff": ("full", True), "walkon": ("full", False), "vanish": ("main", True), "appear": ("main", False)}
 
 
 # Clips named by kind rather than listed one by one: <kind>_<what she does>.
@@ -163,6 +189,24 @@ def clip_role(cid, src, home=None):
         to = change.group(1)
         return ["change"], f"{home}@{outfit}" if outfit else home, home if to == "usual" else f"{home}@{to}"
     kind = action.split("_")[0] if "_" in action else None
+    gone = GONE.get(re.sub(r"\d+$", "", action.split("_")[0]))
+    if gone and not outfit:
+        frame = home if gone[0] == "main" else gone[0]  # Aloy vanishes and appears with her hand down
+        start, end = (frame, "gone") if gone[1] else ("gone", frame)
+        return ["go"], start, end
+    spots = places(cid)
+    place = action.split("_")[1] if kind in ("to", "from") and len(action.split("_")) > 1 else None
+    if place in spots and not outfit:
+        # Getting there and back: to_campfire sits her down from her full body, from_campfire gets her up.
+        return ["go"], spots[place] if kind == "to" else place, place if kind == "to" else spots[place]
+    stem = re.sub(r"\d+$", "", action.split("_")[0])
+    if not outfit and (stem in spots or stem.removesuffix("listen") in spots):
+        # Her loop there (campfire: she can talk in it), listening there, and quiet moments there.
+        place = stem if stem in spots else stem.removesuffix("listen")
+        if stem != place:
+            return ["listen", "talk"], place, place
+        return (["idle", "talk", "think", "listen"] if action == stem or re.fullmatch(stem + r"\d+", action)
+                else ["idle"]), place, place
     moods, start, end = ROLES.get(action) or KINDS.get(kind) or ROLES["base"]
     if action in ("fallasleep", "wake") and home != "main":
         start, end = [home if pose == "main" else pose for pose in (start, end)]

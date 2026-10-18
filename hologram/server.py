@@ -676,8 +676,8 @@ def glass_answer(request):
     alive, worn = closet.load(PORTRAITS, cid)
     if not alive.get("clips"):
         return {"ok": False, "error": f"{choom or 'That Choom'} isn't on the glass yet."}
-    moves, outfits = closet.moves(cid, alive, worn), closet.outfits(alive, worn)
-    names = sorted({closet.move_name(w) for w in moves})
+    moves, outfits, spots = closet.moves(cid, alive, worn), closet.outfits(alive, worn), closet.places(alive, worn)
+    names = sorted({closet.move_name(w, spots) for w in moves})
     if op == "closet":
         # What she has, never what she's wearing at the moment.
         return {"ok": True, "moves": names,
@@ -691,14 +691,20 @@ def glass_answer(request):
         closet.add_wish(PORTRAITS, cid, "move" if request.get("kind") == "move" else "wear", what)
         return {"ok": True, "done": False, "message": f"\"{what}\" is on Donny's wish list in Glass Studio now."}
     if op == "move":
-        found = closet.match_move(what, moves)
+        found = closet.match_move(what, moves, spots)
         if not found:
             closet.add_wish(PORTRAITS, cid, "move", what)
             return {"ok": True, "done": False,
                     "message": f"There's no \"{what}\" on the glass yet. It's on Donny's wish list in Glass Studio now.",
                     "moves": names}
-        word, phrase = found[0][0], closet.move_name(found[0][0])
+        word, phrase = found[0][0], closet.move_name(found[0][0], spots)
         sources = sorted({s for _, srcs in found for s in srcs})
+        if word in spots:
+            # One of her places: the page takes her there and she stays a while (living.js PLACE_STAY_MS).
+            broadcast({"type": "glass", "choom": cid, "move": sources, "name": word})
+            return {"ok": True, "done": True,
+                    "message": f"On the glass you go to your {word} at your next quiet moment: "
+                               f"{closet.as_you(spots[word])}. You stay about ten minutes, then get up and come back."}
         look_of = {c.get("source"): c.get("from", "") for c in alive.get("clips", [])}
         # A move in her usual clothes (or her usual full body) can play whatever she has on; one made only
         # in an outfit plays only while she wears it (the page picks moves from what she has on). Say which,

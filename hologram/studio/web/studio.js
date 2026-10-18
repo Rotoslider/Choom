@@ -965,7 +965,7 @@ function firstPicture(look, l) {
     }, 'Make pictures again')));
 }
 
-// --- New looks: outfits, full body, asleep (Klein) -------------------------------------------------
+// --- New looks: outfits, full body, asleep, places (Klein), the empty glass -----------------------
 const draftUrl = (f) => `/media/draft/${encodeURIComponent(f.replace(/^drafts\//, ''))}`;
 const WHEN = { evening: 'evenings, 6 to 11 pm', cold: 'cold days (under 45°F)', hot: 'hot days (over 85°F)', day: 'daytime, taking turns with her usual clothes',
   night: 'nights, from 10 pm until she wakes (she sleeps in it)' };
@@ -990,6 +990,11 @@ function kleinPrompt() {
       + `Keep ${withClothes(base.kleinKeep ? fullKeep(keep) : '')} exactly as in the picture, with the same light on the same pure black background.${wearing ? ` She wears ${wearing}.` : ''}`;
   }
   if (outfitKind() === 'redo') return TRUE_COLOR;
+  if (outfitKind() === 'place') {  // pictures.place_prompt: from her full body, keeping what her main look keeps
+    const own = (base.kleinKeep || state.choom.looks.main?.kleinKeep || '').replace(/[,. ]+$/, '');
+    return `Show her ${wearing || '…'}, her whole figure in frame with a little black space around her. `
+      + `Keep ${withClothes(own ? fullKeep(own) : '')} exactly as in the picture, with the same light on the same pure black background.`;
+  }
   if (outfitKind() === 'asleep') {
     return 'She has dozed off peacefully: her eyes are gently closed, her face is soft and relaxed, and her head tips slightly down and to one side. '
       + `Keep everything else exactly the same: ${kept}, the lighting, the framing, and the pure black background.`;
@@ -1009,14 +1014,24 @@ function outfitLookId() {
   // A full body or asleep look started from an outfit is that outfit's own (full@dayspandex, asleep@night).
   if (kind === 'full' || kind === 'asleep') return o ? `${kind}@${o}` : kind;
   const name = $('#outfitName').value.toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (kind === 'gone') return 'gone';
+  if (kind === 'place') return name || '…';
   return `${b.split('@')[0]}@${$('#outfitWhen').value}${name}`;  // from another outfit too, in its pose
 }
 function updateOutfitForm() {
   const kind = outfitKind();
   $$('#newOutfit .when').forEach((e) => { e.hidden = kind !== 'outfit'; });
+  $$('#newOutfit .named').forEach((e) => { e.hidden = kind !== 'outfit' && kind !== 'place'; });
   $$('#newOutfit .redo').forEach((e) => { e.hidden = kind !== 'redo'; });
-  $('#newOutfit .wearing').hidden = kind === 'asleep' || kind === 'redo';
-  $('#outfitWearingLabel').textContent = kind === 'full' ? 'What she wears below the waist (optional; her top is kept)' : 'She now wears';
+  $$('#newOutfit .klein').forEach((e) => { e.hidden = kind === 'gone'; });
+  $('#newOutfit .wearing').hidden = kind === 'asleep' || kind === 'redo' || kind === 'gone';
+  $('#outfitNameLabel').textContent = kind === 'place' ? 'Name of the place' : 'Name (optional)';
+  $('#outfitName').placeholder = kind === 'place' ? 'campfire' : 'dress';
+  $('#outfitWearingLabel').textContent = kind === 'full' ? 'What she wears below the waist (optional; her top is kept)'
+    : kind === 'place' ? 'Where she is and how' : 'She now wears';
+  $('#outfitWearing').placeholder = kind === 'place' ? 'sitting on the ground beside a small campfire, her knees drawn up and her hands held toward the flames, looking up at the viewer'
+    : 'a long burgundy dress with thin straps';
+  $('#outfitMake').textContent = kind === 'gone' ? 'Make it' : 'Make pictures';
   if (!promptEdited) $('#outfitPrompt').value = kleinPrompt();
   const id = outfitLookId();
   if (kind === 'redo') {
@@ -1031,12 +1046,14 @@ function renderOutfitForm() {
   // or a night outfit), and a new picture for a look from any look at all.
   const kind = outfitKind(), looks = state.choom.looks;
   const withPicture = lookOrder(looks).filter((l) => looks[l].picture);
-  const bases = withPicture.filter((l) => kind === 'redo' || (waistUp(l) && (kind !== 'asleep' || !l.includes('@') || /^night/.test(l.split('@')[1]))));
+  // A place starts from her full body (or a waist-up look): it's framed wide like the full body.
+  const bases = withPicture.filter((l) => kind === 'redo' || (kind === 'place' && l === 'full') ||
+                                          (waistUp(l) && (kind !== 'asleep' || !l.includes('@') || /^night/.test(l.split('@')[1]))));
   const wasTarget = $('#outfitTarget').value;
   $('#outfitTarget').replaceChildren(...withPicture.map((l) => el('option', { value: l, selected: l === (wasTarget || state.planLook) }, l)));
   const home = state.choom.sequence.length ? state.choom.clips[state.choom.sequence[0]].from : bases[0];
   const wardrobeBase = bases.find((l) => state.choom.looks[l].wardrobe) || home;
-  const was = $('#outfitBase').value;
+  const was = kind === 'place' && bases.includes('full') ? 'full' : $('#outfitBase').value;
   $('#outfitBase').replaceChildren(...bases.map((l) => el('option', { value: l, selected: l === (was || wardrobeBase) }, l)));
   if (!$('#outfitWhen').options.length) $('#outfitWhen').replaceChildren(...Object.entries(WHEN).map(([k, v]) => el('option', { value: k }, v)));
   updateOutfitForm();
@@ -1069,6 +1086,14 @@ $('#outfitKind').addEventListener('input', () => {
 });
 $('#outfitPrompt').addEventListener('input', () => { promptEdited = true; });
 $('#outfitMake').addEventListener('click', attempt(async () => {
+  if (outfitKind() === 'gone') {
+    state.choom = (await api(`/api/choom/${state.cid}/outfit`, { kind: 'gone', base: 'main' })).choom;
+    toast('The empty glass is ready: plan “Walking on and off” in her full body (and main, to vanish and appear)');
+    renderLooks();
+    return;
+  }
+  if (outfitKind() === 'place' && !/^[a-z][a-z0-9]*$/.test($('#outfitName').value.trim().toLowerCase())) return toast('Name the place (letters and digits: campfire)', true);
+  if (outfitKind() === 'place' && !$('#outfitWearing').value.trim() && !promptEdited) return toast('Say where she is and how', true);
   if (outfitKind() === 'outfit' && !$('#outfitWearing').value.trim() && !promptEdited) return toast('Say what she wears', true);
   // A prompt changed before "She now wears" was filled in stops following it and keeps the "…" where her
   // clothes go: Genesis's shop shirt and ponytail never reached Klein that way (2026-10-16).

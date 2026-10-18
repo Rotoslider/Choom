@@ -109,6 +109,8 @@ MOVE_NAMES = {
     "step": "take a step", "stretch": "stretch", "stretches": "stretch", "taichi": "do some tai chi",
     "tilt": "tilt your head", "toss": "toss your hair", "turn": "turn around", "uncross": "uncross your arms",
 }
+# Words in a place's description that say nothing about it ("... looking up at the viewer").
+PLACE_FILLER = {"viewer", "looking", "toward", "towards", "beside", "small", "held", "drawn", "their", "while", "whole"}
 MOVE_FRESH_S = 180  # a move she asked for plays within three minutes, or not at all
 
 
@@ -233,33 +235,57 @@ def move_word(cid, source):
     return re.sub(r"\d+$", "", word) or None
 
 
+def places(alive, closet):
+    """{place: where she is and how}: her places (sitting by her campfire) that the glass can take her
+    to, a clip there to get her there (to_campfire) built. From closet.json's "places"."""
+    reachable = {c.get("to") for c in alive.get("clips", []) if c.get("moods") == ["go"]}
+    return {p: does for p, does in closet.get("places", {}).items() if p in reachable}
+
+
 def moves(cid, alive, closet):
     """{move: [clip sources]}: her selfie moves and full-body clips, clips named for a move she could
-    ask for (a dance, a wave, a kiss), and any clip the Studio gave words to."""
+    ask for (a dance, a wave, a kiss), any clip the Studio gave words to, and her places (the clip that
+    takes her to her campfire, under "campfire")."""
     extra = closet.get("moves", {})
+    spots = places(alive, closet)
     out = {}
     for c in alive.get("clips", []):
         src = c.get("source", "")
         word = move_word(cid, src)
         if c.get("moods") == ["windy"]:
             continue  # weather, not a move: it plays on windy days only
+        if c.get("moods") == ["go"]:
+            if c.get("to") in spots:
+                out.setdefault(c["to"], []).append(src)
+            continue  # walking on and off the glass is for her turns on it, not to ask for
         askable = "pose" in c.get("moods", []) or c.get("from", "").split("@")[0] == "full" or word in MOVE_WORDS
         for w in ([word] if askable and word else []) + list(extra.get(Path(src).stem, [])):
             out.setdefault(w, []).append(src)
     return out
 
 
-def move_name(word):
+def move_name(word, spots=None):
+    if spots and word in spots:
+        return f"go to your {word}"
     return MOVE_NAMES.get(word, word)
 
 
+def as_you(text):
+    """A place's description said to her: "her knees drawn up" -> "your knees drawn up"."""
+    return re.sub(r"\bshe\b", "you", re.sub(r"\bher\b", "your", text))
+
+
 # ---- Requests ----------------------------------------------------------------------------------
-def match_move(request, available):
-    """The moves a request asks for: [(word, sources)], best first (ties all kept), or []."""
+def match_move(request, available, spots=None):
+    """The moves a request asks for: [(word, sources)], best first (ties all kept), or []. spots: her
+    places, found by the words of their description too ("sit by the fire" finds her campfire)."""
     asked = set(words(request))
     scored = []
     for word, sources in available.items():
         keys = {word} | MOVE_KEYWORDS.get(word, set()) | set(words(move_name(word)))
+        if spots and word in spots:
+            told = {w for w in words(spots[word]) if len(w) > 3 and w not in PLACE_FILLER}
+            keys |= told | {"sit" for w in told if w.startswith("sit")} | {"fire" for w in told | {word} if "fire" in w}
         score = len(asked & keys) + (0.5 if word in asked else 0)  # its own name breaks a tie
         if score:
             scored.append((score, word, sources))

@@ -215,6 +215,9 @@ named by kind, `<kind>_<what she does>` (`KINDS`):
 | `oops_…` | a face at her own mishap | main |
 | `windy_…` | hair and clothes in the wind | main |
 | `[<from>-]change_<to>_<what>` | a change of clothes on screen (`usual` for her usual clothes) | from one look to another |
+| `<place>`, `<place>_…`, `<place>listen` | at one of her places: her loop there (she can talk in it), quiet moments, listening | the place |
+| `to_<place>[_…]`, `from_<place>[_…]` | getting there (sitting down from her full body) and back up (mood `go`) | full to the place, and back |
+| `walkoff`, `walkon`, `vanish`, `appear` (`…_<what>`, `…2`) | off the glass and back on (mood `go`) | full or her home pose to `gone`, and back |
 
 An outfit prefix puts any clip in other clothes, in poses of their own:
 - `evening-relaxed` plays in `relaxed@evening`.
@@ -249,6 +252,8 @@ few listening clips borrows her quiet clips that keep facing forward.
 | `relaxed` | Aloy with her hand down: her home pose (set per Choom in the Studio, written to `alive.json` as `home`), reached by `lower` and `raise`; the raised finger comes up now and then while she talks |
 | `asleep` | asleep |
 | `full` | her whole figure, from a full-body picture made from her reference sheet |
+| a place (`campfire`) | somewhere she goes and stays a while, framed wide: any look in her Studio project that isn't one of the others and has no outfit; its look's `from` (her full body) is where she gets there from |
+| `gone` | the empty glass (a black picture) she walks off into and on from |
 
 Full-body clips are reached and left with a quick camera-cut fade, and have no lip sync. About one
 quiet clip in fourteen cuts to a full-body clip and back (`FULL_IDLE_CHANCE`).
@@ -257,6 +262,28 @@ An outfit can have its own full body (`full@dayshop`, clips named `<id>_dayshop-
 - In that outfit, the glass cuts only to that full body.
 - In an outfit without one, the glass never cuts to full body, and a full-body move she asks for
   doesn't play there (her answer says which clothes have it).
+
+**Places.** A place (Genesis's campfire, sitting on the ground by a fire) is reached only when she asks
+for it (glass_move "sit by the fire", matched by the place's name and description). She changes into
+her usual clothes first if need be; the glass cuts to her full body and she sits down (`to_campfire`).
+There she plays the place's clips, talks over its loop (with lip sync if her face is found in it), and
+stays `PLACE_STAY_MS` (`placeMinutes`, 10). Then she gets up (`from_campfire`) and the glass cuts back to
+the look she came from; without a `from_` clip it just cuts back. Bedtime, the group stage and a turn
+passing to another Choom end the stay sooner, the screensaver leaves her the glass while she's there,
+and asking for the place again while she's there makes the stay longer. Her atom and band step aside
+there (they're sized for her close-up), no full-body cuts come from there, and clips with the `go` mood
+never play by chance. In the build a place keeps everything lit (the fire, not just her outline) and
+lines up its depth with its own first frame, like a full body.
+
+**Walking off and on.** On a screensaver turn the one on the glass walks off (from her full body, after
+a cut) or vanishes (from her waist-up look), when she has such a clip from where she is and the next
+Choom has one back from `gone`. The turn passes when her clip ends on the empty glass (the fade has
+nothing left to fade), and the next one walks on or appears, then the glass cuts to her home look. If
+either can't, or she hasn't got off within 30 s, it's the usual fade. A turn passing any other way (a
+reply, a button) or him talking to her cancels it; back on the glass any other way after walking off,
+a Choom is straight back in her home loop, and on the group stage nobody stays gone. The build keeps
+only what's lit in these clips (an empty frame stays empty), lines up depth on the frames she's in, and
+gives them no lip sync. They're in her usual clothes only.
 
 ## Looks and outfits
 
@@ -277,8 +304,8 @@ has a clip with the `talk` mood.
 
 **Install settings.** The hours, temperatures and visit lengths on this page (sleep 11 pm to 7 am,
 night clothes from 10 pm, 70°F for warm night clothes, cold under 45°F, hot over 85°F, evening 6 to 11
-pm, visits of 30 s per clip between 3 and 15 minutes, 25 minutes' rest, a daily 2 minutes per clip)
-are defaults. Copy `glass-settings.example.json` to `glass-settings.json` beside `living.html`
+pm, visits of 30 s per clip between 3 and 15 minutes, 25 minutes' rest, a daily 2 minutes per clip,
+mornings from 5 am for getting up, 10 minutes at a place) are defaults. Copy `glass-settings.example.json` to `glass-settings.json` beside `living.html`
 (gitignored), change what you like and relaunch; anything left out keeps its default.
 
 **Visits.** A dozen clips would loop for hours, so she wears an outfit (or another look) in visits:
@@ -573,6 +600,11 @@ The looking-glass skill in the Choom app (`skills/core/looking-glass`) gives eac
 4. It posts the answer to `/api/hologram/glass/result`.
 
 **Matching.**
+- **Places:** closet.json's `places` (written by the Studio from each place's description) for the
+  places with a `to_` clip built; found by name or by the words of the description ("sit by the
+  fire" finds the campfire). The answer says where she'll be ("go to your campfire ... You stay about
+  ten minutes"), and `glass_closet` lists it as "go to your campfire". Walking on and off isn't asked
+  for.
 - **Moves:** selfie moves, full-body clips, and clips named for a move (dance, wave, kiss, and so on).
   A move plays in the clothes she has on: from her current pose if she has it there, else as a cut to
   her whole figure in those clothes, else through a pose change in them (Aloy raises her hand first).
@@ -746,6 +778,8 @@ Each wake and blank is logged as `screens`.
   - It doesn't switch while she's asleep or just woke, while the stage is up, while you look at her,
     or while someone talks near the tower.
   - A Choom who hasn't been on the glass for 45 minutes greets as she arrives.
+  - The one leaving walks off and the next walks on, when both have the clips (Walking off and on,
+    under Clips, moods and poses). No turn passes while a Choom is at one of her places.
 - **Safeguards.**
   - A clip that can't be played (removed or replaced by a build before the relaunch, a bad encode) is
     left out until the next launch and another plays; only four failures in a row show her still relief.
@@ -771,6 +805,7 @@ Each wake and blank is logged as `screens`.
 | `{"quilt": true}` | the raw quilt (tile i at column i%8, row i//8 from the bottom) |
 | `{"clip": 5}` | jump to a clip of the Choom on the glass |
 | `{"stage": true, "room": ["Aloy", "Eve"]}` / `{"stage": false}` | the group stage (all four without `room`) |
+| `{"quietTurn": "genesis"}` | a screensaver turn now, to that Choom (walking off and on if both can) |
 | `{"sleep": true}`, `{"hour": 22}` | doze now; pretend it's 10 pm (`null` to stop) |
 | `{"weather": {"wind": 25, "temperature": 40}}` | pretend weather (replaced by the next real reading) |
 | `{"presence": {"bed": true}}` | pretend presence (`null` clears a role) |

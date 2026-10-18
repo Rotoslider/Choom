@@ -140,30 +140,32 @@
       <p class="hint">Each look is a clean picture of her and the line that describes her in it. Every clip in the look starts and ends on that picture; the <b>subject</b> starts every prompt (say “a plain pure black background”), the <b>keep</b> line follows it in every clip (Genesis: her motes stay on her), and loops finish with the <b>ending</b>.</p>
       <div id="drafts"></div>
       <details class="custom" id="newOutfit">
-        <summary data-tip="Klein makes a few versions from one of her pictures; you pick one">New look: an outfit, full body, asleep, or a new picture for a look</summary>
-        <p class="hint">Klein makes a few versions from one of her pictures; pick one and it becomes a look you can plan clips for. An <b>outfit</b> needs Essentials first, then a dozen or more quiet moments; when she wears it comes from its name, like the glass's other outfits. <b>Full body</b> is for the full-body moves and twirls: start it from her usual look, or from an outfit for that outfit's own full body (the glass cuts to it only while she wears that outfit). <b>Asleep</b> is for the sleep clips; from a night outfit, she sleeps in it. <b>A new picture for a look she has</b> replaces that look's picture (a truer colour, a better likeness); every clip in the look is planned again from it, and the old takes are kept. Klein can start from any of her looks, or from a picture on your computer.</p>
+        <summary data-tip="Klein makes a few versions from one of her pictures; you pick one">New look: an outfit, full body, asleep, a place, the empty glass, or a new picture for a look</summary>
+        <p class="hint">Klein makes a few versions from one of her pictures; pick one and it becomes a look you can plan clips for. An <b>outfit</b> needs Essentials first, then a dozen or more quiet moments; when she wears it comes from its name, like the glass's other outfits. <b>Full body</b> is for the full-body moves and twirls: start it from her usual look, or from an outfit for that outfit's own full body (the glass cuts to it only while she wears that outfit). <b>Asleep</b> is for the sleep clips; from a night outfit, she sleeps in it. <b>A place</b> is somewhere she goes and stays a while when she asks (sitting by a campfire, in a chair): made from her full body, named by you, with its own loop, quiet moments, and clips to sit down and get up (plan "A place" in it). <b>The empty glass</b> is a black picture for walking on and off (plan "Walking on and off" in her full body); no Klein needed. <b>A new picture for a look she has</b> replaces that look's picture (a truer colour, a better likeness); every clip in the look is planned again from it, and the old takes are kept. Klein can start from any of her looks, or from a picture on your computer.</p>
         <div class="custom-form">
           <label data-tip="What Klein makes">Kind
             <select id="outfitKind">
               <option value="outfit">An outfit</option>
               <option value="full">Full body (head to toe)</option>
               <option value="asleep">Asleep (eyes closed)</option>
+              <option value="place">A place (sitting by a campfire, in a chair)</option>
+              <option value="gone">The empty glass (for walking on and off)</option>
               <option value="redo">A new picture for a look she has</option>
             </select></label>
           <label class="redo" data-tip="The look that gets the new picture; its clips are planned again from it">Look <select id="outfitTarget"></select></label>
-          <label data-tip="The picture Klein starts from; everything but the change is kept. Its look also gives the new look its description">Starts from <select id="outfitBase"></select></label>
-          <label class="wide" data-tip="Klein starts from this picture instead (the look above still gives the description)">Or start from a picture from your computer
+          <label class="klein" data-tip="The picture Klein starts from; everything but the change is kept. Its look also gives the new look its description">Starts from <select id="outfitBase"></select></label>
+          <label class="wide klein" data-tip="Klein starts from this picture instead (the look above still gives the description)">Or start from a picture from your computer
             <input type="file" id="outfitUpload" accept="image/png,image/jpeg,image/webp"></label>
-          <label class="wide" data-tip="Klein keeps the picture it starts from as picture 1 (her framing, pose and light) and takes things from these">More pictures for Klein to use: a dress, shoes, a purse, a close-up of her face
+          <label class="wide klein" data-tip="Klein keeps the picture it starts from as picture 1 (her framing, pose and light) and takes things from these">More pictures for Klein to use: a dress, shoes, a purse, a close-up of her face
             <input type="file" id="outfitRefs" multiple accept="image/png,image/jpeg,image/webp"></label>
           <p class="wide hint" id="outfitRefsHint" hidden>Say which picture holds what: picture 1 is her, the ones you added are picture 2, 3 and so on in the order chosen (“she now wears the dress from picture 2 and the sandals from picture 3”).</p>
           <label class="when" data-tip="The glass picks outfits by time and weather; the name says when">She wears it on <select id="outfitWhen"></select></label>
-          <label class="when" data-tip="Letters and digits; tells two outfits for the same time apart (eveningdress, eveningknit)">Name (optional) <input id="outfitName" placeholder="dress" pattern="[a-z0-9]*"></label>
+          <label class="named" data-tip="Letters and digits; tells two outfits for the same time apart (eveningdress, eveningknit), or names a place (campfire, chair)"><span id="outfitNameLabel">Name (optional)</span> <input id="outfitName" placeholder="dress" pattern="[a-z0-9]*"></label>
           <label class="wide wearing"><span id="outfitWearingLabel">She now wears</span>
             <textarea id="outfitWearing" rows="2" placeholder="a long burgundy dress with thin straps"></textarea></label>
-          <label class="wide">Instruction for Klein (edit if her pose holds something it must keep)
+          <label class="wide klein">Instruction for Klein (edit if her pose holds something it must keep)
             <textarea id="outfitPrompt" rows="4"></textarea></label>
-          <label data-tip="How many versions to choose from (about a minute each)">Versions <select id="outfitCount"><option>2</option><option selected>3</option><option>4</option></select></label>
+          <label class="klein" data-tip="How many versions to choose from (about a minute each)">Versions <select id="outfitCount"><option>2</option><option selected>3</option><option>4</option></select></label>
           <div class="wide row-end"><span id="outfitLook" class="muted"></span><button id="outfitMake" type="button" data-tip="Queue the Klein pictures; they appear above when done (after any render ahead of them)">Make pictures</button></div>
         </div>
       </details>

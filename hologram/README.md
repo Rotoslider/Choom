@@ -35,6 +35,11 @@ happening in the Choom app: listening, thinking, using tools, changing clothes, 
   changes with a camera cut or a change-of-clothes clip.
 - **Full body.** Now and then the glass cuts to her whole figure. An outfit can have its own full
   body, used only while she wears it.
+- **Places.** A Choom can have places of her own, like Genesis's campfire. When she asks, the glass
+  cuts to her full body and she sits down there, stays about ten minutes (talking from there if you
+  talk to her), then gets up and comes back.
+- **Walking on and off.** On a screensaver turn the one leaving walks off (or vanishes) and the next
+  walks on (or appears), for Chooms who have those clips.
 - **Their own choices.** The Chooms can ask the glass for a move or for clothes from their closet,
   their usual clothes included ("my cream blouse"). Clothes she picks take priority: day clothes until
   the 10 pm night clothes, anything later until she sleeps. A

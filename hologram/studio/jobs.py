@@ -14,7 +14,7 @@ A job: {id, kind: render|build|picture|still|review|relaunch, args,
 
 The work list can be paused (studio/worklist.json): what's on the GPU finishes (a render, the clip
 it's on) and nothing more starts there until it's resumed. A render paused that way keeps its
-remaining clips queued and goes on from them.
+remaining clips queued and goes on from them, after anything queued while it was paused.
 """
 import json
 import os
@@ -222,10 +222,14 @@ def pause():
 
 
 def resume():
-    """Resume the work list: a render paused partway goes on from the clips it hadn't rendered."""
+    """Resume the work list: a render paused partway goes on from the clips it hadn't rendered, after
+    what was queued while it was paused (paused to test something: the test goes first)."""
     with lock:
+        since = worklist.get("since", 0)
         worklist.update(paused=False, pausing=False)
         held = [j for j in jobs if j["status"] == "paused"]
+        # The work list runs in list order: what waited from before the pause moves behind what was queued during it.
+        jobs.sort(key=lambda j: j["status"] in ("waiting", "paused") and j.get("created", 0) < since)
         save()
     for j in held:
         old = j["args"]["queue"]

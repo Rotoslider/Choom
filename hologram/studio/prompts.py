@@ -62,12 +62,15 @@ LESSONS = [
 ]
 
 
-def lint(prompt, loop=True):
-    """Warnings for a prompt: [(problem, advice)]."""
+def lint(prompt, loop=True, leaves=False):
+    """Warnings for a prompt: [(problem, advice)]. leaves: a clip on or off the empty glass, where she
+    does walk out of the frame (or in)."""
     out = []
     body = prompt.split("\noverall_soundscape", 1)[0]
     camera_free = body.replace(CAMERA, "")
     for pattern, advice in LESSONS:
+        if leaves and pattern == LESSONS[-1][0]:
+            continue
         m = re.search(pattern, camera_free, re.I)
         if m:
             out.append((m.group(0), advice))

@@ -10,8 +10,10 @@ import json
 import os
 import re
 import shutil
+import struct
 import subprocess
 import time
+import zlib
 from pathlib import Path
 
 from config import CFG, PICTURES, WAN2GP, WAN2GP_PYTHON
@@ -72,6 +74,14 @@ def full_prompt(keep, wearing=""):
             f"exactly as in the picture, with the same light on the same pure black background.{clothes}")
 
 
+def place_prompt(does, keep):
+    """Klein's instruction for one of her places, from her full body: where she is and how ("sitting
+    on the ground beside a small campfire, her knees drawn up and her hands held toward the flames")."""
+    return (f"Show her {does.strip().rstrip('.')}, her whole figure in frame with a little black space around her. "
+            f"Keep {with_clothes(full_keep(keep))} exactly as in the picture, with the same light on the same pure "
+            "black background.")
+
+
 def asleep_prompt(keep):
     """Klein's instruction for her asleep, for the sleep clips."""
     return ("She has dozed off peacefully: her eyes are gently closed, her face is soft and relaxed, and her head tips "
@@ -92,7 +102,30 @@ def kept_in(prompt):
     return ""
 
 
-KINDS = {"outfit": "an outfit", "full": "full body", "asleep": "asleep", "redo": "a new picture for a look she has"}
+KINDS = {"outfit": "an outfit", "full": "full body", "asleep": "asleep", "place": "a place",
+         "redo": "a new picture for a look she has"}
+# Names a place can't have: the poses every Choom may have (clip_roles.POSES), and the words her clip
+# names are made of, which would read as something else (idle_, to_, walkoff).
+NOT_PLACES = {"main", "relaxed", "full", "asleep", "gone", "idle", "listen", "talk", "pose", "oops", "windy", "to",
+              "from", "walkoff", "walkon", "vanish", "appear", "change", "base", "plain", "noheart"}
+
+
+def gone(proj):
+    """The empty glass she walks off into and on from: a pure black picture the size of her full body's
+    (or main) picture, no Klein needed. Returns the look."""
+    like = PICTURES / (proj.looks.get("full", {}).get("picture") or proj.looks["main"]["picture"])
+    head = like.read_bytes()[:24]
+    if head[:8] != b"\x89PNG\r\n\x1a\n":
+        raise ValueError(f"{like.name} isn't a PNG")
+    w, h = struct.unpack(">II", head[16:24])
+    chunk = lambda kind, data: (struct.pack(">I", len(data)) + kind + data
+                                + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF))
+    row = b"\x00" + bytes(w * 3)  # filter byte, then black RGB
+    target = PICTURES / f"{proj.id}_gone.png"
+    target.write_bytes(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+                       + chunk(b"IDAT", zlib.compress(row * h, 9)) + chunk(b"IEND", b""))
+    proj.looks["gone"] = {"picture": target.name, "subject": "", "ending": ""}
+    return proj.looks["gone"]
 # Klein's instruction for a new picture of a look she has, when it's the colour that's wrong.
 TRUE_COLOR_PROMPT = ("Make this picture look natural and true to life: clean neutral white light with accurate, realistic "
                      "skin tones and colours and no colour cast. Keep everything else exactly the same: her face, "
@@ -198,7 +231,21 @@ def adopt(proj, look_id, draft, wearing=None, prompt=None, base_look=None, repla
     kind, outfit = base_of(look_id), outfit_of(look_id)
     target = new_file(proj, look_id)
     shutil.copy2(PICTURES / draft, target)
-    if kind in ("full", "asleep"):
+    if kind not in ("main", "relaxed", "full", "asleep"):
+        # A place: her full body's description, sitting by her campfire instead of standing. She gets
+        # there from her full body (to_campfire), in her usual clothes.
+        full = proj.looks.get("full", {})
+        subject = re.sub(r",?\s*standing with her whole body in view", "", full.get("subject") or proj.looks["main"]["subject"])
+        proj.looks[look_id] = {
+            "picture": target.name,
+            "subject": f"{subject.rstrip('. ')}, {wearing.strip().rstrip('.')}",
+            "does": wearing.strip().rstrip("."),
+            "from": "full",
+            "ending": "She stays in the same place and pose and ends exactly as she began.",
+            **({"keep": full["keep"]} if full.get("keep") else {}),
+            **({"klein": prompt} if prompt else {}),
+        }
+    elif kind in ("full", "asleep"):
         base = proj.looks.get(base_look or f"main@{outfit}", {}) if outfit else proj.looks.get("main", {})
         # An outfit's full body: what's said of her legs and feet joins the outfit's own clothes.
         if outfit and kind == "full" and wearing and base.get("wearing") and base["wearing"].lower() not in wearing.lower():

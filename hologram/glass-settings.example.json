@@ -3,6 +3,7 @@
   "sleepFrom": 23,
   "sleepUntil": 7,
   "sleepAfterQuietMinutes": 10,
+  "morningFrom": 5,
   "nightClothesFrom": 22,
   "nightWarmF": 70,
   "coldBelowF": 45,
@@ -13,5 +14,6 @@
   "visitMinMinutes": 3,
   "visitMaxMinutes": 15,
   "restMinutes": 25,
-  "dailyMinutesPerClip": 2
+  "dailyMinutesPerClip": 2,
+  "placeMinutes": 10
 }

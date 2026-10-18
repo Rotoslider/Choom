@@ -31,7 +31,7 @@ from mediapipe.tasks.python import BaseOptions, vision
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from make_depth import BG_LUMA, DETAIL, WEIGHTS, shape_depth  # noqa: E402
-from clip_roles import clip_role, home_pose  # noqa: E402
+from clip_roles import POSES, clip_role, home_pose  # noqa: E402
 from make_landmarks import (CHIN, LEFT_CORNER, LOWER_INNER, LOWER_OUTER, MODEL, RIGHT_CORNER,  # noqa: E402
                             UPPER_INNER, UPPER_OUTER)
 
@@ -127,8 +127,9 @@ def read_clip(src):
     return fps, [f[:, x0:x0 + cw] for f in frames]
 
 
-def mouth_track(landmarker, frames):
-    """Her mouth on every frame (texture UV, v up, and texture pixels), gaps filled and lightly smoothed."""
+def mouth_track(landmarker, frames, required=True):
+    """Her mouth on every frame (texture UV, v up, and texture pixels), gaps filled and lightly smoothed.
+    Not required (a wide shot at a place, her face small): no face anywhere means no lip sync."""
     h, w = frames[0].shape[:2]
     mouths = []
     for bgr in frames:
@@ -150,6 +151,8 @@ def mouth_track(landmarker, frames):
     n = len(mouths)
     known = [i for i, m in enumerate(mouths) if m is not None]
     if not known:
+        if not required:
+            return np.zeros((0, 8)), 0
         raise SystemExit("no face found in any frame")
     for i in range(n):
         if mouths[i] is None:
@@ -164,6 +167,18 @@ BUILD = 3  # bump when the depth shaping or the video layout changes: every clip
 def particles(src):
     """Whether a clip is about her particles flying free (kept by brightness, not just her outline)."""
     return bool(re.search(r"motes|windy|sparkle", Path(src).stem))
+
+
+def wide(pose):
+    """Framed wider than her waist-up pictures: her full body, a place (sitting by her campfire), or
+    the empty glass she walks off into."""
+    return pose.split("@")[0] not in ("main", "relaxed", "asleep")
+
+
+def at_place(start, end):
+    """A clip at one of her places or on the way there (to_campfire): everything lit is kept, the fire
+    she sits by too, which isn't her outline."""
+    return any(pose.split("@")[0] not in POSES for pose in (start, end))
 
 
 def joined(src):
@@ -257,9 +272,14 @@ def main():
         masks = circular_smooth(masks.astype(np.float32)) > 0.5
         # Clips about her particles (Genesis's motes drifting off her, the wind) keep everything lit
         # around her, frame by frame: on pure black the only lit things are her and her motes, and the
-        # cut-out alone clipped away the motes that drift beyond her outline.
-        if particles(src):
+        # cut-out alone clipped away the motes that drift beyond her outline. So do clips at a place.
+        _, start, end = role(src)
+        if particles(src) or at_place(start, end):
             masks |= lit
+        # On and off the empty glass: only what's lit can be her, so an empty frame stays empty (U2-Net
+        # finds something in a black frame).
+        if "gone" in (start, end):
+            masks &= np.stack([cv2.dilate(f.astype(np.uint8), np.ones((15, 15), np.uint8)) > 0 for f in lit])
         # Outfit clips: anything lit that touches her outline is her (or her clothes). U2-Net took the
         # dark knit of Genesis's sweater, where it runs off the bottom-left of the frame, for background
         # in whole stretches of a clip, the first frame included, so the outline rule couldn't help.
@@ -290,14 +310,21 @@ def main():
     def line_up(c):
         """Depth Anything's scale drifts frame to frame: every frame is lined up with the main clip's
         first frame on the pixels that are her in both (a per-frame scale and offset), so changing
-        clips never changes her depth. A full-body clip is framed differently: it lines up with its
-        own first frame, and its depth range is mapped onto the main clip's."""
-        c["own"] = role(c["src"])[1].split("@")[0] == "full"  # full, or full@<outfit>
-        c_ref, c_mask = (c["raw"][0].astype(np.float32), unpack(c["packed"], 0, w)) if c["own"] else (ref, ref_mask)
-        c["fit"] = []
+        clips never changes her depth. A clip framed wider (full body, a place, walking on or off) lines
+        up with its own first frame (its last, walking on from the empty glass), and its depth range is
+        mapped onto the main clip's. A frame with too little of her to fit (she's off the glass) takes
+        the nearest frame's fit."""
+        _, start, end = role(c["src"])
+        c["own"] = wide(start) or wide(end)
+        r = c["frames"] - 1 if start == "gone" else 0
+        c_ref, c_mask = (c["raw"][r].astype(np.float32), unpack(c["packed"], r, w)) if c["own"] else (ref, ref_mask)
+        fits = []
         for i in range(c["frames"]):
             sel = unpack(c["packed"], i, w) & c_mask
-            c["fit"].append(np.polyfit(np.asarray(c["raw"][i])[sel].astype(np.float32), c_ref[sel], 1))
+            fits.append(np.polyfit(np.asarray(c["raw"][i])[sel].astype(np.float32), c_ref[sel], 1) if sel.sum() >= 500 else None)
+        known = [i for i, f in enumerate(fits) if f is not None]
+        c["fit"] = [f if f is not None else (fits[min(known, key=lambda k: abs(k - i))] if known else np.array([1.0, 0.0]))
+                    for i, f in enumerate(fits)]
         c["map"] = (1.0, 0.0, 0.0)
         if c["own"]:
             ref_lo, ref_hi = np.percentile(ref[ref_mask], [2, 99.5])
@@ -368,8 +395,10 @@ def main():
         enc.stdin.close()
         assert enc.wait() == 0, f"ffmpeg failed on {out.name}"
         part.replace(out)
-        # Full-body clips play without lip sync (her face is too small to track, or turned away mid-twirl).
-        mouths, found = (np.zeros((0, 8)), 0) if start.split("@")[0] == "full" else mouth_track(landmarker, frames)
+        # Full-body clips play without lip sync (her face is too small to track, or turned away mid-twirl),
+        # and so do clips on and off the glass; at a place she has it if her face can be found.
+        mouths, found = ((np.zeros((0, 8)), 0) if start.split("@")[0] == "full" or "gone" in (start, end) else
+                         mouth_track(landmarker, frames, required=not at_place(start, end)))
         del frames, depth
         meta_clips.append({"file": out.name, "frames": c["frames"], "source": name,
                            "moods": moods, "from": start, "to": end, "talk": "talk" in moods,

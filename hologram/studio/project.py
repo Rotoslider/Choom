@@ -339,7 +339,9 @@ class Project:
                 looks[o] = {"tags": self.closet_words(lid),  # her usual clothes, changed some other way: say how
                             "wearing": closet.same_clothes(subject, main) if worn == usual else worn}
         data = {"usual": usual, "looks": looks,
-                "moves": {n: c["tags"] for n, c in sorted(self.clips.items()) if c.get("tags")}}
+                "moves": {n: c["tags"] for n, c in sorted(self.clips.items()) if c.get("tags")},
+                # Her places (sitting by her campfire): where she is and how, for her request and the answer.
+                "places": {lid: look["does"] for lid, look in sorted(self.looks.items()) if look.get("does")}}
         text = json.dumps(data, indent=1) + "\n"
         if not f.exists() or f.read_text() != text:
             part = f.with_suffix(".part")  # swapped in whole: the glass's server reads it any moment

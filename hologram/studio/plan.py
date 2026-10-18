@@ -14,7 +14,7 @@ from project import Project, base_of, editing, next_seeds, outfit_of, roles
 
 PACKS_FILE = Path(__file__).resolve().parent / "packs.json"
 KIND_PREFIX = {
-    "moment": {"main": "idle_", "relaxed": "relaxed_", "full": "full_"},
+    "moment": {"main": "idle_", "relaxed": "relaxed_", "full": "full_", "place": "{place}_"},
     "talk": {"main": "talk_", "relaxed": "relaxedtalk_"},
     "listen": {"main": "listen_", "relaxed": "relaxedlisten_"},
     "oops": {"main": "oops_", "relaxed": "relaxedoops_"},
@@ -28,25 +28,39 @@ def library():
     return json.loads(PACKS_FILE.read_text())
 
 
+POSES = ("main", "relaxed", "full", "asleep", "gone")  # clip_roles.POSES; any other look is a place
+
+
 def look_kind(look_id):
-    """Which packs suit a look: "outfit" for her waist-up looks in other clothes, else its pose (an
-    outfit's full body, full@dayspandex, gets the full-body packs)."""
+    """Which packs suit a look: "outfit" for her waist-up looks in other clothes, "place" for one of
+    her places (sitting by her campfire), else its pose (an outfit's full body, full@dayspandex, gets
+    the full-body packs)."""
     base = base_of(look_id)
+    if base not in POSES:
+        return "place"
     return "outfit" if outfit_of(look_id) and base != "full" else base
 
 
 def action_name(action, look_id):
-    """The clip's action part for this look (idle_glance, relaxedlisten, evening-idle_glance), or None
-    if the action doesn't come in this pose."""
+    """The clip's action part for this look (idle_glance, relaxedlisten, evening-idle_glance,
+    to_campfire), or None if the action doesn't come in this pose."""
     base, outfit = base_of(look_id), outfit_of(look_id)
+    pose = "place" if look_kind(look_id) == "place" else base
     if "names" in action:
-        name = action["names"].get(base)
+        name = action["names"].get(pose)
     else:
-        prefix = KIND_PREFIX[action["kind"]].get(base)
+        prefix = KIND_PREFIX[action["kind"]].get(pose)
         name = prefix + action["key"] if prefix else None
     if not name:
         return None
+    name = name.replace("{place}", base)
     return f"{outfit}-{name}" if outfit else name
+
+
+def for_look(text, look):
+    """An action's wording for a look: a place's actions say where she is ({does}: "sitting on the
+    ground beside a small campfire ...")."""
+    return text.replace("{does}", (look.get("does") or "where she is").rstrip(". "))
 
 
 def unique_name(proj, name, numbered):
@@ -74,7 +88,8 @@ def options(proj, look_id):
     out = []
     for a in lib["actions"]:
         pack = packs[a["pack"]]
-        if not kinds & set(pack["for"]) or not all(look in proj.looks for look in pack.get("needs", [])):
+        if (not kinds & set(pack["for"]) or not all(look in proj.looks for look in pack.get("needs", []))
+                or (pack.get("usual") and outfit_of(look_id))):
             continue
         part = action_name(a, look_id)
         if not part:
@@ -82,7 +97,7 @@ def options(proj, look_id):
         name = f"{proj.id}_{part}"
         have = [n for n in proj.clips if (n == name or re.fullmatch(re.escape(name) + r"\d+", n))
                 and proj.clips[n]["status"] != "dropped"]
-        out.append({"pack": a["pack"], "key": a["key"], "text": a["text"], "seconds": a.get("seconds", 5),
+        out.append({"pack": a["pack"], "key": a["key"], "text": for_look(a["text"], proj.looks[look_id]), "seconds": a.get("seconds", 5),
                     "hands": a.get("hands", False), "name": name, "have": have,
                     "numbered": "names" not in a, "ending": a.get("ending")})
     return out
@@ -133,7 +148,8 @@ def many(targets, picks, preview=True):
 
 
 def prompt_for(proj, start, end, text, seconds, ending=None):
-    look = proj.looks[start]
+    # Walking on from the empty glass: she's described as she ends (the empty glass has no subject line).
+    look = proj.looks[start] if proj.looks[start].get("subject") else proj.looks[end]
     if ending is None:
         ending = look.get("ending", "") if start == end else TRANSITION_ENDING
     # The look's keep line (Genesis's motes stay on her) only if the look she ends in keeps it too: on
@@ -163,11 +179,12 @@ def add(proj, look_id, items):
         wanted.append((name, start, end, item))
     for (name, start, end, item), seed in zip(wanted, next_seeds(len(wanted))):
         seconds = int(item.get("seconds", 5))
-        prompt = prompt_for(proj, start, end, item["text"], seconds, item.get("ending"))
-        proj.add_clip(name, prompt=prompt, action=item["text"], seconds=seconds, ending=item.get("ending"),
+        text = for_look(item["text"], proj.looks[look_id])
+        prompt = prompt_for(proj, start, end, text, seconds, item.get("ending"))
+        proj.add_clip(name, prompt=prompt, action=text, seconds=seconds, ending=item.get("ending"),
                       frames=prompts.SECONDS[seconds][0], seed=seed,
                       start=proj.looks[start]["picture"], end=proj.looks[end]["picture"], queue=None)
-        warnings = prompts.lint(prompt, loop=start == end)
+        warnings = prompts.lint(prompt, loop=start == end, leaves="gone" in (start, end))
         results.append((name, "; ".join(f"{w}: {why}" for w, why in warnings) or "ok"))
     return results
 
@@ -183,7 +200,7 @@ def rewrite(proj, name, text=None, seconds=None):
         clip["seconds"] = int(seconds)
         clip["frames"] = prompts.SECONDS[int(seconds)][0]
     clip["prompt"] = prompt_for(proj, clip["from"], clip["to"], clip["action"], clip["seconds"], clip.get("ending"))
-    return prompts.lint(clip["prompt"], loop=clip["from"] == clip["to"])
+    return prompts.lint(clip["prompt"], loop=clip["from"] == clip["to"], leaves="gone" in (clip["from"], clip["to"]))
 
 
 def add_change(proj, start, end, key, text, seconds=5):

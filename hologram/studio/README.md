@@ -30,6 +30,9 @@ stands in the glass in 3D, and her lips follow her voice over any clip she talks
   - other looks in her usual clothes (Genesis without her motes, `main@plain`)
   - full body (`full`), and an outfit's own full body (`full@dayspandex`)
   - asleep (`asleep`), and asleep in a night outfit (`asleep@nightcold`)
+  - places, named by you: somewhere she goes and stays a while (Genesis's `campfire`, sitting on the
+    ground by a fire), framed wide like her full body
+  - the empty glass (`gone`), a black picture she walks off into and on from
 - **Clips.** A clip's name says what it's for, using the roles in `tools/clip_roles.py`:
   - `idle_glance`: a quiet moment
   - `listen`: listening
@@ -37,6 +40,10 @@ stands in the glass in 3D, and her lips follow her voice over any clip she talks
   - `pose_wink`: a move for a selfie
   - `evening-idle_glance`: the same quiet moment in her evening outfit
   - `eveningdress-change_nightcold_melt`: a change of clothes on screen, from one look to another
+  - `campfire`, `campfire_glance`, `campfirelisten`: her loop at a place, a quiet moment there, listening
+  - `to_campfire`, `from_campfire`: sitting down there from her full body, and getting up again
+  - `walkoff`, `walkon`, `vanish`, `appear`: off the glass and back on, from her full body (walking)
+    or her waist-up look (vanishing)
 
   The Studio names the clips it plans, so you never have to.
 - **Her project file** (`studio/<id>.json` in the workspace) keeps every look and every clip, with its
@@ -155,6 +162,8 @@ holds something (Optic's heart, crossed arms).
 | Big moves | longer full-body moves, 7 to 15 seconds: dances, turning her back to you, a curtsy, tai chi |
 | Picture looks | turning to a picture beside her (usual looks and outfits; an outfit without them glances its way with a quiet clip) |
 | Pose changes | moving between her two waist-up poses; shown only for a Choom with a second pose (Aloy's `relaxed`), which the Studio can't make yet |
+| A place | in a place look: her loop there (she can talk in it), listening, quiet moments, and the clips to sit down from her full body (`to_`) and get up (`from_`); edit those two to say what appears and goes (the fire flickering up as she sits) |
+| Walking on and off | in her full body (walk off, walk on) and main look (vanish, appear), once she has the empty glass; her usual clothes only |
 
 **Plan for many looks at once** plans the same library actions in many looks in one step, for
 instance Expressions and Oops in every outfit. Tick actions (a pack's box ticks all of it) and looks
@@ -226,8 +235,9 @@ losing its work, so it says what will happen first and waits for the item that's
   checks of clips already made carry on.
 
 A banner across the page says pausing or paused. **Resume** carries on: a paused render goes on from
-the clips it hadn't rendered (as a new queue, `<name>-r2`). The pause is kept in
-`studio/worklist.json`, so it outlasts a restart of the Studio.
+the clips it hadn't rendered (as a new queue, `<name>-r2`), after anything queued while it was paused.
+So to try something mid-render, pause, queue it (Klein pictures, a few clips), and resume: it goes
+first. The pause is kept in `studio/worklist.json`, so it outlasts a restart of the Studio.
 
 **Reloading the glass** after a build is a job of its own. It waits up to ten minutes for no Choom to
 be talking; if the glass stays busy (a room the Chooms run at night, say), it tries again five minutes
@@ -317,6 +327,8 @@ it, the page asks before deleting them with it. Both ask in the page before doin
 | An outfit | her in new clothes, in the pose of the look it starts from (`main@eveningdress`) |
 | Full body | her head to toe: `full` from her usual look, `full@<outfit>` from an outfit |
 | Asleep | her with her eyes closed, for the sleep clips: `asleep` from her usual clothes, `asleep@<outfit>` from a night outfit |
+| A place | somewhere she goes and stays a while, from her full body: name it (`campfire`) and say where she is and how ("sitting on the ground beside a small campfire, her knees drawn up and her hands held out toward the flames, looking up at the viewer") |
+| The empty glass | a black picture for walking on and off (`gone`); made at once, no Klein |
 | A new picture for a look she has | replaces a look's picture, for a truer colour or a better likeness |
 
 - **Starts from:** the picture Klein edits. Any of her waist-up looks works, an outfit too (Genesis's
@@ -414,6 +426,11 @@ The glass answers from what's built:
   in the clothes she has on: one she has only in an outfit is answered "only in" those clothes, and one
   only in clothes she can't wear yet becomes a wish. Answers name the move as something she does
   ("blow a kiss", "walk the runway").
+- **Places** answer to their name and the words of their description: "sit by the fire" finds
+  Genesis's campfire once `to_campfire` is built. The glass changes her into her usual clothes if
+  need be, cuts to her full body, and she sits down; she stays about ten minutes (`placeMinutes`),
+  talking from there if spoken to, then gets up and the glass cuts back. Bedtime, the group stage and
+  his turning to another Choom end it sooner. Asked again while she's there, she stays longer.
 - **Clothes** match an outfit's **closet words**. They're read from what she wears in the look
   ("dress, burgundy, red"), and you can change them on the look's card; empty goes back to the ones
   read from her clothes. A garment, colour or fabric she names must be in the outfit, so "the red
@@ -571,7 +588,7 @@ glass.
   back, and Optic's no-heart look dissolves her heart; both work. A new look of this kind needs change
   clips named in `tools/clip_roles.py` and an entry in `ALT_LOOKS` in `living.js`. The Studio can
   render the clips but can't yet add the entry.
-- **Moves between poses:** walking off and vanishing, sitting down in a chair. They need new poses on
-  the glass and clips between them.
-- **Moves that need another pose on request:** a Choom can ask to sit by a campfire, but until the
-  glass has a seated pose, that request becomes a wish.
+- **Places in other clothes.** A place is in her usual clothes; asked to go there in an outfit, she
+  changes first. `campfire@evening` isn't read as a place yet.
+- **Places by themselves.** She goes to a place only when she asks for it. A place she visits on her
+  own now and then (by the fire on evenings) would need hours for it, like an outfit's name gives.

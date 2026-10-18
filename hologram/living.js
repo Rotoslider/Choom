@@ -987,6 +987,14 @@ const poseTo = (c) => c.to || 'main';
 // look) is expected, not an error.
 const videoError = (e) => { if (e.name !== 'AbortError') post('error', { message: `alive video: ${e.message}` }); };
 const WAKING_POSES = new Set(['main', 'relaxed']);
+// Her places (Genesis's campfire: sitting on the ground by a fire): any pose that isn't one every
+// Choom may have (tools/clip_roles.py POSES). She goes there when she asks (glass_move), from her full
+// body (to_campfire), stays a while and gets up again (from_campfire); see nextClip. "gone" is the
+// empty glass: on a quiet turn the one leaving walks off into it and the next walks on from it.
+const POSES = new Set(['main', 'relaxed', 'full', 'asleep', 'gone']);
+const isPlace = (pose) => !POSES.has(pose.split('@')[0]);
+const PLACE_STAY_MS = setting('placeMinutes', 10) * 60000;
+const goes = (c) => clipMoods(c).includes('go');  // on the way to a place or the empty glass, and back
 const LOOKS_AWAY = /glance|look|sidelook|shoulder|daydream|horizon|lookup|lookdown|hunter|skycheck|scan|turn|dreamy|thinkdown|picture/;  // the framings she lives in (not asleep, not full-body)
 const FULL_IDLE_CHANCE = 0.07;
 // Her clothes. Clips in other outfits live in poses of their own (relaxed@evening), and an outfit's
@@ -1207,7 +1215,7 @@ function seekClip(p, pose, wanted, after = -1) {
   const targets = new Set(ks.filter((k) => clipMoods(clips[k]).includes(wanted)).map((k) => poseFrom(clips[k])));
   // (Not through a change of clothes: an expression in her night look isn't worth changing out of it.)
   const toward = ks.find((k) => poseFrom(clips[k]) === pose && poseTo(clips[k]) !== pose && targets.has(poseTo(clips[k])) &&
-                                !clipMoods(clips[k]).includes('change'));
+                                !clipMoods(clips[k]).includes('change') && !goes(clips[k]));
   return toward ?? -1;
 }
 
@@ -1263,13 +1271,27 @@ function suits(p, k) {
 function nextClip(p, after) {
   const clips = p.alive.clips;
   let pose = after >= 0 && clips[after] ? poseTo(clips[after]) : 'main';
-  // After a full-body move, cut back to the framing she was in.
-  if (isFull(pose)) pose = p.cutFrom || 'main';
+  // After a full-body move, cut back to the framing she was in (not to a place she has left).
+  if (isFull(pose)) pose = p.cutFrom && !(isPlace(p.cutFrom) && !p.stay) ? p.cutFrom : p.alive.home || 'main';
+  // Off the glass (she walked off): back on (walking on, appearing), else a cut to her home loop. While
+  // she's leaving for another Choom's turn this waits unplayed (the players' ended handler).
+  if (pose === 'gone') {
+    const on = clips.map((c, k) => k).filter((k) => poseFrom(clips[k]) === 'gone');
+    if (on.length) {
+      const k = on[Math.floor(Math.random() * on.length)];
+      if (isFull(poseTo(clips[k]))) p.cutFrom = p.alive.home || 'main';
+      (p.moments ||= new Set()).add(k);
+      return k;
+    }
+    pose = p.alive.home || 'main';
+  }
   const want = wantedMood(p);
   // Time to change clothes (or back into her usual ones before sleep): a cut to her base loop in the
-  // other outfit, at a quiet moment.
+  // other outfit, at a quiet moment. Her places are in her usual clothes: asked to go to one, she
+  // changes into them first, and there she stays in them.
   const asleep = basePose(pose) === 'asleep';  // asleep, or asleep in her night outfit (asleep@night)
-  const dressed = outfitOf(pose), dress = asleep ? dressed : wantedOutfit(p, want);
+  const goingTo = p.moveWanted && clips.some((c) => p.moveWanted.sources.has(c.source) && isPlace(poseTo(c)));
+  const dressed = outfitOf(pose), dress = asleep || isPlace(pose) ? dressed : goingTo ? null : wantedOutfit(p, want);
   const quiet = want === 'idle' || want === 'sleep' || want === 'listen' || (want === 'think' && chosenOutfit(p) !== undefined);
   if (dress !== dressed && !asleep && quiet) {
     const to = dress ? `${basePose(pose)}@${dress}` : basePose(pose);
@@ -1288,6 +1310,43 @@ function nextClip(p, after) {
     const via = dress ? clips.findIndex((c) => poseFrom(c) === pose && poseTo(c) !== pose && !outfitOf(poseTo(c)) &&
                                                hasLoop(`${poseTo(c)}@${dress}`)) : -1;
     if (via >= 0) return via;
+  }
+  // At one of her places (sitting by her campfire) she stays a while, then gets up (from_campfire, to
+  // her full body, and the glass cuts back), or without such a clip the glass just cuts back. Bedtime,
+  // the group stage or her turn on the glass ending cut the stay short.
+  if (isPlace(pose)) {
+    const now = performance.now();
+    // `back`: the look she came from, cut back to once she's up (a full-body move from here cuts back here).
+    if (!p.stay || p.stay.pose !== pose) {
+      p.stay = { pose, until: now + PLACE_STAY_MS, back: p.cutFrom && !isPlace(p.cutFrom) ? p.cutFrom : p.alive.home || 'main' };
+    }
+    if (now > p.stay.until || want === 'sleep' || stage.on || p.leaving != null) {
+      p.cutFrom = p.stay.back;
+      p.stay = null;
+      const up = clips.map((c, k) => k).filter((k) => poseFrom(clips[k]) === pose && goes(clips[k]));
+      if (up.length) {
+        const k = up[Math.floor(Math.random() * up.length)];
+        (p.moments ||= new Set()).add(k);
+        return k;
+      }
+      pose = p.cutFrom || p.alive.home || 'main';
+    }
+  } else {
+    p.stay = null;
+  }
+  // Her turn on the glass is over (a quiet turn): she walks off, or vanishes, and the next Choom comes
+  // on once she's gone (the players' ended handler). From a waist-up look the glass cuts to her full
+  // body to walk off from. With neither, the turn passes with the usual fade (the screensaver below).
+  if (p.leaving != null && want !== 'idle') p.leaving = null;  // he's talking with her: she stays
+  if (p.leaving != null) {
+    const off = (pz) => clips.map((c, k) => k).filter((k) => poseFrom(clips[k]) === pz && poseTo(clips[k]) === 'gone');
+    const ways = off(pose).concat(isPlace(pose) ? [] : off(fullOf(pose)));
+    if (ways.length) {
+      const k = ways[Math.floor(Math.random() * ways.length)];
+      if (poseFrom(clips[k]) !== pose) p.cutFrom = pose;
+      (p.moments ||= new Set()).add(k);
+      return k;
+    }
   }
   // Asleep: stay asleep, or wake first if anything else is wanted. Sleepy: doze off (via a pose
   // change if needed).
@@ -1333,13 +1392,17 @@ function nextClip(p, after) {
   // side of a pose change in these clothes. A move she has only in other clothes doesn't play (it was
   // a cut into another outfit; server.py tells her it's a wish).
   if (p.moveWanted && performance.now() > p.moveWanted.until) p.moveWanted = null;
+  if (p.moveWanted && free && isPlace(pose) && clips.some((c) => p.moveWanted.sources.has(c.source) && poseTo(c) === pose)) {
+    p.moveWanted = null;  // asked for the place she's at: she stays longer
+    if (p.stay) p.stay.until = performance.now() + PLACE_STAY_MS;
+  }
   if (p.moveWanted && free) {
     const sameClothes = (pz) => outfitOf(pz) === outfitOf(pose);
     const asked = clips.map((c, k) => k).filter((k) => p.moveWanted.sources.has(clips[k].source) && sameClothes(poseFrom(clips[k])));
     const here = asked.filter((k) => poseFrom(clips[k]) === pose);
     const wide = asked.filter((k) => poseFrom(clips[k]) === fullOf(pose));
     const starts = new Set(asked.filter((k) => !isFull(poseFrom(clips[k]))).map((k) => poseFrom(clips[k])));
-    const toward = clips.findIndex((c) => poseFrom(c) === pose && poseTo(c) !== pose && starts.has(poseTo(c)) && !clipMoods(c).includes('change'));
+    const toward = clips.findIndex((c) => poseFrom(c) === pose && poseTo(c) !== pose && starts.has(poseTo(c)) && !clipMoods(c).includes('change') && !goes(c));
     if (!here.length && !wide.length && toward >= 0) return toward; // Aloy raises her hand first
     const from = here.length ? here : wide;
     if (!from.length) post('glass', { choom: p.id, missed: [...p.moveWanted.sources][0] || null, why: 'not in the clothes she has on' });
@@ -1401,7 +1464,7 @@ function nextClip(p, after) {
   // like a camera changing shots (her full-body quiet clips). Only the Choom on the glass, never on
   // the stage, and not twice running. In an outfit, only to that outfit's own full body.
   const cameFromWide = after >= 0 && clips[after] && isFull(poseFrom(clips[after]));
-  if (want === 'idle' && !stage.on && p === portraits[current] && !cameFromWide && Math.random() < FULL_IDLE_CHANCE) {
+  if (want === 'idle' && !stage.on && p === portraits[current] && !cameFromWide && !isPlace(pose) && Math.random() < FULL_IDLE_CHANCE) {
     const wide = clips.map((c, k) => k).filter((k) => poseFrom(clips[k]) === fullOf(pose) && clipMoods(clips[k]).includes('idle'));
     if (wide.length) {
       p.cutFrom = pose;
@@ -1435,8 +1498,9 @@ function nextClip(p, after) {
   const home = p.alive.home || (clips.some((c) => poseFrom(c) === 'relaxed' && clipMoods(c).includes('talk')) ? 'relaxed' : 'main');
   const handMove = (k) => poseTo(clips[k]) !== pose && WAKING_POSES.has(poseTo(clips[k])) && !clipMoods(clips[k]).includes('change');
   if (want === 'talk' && !justMoved) pool.push(...all.filter((k) => handMove(k) && !pool.includes(k)));
-  if (!pool.length) pool = fits.length ? fits : all.filter((k) => k !== after);   // the only fitting clip may repeat
-  if (!pool.length) pool = all.length ? all : [0];
+  const stays = all.filter((k) => !goes(clips[k]));  // never off to a place or the empty glass by chance
+  if (!pool.length) pool = fits.length ? fits : stays.filter((k) => k !== after);   // the only fitting clip may repeat
+  if (!pool.length) pool = stays.length ? stays : [0];
   // The pose's main loop comes up twice as often as each other idle clip.
   const main = all.find((k) => poseTo(clips[k]) === pose && clipMoods(clips[k]).includes('talk'));
   // Quiet clips play like a shuffled deck: one that played lately waits until most of the others
@@ -1506,8 +1570,28 @@ function hurryAlive(p) {
   pl.video.playbackRate = !fits ? (asleep ? 2.5 : 1.4) : waiting ? 1.3 : (pl.baseRate || 1);
 }
 
+// Her loop in her home pose, to start from.
+const homeLoop = (p) => Math.max(0, p.alive.clips.findIndex((c) => poseFrom(c) === (p.alive.home || 'main') &&
+                                                            poseTo(c) === poseFrom(c) && clipMoods(c).includes('talk')));
+// Back from the empty glass: on a quiet turn she walks on (or appears); any other way back (a reply,
+// a button, the group stage) she's straight back in her home loop, no waiting for her to walk on.
+function backOn(p, walk) {
+  const clips = p.alive.clips, a = p.players[p.active];
+  const on = walk ? clips.map((c, k) => k).filter((k) => poseFrom(clips[k]) === 'gone') : [];
+  const k = on.length ? on[Math.floor(Math.random() * on.length)] : homeLoop(p);
+  if (on.length) {
+    if (isFull(poseTo(clips[k]))) p.cutFrom = p.alive.home || 'main';
+    (p.moments ||= new Set()).add(k);
+  }
+  aliveLoad(p, a, k);
+  aliveLoad(p, p.players[1 - p.active], nextClip(p, k));
+}
+const offGlass = (p) => p.players[p.active].clip >= 0 && poseTo(p.alive.clips[p.players[p.active].clip]) === 'gone';
+
 function aliveStart(p) {
   const a = p.players[p.active];
+  if (p.arrive || offGlass(p)) backOn(p, p.arrive && p.alive.clips.some((c) => poseFrom(c) === 'gone'));
+  p.arrive = false;
   if (a.clip < 0) aliveLoad(p, a, 0);
   a.video.play().catch(videoError);
   const b = p.players[1 - p.active];
@@ -1552,6 +1636,16 @@ for (const p of portraits) {
     pl.video.addEventListener('loadeddata', () => { p.videoFails = 0; });
     pl.video.addEventListener('ended', () => {
       if (idx !== p.active) return;
+      // She has walked off for another Choom's turn: the glass is empty, so the turn passes now (the
+      // fade has nothing to fade) and the next one walks on (aliveStart).
+      if (p.leaving != null && wantedMood(p) !== 'idle') p.leaving = null;  // spoken to on her way out: she walks back on
+      if (p.leaving != null && pl.clip >= 0 && poseTo(p.alive.clips[pl.clip]) === 'gone') {
+        const to = p.leaving;
+        p.leaving = null;
+        portraits[to].arrive = true;
+        switchTo(to);
+        return;
+      }
       const next = p.players[1 - idx];
       // The next clip was picked while it loaded; if she has started talking since, swap a laugh or
       // a long breath for a calm one (the last frame, the same picture, holds while it loads). A
@@ -1715,6 +1809,7 @@ function stageEnter(i, members = null) {
   }
   stage.on = true;
   stage.members = members;
+  for (const q of portraits) q.leaving = null;  // (one who walked off earlier is back on: aliveStart below)
   const front = i >= 0 ? i : current;
   // The one in front is the one on the glass (drawn last, over her sisters): Genesis stayed "on the
   // glass" from a back place while Optic stood in front, and was drawn over her.
@@ -1794,6 +1889,7 @@ function updateStage(dt) {
 }
 
 function switchTo(i, force = false) {
+  for (const q of portraits) q.leaving = null;  // a turn passed any other way: nobody walks off for it
   const next = (i + portraits.length) % portraits.length;
   if (next === current && phase !== 'out' && !force) return;
   // On the stage the turn passes without a fade: the two trade places. A Choom who isn't in the room
@@ -1881,6 +1977,10 @@ function onControl(ev) {
   if (typeof ev.picture === 'string') showPicture(ev.picture, ev.kind || 'picture', portraits[current]); // debug: a gallery image id
   if (ev.stage === true) stageEnter(current, Array.isArray(ev.room) ? roomMembers(ev, current) : null); // debug: the group stage (room: names)
   if (ev.stage === false) stageExit();
+  if (ev.quietTurn) { // debug: a quiet turn now, to a Choom by name (or the next one)
+    const k = portraits.findIndex((q) => q.id === String(ev.quietTurn).toLowerCase());
+    if (k !== current) quietTurn(k >= 0 ? k : (current + 1) % portraits.length);
+  }
   if (ev.closeTurn === true) closeTurn('debug');  // debug: as if the end of her turn never arrived
   if (ev.loseContext === true) renderer.getContext().getExtension('WEBGL_lose_context')?.loseContext(); // debug: the reload
   if (typeof ev.clip === 'number' && portraits[current].players) { // debug: jump to a moving relief clip
@@ -2641,8 +2741,10 @@ renderer.setAnimationLoop((now) => {
   bandT += (paused ? 0 : dt) * (1 + 3 * toolBoost);
   updateParticles(paused ? 0 : dt, (1 + 1.5 * listenAmt + 1.4 * thinking + 2.5 * level + 4 * toolBoost) * (1 - 0.7 * sleepAmt));
   shared.time.value = simTime;
-  // Her atom dims while she sleeps and steps aside in a full-body move (it's sized for her close-up).
-  const fullNow = curClip && isFull(poseFrom(curClip)) ? 1 : 0;
+  // Her atom dims while she sleeps and steps aside in a full-body move, at a place or off the glass
+  // (it's sized for her close-up).
+  const wideNow = (pz) => isFull(pz) || isPlace(pz) || pz === 'gone';
+  const fullNow = curClip && (wideNow(poseFrom(curClip)) || wideNow(poseTo(curClip))) ? 1 : 0;
   fullAmt += (fullNow - fullAmt) * Math.min(dt * 5, 1);
   if (orbGroup.visible) updateOrbs(presence * (1 - 0.6 * sleepAmt) * (1 - fullAmt));
   particleMaterial.uniforms.time.value = simTime;
@@ -2720,6 +2822,12 @@ let turnLength = TURN_MS[0];
 setInterval(() => {
   const now = performance.now();
   const here = portraits[current];
+  // Walking off for a quiet turn: it passes once she's gone (the players' ended handler), or after 30 s
+  // if she never got to it.
+  if (here.leaving != null) {
+    if (now - here.leavingAt > 30000) switchTo(here.leaving);
+    return;
+  }
   // Bedtime with a Choom on the glass who can't fall asleep (no sleep clips yet, a new one): the glass
   // goes to one who can, so it dims instead of staying lit and awake all night.
   if (sleepy() && !stage.on && phase === 'idle' && !canSleep(here)) {
@@ -2735,10 +2843,29 @@ setInterval(() => {
   if (mood !== 'idle' || speech.busy || speech.queue.length || heard() || phase !== 'idle' || sleepy() || stage.on || gaze.looking) return;
   const clip = here.alive && here.players[here.active].clip >= 0 ? here.alive.clips[here.players[here.active].clip] : null;
   if ((clip && (basePose(poseFrom(clip)) === 'asleep' || basePose(poseTo(clip)) === 'asleep')) || now - (here.wokeAt || 0) < 3 * 60 * 1000) return;
+  // At her campfire she has the glass until she gets up.
+  if (here.stay) return;
   const others = portraits.map((q, k) => k).filter((k) => k !== current);
   const next = others[Math.floor(Math.random() * others.length)];
   if (now - (portraits[next].lastShown || 0) > 45 * 60 * 1000) portraits[next].greet = true;
   turnLength = TURN_MS[0] + Math.random() * (TURN_MS[1] - TURN_MS[0]);
-  post('quiet-turn', { from: here.name, to: portraits[next].name });
-  switchTo(next);
+  quietTurn(next);
 }, 15000);
+
+// A quiet turn: the one on the glass walks off (or vanishes) and the next walks on (or appears), when
+// she can leave from where she is and the next can come on; else the usual fade. /control
+// {"quietTurn": "genesis"} tries one now.
+function quietTurn(next) {
+  const here = portraits[current];
+  const clip = here.alive && here.players[here.active].clip >= 0 ? here.alive.clips[here.players[here.active].clip] : null;
+  const pose = clip ? poseTo(clip) : 'main';
+  const canLeave = here.alive?.clips.some((c) => poseTo(c) === 'gone' && (poseFrom(c) === pose || poseFrom(c) === fullOf(pose)));
+  const canArrive = portraits[next].alive?.clips.some((c) => poseFrom(c) === 'gone');
+  post('quiet-turn', { from: here.name, to: portraits[next].name, ...(canLeave && canArrive ? { walk: true } : {}) });
+  if (canLeave && canArrive) {
+    here.leaving = next;
+    here.leavingAt = performance.now();
+  } else {
+    switchTo(next);
+  }
+}
