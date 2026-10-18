@@ -2185,6 +2185,7 @@ function updateStage(dt) {
     u.depthScale.value = shared.depthScale.value * 0.8;
     u.flip.value = place.flip || 0;
     u.bottomFade.value = seated ? 0 : 0.5;  // a seat shows her whole figure
+    u.sparkle.value = !seated && q.style === 'motes' ? 1 : 0;  // by the fire Genesis is herself, no motes
   });
 }
 
@@ -3039,6 +3040,7 @@ renderer.setAnimationLoop((now) => {
   portrait.scale.setScalar(0.94 * (1 + (front.s - 1) * sm));
   frontMaterial.uniforms.bottomFade.value = seated ? 0 : 0.22 * sm;
   frontMaterial.uniforms.flip.value = circle.on ? stage.place[current]?.flip || 0 : 0;
+  frontMaterial.uniforms.sparkle.value = !seated && portraits[current].style === 'motes' ? 1 : 0;
   const breath = 1 + Math.sin(simTime * tau / 4.6) * 0.035;
   shared.depthScale.value = baseDepth.value * breath * (0.25 + 0.75 * presence);
   // A camera cut: fade out, hold dark until the new framing's first frame, fade in.
@@ -3088,7 +3090,7 @@ renderer.setAnimationLoop((now) => {
   if (orbGroup.visible) updateOrbs(presence * (1 - 0.6 * sleepAmt) * (1 - fullAmt));
   particleMaterial.uniforms.time.value = simTime;
   updateWeather(paused ? 0 : dt, simTime, presence * (1 - 0.7 * sleepAmt));
-  particleMaterial.uniforms.opacity.value = presence * (0.85 + 0.4 * listenAmt + 0.5 * level) * (1 - 0.6 * (circle.shown || 0));  // the fire's sparks instead
+  particleMaterial.uniforms.opacity.value = presence * (0.85 + 0.4 * listenAmt + 0.5 * level) * (1 - (circle.shown || 0));  // the fire's sparks instead
 
   if (band.visible) {
     const cycle = style === 'scan' ? (bandT % 5) / 5 : 0.5 + 0.5 * Math.sin(bandT * tau / 9);

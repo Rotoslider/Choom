@@ -296,7 +296,9 @@ in `circleOrder` (Aloy, Eve, Optic, Genesis, as in the photo of their camping tr
   to the other look if she has only one.
 - **The fire** is drawn by the glass, not rendered: three crossed planes of rising noise (`FLAME_FRAG`)
   with embers at the foot, a soft pool of light and sparks. Everyone's light flickers with it
-  (`circle.flicker`), the one talking a little brighter.
+  (`circle.flicker`), the one talking a little brighter. The glass's own particles fade out around
+  the fire (its sparks take over), and seats get no mote shimmer: by the fire Genesis is realistic,
+  natural skin in her seat picture, at Donny's wish.
 - **The turn passing:** nobody moves seats. Her sisters play their listening clips turned her way (a
   facing seat has `listen_left` and `listen_right`), and the circle drifts toward her (`circle.pan`).
   Around the fire there's real depth: the speaker isn't drawn over her sisters as on the standing stage.
