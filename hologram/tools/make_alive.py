@@ -150,13 +150,16 @@ def mouth_at(landmarker, bgr, box=None):
 
 def face_box(landmarker, bgr):
     """A square around her face where the landmarker finds it, for a wide shot whose face it misses in
-    the whole frame (Genesis by her campfire): squares half the frame wide, over its top two thirds."""
+    the whole frame (Genesis by her campfire): squares half the frame wide, over its top two thirds,
+    and once one finds her, the square centred on her face. The first square it's found in can cut it
+    off at an edge (her palms-down campfire loop: the top-left square, 37 of 124 frames; centred, 124)."""
     h, w = bgr.shape[:2]
     size = w // 2
     for y0 in range(0, int(h * 0.67) - size // 2, size // 4):
         for x0 in range(0, w - size + 1, size // 4):
-            if mouth_at(landmarker, bgr, (x0, y0, size)):
-                return x0, y0, size
+            m = mouth_at(landmarker, bgr, (x0, y0, size))
+            if m:
+                return face_square([m], bgr)
     return None
 
 

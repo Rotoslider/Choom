@@ -158,7 +158,8 @@ whole pipeline. The steps underneath:
    - The depth is lined up with the main clip and normalized to the main clip's depth range, which
      is kept in `alive.json`.
    - It is then smoothed in time and shaped for the panel.
-   - MediaPipe tracks her mouth.
+   - MediaPipe tracks her mouth. In a wide shot (a place, a seat) where her face is too small to find in
+     the whole frame, it looks again in a square half the frame wide, centred on her face.
 
    It writes `portraits/<id>/alive_<clip>.mp4` (colour, depth and cut-out stacked) and `alive.json`.
    It encodes only clips that are new or changed; a re-encoded clip gets a new name
