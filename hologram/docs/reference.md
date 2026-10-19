@@ -312,9 +312,10 @@ in `circleOrder` (Aloy, Eve, Optic, Genesis, as in the photo of their camping tr
   she has one.
 
 Seat clips: `<seat>` (her loop; she talks over it with lip sync), `<seat>listen` (turned toward the
-middle), `<seat>listen_left` / `listen_right` (a facing seat), and quiet moments `<seat>_<what>`
-(a laugh, a gaze into the light, a smile, a sip from her mug, warming her hands: one hand lets go of
-the mug or notebook and warms palms down over the fire, moving a little, never palms up). They never
+middle), `<seat>listen_left` / `listen_right` (a facing seat), and moments `<seat>_<what>`: quiet
+ones (a gaze into the fire, a smile, a sip from her mug, warming her hands: one hand lets go of the mug
+or notebook and warms palms down over the fire, moving a little, never palms up) and a laugh, which a
+sister plays now and then while another is talking, never in a quiet moment (`seatClip`). They never
 play outside the circle, and aren't moves to ask for. In their seats Aloy and Eve hold enamel mugs and
 Genesis her notebook, as in the photo; Optic sits with her knees drawn up and no heart.
 

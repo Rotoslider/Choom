@@ -523,6 +523,10 @@ class Handler(BaseHTTPRequestHandler):
         name = data.get("queue") or time.strftime("studio_%Y%m%d-%H%M%S")
         if not NAME.match(name):
             return self.fail("bad queue name")
+        # Two renders started in the same second would share a queue (the second overwriting the first's).
+        base, n = name, 2
+        while (WORKSPACE / "queue" / f"{name}_plan.json").exists():
+            name, n = f"{base}-{n}", n + 1
         render.make_queue(name, picks)
         job = jobs.add("render", {"queue": name, "clips": len(picks)}, not_before=float(data.get("at", 0)))
         return self.send_json({"job": job, "ahead": self.ahead(job)})

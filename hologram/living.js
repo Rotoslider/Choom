@@ -1916,11 +1916,16 @@ function seatClip(p, after) {
   const listening = here.filter((k) => /listen/.test(src(k)));
   const loops = here.filter((k) => clipMoods(clips[k]).includes('talk') && !/listen/.test(src(k)));
   const moments = here.filter((k) => !listening.includes(k) && !loops.includes(k));
+  // A laugh is a sister's answer to what the one talking says, now and then; laughing at nothing in a
+  // quiet moment looked odd. Quiet moments are the rest (a gaze into the fire, a smile, a sip, warm hands).
+  const laughs = moments.filter((k) => /laugh/.test(src(k)));
+  const quiet = moments.filter((k) => !laughs.includes(k));
   const want = wantedMood(p);
   if (p === portraits[current]) {
-    if (want === 'talk' || want === 'think' || want === 'listen' || !moments.length || Math.random() < 0.6) return pick(loops.length ? loops : here);
-    return pick(moments);
+    if (want === 'talk' || want === 'think' || want === 'listen' || !quiet.length || Math.random() < 0.6) return pick(loops.length ? loops : here);
+    return pick(quiet);
   }
+  if (mood === 'speaking' && laughs.length && Math.random() < 0.1) return pick(laughs);
   if ((mood === 'speaking' || mood === 'thinking') && listening.length) {
     const me = stage.place[portraits.indexOf(p)], them = stage.place[current];
     let side = me && them ? (them.x < me.x ? 'left' : 'right') : null;  // on the glass
@@ -1929,7 +1934,7 @@ function seatClip(p, after) {
     const either = listening.filter((k) => !/listen_(left|right)/.test(src(k)));
     if (toward.length || either.length) return pick(toward.length ? toward : either);
   }
-  return pick(moments.length && Math.random() < 0.45 ? moments : loops.length ? loops : here);
+  return pick(quiet.length && Math.random() < 0.45 ? quiet : loops.length ? loops : here);
 }
 
 // The fire, drawn by the glass (not a clip): flames from three crossed planes of rising noise, so it
