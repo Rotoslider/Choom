@@ -297,10 +297,12 @@ in `circleOrder` (Aloy, Eve, Optic, Genesis, as in the photo of their camping tr
 - **The fire** is drawn by the glass, not rendered: three crossed planes of rising noise (`FLAME_FRAG`)
   with embers at the foot, a soft pool of light and sparks. Everyone's light flickers with it
   (`circle.flicker`), the one talking a little brighter. The glass's own particles fade out around
-  the fire (its sparks take over), and seats get no mote shimmer: by the fire Genesis is realistic,
-  natural skin in her seat picture, at Donny's wish.
+  the fire (its sparks take over), and seats get no mote shimmer: by the fire they're realistic,
+  at Donny's wish, with natural skin in every seat picture (Genesis without her motes, Optic without her
+  cyan outline or her heart).
 - **The turn passing:** nobody moves seats. Her sisters play their listening clips turned her way (a
-  facing seat has `listen_left` and `listen_right`), and the circle drifts toward her (`circle.pan`).
+  facing seat has `listen_left` and `listen_right`), and the circle drifts a little toward her (`circle.pan`,
+  `CIRCLE_PAN`; the end seats sit in far enough that the far end stays on the glass).
   Around the fire there's real depth: the speaker isn't drawn over her sisters as on the standing stage.
 - **Going in and out** is a camera cut (`circleSet`): everyone fades, sits down (or gets up) and fades
   back in. A Choom joining the room gets a seat; one without seat clips ends the circle (back to the
@@ -310,8 +312,11 @@ in `circleOrder` (Aloy, Eve, Optic, Genesis, as in the photo of their camping tr
   she has one.
 
 Seat clips: `<seat>` (her loop; she talks over it with lip sync), `<seat>listen` (turned toward the
-middle), `<seat>listen_left` / `listen_right` (a facing seat), and quiet moments `<seat>_<what>`. They
-never play outside the circle, and aren't moves to ask for.
+middle), `<seat>listen_left` / `listen_right` (a facing seat), and quiet moments `<seat>_<what>`
+(a laugh, a gaze into the light, a smile, a sip from her mug, warming her hands: one hand lets go of
+the mug or notebook and warms palms down over the fire, moving a little, never palms up). They never
+play outside the circle, and aren't moves to ask for. In their seats Aloy and Eve hold enamel mugs and
+Genesis her notebook, as in the photo; Optic sits with her knees drawn up and no heart.
 
 ## Looks and outfits
 
