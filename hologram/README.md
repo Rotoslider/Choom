@@ -27,7 +27,8 @@ happening in the Choom app: listening, thinking, using tools, changing clothes, 
 - **Group stage.** In a group room, the Chooms in that room share the glass, however many there are.
   The speaker stands in front, and the speakers trade places as the turn passes.
 - **Campfire circle.** After dark, or when one of them asks for the fire, a group room sits around a
-  campfire the glass draws: an open arc like the photo of their camping trip, the fire nearest you.
+  campfire of the glass's own (logs in a small ring of stones, like the one at Genesis's place): an open
+  arc like the photo of their camping trip, the fire nearest you.
   Nobody moves seats; the others turn to whoever is talking and the circle drifts a little her way.
   Everyone in the room needs her seat clips (Glass Studio, Campfire circle).
 

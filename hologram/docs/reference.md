@@ -168,6 +168,18 @@ whole pipeline. The steps underneath:
    no longer listed, their depth and mask caches, and leftover `.part` files. `tools/make_alive_depth.py`
    caches depth alone, so `make_alive.py` can then run on the CPU beside a render.
 
+**The campfire circle's fire** is built the same way, outside the Studio (it isn't a Choom):
+1. Its picture: Klein, from Genesis's campfire picture, "Remove the woman completely, so only the small
+   campfire is left ... a small ring of rounded grey stones around it" (kept in the workspace as
+   `props/fire_pick.png`).
+2. Its loop: one Wan2GP task from the Studio's template (`studio/templates/h3_task.json`) with that
+   picture as start and end, 124 frames: the flames flicker, the embers pulse, a few sparks rise, the
+   logs and stones stay put (`props/fire.mp4` in the workspace).
+3. `~/pinokio/api/forge-neo/app/venv/bin/python tools/make_fire.py FIRE.mp4` crops the panel to
+   everything the fire lights, takes the depth once from the clip's median frame (the flames take the
+   depth of the wood under them, so the fire's shape doesn't wobble) and writes `props/fire.mp4`
+   (colour, depth, a matte that follows the light) and `props/fire.json`. The glass reads them at start.
+
 **Two processes on one GPU.**
 - Depth Anything shares the GPU badly with a Wan2GP queue (more than tenfold slower), so builds
   wait for renders. A rebuild with every depth cached needs no GPU.
@@ -294,8 +306,13 @@ in `circleOrder` (Aloy, Eve, Optic, Genesis, as in the photo of their camping tr
 - **Seats** (`CIRCLE_SEATS`, 2 to 4): the ends nearer and turned in (`circleside`, mirrored on the left
   half by the shader's `flip`), the middle seats further back and facing you (`circle`); each falls back
   to the other look if she has only one.
-- **The fire** is drawn by the glass, not rendered: three crossed planes of rising noise (`FLAME_FRAG`)
-  with embers at the foot, a soft pool of light and sparks. Everyone's light flickers with it
+- **The fire** is the glass's own, not in anyone's clips: a looping clip of a campfire like the one at
+  Genesis's place (split logs over embers in a small ring of stones), built into a relief like the
+  Chooms' clips (`props/fire.mp4` and `props/fire.json`, by `tools/make_fire.py`; the video stays on
+  the NUC) and added to what's behind it, so its flame tips fade into the dark. It sits in front of
+  everyone's boots (`FIRE_AT`, low on the glass and nearer you; at its old height an end seat looked as
+  if she sat on its edge). Without the clip the glass draws flames instead: three crossed planes of
+  rising noise (`FLAME_FRAG`). Either way a soft pool of light and sparks. Everyone's light flickers with it
   (`circle.flicker`), the one talking a little brighter. The glass's own particles fade out around
   the fire (its sparks take over), and seats get no mote shimmer: by the fire they're realistic,
   at Donny's wish, with natural skin in every seat picture (Genesis without her motes, Optic without her

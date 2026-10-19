@@ -30,3 +30,6 @@ portraits/*/wishes_done.json
 portraits/*/*.studio-part
 # This install's own hours, temperatures and visit lengths (glass-settings.example.json)
 glass-settings.json
+# The campfire circle's fire clip (tools/make_fire.py) stays on the NUC like the Chooms' videos; fire.json is tracked
+props/*.mp4
+props/*.part

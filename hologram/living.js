@@ -1807,7 +1807,9 @@ const CIRCLE_SEATS = {
       { x: 0.2, y: 0.08, z: -0.12, s: 0.42 }, { x: 0.41, y: -0.2, z: 0.04, s: 0.46, end: true }],
 };
 const CIRCLE_PAN = 0.08;  // how far the circle drifts toward the one talking, per unit of her seat's x
-const FIRE_AT = { x: 0, y: -0.6, z: 0.1 };
+// The fire's foot: in front of everyone's boots, low on the glass and nearer you (at y -0.6 an end seat's
+// boots reached into it, as if she sat on its edge).
+const FIRE_AT = { x: 0, y: -0.84, z: 0.22 };
 // Who sits where, left to right on the glass: as in the photo (Aloy, Eve, Genesis), Optic between Eve and
 // Genesis when all four sit. A Choom not listed sits after them.
 const CIRCLE_ORDER = setting('circleOrder', ['aloy', 'eve', 'optic', 'genesis']);
@@ -1938,9 +1940,9 @@ function seatClip(p, after) {
   return pick(quiet.length && Math.random() < 0.45 ? quiet : loops.length ? loops : here);
 }
 
-// The fire, drawn by the glass (not a clip): flames from three crossed planes of rising noise, so it
-// has body from every view, a warm pool of light under it, and sparks drifting up. Everyone around
-// it flickers with it (circle.flicker).
+// The fire: its clip (below), or until that's built, flames the glass draws from three crossed planes
+// of rising noise, so they have body from every view; either way a warm pool of light under it and
+// sparks drifting up. Everyone around it flickers with it (circle.flicker).
 const FLAME_FRAG = /* glsl */ `
     uniform float time, opacity, seed, flicker;
     varying vec2 vUv;
@@ -1984,18 +1986,19 @@ const POOL_FRAG = /* glsl */ `
       vec2 d = (vUv - 0.5) * 2.0;  // -1..1 across the plane: nothing left at its edges
       float r = dot(d, d);
       float glow = exp(-3.5 * r) * (1.0 - smoothstep(0.55, 1.0, r));
-      gl_FragColor = vec4(vec3(1.0, 0.45, 0.12) * glow * 0.33 * opacity * flicker, 1.0);
+      gl_FragColor = vec4(vec3(1.0, 0.45, 0.12) * glow * 0.24 * opacity * flicker, 1.0);
     }`;
 const PLAIN_VERT = /* glsl */ `
     varying vec2 vUv;
     void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
-const fire = { group: new THREE.Group(), flames: [], mats: [] };
+const fire = { group: new THREE.Group(), flames: [], mats: [], video: null };
 {
   const additive = { blending: THREE.AdditiveBlending, transparent: true, depthWrite: false };
   const pool = new THREE.ShaderMaterial({ uniforms: { opacity: { value: 0 }, flicker: { value: 1 } },
                                           vertexShader: PLAIN_VERT, fragmentShader: POOL_FRAG, ...additive });
-  const poolMesh = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 0.42), pool);
-  poolMesh.position.set(0, 0.04, -0.06);
+  // The ground it lights, around and just behind it (wider, it read as a flat orange disc under everyone).
+  const poolMesh = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 0.3), pool);
+  poolMesh.position.set(0, 0.06, -0.06);
   fire.group.add(poolMesh);
   fire.mats.push(pool);
   for (let i = 0; i < 3; i++) {
@@ -2005,6 +2008,7 @@ const fire = { group: new THREE.Group(), flames: [], mats: [] };
     flame.position.y = 0.16;
     flame.rotation.y = (i * Math.PI) / 3;
     fire.group.add(flame);
+    fire.flames.push(flame);
     fire.mats.push(m);
   }
   // Sparks: each rises on its own cycle, swaying, and fades out as it goes (all in the shader).
@@ -2048,11 +2052,72 @@ const fire = { group: new THREE.Group(), flames: [], mats: [] };
   scene.add(fire.group);
 }
 
+// The fire itself, once it's been built (tools/make_fire.py): a looping clip of a campfire like the one
+// at Genesis's place, split logs over embers in a small ring of stones, as a relief like the Chooms'
+// clips. It glows (added to what's behind it), so flame tips and sparks fade into the dark instead of
+// ending at a cut-out's edge. Until it's built, the flames drawn above.
+const FIRE_WIDTH = 0.42;  // the clip's panel across, before the group's scale: its stone ring a little narrower
+const FIRE_VERT = /* glsl */ `
+    uniform sampler2D map;
+    uniform float focus, depthScale;
+    varying vec2 vUv;
+    ${PACKED_GLSL}
+    void main() {
+      vUv = uv;
+      vec3 p = position;
+      p.z = (depthAt(map, uv) - focus) * depthScale;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+    }`;
+const FIRE_FRAG = /* glsl */ `
+    uniform sampler2D map;
+    uniform float opacity;
+    varying vec2 vUv;
+    ${PACKED_GLSL}
+    void main() {
+      vec3 c = texture2D(map, colorUv(vUv)).rgb;
+      c = mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c));  // video frames are raw sRGB
+      gl_FragColor = vec4(c * maskAt(map, vUv) * opacity, 1.0);
+    }`;
+(async () => {
+  let meta;
+  try {
+    meta = await getJSON('/props/fire.json');
+  } catch {
+    return;  // not built: the drawn flames
+  }
+  const video = document.createElement('video');
+  Object.assign(video, { muted: true, playsInline: true, loop: true, preload: 'auto', src: '/props/fire.mp4' });
+  const texture = new THREE.VideoTexture(video);
+  texture.colorSpace = THREE.NoColorSpace;  // color, depth and matte share it; the shader decodes each
+  texture.generateMipmaps = false;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  const [w, h] = meta.texSize;
+  const height = (FIRE_WIDTH * h) / w;
+  const material = new THREE.ShaderMaterial({
+    uniforms: { map: { value: texture }, packed: { value: 1 }, focus: { value: meta.focus }, depthScale: { value: 0.35 },
+                opacity: { value: 0 } },
+    vertexShader: FIRE_VERT, fragmentShader: FIRE_FRAG,
+    blending: THREE.AdditiveBlending, transparent: true, depthWrite: false,
+  });
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(FIRE_WIDTH, height, 96, Math.round((96 * h) / w)), material);
+  mesh.frustumCulled = false;
+  mesh.position.y = height / 2 - 0.05;  // the foot of its stones on the ground
+  fire.group.add(mesh);
+  fire.mats.push(material);
+  fire.video = video;
+  for (const flame of fire.flames) flame.visible = false;
+})();
+
 // Every frame: the fire burns while the circle is up, and the circle drifts toward whoever is talking.
 function updateFire(dt) {
   const shown = circle.on ? ease(stage.mix) : 0;
   circle.shown = (circle.shown || 0) + (shown - (circle.shown || 0)) * Math.min(dt * 3, 1);
   fire.group.visible = circle.shown > 0.01;
+  if (fire.video && fire.video.paused === fire.group.visible) {  // its clip plays only while it burns
+    if (fire.group.visible) fire.video.play().catch(videoError);
+    else fire.video.pause();
+  }
   if (!fire.group.visible) return;
   const t = simTime;
   circle.flicker = 1 + 0.06 * Math.sin(t * 7.3) + 0.04 * Math.sin(t * 13.1 + 1.3) + 0.05 * Math.sin(t * 3.1 + Math.sin(t * 1.7));
