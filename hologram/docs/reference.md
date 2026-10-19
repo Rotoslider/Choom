@@ -586,11 +586,13 @@ reads exactly that value:
   movement and loses someone lying still. On the first night the bed zone blinked on for 15 to 90 s
   whenever Donny moved and read empty in between, sometimes for an hour, and a moving sleeper showed up
   as short ghost readings in the office and kitchen zones too.
-  - It counts once it's the last place you were seen, for its `after`, with no other zone holding you
-    45 s or more since. The other zones count together for this: walking out the east door on Oct 18
-    the office and kitchen read Donny by turns for over a minute, neither for 45 s on its own, and a
-    single blip in the bed on the way out counted 3 minutes later with him outside (his phone still
-    on the Wi-Fi). Ghosts at night are single blips between bed readings, so they don't add up.
+  - It counts once it's the last place you were seen, for its `after`, with no other zone reading you
+    since, even for a moment. A brush of the bed reads 15 to 30 s, and then the office and kitchen read
+    you only in short bits, since the radar loses you standing or sitting still. Walking out the east
+    door on Oct 18, one blip in the bed counted 3 minutes later with Donny outside (his phone still on
+    the Wi-Fi). On Oct 19 afternoon, getting up from the desk chair and tossing a backpack on the bed
+    counted twice with him up and about. Getting back into bed at night is one blip and then nothing,
+    so that still counts.
   - It ends only when you settle in another zone, or when home ends. Rolling over, lying still, ghost
     readings and a short trip out of bed leave you in bed.
 - **Donny's timings fit his room.** The office chair touches the bed, so bed needs 3 minutes; a brush of
@@ -598,7 +600,9 @@ reads exactly that value:
   count. Kitchen needs 3 minutes, so passing through it to the east door isn't "in the kitchen". Replayed
   against the first night's history: in bed 4 minutes after lying down, held until 7:07 when he'd been
   making coffee for 3 minutes, at the desk at 7:14. Against Oct 18's morning: out the door at 9:17 with
-  no bed, back in through the kitchen at 12:28.
+  no bed, back in through the kitchen at 12:28. Against the second night: in bed at 23:14, held until 6:52;
+  started fresh in the night, in bed 3 minutes after his next blip there. Oct 19's afternoon no longer
+  puts him in bed.
 - **An entity that's gone** (renamed or removed in Home Assistant) leaves only its role unknown; the
   others go on. `/status` `presence_state` names it ("not found in Home Assistant").
 - **What each role does.**

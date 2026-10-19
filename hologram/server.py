@@ -840,14 +840,12 @@ class Presence:
       in another zone (it starts to count) ends it at once.
     - A zone that "stays" (the bed) is different, because a tracking radar loses someone lying still:
       the bed zone blinked on for 15 to 90 s whenever he moved and read empty in between, all night.
-      It counts once it has been the last place he was seen for "after" seconds (no other zone held
-      him ZONE_SOLID_S since, on its own or the others by turns), and it ends only when he settles in
-      another zone or leaves home."""
+      It counts once it has been the last place he was seen for "after" seconds (no other zone read
+      him since), and it ends only when he settles in another zone or leaves home."""
 
     def __init__(self):
         self.shown, self.on_since, self.last_on, self.absent_since = {}, {}, {}, {}
         self.place, self.place_at = None, 0.0  # the last place he was seen, and since when
-        self.elsewhere_since, self.elsewhere_last = None, 0.0  # the zones that don't stay, together
 
     def update(self, t, seen, entities):
         """seen: role -> True/False/None (unknown) as read at time t. Returns what to tell the page."""
@@ -865,22 +863,15 @@ class Presence:
         # A stretch runs from its first reading to its last (a gap only counts once it's bridged).
         stretch = lambda role: self.last_on[role] - self.on_since[role] if role in self.on_since else -1.0
         solid = [role for role in zones if role not in stays and stretch(role) >= ZONE_SOLID_S]
-        # The other zones together, until the bed reads him again: walking out the door the office and
-        # the kitchen read him by turns for over a minute, neither for ZONE_SOLID_S on its own, so one
-        # radar blip in the bed on the way became the last place he was seen and counted 3 minutes
-        # later, with him outside (2026-10-18, 9:16 am). Ghosts are single blips, between bed readings.
+        # The bed is the last place only until another zone reads him, even for a moment. A brush of the
+        # bed (walking out past it; up from the desk chair, which touches it; tossing a backpack on it)
+        # reads 15-30 s, and then the office and kitchen read him only in short bits, since standing or
+        # sitting still the radar loses him: the bed counted with him outside (2026-10-18, 9:16 am) and
+        # with him up and about (2026-10-19, 4:17 and 4:26 pm). Back into bed at night is one blip and
+        # then nothing (00:49, 02:50), and once the bed counts, ghosts elsewhere don't end it.
         others = [role for role in zones if role not in stays]
-        if any(seen.get(role) for role in stays):
-            self.elsewhere_since = None
-        elif any(seen.get(role) for role in others):
-            self.elsewhere_since = self.elsewhere_since or t
-            self.elsewhere_last = t
-        elif self.elsewhere_since and t - self.elsewhere_last >= ZONE_GAP_S:
-            self.elsewhere_since = None
-        elsewhere = bool(self.elsewhere_since) and self.elsewhere_last - self.elsewhere_since >= ZONE_SOLID_S
         place = (max(solid, key=lambda role: self.on_since[role]) if solid
-                 else max(others, key=lambda role: self.last_on.get(role, 0.0)) if elsewhere
-                 else next((role for role in stays if seen.get(role)), self.place))
+                 else next((role for role in stays + others if seen.get(role)), self.place))
         if place != self.place:
             self.place, self.place_at = place, t
         now = {}
