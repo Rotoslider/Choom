@@ -85,6 +85,10 @@ export function clearGuiActivity(choomName: string) {
 // Maximum agentic loop iterations
 export const MAX_ITERATIONS = 50;
 export const HEARTBEAT_DEFAULT_MAX_ITERATIONS = 15;
+// The most a turn nobody asked for gets (a heartbeat, a reply in a group room), whatever her directive
+// or the project says: Aloy's directive of 100 let one 07:15 heartbeat run 95 rounds of cameras and
+// vision on the cloud model, and the sisters' room replies ran as long (2026-10-19, ~15M tokens by 8 am).
+export const UNPROMPTED_MAX_ITERATIONS = 20;
 
 // Parse the <!-- max_iterations: N --> directive from a Choom's system prompt.
 // Returns 0 when absent (caller falls back to project/default caps).
@@ -98,6 +102,7 @@ export type IterationCapSource =
   | 'choom-directive'
   | 'project'
   | 'heartbeat-default'
+  | 'unprompted-cap'
   | 'global-default';
 
 export interface ResolvedIterationCap {
@@ -124,12 +129,18 @@ export interface ResolvedIterationCap {
  * lower-priority source — before this resolver a project could silently
  * LOOSEN a Choom's directive, and could never TIGHTEN the global default,
  * so "limit by project" simply didn't work below 50.
+ *
+ * Except on turns nobody asked for (heartbeats, group-room replies): there a
+ * directive or project above UNPROMPTED_MAX_ITERATIONS is held to it (a lower
+ * one still applies), and a group reply with neither gets it too. A request
+ * override (the scheduler's goal reviews) is explicit and still wins.
  */
 export function resolveMaxIterations(opts: {
   maxIterationsOverride?: unknown;
   choomMaxIterations?: number;
   projectMaxIterations?: number | null;
   isHeartbeat?: boolean;
+  isGroupTurn?: boolean;
 }): ResolvedIterationCap {
   const override = typeof opts.maxIterationsOverride === 'number' && Number.isFinite(opts.maxIterationsOverride) && opts.maxIterationsOverride > 0
     ? opts.maxIterationsOverride : 0;
@@ -144,6 +155,14 @@ export function resolveMaxIterations(opts: {
     if (project > 0) shadowed.push('project');
     return { maxIterations: override, source: 'request-override', locked: true, shadowed };
   }
+  const unprompted = !!(opts.isHeartbeat || opts.isGroupTurn);
+  const explicit = directive || project;
+  if (unprompted && explicit > UNPROMPTED_MAX_ITERATIONS) {
+    const shadowed: IterationCapSource[] = [];
+    if (directive > 0) shadowed.push('choom-directive');
+    if (project > 0) shadowed.push('project');
+    return { maxIterations: UNPROMPTED_MAX_ITERATIONS, source: 'unprompted-cap', locked: true, shadowed };
+  }
   if (directive > 0) {
     return {
       maxIterations: directive, source: 'choom-directive', locked: true,
@@ -155,6 +174,9 @@ export function resolveMaxIterations(opts: {
   }
   if (opts.isHeartbeat) {
     return { maxIterations: HEARTBEAT_DEFAULT_MAX_ITERATIONS, source: 'heartbeat-default', locked: false, shadowed: [] };
+  }
+  if (opts.isGroupTurn) {
+    return { maxIterations: UNPROMPTED_MAX_ITERATIONS, source: 'unprompted-cap', locked: false, shadowed: [] };
   }
   return { maxIterations: MAX_ITERATIONS, source: 'global-default', locked: false, shadowed: [] };
 }

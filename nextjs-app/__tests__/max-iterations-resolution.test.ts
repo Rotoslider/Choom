@@ -15,6 +15,7 @@
 import {
   MAX_ITERATIONS,
   HEARTBEAT_DEFAULT_MAX_ITERATIONS,
+  UNPROMPTED_MAX_ITERATIONS,
   parseChoomMaxIterations,
   resolveMaxIterations,
 } from '../lib/chat-shared';
@@ -61,11 +62,52 @@ describe('resolveMaxIterations precedence', () => {
     expect(r.locked).toBe(false);
   });
 
-  it('a Choom directive overrides defaults and heartbeat tightening', () => {
-    const r = resolveMaxIterations({ choomMaxIterations: 100, isHeartbeat: true });
+  it('a Choom directive overrides the defaults in a chat', () => {
+    const r = resolveMaxIterations({ choomMaxIterations: 100 });
     expect(r.maxIterations).toBe(100);
     expect(r.source).toBe('choom-directive');
     expect(r.locked).toBe(true);
+  });
+
+  // 2026-10-19: Aloy's directive of 100 let a heartbeat run 95 rounds on the cloud model, and the
+  // sisters' room replies as long — about 15M tokens by 8 am. Turns nobody asked for are held to 20.
+  it('a heartbeat holds a big directive to the unprompted cap', () => {
+    const r = resolveMaxIterations({ choomMaxIterations: 100, isHeartbeat: true });
+    expect(r.maxIterations).toBe(UNPROMPTED_MAX_ITERATIONS); // 20
+    expect(r.source).toBe('unprompted-cap');
+    expect(r.locked).toBe(true);
+    expect(r.shadowed).toEqual(['choom-directive']);
+  });
+
+  it('a group-room reply holds a big directive or project to the unprompted cap', () => {
+    expect(resolveMaxIterations({ choomMaxIterations: 100, isGroupTurn: true }).maxIterations).toBe(UNPROMPTED_MAX_ITERATIONS);
+    const r = resolveMaxIterations({ projectMaxIterations: 100, isGroupTurn: true });
+    expect(r.maxIterations).toBe(UNPROMPTED_MAX_ITERATIONS);
+    expect(r.shadowed).toEqual(['project']);
+  });
+
+  it('a heartbeat with a project named in its note is held too (Aloy and choom_commons)', () => {
+    const r = resolveMaxIterations({ choomMaxIterations: 100, projectMaxIterations: 100, isHeartbeat: true });
+    expect(r.maxIterations).toBe(UNPROMPTED_MAX_ITERATIONS);
+    expect(r.shadowed).toEqual(['choom-directive', 'project']);
+  });
+
+  it('a directive under the cap still applies to unprompted turns', () => {
+    const r = resolveMaxIterations({ choomMaxIterations: 12, isHeartbeat: true });
+    expect(r.maxIterations).toBe(12);
+    expect(r.source).toBe('choom-directive');
+    expect(resolveMaxIterations({ choomMaxIterations: 12, projectMaxIterations: 100, isGroupTurn: true }).maxIterations).toBe(12);
+  });
+
+  it('a group-room reply with no directive gets the unprompted cap, unlocked', () => {
+    const r = resolveMaxIterations({ isGroupTurn: true });
+    expect(r.maxIterations).toBe(UNPROMPTED_MAX_ITERATIONS);
+    expect(r.source).toBe('unprompted-cap');
+    expect(r.locked).toBe(false);
+  });
+
+  it('a request override still beats the unprompted cap', () => {
+    expect(resolveMaxIterations({ maxIterationsOverride: 30, choomMaxIterations: 100, isHeartbeat: true }).maxIterations).toBe(30);
   });
 
   it('BUG 1 regression: a project cap TIGHTENS the default (10 < 50 applies)', () => {

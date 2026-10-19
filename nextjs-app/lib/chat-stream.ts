@@ -131,7 +131,8 @@ export async function runChatTurn(params: ChatTurnParams): Promise<void> {
         // Iteration-cap resolution — single source of truth in resolveMaxIterations
         // (chat-shared). Precedence: request override > <!-- max_iterations: N -->
         // directive > project .choom-project.json metadata > defaults (heartbeat
-        // 15, global 50). An explicit setting LOCKS the cap: neither the post-plan
+        // 15, global 50); a heartbeat or group reply is held to 20 whatever the
+        // directive or project says. An explicit setting LOCKS the cap: neither the post-plan
         // reduction nor mid-turn project re-detection inside the agentic loop may
         // move it. The old inline ladder let a project silently LOOSEN a Choom's
         // directive and never let one TIGHTEN the default below 50.
@@ -140,6 +141,7 @@ export async function runChatTurn(params: ChatTurnParams): Promise<void> {
           choomMaxIterations,
           projectMaxIterations: detectedProject?.metadata?.maxIterations,
           isHeartbeat,
+          isGroupTurn: !!isGroupTurn,
         });
         let maxIterations = iterationCap.maxIterations;
         // iterationCapLocked doubles as "don't re-derive the cap mid-turn".

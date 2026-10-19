@@ -770,7 +770,7 @@ export async function POST(request: NextRequest) {
       // Tell speakers the SAME budget the loop will enforce (resolveMaxIterations
       // precedence) instead of a hardcoded global — a speaker with a directive of
       // e.g. 12 was previously told "50 rounds" and ran out mid-sentence.
-      const groupRounds = resolveMaxIterations({ maxIterationsOverride, choomMaxIterations }).maxIterations;
+      const groupRounds = resolveMaxIterations({ maxIterationsOverride, choomMaxIterations, isGroupTurn: true }).maxIterations;
       currentMessages[0].content += `\nYou have ${groupRounds} thinking rounds available. Each round can include multiple parallel tool calls — calling 5 tools in one round only uses 1 round, not 5.`;
     } else try {
       const projectService = new ProjectService(WORKSPACE_ROOT);
@@ -839,6 +839,7 @@ export async function POST(request: NextRequest) {
           maxIterationsOverride,
           choomMaxIterations,
           projectMaxIterations: detectedProject.metadata.maxIterations,
+          isHeartbeat,
         }).maxIterations;
         if (isAssignedFallback) {
           // Softer hint: this is the Choom's default workspace, not a hard lock.
@@ -861,7 +862,7 @@ export async function POST(request: NextRequest) {
         // into unrelated chats.
         const selfiesFolder = `selfies_${choom.name.toLowerCase()}`;
         const defaultRounds = resolveMaxIterations({ maxIterationsOverride, choomMaxIterations, isHeartbeat }).maxIterations;
-        // Same rule as everywhere else: advertise the budget resolveMaxIterations will actually enforce (heartbeat turns cap at 15, directives win).
+        // Same rule as everywhere else: advertise the budget resolveMaxIterations will actually enforce (heartbeat turns: 15 by default, a directive or project held to 20).
         currentMessages[0].content += `\n\n## YOUR WORKSPACE\nYour default workspace is \`${selfiesFolder}/\` — your own personal folder. When you save a file without a project being named, save it inside \`${selfiesFolder}/\` (e.g. \`${selfiesFolder}/notes/today.md\`). Don't spin up a new top-level folder for one-off saves — those belong in \`${selfiesFolder}/\`. But if what you're working on genuinely grows into its own body of work, use your judgment and create a dedicated project for it with \`workspace_create_project\` (the user can also name or pick one from the chat's project menu). One-off note → selfies; a real project worth keeping together → its own folder.\n\n**Shared folder — \`choom_commons/\`** (NOT inside your selfies folder): where ALL cross-Choom communication happens — letters, notes, delegation handoffs, shared drafts, research. Each sibling has an INBOX there — ${inboxList} — and it is hers: leave things FOR her with \`leave_for_sister\`, read your own with \`check_inbox\` when you wake up. Do not use an inbox as a working folder. Shared drafts go in \`choom_commons/drafts/\`. You may NEVER write into another Choom's \`selfies_*/\` folder. Your \`growth_journal.md\` lives in \`${selfiesFolder}/growth_journal.md\`.\n\nYou have ${defaultRounds} thinking rounds available. Each round can include multiple parallel tool calls — calling 5 tools in one round only uses 1 round, not 5.`;
         console.log(`   🪪 ${choom.name} — no active project; default workspace ${selfiesFolder}/`);
       }
