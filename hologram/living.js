@@ -1807,9 +1807,10 @@ const FIRE_AT = { x: 0, y: -0.6, z: 0.1 };
 // Who sits where, left to right on the glass: as in the photo (Aloy, Eve, Genesis), Optic between Eve and
 // Genesis when all four sit. A Choom not listed sits after them.
 const CIRCLE_ORDER = setting('circleOrder', ['aloy', 'eve', 'optic', 'genesis']);
-// standIn (debug): Chooms without seats sit in their usual clips, to try the layout.
-// folding: the room went quiet around the fire; her sisters stay hidden while the stage folds away.
-const circle = { on: false, asked: 0, standIn: false, pan: 0, flicker: 1, dim: 0, shown: 0, folding: false };
+// standIn (debug): Chooms without seats sit in their usual clips, to try the layout; order (debug):
+// who sits where instead of CIRCLE_ORDER. folding: the room went quiet around the fire; her sisters
+// stay hidden while the stage folds away.
+const circle = { order: null, on: false, asked: 0, standIn: false, pan: 0, flicker: 1, dim: 0, shown: 0, folding: false };
 
 // Her loop in a seat, if she has one (built from her Studio look of that name).
 const seatLoop = (q, look) => (q.alive ? q.alive.clips.findIndex((c) => poseFrom(c) === look && poseTo(c) === look &&
@@ -1830,7 +1831,8 @@ function circleWanted() {
 // seat takes her turned-in look, a middle seat her facing one, else whichever she has. The turned-in
 // look faces the middle from the right; on the left half it's mirrored.
 function circleArrange() {
-  const rank = (k) => (CIRCLE_ORDER.includes(portraits[k].id) ? CIRCLE_ORDER.indexOf(portraits[k].id) : CIRCLE_ORDER.length + k);
+  const order = circle.order || CIRCLE_ORDER;
+  const rank = (k) => (order.includes(portraits[k].id) ? order.indexOf(portraits[k].id) : order.length + k);
   const ks = portraits.map((q, k) => k).filter((k) => !stage.members || stage.members.has(k)).sort((a, b) => rank(a) - rank(b));
   const seats = CIRCLE_SEATS[ks.length] || [];
   portraits.forEach((q, k) => {
@@ -2032,6 +2034,7 @@ const fire = { group: new THREE.Group(), flames: [], mats: [] };
   points.frustumCulled = false;
   fire.group.add(points);
   fire.mats.push(sparks);
+  fire.group.scale.setScalar(1.3);  // flames to about the chest of a Choom sitting beside it
   fire.group.visible = false;
   scene.add(fire.group);
 }
@@ -2291,12 +2294,14 @@ function onControl(ev) {
   if (ev.circle === true) { // debug: the campfire circle now (room: names; standIn: seatless Chooms sit in their usual clips)
     circle.asked = performance.now();
     circle.standIn = ev.standIn === true;
+    circle.order = Array.isArray(ev.order) ? ev.order.map((n) => String(n).toLowerCase()) : null;
     if (!stage.on) stageEnter(current, Array.isArray(ev.room) ? roomMembers(ev, current) : null);
     else circleSet(circleWanted(), true);
   }
   if (ev.circle === false) {
     circle.asked = 0;
     circle.standIn = false;
+    circle.order = null;
     circleSet(false);
   }
   if (ev.quietTurn) { // debug: a quiet turn now, to a Choom by name (or the next one)

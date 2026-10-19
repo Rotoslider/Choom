@@ -841,7 +841,7 @@ Each wake and blank is logged as `screens`.
 | `{"clip": 5}` | jump to a clip of the Choom on the glass |
 | `{"stage": true, "room": ["Aloy", "Eve"]}` / `{"stage": false}` | the group stage (all four without `room`) |
 | `{"quietTurn": "genesis"}` | a screensaver turn now, to that Choom (walking off and on if both can) |
-| `{"circle": true, "room": ["aloy", "eve", "genesis"], "standIn": true}` / `{"circle": false}` | the campfire circle now (`standIn`: Chooms without seats sit in their usual clips, to try the layout) |
+| `{"circle": true, "room": ["aloy", "eve", "genesis"], "standIn": true, "order": ["genesis", "eve", "aloy"]}` / `{"circle": false}` | the campfire circle now (`standIn`: Chooms without seats sit in their usual clips, to try the layout; `order`: who sits where, left to right, instead of `circleOrder`) |
 | `{"sleep": true}`, `{"hour": 22}` | doze now; pretend it's 10 pm (`null` to stop) |
 | `{"weather": {"wind": 25, "temperature": 40}}` | pretend weather (replaced by the next real reading) |
 | `{"presence": {"bed": true}}` | pretend presence (`null` clears a role) |
