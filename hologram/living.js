@@ -1798,12 +1798,13 @@ const CIRCLE_ASKED_MS = 60 * 60 * 1000;          // one of them asked for the fi
 // Seats by how many sit, left to right on the glass (end seats are turned in; see circleArrange).
 // The glass shows about x ±0.74; a seated figure reaches out about 0.6 of her seat's scale either side
 // of its x (her boots, her back), so the ends sit in far enough that the drift (CIRCLE_PAN) keeps them on.
+// The two middle seats of four sit at the same depth, so they're kept apart: overlapping, their knees would fight.
 const CIRCLE_SEATS = {
   2: [{ x: -0.33, y: -0.12, z: 0, s: 0.6, end: true }, { x: 0.33, y: -0.12, z: 0, s: 0.6, end: true }],
   3: [{ x: -0.38, y: -0.16, z: 0.03, s: 0.52, end: true }, { x: 0, y: 0.08, z: -0.1, s: 0.48 },
       { x: 0.38, y: -0.16, z: 0.03, s: 0.52, end: true }],
-  4: [{ x: -0.41, y: -0.2, z: 0.04, s: 0.46, end: true }, { x: -0.17, y: 0.08, z: -0.12, s: 0.42 },
-      { x: 0.17, y: 0.08, z: -0.12, s: 0.42 }, { x: 0.41, y: -0.2, z: 0.04, s: 0.46, end: true }],
+  4: [{ x: -0.41, y: -0.2, z: 0.04, s: 0.46, end: true }, { x: -0.2, y: 0.08, z: -0.12, s: 0.42 },
+      { x: 0.2, y: 0.08, z: -0.12, s: 0.42 }, { x: 0.41, y: -0.2, z: 0.04, s: 0.46, end: true }],
 };
 const CIRCLE_PAN = 0.08;  // how far the circle drifts toward the one talking, per unit of her seat's x
 const FIRE_AT = { x: 0, y: -0.6, z: 0.1 };
