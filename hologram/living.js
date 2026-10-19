@@ -1796,13 +1796,16 @@ function bindStageSlot(j) {
 const CIRCLE_FROM = setting('circleFrom', 19);    // after dark (local hour), until morningFrom
 const CIRCLE_ASKED_MS = 60 * 60 * 1000;          // one of them asked for the fire: for the next hour
 // Seats by how many sit, left to right on the glass (end seats are turned in; see circleArrange).
+// The glass shows about x ±0.74; a seated figure reaches out about 0.6 of her seat's scale either side
+// of its x (her boots, her back), so the ends sit in far enough that the drift (CIRCLE_PAN) keeps them on.
 const CIRCLE_SEATS = {
-  2: [{ x: -0.36, y: -0.12, z: 0, s: 0.62, end: true }, { x: 0.36, y: -0.12, z: 0, s: 0.62, end: true }],
-  3: [{ x: -0.44, y: -0.16, z: 0.03, s: 0.54, end: true }, { x: 0, y: 0.08, z: -0.1, s: 0.48 },
-      { x: 0.44, y: -0.16, z: 0.03, s: 0.54, end: true }],
-  4: [{ x: -0.5, y: -0.2, z: 0.04, s: 0.5, end: true }, { x: -0.18, y: 0.08, z: -0.1, s: 0.44 },
-      { x: 0.18, y: 0.08, z: -0.1, s: 0.44 }, { x: 0.5, y: -0.2, z: 0.04, s: 0.5, end: true }],
+  2: [{ x: -0.33, y: -0.12, z: 0, s: 0.6, end: true }, { x: 0.33, y: -0.12, z: 0, s: 0.6, end: true }],
+  3: [{ x: -0.38, y: -0.16, z: 0.03, s: 0.52, end: true }, { x: 0, y: 0.08, z: -0.1, s: 0.48 },
+      { x: 0.38, y: -0.16, z: 0.03, s: 0.52, end: true }],
+  4: [{ x: -0.41, y: -0.2, z: 0.04, s: 0.46, end: true }, { x: -0.17, y: 0.08, z: -0.12, s: 0.42 },
+      { x: 0.17, y: 0.08, z: -0.12, s: 0.42 }, { x: 0.41, y: -0.2, z: 0.04, s: 0.46, end: true }],
 };
+const CIRCLE_PAN = 0.08;  // how far the circle drifts toward the one talking, per unit of her seat's x
 const FIRE_AT = { x: 0, y: -0.6, z: 0.1 };
 // Who sits where, left to right on the glass: as in the photo (Aloy, Eve, Genesis), Optic between Eve and
 // Genesis when all four sit. A Choom not listed sits after them.
@@ -2048,7 +2051,7 @@ function updateFire(dt) {
   const t = simTime;
   circle.flicker = 1 + 0.06 * Math.sin(t * 7.3) + 0.04 * Math.sin(t * 13.1 + 1.3) + 0.05 * Math.sin(t * 3.1 + Math.sin(t * 1.7));
   const seat = stage.place[current];
-  const target = circle.on && seat ? -seat.x * 0.25 : 0;
+  const target = circle.on && seat ? -seat.x * CIRCLE_PAN : 0;
   circle.pan += (target - circle.pan) * Math.min(dt * 0.8, 1);
   fire.group.position.set(FIRE_AT.x + circle.pan, FIRE_AT.y, FIRE_AT.z);
   for (const m of fire.mats) {
