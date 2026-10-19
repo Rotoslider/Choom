@@ -160,14 +160,30 @@ def face_box(landmarker, bgr):
     return None
 
 
+def face_square(mouths, bgr):
+    """A square half the frame wide around her face, from the first frame it was found in."""
+    m = next((m for m in mouths if m is not None), None)
+    if m is None:
+        return None
+    h, w = bgr.shape[:2]
+    size = w // 2
+    cx, cy = m[0] * w, (1 - m[1]) * h
+    return int(min(max(cx - size / 2, 0), w - size)), int(min(max(cy - size * 0.55, 0), h - size)), size
+
+
 def mouth_track(landmarker, frames, required=True):
     """Her mouth on every frame (texture UV, v up, and texture pixels), gaps filled and lightly smoothed.
-    Not required (a wide shot at a place, her face small): it looks again in a square around her face
-    found in the first frame, and no face there either means no lip sync."""
+    Not required (a wide shot at a place or a seat, her face small): missed in any frame, it looks again
+    in a square around her face (where it was found, else wherever the first frame shows it) and keeps
+    whichever finds it more often; no face either way means no lip sync. Genesis turned three-quarters
+    in the firelight at her campfire seat was found in 11 of 124 whole frames, and in all 124 that way."""
     mouths = [mouth_at(landmarker, bgr) for bgr in frames]
-    if not required and not any(mouths):
-        box = face_box(landmarker, frames[0])
-        mouths = [mouth_at(landmarker, bgr, box) for bgr in frames] if box else mouths
+    found = sum(m is not None for m in mouths)
+    if not required and found < len(frames):
+        box = face_square(mouths, frames[0]) or face_box(landmarker, frames[0])
+        boxed = [mouth_at(landmarker, bgr, box) for bgr in frames] if box else []
+        if sum(m is not None for m in boxed) > found:
+            mouths = boxed
     n = len(mouths)
     known = [i for i, m in enumerate(mouths) if m is not None]
     if not known:
