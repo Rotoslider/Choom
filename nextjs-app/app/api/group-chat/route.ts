@@ -420,17 +420,19 @@ export async function POST(request: NextRequest) {
         }
 
         // Round cap. Keep-going honors its explicit override. A Choom-initiated
-        // run honors the `rounds` the initiator asked for (round 0 = siblings
-        // react to her opening, then `rounds` more full rounds) instead of the
-        // room's large auto-rounds ceiling — convergence (below) usually ends it
-        // sooner. Owner-driven runs keep the room's autoRounds unless the
+        // run gets round 0 (siblings react to her opening) and then the `rounds`
+        // she asked for, but never more than the room's autoRounds, which is
+        // also the default; at least one, so she hears back. Before 2026-10-20 it
+        // ignored the room (default 3, up to 10), so the owner's setting in
+        // /rooms only held for his own messages. Convergence (below) usually ends
+        // it sooner. Owner-driven runs keep the room's autoRounds unless the
         // caller passes `rounds` (the web UI never does on a plain message;
         // the harness and API callers do — `rounds: 0` used to be ignored and
         // still ran the room's autoRounds, 2026-09-12).
         const maxRounds = continueRun
           ? Math.max(1, roundsOverride ?? room.autoRounds)
           : initiator
-            ? 1 + Math.max(1, roundsOverride ?? 3)
+            ? 1 + Math.max(1, Math.min(roundsOverride ?? room.autoRounds, room.autoRounds))
             : 1 + Math.max(0, roundsOverride ?? room.autoRounds);
         // Settle gap between consecutive turns: every Choom usually shares one
         // local model, so firing back-to-back large-context requests at the same

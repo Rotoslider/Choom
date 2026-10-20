@@ -10,9 +10,10 @@ const TOOL_NAMES = new Set([
 ]);
 const MAX_ROUNDS = 10;
 // Auto-rounds a room gets when a Choom creates it. It was MAX_ROUNDS (10);
-// the owner finds the sisters start spinning by about round 5 (2026-09-28).
-// He can still raise it per room in /rooms.
-const NEW_ROOM_AUTO_ROUNDS = 5;
+// the owner finds the sisters start spinning by about round 5 (2026-09-28), and
+// asked for 3 (2026-10-20). He can change it per room in /rooms, and since then
+// it caps the sisters' own runs there too, not only his.
+const NEW_ROOM_AUTO_ROUNDS = 3;
 const dispatcher = new Agent({ bodyTimeout: 0, headersTimeout: 0 });
 
 // Loose title normalization for matching a spoken room name ("the Tune Lounge")
@@ -499,7 +500,7 @@ export default class GroupChatHandler extends BaseSkillHandler {
     const message = typeof args.message === 'string' ? args.message.trim() : '';
     if (!message) return this.error(toolCall, 'The "message" parameter is required: provide your opening line for the conversation, in your own voice.');
 
-    const rounds = Math.max(1, Math.min(MAX_ROUNDS, typeof args.rounds === 'number' ? args.rounds : 3));
+    const askedRounds = typeof args.rounds === 'number' ? Math.max(1, Math.min(MAX_ROUNDS, args.rounds)) : undefined;
     const roomQuery = typeof args.room === 'string' ? args.room.trim() : '';
     // new_room: the user asked for a FRESH room. Before this existed (2026-09-21)
     // Aloy was told twice to start a new room for Eve and Genesis; the only path
@@ -631,6 +632,11 @@ export default class GroupChatHandler extends BaseSkillHandler {
         },
       }).catch(() => { /* logging is best-effort */ });
     }
+
+    // No more rounds than the room's auto-rounds (the owner's setting in /rooms),
+    // which is also the default; at least one, so she hears back. The route caps
+    // it the same way.
+    const rounds = Math.max(1, Math.min(askedRounds ?? room.autoRounds, room.autoRounds));
 
     // Run the conversation by calling the orchestrator with us as the initiator.
     const baseUrl = process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';

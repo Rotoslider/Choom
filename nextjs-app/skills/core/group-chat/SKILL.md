@@ -25,7 +25,7 @@ dependencies: []
 ## How It Works
 - `talk_with_sisters({ sisters: ["Eve"], message: "...", rounds: 3 })`.
 - You are added automatically — list only the OTHER sisters.
-- Your `message` is the opening line, in your own voice. Each sister then responds in turn, reacting to you and to each other, for up to `rounds` rounds (default 3, max 10).
+- Your `message` is the opening line, in your own voice. Each sister then responds in turn, reacting to you and to each other, for up to `rounds` rounds. The room's auto-rounds setting is both the default and the most; the user chooses it in the Group Rooms view (3 for a new room).
 - It happens in a shared **room** the user can see and join in the Group Rooms view. Rooms **persist** — the same room (and everything in it) is there next time.
 - Any image a sister generates is auto-saved to the room folder so everyone can `analyze_image` it.
 
@@ -57,6 +57,6 @@ dependencies: []
 - **A new room on request:** when the user asks for a fresh/new room, pass `new_room: "<name>"` with `sisters` — that creates a separate room even if one with the same sisters exists. Do NOT reuse or rename the old room to fake a new one; the old room and its history stay as they are.
 
 ## Guardrails
-- Max 10 rounds per call.
+- No more rounds per call than the room's auto-rounds setting (the user's choice; 3 for a new room).
 - This is a real conversation: take real actions with real tools (don't narrate `*does a thing*`).
 - You can't nest a group chat inside a group turn — finish this one first.

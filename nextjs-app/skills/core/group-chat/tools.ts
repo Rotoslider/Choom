@@ -19,7 +19,7 @@ export const tools: ToolDefinition[] = [
         },
         rounds: {
           type: 'number',
-          description: 'How many rounds of back-and-forth (each sister speaks once per round). Default 3, max 10.',
+          description: 'How many rounds of back-and-forth (each sister speaks once per round). At most the room\'s auto-rounds setting, which the user chooses in the Group Rooms view (3 for a new room); that is also the default.',
         },
         room: {
           type: 'string',
