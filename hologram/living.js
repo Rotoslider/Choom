@@ -1188,6 +1188,7 @@ function wantedMood(p) {
 const SLEEP_FROM = setting('sleepFrom', 23);
 const SLEEP_UNTIL = setting('sleepUntil', 7);
 const SLEEP_AFTER_QUIET_MS = setting('sleepAfterQuietMinutes', 10) * 60 * 1000;
+const MORNING_FROM = setting('morningFrom', 5);  // from here on, the desk counts (see onPresence)
 let debugHour = null;     // debug: pretend it's this hour (/control {"hour": 23})
 let debugJaw = null;      // debug: hold the mouth open this far (/control {"jaw": 0.6})
 let debugSleep = false;   // debug: doze off now, however early or busy it is (/control {"sleep": true})
@@ -1198,7 +1199,10 @@ function sleepy() {
   if (debugSleep || presence.bed === true) return mood === 'idle' && !heard() && !speech.busy;
   const h = hourNow();
   const night = SLEEP_FROM > SLEEP_UNTIL ? h >= SLEEP_FROM || h < SLEEP_UNTIL : h >= SLEEP_FROM && h < SLEEP_UNTIL;
-  return night && performance.now() - lastActivity > SLEEP_AFTER_QUIET_MS && mood === 'idle' && !heard() && !speech.busy;
+  // At the desk from 5 am he's up, whether or not the camera sees his face: working at the monitors in
+  // the half dark, she dozed off at 6:03 with him there 13 minutes (2026-10-20).
+  const up = presence.desk === true && h >= MORNING_FROM && h < SLEEP_FROM;
+  return night && !up && performance.now() - lastActivity > SLEEP_AFTER_QUIET_MS && mood === 'idle' && !heard() && !speech.busy;
 }
 
 // She only dozes off if she has a sleep loop to stay asleep in (and can wake from it).
@@ -2673,7 +2677,6 @@ function noteTalk(id) {
 // others smile); getting into bed puts the glass to sleep whatever the hour, and getting up wakes it.
 // From 11 pm to 5 am only coming home does: up for the kitchen and back to bed, or a minute at the
 // desk, leaves her asleep (typing, talking and the buttons still wake her).
-const MORNING_FROM = setting('morningFrom', 5);
 function onPresence(next) {
   const was = presence;
   const pick = (role) => (role in next ? next[role] : presence[role]); // roles not reported stay as they were

@@ -606,7 +606,8 @@ reads exactly that value:
 - **An entity that's gone** (renamed or removed in Home Assistant) leaves only its role unknown; the
   others go on. `/status` `presence_state` names it ("not found in Home Assistant").
 - **What each role does.**
-  - Coming home or sitting at the desk wakes the Choom on the glass, and she greets you.
+  - Coming home or sitting at the desk wakes the Choom on the glass, and she greets you. From 5 am she
+    stays awake while you're at the desk, and it counts as being there for the welcome back.
   - Getting into bed puts the glass to sleep at any hour; getting up wakes it.
   - A sound near the tower (tower_ears thinks someone is talking) holds off the Chooms' quiet turns,
     but never keeps her awake or wakes her: the first night it woke her each time Donny turned over.
@@ -700,13 +701,16 @@ chosen outfit.
 When you sit back down after a while away (20 minutes by default), the Choom you last talked with one
 to one welcomes you back.
 
-**Being at the desk.** `server.py` counts you at the desk while the camera sees your face, or while
-both of these hold:
+**Being at the desk.** `server.py` counts you at the desk while the camera sees your face, while the
+room sensor counts you there (Presence's `desk`, a minute in a row in the office zone), or while both
+of these hold:
 - the NUC's keyboard or mouse was used in the last 30 seconds (GNOME's idle time);
 - the camera saw you in the last 5 minutes.
 
 GNOME also resets its idle time when the screens wake or the monitor layout is reapplied, so input
-alone doesn't count. Without a camera, input alone decides.
+alone doesn't count. Without a camera, input alone decides. The room sensor was added after Oct 20:
+working at the monitors in the half dark, Donny sat at the desk from 5:50 and the camera beside them
+didn't see his face until 6:15, so his good morning waited until then.
 
 **Across relaunches.** The last time you were at the desk (saved each minute while you are, and the
 moment you leave) and the last welcome are kept in `desk.json` beside `server.py`, so a relaunch
@@ -828,7 +832,8 @@ Each wake and blank is logged as `screens`.
   The first chat after 8 hours or more opens with her lighting up.
 - **Night.**
   - From 11 pm to 7 am, after ten quiet minutes, she yawns, dozes off and the glass dims. She dozes
-    off only if she has a sleep loop and a wake clip.
+    off only if she has a sleep loop and a wake clip. From 5 am she doesn't while the room sensor has
+    Donny at the desk (`morningFrom`): the camera doesn't always see his face there.
   - Typing, talking, a reply, a button or 7 am wakes her.
   - Heartbeats and delegated tasks that start at night run unseen.
   - At bedtime a Choom on the glass who can't sleep (no sleep clips yet) hands it to one who can, so

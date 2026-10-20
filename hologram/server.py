@@ -404,10 +404,11 @@ image_cache = {}  # the last few pictures fetched for the page: id -> (content t
 # --- Welcome back ------------------------------------------------------------------------
 # When Donny sits back down after a while away, the Choom he last talked with welcomes him back (the
 # Choom app's /api/hologram/welcome picks her and gives her a note; she knows from their conversation
-# where he went). He's at the desk while the camera sees his face, or he has used the NUC's keyboard or
-# mouse in the last 30 seconds and the camera saw him in the last 5 minutes. GNOME also resets its idle
-# time when the screens wake (a Choom starting to talk woke them then) or the monitor layout is reapplied,
-# which kept "bringing him back" while he was out at the gate; the camera decides when he's back.
+# where he went). He's at the desk while the camera sees his face, or the room sensor counts him there
+# (its office zone, a minute in a row), or he has used the NUC's keyboard or mouse in the last 30 seconds
+# and the camera saw him in the last 5 minutes. GNOME also resets its idle time when the screens wake (a
+# Choom starting to talk woke them then) or the monitor layout is reapplied, which kept "bringing him
+# back" while he was out at the gate, so input alone doesn't count.
 WELCOME_AFTER_S = float(os.environ.get("HOLOGRAM_WELCOME_AFTER_S", 20 * 60))  # away at least this long
 WELCOME_EVERY_S = 2 * 60 * 60    # at most one welcome back every two hours
 WELCOME_HOURS = (7, 23)          # not at night
@@ -536,13 +537,16 @@ def welcome_watch():
             face = (latest.get("gaze") or {}).get("face") is True
             if face or not latest.get("eyes_camera"):
                 face_seen = time.time()  # (no camera: input alone decides, as before)
-            here = face or (idle is not None and idle < 30 and time.time() - face_seen < INPUT_COUNTS_S)
+            # The room sensor too: at the desk in the half dark, facing the monitors, the camera beside them
+            # didn't see his face for 25 minutes and his good morning waited until 6:15 (2026-10-20).
             presence = latest.get("presence") or {}
-            latest["welcome_watch"] = {"face": face, "idle": None if idle is None else round(idle),
+            desk = presence.get("desk") is True
+            here = face or desk or (idle is not None and idle < 30 and time.time() - face_seen < INPUT_COUNTS_S)
+            latest["welcome_watch"] = {"face": face, "desk": desk, "idle": None if idle is None else round(idle),
                                        "here": here, "unseen_for": round(time.time() - present_at)}
             if here != was_here[0]:  # log each leaving and coming back (and why he counted as here)
-                log_entry({"kind": "desk", "here": here, "face": face, "idle": None if idle is None else round(idle),
-                           "after": round(time.time() - present_at)})
+                log_entry({"kind": "desk", "here": here, "face": face, "desk": desk,
+                           "idle": None if idle is None else round(idle), "after": round(time.time() - present_at)})
                 was_here[0] = here
                 if not here:
                     save_desk(present_at, last_welcome)  # the last moment he was here
