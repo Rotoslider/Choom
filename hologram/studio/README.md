@@ -463,8 +463,9 @@ The glass answers from what's built:
   ("dress, burgundy, red"), and you can change them on the look's card; empty goes back to the ones
   read from her clothes. A garment, colour or fabric she names must be in the outfit, so "the red
   dress" finds the burgundy one but "a blue silk dress" doesn't find a green one. If two outfits fit
-  equally, the glass picks one at random. Night clothes also answer to pajamas, bed and their own
-  garments, warm or cold by the weather.
+  equally, the one with no garment she didn't name wins ("my tank top" is Eve's tank top on its own,
+  not her flannel or overalls over one); after that the glass picks one at random. Night clothes also
+  answer to pajamas, bed and their own garments, warm or cold by the weather.
 - **Her usual clothes** can be asked for by description as well as by "my usual clothes": "my
   wireframe dress", "my cream blouse". A tie with them goes to them. "Own" beside a garment means that
   garment ("my own green dress" is her green dress).

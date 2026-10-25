@@ -324,7 +324,8 @@ def match_outfit(request, available, warm=None, usual=""):
     A garment, colour or fabric named must be in the outfit: "a midnight-blue silk slip dress" isn't her
     dark green dress, it's a wish (Eve, 2026-10-14). Other words break ties; a tie between her warm
     and cold night clothes goes by the weather (`warm`: 70°F or more), a tie with her usual clothes goes
-    to them, any other tie is a coin toss.
+    to them, then the outfit with the fewest garments she didn't name ("my tank top"), and any other tie
+    is a coin toss.
 
     `usual` describes her usual clothes (closet.json's "usual" and her main subject line), so they can be
     asked for like any outfit: "my wireframe dress" (Eve) and "my cream blouse" (Aloy) found other outfits
@@ -337,7 +338,7 @@ def match_outfit(request, available, warm=None, usual=""):
     if asked & USUAL and not (garments or colors or fabrics):
         return ("usual", None)
     candidates = dict(available, **({"usual": {"tags": [], "wearing": usual}} if usual.strip() else {}))
-    scored = []
+    scored, others = [], {}
     for name, o in candidates.items():
         has = canon(words(" ".join(o["tags"]) + " " + o.get("wearing", "") + " " + " ".join(name_words(name))))
         if any(named and not named & has for named in (garments, colors, fabrics)):
@@ -345,14 +346,17 @@ def match_outfit(request, available, warm=None, usual=""):
         score = 10 * len(garments & has) + 3 * len(colors & has) + 2 * len((asked - garments - colors) & has)
         if score:
             scored.append((score, name))
+            others[name] = len((has & set(GARMENTS)) - garments)  # garments she didn't name
     if not scored:
         return None
     best = max(s for s, _ in scored)
     tied = [n for s, n in scored if s == best]
     if "usual" in tied:  # "my mint tee": her usual tee, not the tee under her cold-day jacket
         return ("usual", None)
-    if warm is not None:
-        tied = [n for n in tied if ("warm" if warm else "cold") in n] or tied
+    if warm is not None:  # night clothes for the other weather drop out (not her cold-day clothes: Eve's flannel)
+        tied = [n for n in tied if not n.startswith("night") or ("warm" if warm else "cold") in n] or tied
+    if garments:  # "my tank top": the outfit that's just one, not the flannel or the overalls over one (Eve's)
+        tied = [n for n in tied if others[n] == min(others[m] for m in tied)]
     name = random.choice(tied)
     return (name, available[name])
 

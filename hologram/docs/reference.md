@@ -691,8 +691,10 @@ The looking-glass skill in the Choom app (`skills/core/looking-glass`) gives eac
     cotton dress.
   - Scoring is 10 per garment, 3 per colour, 2 per other word.
   - A tie with her usual clothes goes to them ("my mint tee" is her usual tee, not the one under her
-    cold-day jacket). A tie between warm and cold night clothes goes by the temperature. Any other tie
-    is a coin toss.
+    cold-day jacket). A tie between warm and cold night clothes goes by the temperature (only night
+    clothes: Eve's cold-day flannel isn't "cold" night clothes). Then, if she named a garment, the
+    outfit with the fewest garments she didn't name ("my tank top" is Eve's tank top alone, not her
+    flannel or overalls over one). Any other tie is a coin toss.
   - The chosen outfit is kept in the page's wardrobe (localStorage).
 - **Wishes:** a move or clothes with no match, or anything asked with `glass_wish`, goes in
   `portraits/<id>/wishes.json` (not in git). The Studio shows it on its Plan page. The file is written
