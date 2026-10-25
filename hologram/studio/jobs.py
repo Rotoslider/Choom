@@ -264,6 +264,9 @@ def do_render(job):
     since = job["started"]
     if not running(job):
         attach(job, render.start(name), str(render.QUEUES / f"{name}.zip"))
+        with lock:
+            job["queueStarted"] = time.time()  # a render resumed after a pause starts a new queue
+    began = job.get("queueStarted") or since
     pause_from = None  # clips collected by the time the pause was asked for
     collected = 0
     while True:
@@ -271,7 +274,10 @@ def do_render(job):
         with lock:
             if job["status"] != "running":  # cancelling: finish_cancel stops it
                 return
-            job["progress"] = render.progress(name)
+            p = job["progress"] = render.progress(name)
+            # The clip it's on counts by its denoising steps, so the estimate moves between clips too.
+            p["left"] = time_left(p["done"] + int(p["step"].rstrip("%") or 0) / 100 if p["step"] else p["done"],
+                                  p["total"], began)
             save()
         landed = render.collect()
         collected += len(landed)
@@ -308,20 +314,38 @@ def do_render(job):
         raise RuntimeError(f"{len(missing)} clips didn't render and are planned again: {', '.join(missing)} (see queue/{name}.log)")
 
 
+def time_left(done, total, began):
+    """Seconds left at the pace so far (None until something is done)."""
+    if done <= 0 or not total:
+        return None
+    return round(max(total - done, 0) * (time.time() - began) / done)
+
+
 def tail(job, path, start):
-    """Lines a tool wrote to its log since byte `start` go into the job's log; returns the new end."""
+    """Lines a tool wrote to its log since byte `start` go into the job's log; returns the new end
+    and the lines."""
     try:
         with open(path, "rb") as f:
             f.seek(start)
             chunk = f.read()
     except OSError:
-        return start
+        return start, []
     lines = [l for l in chunk.decode(errors="replace").replace("\r", "\n").split("\n") if l.strip()]
     if lines:
         with lock:
             job["log"] = (job["log"] + lines)[-60:]
             save()
-    return start + len(chunk)
+    return start + len(chunk), lines
+
+
+def last_rates():
+    """Seconds a clip took in each build step, from the latest builds that timed them."""
+    rates = {}
+    with lock:
+        for j in reversed(jobs):
+            for step, rate in (j.get("rates") or {}).items() if j["kind"] == "build" else ():
+                rates.setdefault(step, rate)
+    return {**build.RATE_GUESS, **rates}
 
 
 def do_build(job):
@@ -341,24 +365,51 @@ def do_build(job):
     if running(job):  # picked up after a restart: let that run end, then run its step again
         note(job, f"waiting for the {job.get('stepName', 'build')} step an earlier Studio started")
         while running(job):
-            pos = tail(job, log_path, pos)
+            pos = tail(job, log_path, pos)[0]
             time.sleep(2)
     plan = build.steps(proj)
+    # Progress, as a render shows it: the clips this step works on (cut-outs only for new clips; the
+    # reliefs say how many they encode, and until they do, the new clips are the guess), how many are
+    # done, and the time left at this build's pace (the last build's before a clip is done), with
+    # the reliefs still to come counted in while the cut-outs run.
+    rates = last_rates()
+    new = len(build.masks_todo(proj))
     for i, (step, cmd, tag) in enumerate(plan):
         if i < job.get("step", 0):
             continue
+        total, done, began = new if step in ("masks", "reliefs") else 0, 0, time.time()
+
+        def progress():
+            rate = (time.time() - began) / done if done else rates.get(step, 0)
+            later = sum(new * rates.get(s, 0) for s, _, _ in plan[i + 1:])
+            job["progress"] = {"done": done, "total": total, "step": build.STEP_WORDS.get(step, step),
+                               "stage": f"{i + 1}/{len(plan)}", "left": round(max(total - done, 0) * rate + later)}
+
         with lock:
             if job["status"] != "running":
                 return
             job.update(step=i, stepName=step)
+            progress()
             save()
         proc = build.start(cmd, log_path)
         attach(job, proc, tag)
-        while proc.poll() is None:
-            pos = tail(job, log_path, pos)
+        while True:
+            ended = proc.poll() is not None
+            pos, lines = tail(job, log_path, pos)
+            for line in lines:
+                if build.TOTAL_LINE.match(line):
+                    total = int(build.TOTAL_LINE.match(line).group(1))
+                elif build.DONE_LINE.get(step) and build.DONE_LINE[step].search(line):
+                    done += 1
+            with lock:
+                progress()
+                save()
+            if ended:
+                break
             time.sleep(2)
-        pos = tail(job, log_path, pos)
         with lock:
+            if done:
+                job.setdefault("rates", {})[step] = round((time.time() - began) / done, 1)
             if job["status"] != "running":  # cancelled meanwhile
                 return
         if proc.returncode:

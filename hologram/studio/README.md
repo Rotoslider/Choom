@@ -236,7 +236,14 @@ Everything the Studio does runs as a job in one of three lanes:
 
 A scheduled job shows what it waits for ("waiting until 11:00 PM", "waiting until the render has
 finished"). Waiting, running and paused jobs stay at the top of the list, above the finished ones. The
-pill in the corner says what's happening: rendering 12/44, building, pausing, paused.
+pill in the corner says what's happening: rendering 12/44, building 30/54, pausing, paused.
+
+A running render or build has a bar and its time left at the pace so far ("about 40 min left"). A
+build goes in two steps, each with its own count: step 1 makes the cut-outs for the new clips (the
+rest it already has), step 2 the reliefs for the clips that are new or changed. While step 1 runs,
+its time left counts step 2 too. Until a clip is done, the estimate is the last build's pace (a new
+clip takes about 10 seconds for its cut-out and 40 for its relief), so the first figure is a
+guess that settles after a clip or two.
 
 **Cancel** stops a job. The tool it runs is stopped (asked first, then made to stop if it hasn't within
 30 seconds), and the lane stays taken ("stopping…") until it really has, so nothing new starts beside

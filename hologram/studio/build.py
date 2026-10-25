@@ -14,6 +14,7 @@ a Studio restart neither kills it nor loses it: the job picks the step up again 
 """
 import json
 import os
+import re
 import subprocess
 import time
 
@@ -21,6 +22,15 @@ from config import CLIPS, FORGE_PYTHON, HOLOGRAM, PICTURES, PORTRAITS, PROJECTS,
 from project import Project, base_of, editing
 
 LOGS = PROJECTS / "logs"
+
+# How far a step has got, from its log: a line for each clip it has done (cut-outs it skips print
+# "already made" and aren't counted), and the reliefs' first line, how many clips it will encode.
+STEP_WORDS = {"masks": "cut-outs", "reliefs": "reliefs"}
+DONE_LINE = {"masks": re.compile(r"masks -> alive_masks_"), "reliefs": re.compile(r"^\s*wrote alive_\S+\.mp4")}
+TOTAL_LINE = re.compile(r"^encoding (\d+) of \d+ clips")
+# Seconds a clip takes in each step until a build has timed its own (Oct 25, a five-second clip:
+# U2-Net about 10 s on the GPU, depth and the relief video about 37 s).
+RATE_GUESS = {"masks": 10.0, "reliefs": 40.0}
 
 
 def in_manifest(cid):
@@ -64,6 +74,18 @@ def steps(proj):
     return [("masks", [str(WAN2GP_PYTHON), str(TOOLS / "make_alive_masks.py"), proj.id, *sources], "make_alive_masks.py"),
             ("reliefs", [str(FORGE_PYTHON), str(TOOLS / "make_alive.py"), proj.id, "--home", home_of(proj), *sources],
              "make_alive.py")]
+
+
+def masks_todo(proj):
+    """The clips in her sequence that make_alive_masks.py cuts out (new, or remade since their cut-out),
+    by its own rule; it skips the rest at once."""
+    folder = PORTRAITS / proj.id
+    out = []
+    for n in proj.sequence:
+        cut, src = folder / f"alive_masks_{n}.npz", CLIPS / f"{n}.mp4"
+        if not (cut.exists() and src.exists() and cut.stat().st_mtime >= src.stat().st_mtime):
+            out.append(n)
+    return out
 
 
 def log_file(cid):

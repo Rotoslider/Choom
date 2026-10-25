@@ -1219,6 +1219,12 @@ const STATE_WORDS = { waiting: 'waiting', running: 'running', done: 'done', fail
 const LIVE = ['waiting', 'running', 'paused', 'cancelling'];
 const GPU = ['render', 'build', 'picture', 'still'];
 const clock = (t) => new Date(t * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+// A render's or build's time left (progress.left, seconds at its pace so far), in words.
+function leftWords(s) {
+  if (s == null) return '';
+  const m = Math.round(s / 60);
+  return m < 1 ? 'under a minute left' : m < 60 ? `about ${m} min left` : `about ${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ''} left`;
+}
 // Where a queue's render stands, for the clips queued in it.
 function queueWords(queue) {
   const job = state.jobs.find((j) => j.kind === 'render' && LIVE.includes(j.status) && [j.args.queue, ...(j.args.earlier || [])].includes(queue));
@@ -1250,11 +1256,13 @@ async function pollJobs() {
     const waiting = state.jobs.filter((j) => j.status === 'waiting');
     const pill = $('#jobsButton');
     const r = running.find((j) => j.kind === 'render');
+    const b = running.find((j) => j.kind === 'build' && j.progress?.total);
     const lastFailed = state.jobs.length && state.jobs[state.jobs.length - 1].status === 'failed';
     const wl = state.worklist;
     pill.className = `jobs-pill${wl.paused ? ' paused' : running.length ? ' busy' : lastFailed ? ' failed' : ''}`;
     $('#jobsText').textContent = wl.paused ? `Paused${waiting.length ? ` · ${waiting.length} waiting` : ''}`
       : r ? `${wl.pausing ? 'Pausing · ' : 'Rendering '}${r.progress?.done ?? 0}/${r.progress?.total || r.args.clips}`
+        : b ? `${wl.pausing ? 'Pausing · ' : 'Building '}${b.progress.done}/${b.progress.total}`
         : running.length ? `${wl.pausing ? 'Pausing · ' : ''}${{ build: 'Building', picture: 'Klein', still: 'Still relief', relaunch: 'Reloading the glass', review: 'Checking' }[running[0].kind] || 'Working'}…`
           : waiting.length ? `${waiting.length} waiting` : lastFailed ? 'Last job failed' : 'Idle';
     renderPaused();
@@ -1279,7 +1287,10 @@ function renderJobs() {
     return el('div', { className: `job ${j.status}` },
       el('div', { className: 'row' }, el('span', {}, el('span', { className: 'kind' }, j.kind), ` ${what}`),
         el('span', { className: 'state' }, `${STATE_WORDS[j.status]}${when}${j.status === 'running' && p.total ? ` · ${p.done}/${p.total} ${p.step || ''}` : ''}`)),
-      j.kind === 'render' && j.status === 'running' ? el('div', { className: 'bar' }, el('i', { style: `width:${pct}%` })) : null,
+      // A build's steps (cut-outs, then reliefs) each count their own clips; its time left counts the rest too.
+      j.status === 'running' && (p.stage || p.left != null) ? el('div', { className: 'state' },
+        [p.stage ? `step ${p.stage.replace('/', ' of ')}` : '', leftWords(p.left)].filter(Boolean).join(' · ')) : null,
+      ['render', 'build'].includes(j.kind) && j.status === 'running' && p.total ? el('div', { className: 'bar' }, el('i', { style: `width:${pct}%` })) : null,
       j.error ? el('div', { className: 'state' }, j.error) : null,
       j.log?.length && j.status !== 'done' ? el('pre', {}, j.log.slice(-8).join('\n')) : null,
       ['waiting', 'running', 'paused'].includes(j.status) ? el('div', {}, el('button', {

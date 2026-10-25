@@ -400,12 +400,20 @@ def main():
         vision.FaceLandmarkerOptions(base_options=BaseOptions(model_asset_path=str(MODEL)), num_faces=1))
     gray = lambda a: cv2.cvtColor(np.round(np.clip(a, 0, 1) * 255).astype(np.uint8), cv2.COLOR_GRAY2BGR)
     meta_clips, encoded = [], 0
+
+    def unchanged(src):
+        """Built before just as it would be now: its video and mouth track are kept."""
+        before = built_before.get(Path(src).name)
+        expect = [BUILD, round(lo, 6), round(hi, 6), round(focus, 6), stamp(src), main_stamp] + (["lit"] if particles(src) else []) + (["joined"] if joined(src) else [])
+        return bool(before and before.get("built") == expect and (folder / before["file"]).exists())
+
+    # How many it encodes, first, so the Studio can show the build's progress (a line per clip follows).
+    print(f"encoding {sum(not unchanged(src) for src in sources)} of {len(sources)} clips", flush=True)
     for k, src in enumerate(sources):
         name = Path(src).name
         moods, start, end = role(src)
         before = built_before.get(name)
-        expect = [BUILD, round(lo, 6), round(hi, 6), round(focus, 6), stamp(src), main_stamp] + (["lit"] if particles(src) else []) + (["joined"] if joined(src) else [])
-        if before and before.get("built") == expect and (folder / before["file"]).exists():
+        if unchanged(src):
             # Unchanged since it was last built: keep the video and its mouth track (its role may change).
             meta_clips.append({**before, "moods": moods, "from": start, "to": end, "talk": "talk" in moods})
             continue

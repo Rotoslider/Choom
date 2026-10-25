@@ -9,6 +9,9 @@ from pathlib import Path
 import cv2
 import numpy as np
 from PIL import Image
+# torch first: it loads the CUDA 13 libraries (cuBLAS) that onnxruntime's GPU provider needs and can't
+# find by itself; without them U2-Net quietly runs on the CPU, about 8x slower (until Oct 25).
+import torch  # noqa: F401
 from rembg import new_session, remove
 
 HOLOGRAM = Path(__file__).resolve().parents[1]

@@ -140,6 +140,10 @@ whole pipeline. The steps underneath:
      tools/make_alive_masks.py <id> CLIP.mp4 ...
    ```
    - Masks are kept per clip as `alive_masks_<clip>.npz`.
+   - It runs on the GPU, about 0.05 s a frame (a five-second clip in about 6 s). The scripts import
+     torch before rembg because torch loads the CUDA 13 libraries (cuBLAS) that onnxruntime's GPU
+     provider can't find by itself. Without them U2-Net quietly falls back to the CPU, about ten
+     times slower; every build ran that way until Oct 25, 2026.
    - U2-Net can lose most of her for a stretch when something busy moves around her (blowing hair).
      `make_alive.py` adds back anything lit inside her first frame's outline, because every clip
      starts on her picture.
@@ -151,6 +155,9 @@ whole pipeline. The steps underneath:
    ```bash
    ~/pinokio/api/forge-neo/app/venv/bin/python tools/make_alive.py <id> MAIN.mp4 CLIP.mp4 ...
    ```
+   Only new or changed clips are encoded. Its first line says how many (`encoding 12 of 642
+   clips`), then a `wrote` line follows for each; the Studio's build progress counts them.
+
    For each frame:
    - Depth Anything V2 Large depth (fused attention, half precision, about 0.2 s a frame). Raw depth
      is cached per clip as `alive_depth_<clip>.npy` and read from disk as needed, so memory stays
