@@ -1010,8 +1010,9 @@ const FULL_IDLE_CHANCE = 0.07;
 // Her clothes. Clips in other outfits live in poses of their own (relaxed@evening), and an outfit's
 // name says when she wears it: night… from 10 pm until she wakes, cold… under 45°F, hot… over 85°F,
 // evening… from 6 to 11 pm, and day… outfits take turns with her usual clothes, a different one each
-// day (picked from the date, so it holds all day). She changes with a camera cut at a quiet moment
-// (or a change clip made for it, <choom>_eveningdress-change_night_slip), and back into her usual
+// day (picked from the date, so it holds all day); chosen… outfits only when she asks for them herself
+// (glass_wear). She changes with a camera cut at a quiet moment (or a change clip made for it,
+// <choom>_eveningdress-change_night_slip, or fullchange_ in her whole figure), and back into her usual
 // clothes before she sleeps, unless a night outfit has its own asleep look to sleep in.
 const outfitOf = (pose) => pose.split('@')[1] || null;
 const basePose = (pose) => pose.split('@')[0];
@@ -1041,6 +1042,7 @@ const OUTFIT_RULES = [
   [/^cold/, () => typeof weather.temperature === 'number' && weather.temperature < COLD_BELOW_F],  // °F
   [/^hot/, () => typeof weather.temperature === 'number' && weather.temperature > HOT_ABOVE_F],
   [/^evening/, () => { const h = hourNow(); return h >= EVENING_FROM && h < EVENING_UNTIL; }],
+  [/^chosen/, () => false],  // never by the clock: only when she chooses it (chosenOutfit), and no visit after
 ];
 // An outfit or other look with a dozen clips loops them every minute (the clock look), so she wears
 // it in short visits spread through its hours: a visit lasts about 30 s per clip it has (each clip
@@ -1318,10 +1320,15 @@ function nextClip(p, after) {
   const quiet = want === 'idle' || want === 'sleep' || want === 'listen' || (want === 'think' && chosenOutfit(p) !== undefined);
   if (dress !== dressed && !asleep && quiet) {
     const to = dress ? `${basePose(pose)}@${dress}` : basePose(pose);
-    // A clip that makes the change on screen (Genesis's motes fading away or sparkling back), else a cut.
-    const change = clips.map((c, k) => k).filter((k) => poseFrom(clips[k]) === pose && poseTo(clips[k]) === to);
+    // A clip that makes the change on screen (Genesis's motes fading away or sparkling back), or one in
+    // her whole figure (a nightie slipping to the floor), cut to and then back from to her framing in the
+    // new clothes (only on the glass by herself, as her other full-body cuts); else a cut.
+    const wide = !stage.on && p === portraits[current];
+    const change = clips.map((c, k) => k).filter((k) => (poseFrom(clips[k]) === pose && poseTo(clips[k]) === to) ||
+                                                        (wide && poseFrom(clips[k]) === fullOf(pose) && poseTo(clips[k]) === fullOf(to)));
     if (change.length) {
       const k = change[Math.floor(Math.random() * change.length)];
+      if (isFull(poseFrom(clips[k]))) p.cutFrom = to;
       (p.moments ||= new Set()).add(k);
       return k;
     }

@@ -35,6 +35,8 @@ GARMENTS = {
                 "sleepwear", "nightwear"},
     "lingerie": {"lingerie", "teddy", "negligee", "babydoll", "bodysuit", "chemise"},
     "swimsuit": {"swimsuit", "bikini", "swimwear"},
+    "underwear": {"underwear", "underthings", "undies", "undergarments", "underclothes", "bra", "bralette", "briefs",
+                  "panties", "knickers"},
     "overalls": {"overalls", "dungarees"},
     "robe": {"robe", "kimono"},
 }
@@ -61,8 +63,9 @@ USUAL = {"usual", "normal", "regular", "default", "everyday", "original", "own"}
 STOP = {"a", "an", "the", "my", "your", "her", "some", "on", "in", "into", "with", "wear", "wearing", "put", "change",
         "outfit", "clothes", "please", "little", "i", "want", "to", "me", "something", "one", "that", "this", "for",
         "do", "of", "and", "again", "now", "bit", "quick", "just", "go", "get", "dressed"}
-# An outfit's name says when she wears it (living.js OUTFIT_RULES); the rest is its own name.
-WHEN = ("evening", "cold", "hot", "day", "night")
+# An outfit's name says when she wears it (living.js OUTFIT_RULES); the rest is its own name. A chosen…
+# outfit is worn only when she asks for it.
+WHEN = ("evening", "cold", "hot", "day", "night", "chosen")
 # Asking for something to sleep in finds her night clothes (their name starts with night).
 NIGHT_WORDS = {"night", "nighttime", "bed", "bedtime", "sleep", "sleeping"}
 
@@ -140,7 +143,7 @@ def name_words(outfit):
     """evening, dress from "eveningdress"; day, denim from "daydenim"."""
     for when in WHEN:
         if outfit.startswith(when) and outfit != when:
-            return [when, outfit[len(when):]]
+            return [outfit[len(when):]] if when == "chosen" else [when, outfit[len(when):]]  # nobody asks for "chosen"
     return [outfit]
 
 
@@ -258,6 +261,8 @@ def moves(cid, alive, closet):
         word = move_word(cid, src)
         if c.get("moods") == ["windy"]:
             continue  # weather, not a move: it plays on windy days only
+        if c.get("moods") == ["change"]:
+            continue  # a change of clothes (a full-body one starts in her whole figure): glass_wear plays it
         if c.get("from", "").split("@")[0] in SEATS:
             continue  # her seat at the campfire circle
         if c.get("moods") == ["go"]:

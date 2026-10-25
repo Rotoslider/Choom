@@ -686,7 +686,8 @@ def glass_answer(request):
         # What she has, never what she's wearing at the moment.
         return {"ok": True, "moves": names,
                 "clothes": [f"your usual clothes{': ' + worn['usual'] if worn.get('usual') else ''}"] +
-                           [o["wearing"] or ", ".join(o["tags"]) for o in outfits.values()],
+                           [(o["wearing"] or ", ".join(o["tags"])) + (" (worn only when you choose it)" if name.startswith("chosen") else "")
+                            for name, o in outfits.items()],
                 "note": "This only lists your closet; nothing has changed. To change clothes, use glass_wear. "
                         "Ask for something you don't have and it goes on Donny's wish list for Glass Studio."}
     if not what:

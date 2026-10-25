@@ -172,8 +172,10 @@ KINDS = {
 
 # A change of clothes on screen: <choom>_[<from>-]change_<to>[_<what>], "usual" for her usual
 # clothes (genesis_eveningdress-change_night_slip: the burgundy dress to her night look). The glass
-# plays it instead of the camera cut when she changes from one to the other.
-CHANGE = re.compile(r"change_([a-z0-9]+)(?:_[a-z0-9]+)?")
+# plays it instead of the camera cut when she changes from one to the other. fullchange_ is the same in
+# her whole figure, for a change that needs her feet in the frame (a nightie slipping to the floor):
+# full@nightwarm to full@<the other outfit>, cut to and back from like her other full-body clips.
+CHANGE = re.compile(r"(full)?change_([a-z0-9]+)(?:_[a-z0-9]+)?")
 
 
 def clip_role(cid, src, home=None):
@@ -188,8 +190,8 @@ def clip_role(cid, src, home=None):
         outfit, action = action.split("-", 1)
     change = CHANGE.fullmatch(action)
     if change:
-        to = change.group(1)
-        return ["change"], f"{home}@{outfit}" if outfit else home, home if to == "usual" else f"{home}@{to}"
+        frame, to = "full" if change.group(1) else home, change.group(2)
+        return ["change"], f"{frame}@{outfit}" if outfit else frame, frame if to == "usual" else f"{frame}@{to}"
     kind = action.split("_")[0] if "_" in action else None
     gone = GONE.get(re.sub(r"\d+$", "", action.split("_")[0]))
     if gone and not outfit:

@@ -36,7 +36,7 @@ STATUSES = ("planned", "queued", "rendered", "kept", "dropped")
 NOT_CHOOMS = {"jobs", "worklist", "notify", "schedule"}  # json files in studio/ that aren't Choom projects
 BUILD_MINUTES_PER_CLIP = 2.5  # masks, depth and relief of one new clip in a build (October 2026 builds)
 TAKES = CLIPS / "takes"  # earlier takes of re-rolled clips (render.collect)
-WHEN_WORDS = ("cold", "hot", "evening", "day", "night")  # an outfit's name starts with when she wears it
+WHEN_WORDS = ("cold", "hot", "evening", "day", "night", "chosen")  # an outfit's name starts with when she wears it
 
 
 class LookHasDropped(ValueError):
@@ -253,7 +253,7 @@ class Project:
         """Give an outfit a new name: all its looks (main@, relaxed@, full@, asleep@), its clips and
         their files (clips/, sheets, earlier takes) move to it, change-of-clothes clips into it too,
         since a clip's name says which look it's in. The name starts with when she wears it (cold, hot,
-        evening, day, night), so renaming can change that. Not while any of its clips is queued, placed
+        evening, day, night, or chosen: only when she picks it), so renaming can change that. Not while any of its clips is queued, placed
         on the glass or built (the glass plays them by name): take them off and build first. Returns
         {old clip name: new}."""
         if not re.fullmatch(r"[a-z0-9]+", new or ""):
@@ -266,11 +266,11 @@ class Project:
         if new == old or any(outfit_of(lid) == new for lid in self.looks):
             raise ValueError(f"she already has an outfit called {new}")
         relook = lambda lid: f"{base_of(lid)}@{new}" if outfit_of(lid) == old else lid  # noqa: E731
-        into = re.compile(rf"(?<=[-_])change_{re.escape(old)}(?=_|$)")
+        into = re.compile(rf"(?<=[-_])(full)?change_{re.escape(old)}(?=_|$)")
         names = {}
         for n in self.clips:
             m = f"{self.id}_{new}-" + n[len(f"{self.id}_{old}-"):] if n.startswith(f"{self.id}_{old}-") else n
-            m = into.sub(f"change_{new}", m)
+            m = into.sub(lambda x: f"{x.group(1) or ''}change_{new}", m)
             if m != n:
                 names[n] = m
         built = set(built)

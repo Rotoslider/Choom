@@ -37,7 +37,8 @@ happening in the Choom app: listening, thinking, using tools, changing clothes, 
   and cold weather, for the evening (several take turns), and warm or cold night clothes from 10 pm
   to 7 am.
   She wears an outfit in short visits with at least 25 minutes in her usual clothes between them, and
-  changes with a camera cut or a change-of-clothes clip.
+  changes with a camera cut or a change-of-clothes clip (waist-up, or in her whole figure for a
+  change like a nightie slipping to the floor). Some outfits she wears only when she chooses them.
 - **Full body.** Now and then the glass cuts to her whole figure. An outfit can have its own full
   body, used only while she wears it.
 - **Places.** A Choom can have places of her own, like Genesis's campfire. When she asks, the glass

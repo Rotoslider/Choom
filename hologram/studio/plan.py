@@ -210,13 +210,15 @@ def rewrite(proj, name, text=None, seconds=None):
 
 def add_change(proj, start, end, key, text, seconds=5):
     """Plan a change of clothes on screen, from one of her waist-up looks to another in the same pose
-    (the burgundy dress to her night look, her night look back to her usual clothes). It's rendered
-    from the first look's picture to the second's, and the glass plays it instead of a camera cut.
-    Returns (name or None, message)."""
-    if start == end or base_of(start) != base_of(end) or base_of(start) not in ("main", "relaxed"):
-        return None, "a change goes between two of her waist-up looks in the same pose"
+    (the burgundy dress to her night look, her night look back to her usual clothes), or from one full
+    body to another (a nightie slipping to the floor needs her feet in the frame). It's rendered from
+    the first look's picture to the second's, and the glass plays it instead of a camera cut (a full-body
+    one with a cut to her whole figure and back). Returns (name or None, message)."""
+    if start == end or base_of(start) != base_of(end) or base_of(start) not in ("main", "relaxed", "full"):
+        return None, "a change goes between two of her waist-up looks in the same pose, or two of her full bodies"
     key = re.sub(r"[^a-z0-9]", "", (key or "").lower()) or "swap"
-    part = (f"{outfit_of(start)}-" if outfit_of(start) else "") + f"change_{outfit_of(end) or 'usual'}_{key}"
+    part = ((f"{outfit_of(start)}-" if outfit_of(start) else "") + ("full" if base_of(start) == "full" else "")
+            + f"change_{outfit_of(end) or 'usual'}_{key}")
     name = unique_name(proj, f"{proj.id}_{part}", True)
     _, frm, to = roles(proj.id, name)
     if (frm, to) != (start, end):  # Aloy's outfits are all hand-down: a change from her finger-up look can't be named

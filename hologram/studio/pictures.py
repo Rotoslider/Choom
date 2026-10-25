@@ -22,7 +22,8 @@ from project import base_of, outfit_of
 DRAFTS = PICTURES / "drafts"
 WHEN = {"cold": "cold days (under 45°F)", "hot": "hot days (over 85°F)", "evening": "evenings, 6 to 11 pm",
         "day": "daytime, taking turns with her usual clothes",
-        "night": "nights, from 10 pm until she wakes (she sleeps in it)"}
+        "night": "nights, from 10 pm until she wakes (she sleeps in it)",
+        "chosen": "only when she chooses it herself (glass_wear)"}
 BACKGROUND = "the lighting, the framing, and the pure black background"
 CLEAN_PROMPT = ("Clean up this picture of her: the same young woman with exactly the same face, hair, expression "
                 "and clothes, facing the viewer, framed from the waist up with a little black space above her head, "
@@ -247,13 +248,16 @@ def adopt(proj, look_id, draft, wearing=None, prompt=None, base_look=None, repla
         }
     elif kind in ("full", "asleep"):
         base = proj.looks.get(base_look or f"main@{outfit}", {}) if outfit else proj.looks.get("main", {})
+        # An outfit made on one of her full bodies (Klein changed the clothes on her whole figure): its
+        # subject already stands with her whole body in view, and what she wears is head to toe.
+        on_full = kind == "full" and base_of(base_look or "") == "full"
         # An outfit's full body: what's said of her legs and feet joins the outfit's own clothes.
         if outfit and kind == "full" and wearing and base.get("wearing") and base["wearing"].lower() not in wearing.lower():
             wearing = f"{base['wearing']}, {wearing.strip().rstrip('.')}"
         subject = (subject_for(base, wearing) if wearing else base.get("subject", "")).rstrip(". ")
         proj.looks[look_id] = {
             "picture": target.name,
-            "subject": subject + (", standing with her whole body in view" if kind == "full" else ""),
+            "subject": subject + (", standing with her whole body in view" if kind == "full" and not on_full else ""),
             "ending": ("She stays in the same place and ends exactly as she began, facing the viewer, her whole body in view."
                        if kind == "full" else "She stays in the same place and pose and ends exactly as she began."),
             **({"keep": base["keep"]} if base.get("keep") else {}),

@@ -17,6 +17,9 @@ field explains itself when you hover over it.
   in the glass, with her own moves.
 - [A new outfit for a Choom you have](docs/tutorial-outfit.md): her picture in new clothes, its clips,
   its full body, and onto the glass.
+- [Changes of clothes, new moves and new looks](docs/tutorial-changes.md): a nightie slipping to the
+  floor, a flannel coming off, a coat for cold days, a move of her own, and clothes she wears only
+  when she chooses them.
 
 ## How a Choom is made
 
@@ -40,6 +43,7 @@ stands in the glass in 3D, and her lips follow her voice over any clip she talks
   - `pose_wink`: a move for a selfie
   - `evening-idle_glance`: the same quiet moment in her evening outfit
   - `eveningdress-change_nightcold_melt`: a change of clothes on screen, from one look to another
+  - `nightwarm-fullchange_chosenunder_slip`: the same in her whole figure, from one full body to another
   - `campfire`, `campfire_glance`, `campfirelisten`: her loop at a place, a quiet moment there, listening
   - `to_campfire`, `from_campfire`: sitting down there from her full body, and getting up again
   - `walkoff`, `walkon`, `vanish`, `appear`: off the glass and back on, from her full body (walking)
@@ -191,6 +195,14 @@ plays it instead of the camera cut when she changes between them. Make one each 
 look, and back to her usual clothes for the morning). One motion in five to seven seconds works
 best, and a change by magic renders more reliably than clothes moved by hand.
 
+A change can also go from one of her full bodies to another (`genesis_nightwarm-fullchange_chosenunder_slip`),
+for one that needs her feet in the frame: a nightie slipping off and pooling on the floor. The glass
+cuts to her whole figure for it, as for her other full-body clips, and after it cuts back to her
+waist-up look in the new clothes. It plays only while she's on the glass by herself (not in a group
+room); otherwise she changes waist-up or with a cut. Both full bodies should be in the same pose and
+framing, so make the second as an outfit started from the first (see [New look](#new-look)). The
+[changes tutorial](docs/tutorial-changes.md) walks through one.
+
 ![A change of clothes from the burgundy dress to the cold-night look](docs/images/change-clip.jpg)
 
 Each prompt is built from the look's subject line, its keep line, the action, the camera line and the
@@ -314,7 +326,7 @@ Klein runs, so either can still be changed by hand.
 **Rename outfit** (on an outfit's cards) gives the outfit a new name: all its looks (`main@`,
 `relaxed@`, `full@`, `asleep@`), its clips and their files in `clips/`, sheets and earlier takes move
 to it, change-of-clothes clips into it too, since a clip's name says which look it's in. The name
-starts with when she wears it (day, hot, evening, cold or night), so a rename can change that. It's
+starts with when she wears it (day, hot, evening, cold, night, or chosen), so a rename can change that. It's
 refused while any of its clips is queued, placed on the glass or built: take them off the glass and
 build first. **Delete look** takes a look out of her project (its picture file stays in `clean/`).
 It's refused for her main look and while clips that aren't dropped use it; if only dropped clips use
@@ -328,7 +340,7 @@ it, the page asks before deleting them with it. Both ask in the page before doin
 
 | Kind | What it makes |
 |---|---|
-| An outfit | her in new clothes, in the pose of the look it starts from (`main@eveningdress`) |
+| An outfit | her in new clothes, in the pose of the look it starts from (`main@eveningdress`); started from one of her full bodies, that outfit's full body in the same pose and framing (`full@chosenunder` from `full@nightwarm`), for a change of clothes in her whole figure |
 | Full body | her head to toe: `full` from her usual look, `full@<outfit>` from an outfit |
 | Asleep | her with her eyes closed, for the sleep clips: `asleep` from her usual clothes, `asleep@<outfit>` from a night outfit |
 | A place | somewhere she goes and stays a while, from her full body: name it (`campfire`) and say where she is and how ("sitting on the ground beside a small campfire, her knees drawn up and her hands held out over the flames, palms down, looking up at the viewer"). By a fire, hands warm palms down and move a little; palms up looks like holding something out (Genesis's first campfire). A pass on a picture keeps her hands as they are (Genesis's stayed palms up through three, even with a palms-down picture as the reference); what turned them was a clip from the picture alone, no end picture, in which she turns them over, and its last frame sent from the computer as a new picture for the look ("keep this picture exactly as it is, only sharper") |
@@ -338,7 +350,10 @@ it, the page asks before deleting them with it. Both ask in the page before doin
 
 - **Starts from:** the picture Klein edits. Any of her waist-up looks works, an outfit too (Genesis's
   night looks start from her plain look, without her motes). Its look also gives the new look its
-  subject, keep line and ending.
+  subject, keep line and ending. An outfit can also start from one of her full bodies: Klein changes
+  the clothes on her whole figure and keeps her pose, and "She now wears" is everything head to toe,
+  feet too (*…, and she is barefoot*). A full body has no keep line of its own, so the instruction
+  uses the one of the clothes she's in there, waist-up, without her arms, and adds her pose.
 - **Or start from a picture from your computer:** Klein edits that instead; the look above still
   gives the description.
 - **More pictures for Klein to use:** a dress, shoes, a purse, a close-up of her face. Her picture
@@ -346,7 +361,8 @@ it, the page asks before deleting them with it. Both ask in the page before doin
   order chosen. Say which holds what: "she now wears the dress from picture 2 and the sandals from
   picture 3".
 - **She wears it on** and **Name** (outfits only): when the glass puts her in it, and a name that
-  tells two outfits for the same time apart (`dress` makes `main@eveningdress`).
+  tells two outfits for the same time apart (`dress` makes `main@eveningdress`). *Only when she
+  chooses it herself* makes a `chosen…` outfit, which the glass never puts on by the clock.
 - **She now wears:** the clothes, as you'd describe them to someone. For a full body this is **what
   she wears below the waist**; see below.
 - **Instruction for Klein:** written for you. It keeps what the start look's own Klein line keeps (her
@@ -395,6 +411,7 @@ An outfit's name tells the glass when she wears it (`OUTFIT_RULES` in `living.js
 | `hot…` | over 85°F |
 | `evening…` | 6 to 11 pm |
 | `day…` | a different day outfit each day, taking turns with her usual clothes |
+| `chosen…` | never by the clock: only when she asks for it herself (`glass_wear`), until she goes to sleep or changes again |
 
 The rules are checked in that order. Temperatures come from your own weather station when Home
 Assistant has one (see the [reference](../docs/reference.md)).
@@ -409,7 +426,9 @@ Assistant has one (see the [reference](../docs/reference.md)).
   the time she'd otherwise spend in her usual clothes, decided every twenty minutes, and change on
   screen with clips made for them.
 - **Clothes she chooses herself** (`glass_wear`) stay on until she goes to sleep or changes again, at
-  most until midnight. Day clothes chosen before 10 pm come off then for her night clothes.
+  most until midnight. Day clothes chosen before 10 pm come off then for her night clothes, and so does
+  a `chosen…` outfit put on before 10 pm; put on after 10 pm, it stays on until she falls asleep, and
+  she changes into her night clothes to sleep.
 - **Windy days:** wind clips play only when it's windy (a 10-minute average of 12 mph or gusts of 20,
   held for 20 minutes after the last such reading), in the look she has on.
 
@@ -422,7 +441,7 @@ looking-glass skill):
 |---|---|
 | `glass_move("a little dance")` | plays a move once, in the clothes she has on, at her next quiet moment on the glass within half an hour |
 | `glass_wear("my red dress")` | changes her clothes at her next quiet moment; she keeps them on until bedtime, or until she changes again (day clothes chosen by day: until 10 pm) |
-| `glass_closet()` | lists her moves and the clothes in her closet, never what she has on; it only lists, and its answer points her to `glass_wear` |
+| `glass_closet()` | lists her moves and the clothes in her closet, never what she has on (a `chosen…` outfit says it's "worn only when you choose it"); it only lists, and its answer points her to `glass_wear` |
 | `glass_wish("a midnight-blue silk slip dress")` | puts clothes or a move she'd like on her wish list; nothing changes on the glass |
 
 The glass answers from what's built:

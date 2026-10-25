@@ -353,11 +353,14 @@ class Handler(BaseHTTPRequestHandler):
                     return self.fail(f"no {base} picture to start from")
                 if kind not in pictures.KINDS:
                     return self.fail("a new look is an outfit, full body, asleep, a place, the empty glass, or a new picture for a look she has")
-                if kind not in ("redo", "place") and base_of(base) in ("full", "asleep"):
-                    return self.fail("a new look starts from one of her waist-up looks")
+                # An outfit can start from a full body too: Klein changes the clothes on her whole figure
+                # and keeps her pose, so the two full bodies match for a change between them (a nightie
+                # slipping to the floor).
+                if kind not in ("redo", "place") and base_of(base) == "asleep" or kind not in ("redo", "place", "outfit") and base_of(base) == "full":
+                    return self.fail("a new look starts from one of her waist-up looks (an outfit from a full body too)")
                 if kind == "outfit":
                     if data["when"] not in pictures.WHEN:
-                        return self.fail("an outfit is for cold, hot, evening, day or night")
+                        return self.fail("an outfit is for cold, hot, evening, day or night, or chosen by her")
                     # From another outfit's picture too (Genesis's night look from her plain one), in its pose.
                     look_id = f"{base_of(base)}@{data['when']}{re.sub(r'[^a-z0-9]', '', data.get('name', '').lower())}"
                 elif kind == "full":
@@ -398,6 +401,11 @@ class Handler(BaseHTTPRequestHandler):
                 refs = list(saved.values())
                 wearing = data.get("wearing", "").strip()
                 keep = proj.looks[base].get("kleinKeep", "") or (proj.looks["main"].get("kleinKeep", "") if kind == "place" else "")
+                if not keep and kind == "outfit" and base_of(base) == "full":
+                    # A full body has no keep line of its own: the one of the clothes she's in there, waist-up,
+                    # without her arms (she stands relaxed), and her pose, so the two full bodies match.
+                    own = proj.looks.get(f"main@{outfit_of(base)}" if outfit_of(base) else "main", {}).get("kleinKeep", "")
+                    keep = f"{pictures.full_keep(own)}, and her pose" if own else ""
                 default = {"outfit": lambda: pictures.outfit_prompt(wearing, keep), "full": lambda: pictures.full_prompt(keep, wearing),
                            "asleep": lambda: pictures.asleep_prompt(keep), "place": lambda: pictures.place_prompt(wearing, keep),
                            "redo": lambda: pictures.TRUE_COLOR_PROMPT}[kind]

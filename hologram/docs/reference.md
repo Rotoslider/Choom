@@ -228,6 +228,7 @@ named by kind, `<kind>_<what she does>` (`KINDS`):
 | `oops_…` | a face at her own mishap | main |
 | `windy_…` | hair and clothes in the wind | main |
 | `[<from>-]change_<to>_<what>` | a change of clothes on screen (`usual` for her usual clothes) | from one look to another |
+| `[<from>-]fullchange_<to>_<what>` | the same in her whole figure (a nightie slipping to the floor) | from one full body to another |
 | `<place>`, `<place>_…`, `<place>listen` | at one of her places: her loop there (she can talk in it), quiet moments, listening | the place |
 | `to_<place>[_…]`, `from_<place>[_…]` | getting there (sitting down from her full body) and back up (mood `go`) | full to the place, and back |
 | `walkoff`, `walkon`, `vanish`, `appear` (`…_<what>`, `…2`) | off the glass and back on (mood `go`) | full or her home pose to `gone`, and back |
@@ -349,6 +350,7 @@ An outfit's name says when she wears it (`OUTFIT_RULES`, `nightOutfit` and `want
 | `hot…` | over 85°F |
 | `evening…` | 6 to 11 pm |
 | `day…` | takes turns with her usual clothes: one pick a day from the date, held all day (while it rests, she's in her usual clothes, not another day outfit) |
+| `chosen…` | never by the clock (a rule that's never true): only when she chooses it herself, and no visit carries on after (Genesis's underthings, Oct 24 2026) |
 | `plain`, `noheart` | looks in her usual clothes (Genesis without her glow, Optic without her heart): about a third of the time, decided every 20 minutes, changed on screen with clips made for it |
 
 The temperature comes from the weather feed ([Weather](#weather)). An outfit is wearable only if it
@@ -376,6 +378,11 @@ order) are defaults. Copy `glass-settings.example.json` to `glass-settings.json`
 **Changing.**
 - She changes at a quiet moment, with a camera cut. A change clip made for that pair of looks plays
   instead when there is one.
+- A full-body change (`fullchange_`, from `full@<from>` to `full@<to>`) counts for the waist-up pair:
+  the glass cuts to her whole figure for it and sets the cut back to her waist-up look in the new
+  clothes (`cutFrom`). Only while she's the Choom on the glass and not on the stage, as for her other
+  full-body cuts. The two full bodies match best when the second is an outfit Klein made from the
+  first (the Studio allows an outfit to start from a full body for this).
 - Change clips play only to change clothes, never to reach an expression or a move.
 - Before sleeping she changes back into her usual clothes. She stays in her night clothes instead
   when they have their own asleep look (`asleep@nightcold`, with sleep and wake clips such as
@@ -647,7 +654,7 @@ The looking-glass skill in the Choom app (`skills/core/looking-glass`) gives eac
 |---|---|
 | `glass_move` | a move at her next quiet moment on the glass, if that comes within half an hour |
 | `glass_wear` | clothes from her closet on the glass, kept until bedtime unless she changes again (day clothes chosen by day: until 10 pm) |
-| `glass_closet` | what she has (moves and clothes), never what she has on; it only lists, and its answer points her to `glass_wear` |
+| `glass_closet` | what she has (moves and clothes), never what she has on; it only lists, and its answer points her to `glass_wear`. A `chosen…` outfit is listed as "worn only when you choose it"; change clips aren't moves |
 | `glass_wish` | puts clothes or a move she'd like on the wish list, without changing anything |
 
 **How a request travels.** Like the camera, these go over the hologram feed:
