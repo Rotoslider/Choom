@@ -37,6 +37,7 @@ Open the Studio (http://127.0.0.1:8767), click her name at the top, and go to **
   | hot days | over 85°F |
   | daytime | a different day outfit each day, taking turns with her usual clothes |
   | nights | from 10 pm until she wakes; she can sleep in it (step 9) |
+  | only when she chooses it herself | never by the clock: only when she asks for it with `glass_wear` |
 
   The outfit's name carries this (`evening…`), which is how the glass decides.
 - **Name:** tells two outfits for the same time apart: `dress` makes the look `main@eveningdress`.
@@ -232,7 +233,8 @@ and keeps it until morning.
 
    The example plans `genesis_eveningdress-change_nightcold_melt`. One motion in five to seven
    seconds works best; a change by magic (motes swirling, one dress melting into the other) renders
-   more reliably than clothes moved by hand.
+   more reliably than clothes moved by hand. A change that needs her feet in the frame goes between
+   two full bodies instead; [the changes tutorial](tutorial-changes.md) has one.
 5. **Its full body** (optional): as in step 8, from the night outfit.
 
 Until it has its own asleep look, she wears it from 10 pm and changes back to her usual clothes to
@@ -252,6 +254,8 @@ light"), then render the clips.
 ## Tips
 
 - **One outfit at a time.** Render it, review it, build it, then start the next.
+- **Changes between outfits, and moves of her own,** are in [the changes tutorial](tutorial-changes.md):
+  a flannel coming off, a coat going on, a nightie slipping to the floor.
 - **Short clips fail less.** Five seconds is the sweet spot. Longer clips (up to 15 s, for a dance)
   drift more into new shots and colour shifts.
 - **An outfit-specific moment** makes it feel worn: tugging a sweater back onto her shoulder, pulling
