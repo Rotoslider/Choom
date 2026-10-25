@@ -219,6 +219,29 @@ and on the way back swings it around behind her and shrugs into it. Her tank top
 body too (`full@chosentank`, made as an outfit from her new flannel full body, `full@cold`), and her
 flannel has moves that belong to it: pulling it snug against a chill, straightening the collar.
 
+### Eve's slip dress to her underthings
+
+The same change as Genesis's, from Eve's evening slip (`main@eveningslip`, `full@eveningslip`: a
+midnight-blue silk slip dress to just below the knee, barefoot):
+
+1. **New look**, *An outfit*, **Starts from** `main@eveningslip`, *only when she chooses it
+   herself*, **Name** `under`, **She now wears** *a plain, opaque ivory cotton bralette and matching
+   ivory cotton briefs*. Starting from her own picture keeps her own face and figure; Klein changes
+   only the clothes, so each Choom's underthings fit her, not Genesis.
+2. The same again from `full@eveningslip`, adding *and she is barefoot*, for `full@chosenunder`.
+3. Her waist-up picture ends at her hips, with only the top edge of the briefs in it, so her Subject
+   names just *a plain, opaque ivory cotton bralette with thin straps*. Closet words as Genesis's.
+4. **Change of clothes**, `full@eveningslip` to `full@chosenunder`, `slip`, 7 s: *She slides one
+   thin strap off her shoulder, then the other, and the midnight-blue silk slip dress slides down her
+   body and settles in a soft pool around her bare feet; she steps out of it and smiles at the
+   viewer.*
+5. Back, `full@chosenunder` to `full@eveningslip`, `on`, 7 s: *She bends and reaches down beside her
+   feet, lifts up a midnight-blue silk slip dress, slips it on over her head and smooths it down to
+   just below her knees, then smiles at the viewer.*
+
+Both changes came out on the first try (Oct 25). In her slip in the evening she can ask for her
+underthings and the slip falls to the floor; asked for from anything else, it's a cut.
+
 ### A warm coat when it's cold
 
 The glass puts `cold…` outfits on under 45°F, in visits, and takes them off again afterwards, so both
