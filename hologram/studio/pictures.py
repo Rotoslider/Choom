@@ -133,6 +133,13 @@ TRUE_COLOR_PROMPT = ("Make this picture look natural and true to life: clean neu
                      "expression, hair, clothes and pose, the framing, and the pure black background.")
 
 
+def worn_in(subject):
+    """The clothes her subject line names ("an open red plaid flannel shirt over a white ribbed tank
+    top"), for a look made before "She wears" was kept; "" if it names none."""
+    m = re.search(r"wearing (.+?)(, (?:glows|glowing|softly|against|her|in |standing|holding))", subject or "")
+    return m.group(1) if m else ""
+
+
 def subject_for(look, wearing):
     """Her subject line in the new clothes: from the look's wardrobe template ("... wearing {wearing},
     glows softly against ..."), or by swapping the clothes in her subject line."""
@@ -251,10 +258,16 @@ def adopt(proj, look_id, draft, wearing=None, prompt=None, base_look=None, repla
         # An outfit made on one of her full bodies (Klein changed the clothes on her whole figure): its
         # subject already stands with her whole body in view, and what she wears is head to toe.
         on_full = kind == "full" and base_of(base_look or "") == "full"
-        # An outfit's full body: what's said of her legs and feet joins the outfit's own clothes.
-        if outfit and kind == "full" and wearing and base.get("wearing") and base["wearing"].lower() not in wearing.lower():
-            wearing = f"{base['wearing']}, {wearing.strip().rstrip('.')}"
+        # An outfit's full body: what's said of her legs and feet joins the outfit's own clothes (read
+        # from its subject line if it has no "She wears": Eve's flannel full body lost the flannel).
+        top = base.get("wearing") or (worn_in(base.get("subject")) if not on_full else "")
+        if outfit and kind == "full" and wearing and top and top.lower() not in wearing.lower():
+            wearing = f"{top}, {wearing.strip().rstrip('.')}"
         subject = (subject_for(base, wearing) if wearing else base.get("subject", "")).rstrip(". ")
+        if kind == "full" and not on_full and re.search(r",\s*(?:her )?arms crossed(?: in front of her)?", subject):
+            # A full body stands relaxed (pictures.full_keep); her waist-up pose stays out of its line.
+            subject = re.sub(r",\s*(?:her )?arms crossed(?: in front of her)?", "", subject).replace(
+                ", against a plain pure black background", ", against a plain pure black background, her arms relaxed at her sides", 1)
         proj.looks[look_id] = {
             "picture": target.name,
             "subject": subject + (", standing with her whole body in view" if kind == "full" and not on_full else ""),

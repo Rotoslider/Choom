@@ -381,7 +381,9 @@ is written from it, so the two always name the same clothes:
 **A full body keeps the top from the picture it starts from.** For an outfit's full body, "She now
 wears" is what's below the waist (*faded ripped jeans and worn tan work boots*). Words about the top
 change the top in the new picture and are said twice in the new look's subject line, so leave them
-out, or tidy the subject line afterwards.
+out, or tidy the subject line afterwards. The new subject line takes the outfit's clothes from its
+**She wears**, or, for an outfit made before that field, from its subject line (Eve's flannel full
+body lost the flannel before), and says her arms are relaxed at her sides instead of crossed.
 
 The versions appear at the top of Looks; click one to see it large, and **Use this one** makes it the
 look. **Discard** throws the versions away and puts their settings back in the form (kind, start

@@ -61,6 +61,13 @@ uses the same pages and only spells out what's new.
   camera pushes in). The Studio warns you when you plan. The full list is in the [new-Choom
   tutorial](tutorial-new-choom.md#your-own-moves-a-dance-turning-her-back-to-you-anything).
 
+### The subject line names what's in the frame
+
+Every clip's prompt starts with the look's Subject. If it names clothes the picture doesn't show
+(briefs in a chest-up picture), the video model pulls the camera back to show them, and the clip
+fails as a push-out. Keep a waist-up look's Subject to what's in its frame; its full body says the
+rest.
+
 ### Reviewing a change
 
 Watch the whole clip, not just the contact sheet:
@@ -101,6 +108,11 @@ opaque underthings, clean edges on black.
 
 On the new look's card, check:
 - **Subject:** her, in the underthings, "in clean neutral light against a plain pure black background".
+  Her night look is framed from the chest up, so the briefs aren't in the picture: take them out of the
+  Subject (*wearing a plain, opaque ivory cotton bralette with thin straps*) and **Save**. A Subject
+  that names something below the frame makes the video model pull back to show it: two of the first
+  four clips zoomed out to her waist before the briefs came out of the line. "She wears" keeps
+  both, for her closet.
 - **Closet words:** what she can ask for it by. Read from what she wears: *bralette, briefs, cotton,
   ivory, underwear, white*. Add the words she'd use (*underthings*, *undies*), then **Save**.
 
@@ -153,8 +165,12 @@ The way back plays when she goes to sleep: at bedtime the glass puts her night c
 Plan it the same way:
 
 - **From** `full@chosenunder`, **To** `full@nightwarm`, **Short name** `on`, 7 s.
-- *She bends down, picks up the silk nightie from around her feet and slips it on over her head,
-  smooths it down and smiles at the viewer.*
+- *She bends and reaches down beside her feet, lifts up a short blush pink silk nightie, slips it on
+  over her head and smooths it down to mid-thigh, then smiles at the viewer.* (Her start picture has
+  no nightie on the floor, so it's "reaches down beside her feet" rather than "picks up the nightie".)
+
+Both came out on the first try (Oct 25). In the first, the pooled nightie fades away in the last
+second, since her end picture has nothing on the floor; it reads fine.
 
 Her cold-night look is a long ivory nightgown with long sleeves, worn when it's under 70°F at your
 weather station. For cold nights too, plan one from `full@nightcold` to `full@chosenunder`: *She
@@ -194,9 +210,14 @@ Eve's cold-day look (`main@cold`) is an open red plaid flannel shirt over a whit
 3. **Change of clothes**, `main@cold` to `main@chosentank`, `off`: *She uncrosses her arms, shrugs
    the open red flannel shirt off her shoulders, slides her arms out of the sleeves and drops it out of
    view below, then crosses her arms again and smiles at the viewer.*
-4. Back, `main@chosentank` to `main@cold`, `on`: *She uncrosses her arms, picks up the red flannel
-   shirt from below, slips her arms into the sleeves and settles it on her shoulders, leaving it open,
-   then crosses her arms again and smiles at the viewer.*
+4. Back, `main@chosentank` to `main@cold`, `on`: *She uncrosses her arms, lifts a red plaid flannel
+   shirt up from below, slips her arms into the sleeves and settles it open on her shoulders with the
+   cuffs rolled back, then crosses her arms again and smiles at the viewer.*
+
+These are on the glass now (Oct 25), both first tries: she shrugs the flannel off and lets it drop,
+and on the way back swings it around behind her and shrugs into it. Her tank top has its own full
+body too (`full@chosentank`, made as an outfit from her new flannel full body, `full@cold`), and her
+flannel has moves that belong to it: pulling it snug against a chill, straightening the collar.
 
 ### A warm coat when it's cold
 
