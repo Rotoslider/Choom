@@ -757,7 +757,9 @@ function drawLabel(p) {
 }
 
 // ---- State --------------------------------------------------------------------------------
-let current = 0;
+// Who's on the glass, kept in this browser profile (applyPortrait): every relaunch brought Aloy back
+// whoever had been on, Genesis in the middle of talking with Donny four times in a day (2026-10-25).
+let current = Math.max(0, (() => { try { return portraits.findIndex((p) => p.id === localStorage.getItem('onGlass')); } catch { return 0; } })());
 let pending = null;
 let phase = 'in';        // 'in' -> 'idle' -> 'out' -> 'in'
 let phaseT = 0;
@@ -894,6 +896,7 @@ const baseDepth = { value: 0.75 };
 function applyPortrait(i) {
   const p = portraits[i];
   lastSwitchAt = performance.now();
+  try { localStorage.setItem('onGlass', p.id); } catch { /* she starts on the first Choom */ }
   const fu = frontMaterial.uniforms;
   fu.packed.value = p.alive ? 1 : 0;
   fu.colorMap.value = p.alive ? p.players[p.active].texture : p.color;

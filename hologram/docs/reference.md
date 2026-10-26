@@ -48,6 +48,14 @@ Two relaunches at the same moment can leave duplicate processes. When several sc
 relaunch, wrap each in the same lock, e.g. `flock /tmp/glass-relaunch.lock tools/relaunch_when_quiet.sh`;
 `launch.sh` lets go of the lock it was handed (step 2), so it is free again as soon as the relaunch ends.
 
+**What a relaunch keeps.**
+- The Choom on the glass: the page saves her in the kiosk's localStorage each time she changes and starts
+  on her. Every relaunch used to bring Aloy, the first in the manifest, back instead.
+- Her wardrobe (localStorage, see Looks and outfits).
+- Where you are in the room (`presence_state.json`, see Presence).
+- The last time you were at the desk (`desk.json`, see Welcome back).
+- The app's mute: the server replays it to the new page.
+
 **Recovery.** The server watches the rest:
 - **The page:** it posts its status every 2 s, also with the screens dark. If none comes for a minute
   (Chrome crashed, the page froze), the server relaunches everything with `launch.sh`. Not in the
@@ -589,7 +597,17 @@ reads exactly that value:
   changed).
 - **Arriving and leaving.** Arriving counts at once, or after `after` seconds present in a row. Leaving
   counts after two minutes absent (phones drop Wi-Fi now and then), or after `away_after` seconds.
-  When the server starts, what Home Assistant says counts at once, so a relaunch keeps it.
+- **A relaunch carries on.** The server saves where you are as it has worked it out
+  (`presence_state.json`, when it changes and every minute). A server that starts within 10 minutes
+  picks that up, so a build's relaunch changes nothing. Reading the zones afresh went wrong both ways:
+  - A still sleeper reads empty, so a night relaunch lost the bed (Oct 19, 0:38 and 2:32 am) and the
+    glass woke.
+  - The bed zone blinked on for 23 s as Donny shifted in the desk chair beside it. The relaunch at
+    6:00 pm on Oct 25 came in the middle of it, so the bed counted at once: Aloy changed into her
+    night clothes and fell asleep with him at the desk, and the bed would only have ended when he got up.
+
+  With nothing recent saved (after a reboot), what Home Assistant says counts at once, except a bed
+  reading while another zone reads you too.
 - **Zones** (`"zone": true`) are the zones of one room sensor, such as Donny's Everything Presence Lite,
   a mmWave radar with bed, office and kitchen zones. You're in one zone at a time:
   - A radar blinks. A gap under 25 s doesn't break a stretch in a zone, unless another zone read you

@@ -832,13 +832,21 @@ AWAY_GRACE_S = 120  # gone only after two minutes of absence: phones drop Wi-Fi 
 ZONE_GAP_S = 25     # a radar zone blinks off between readings: a gap this short doesn't end a stretch
 ZONE_SOLID_S = 45   # a stretch this long in a zone is him; a ghost reading (the radar's echo of him
                     # moving in bed, shown in another zone) lasted 15 to 35 s on 2026-10-18
+PRESENCE_SAVED = HERE / "presence_state.json"  # where he is as last worked out, kept across relaunches
+PRESENCE_KEEP_S = 10 * 60  # a saved state this recent carries on; an older one is read afresh
+PRESENCE_SAVE_S = 60       # saved this often, and whenever what the page is told changes
 
 
 class Presence:
     """Home Assistant's readings, debounced into what the page is told, role by role.
     - Any role: arriving counts after "after" seconds present (at once by default), leaving after
-      "away_after" seconds absent (two minutes: phones drop Wi-Fi now and then). What it reads when
-      the server starts counts at once, so a relaunch keeps it.
+      "away_after" seconds absent (two minutes: phones drop Wi-Fi now and then).
+    - A relaunch (every build) carries on from the state the last server saved (presence_state.json,
+      if it's under PRESENCE_KEEP_S old). Read afresh, the zones' readings at that moment told the
+      page where he was at once: a still sleeper reads empty, so the bed was lost (2026-10-19, 0:38
+      and 2:32 am), and a bed zone that blinked on as he shifted in the desk chair beside it put the
+      glass to sleep with him at the desk, until he got up (2026-10-25, 6:00 pm). With nothing saved,
+      what it reads counts at once, except a bed reading while another zone reads him too.
     - A zone of a room sensor ("zone": true) is where he is in the room. A radar blinks, so a gap
       under ZONE_GAP_S doesn't break a stretch, unless another zone read him meanwhile (turning over
       at the edge of the bed, office and bed blinked by turns), and "after" is one stretch. Settling
@@ -848,9 +856,38 @@ class Presence:
       It counts once it has been the last place he was seen for "after" seconds (no other zone read
       him since), and it ends only when he settles in another zone or leaves home."""
 
+    KEPT = ("shown", "on_since", "last_on", "absent_since", "place", "place_at")
+
     def __init__(self):
         self.shown, self.on_since, self.last_on, self.absent_since = {}, {}, {}, {}
         self.place, self.place_at = None, 0.0  # the last place he was seen, and since when
+        self.saved_at, self.saved_as = 0.0, None
+
+    def carry_on(self, path, t):
+        """Pick up the last server's state, if it's recent. True if it did."""
+        try:
+            saved = json.loads(path.read_text())
+            if not 0 <= t - float(saved["time"]) < PRESENCE_KEEP_S:
+                return False
+            for key in self.KEPT:
+                setattr(self, key, saved[key])
+        except (OSError, ValueError, KeyError, TypeError):
+            self.__init__()
+            return False
+        return True
+
+    def save(self, path, t):
+        """Kept for the next server: whenever what the page is told or the last place changes, else every
+        PRESENCE_SAVE_S."""
+        if (self.shown, self.place) == self.saved_as and t - self.saved_at < PRESENCE_SAVE_S:
+            return
+        try:
+            part = path.with_suffix(".part")
+            part.write_text(json.dumps({"time": t, **{key: getattr(self, key) for key in self.KEPT}}))
+            part.replace(path)
+            self.saved_at, self.saved_as = t, (dict(self.shown), self.place)
+        except OSError:
+            pass
 
     def update(self, t, seen, entities):
         """seen: role -> True/False/None (unknown) as read at time t. Returns what to tell the page."""
@@ -882,8 +919,9 @@ class Presence:
         now = {}
         for role, value in seen.items():
             was = self.shown.get(role)
-            if value is None or was is None:  # unknown, or the server has just started: as it reads
-                now[role] = value
+            if value is None or was is None:  # unknown, or a server with nothing saved: as it reads, but
+                # the bed with another zone reading him too is the chair beside it (2026-10-25, 6:00 pm)
+                now[role] = value and not (role in stays and any(seen.get(other) for other in zones if other != role))
             elif was:
                 now[role] = True  # leaving is decided below
             elif role in stays:
@@ -925,6 +963,8 @@ def presence_watch():
     reservation), since presence and the weather station stop when it moves."""
     last, entities, resolved_at = None, {}, 0.0
     debounce = Presence()
+    carried = debounce.carry_on(PRESENCE_SAVED, time.time())
+    log_entry({"kind": "presence-start", "carried": carried, **({"shown": debounce.shown, "place": debounce.place} if carried else {})})
     while True:
         try:
             url_file, token_file, map_file = HA_CONFIG / "ha_url", HA_CONFIG / "ha_token", HA_CONFIG / "presence.json"
@@ -967,6 +1007,7 @@ def presence_watch():
                 else:
                     now[role] = raw.lower() in PRESENT_STATES
             now = debounce.update(time.time(), now, entities)
+            debounce.save(PRESENCE_SAVED, time.time())
             latest["in_bed_now"] = debounce.in_bed_now
             latest["presence_state"] = "watching " + ", ".join(
                 f"{role}: {spec['entity'] if isinstance(spec, dict) else spec}" for role, spec in entities.items()) + (
