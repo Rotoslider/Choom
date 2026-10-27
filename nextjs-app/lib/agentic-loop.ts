@@ -48,6 +48,7 @@ import {
   type FallbackConfig, type DetectedProject,
 } from '@/lib/chat-shared';
 import { type ToolContext, executeToolCall, executeToolCallViaSkills } from '@/lib/tool-execution';
+import { dropStaleReads } from '@/lib/tool-dedup';
 import type { LLMSettings, ToolCall, ToolResult, ToolDefinition, LLMProviderConfig, LLMModelProfile } from '@/lib/types';
 import type { Choom, Chat, Message } from '@prisma/client';
 
@@ -2310,6 +2311,9 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                 if (!NO_DEDUP_TOOLS.has(tc.name)) {
                   executedToolCache.set(dedupKey, result.result);
                 }
+                // After a change her earlier reads are stale: re-checking with them served the old
+                // answer (lib/tool-dedup.ts).
+                dropStaleReads(PARALLEL_SAFE, tc.name, executedToolCache, dedupHitCounts);
                 consecutiveFailures = 0;
                 consecutiveNoToolIters = 0;
               } else {
