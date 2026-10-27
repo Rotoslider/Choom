@@ -2,7 +2,7 @@
 Run: venv/bin/python -m unittest test_self_followup_recurrence -v"""
 import json, os, tempfile, unittest
 from datetime import datetime, timezone
-from scheduler import ScheduledTaskManager as S
+from scheduler import ScheduledTaskManager as S, _note_written_line
 
 TZ = "America/Denver"
 
@@ -56,6 +56,23 @@ class Requeue(unittest.TestCase):
                 self.assertEqual(new[k], entry[k])
             self.assertEqual(new["requeued_from"], "sf_aaaa1111")
             self.assertFalse(new["consumed"]); self.assertEqual(new["status"], "pending")
+
+    def test_keeps_when_the_note_was_written(self):
+        # A copy is re-queued each night, but the words are the first one's (2026-10-26: Genesis's
+        # Oct 19 trip watch read as written "24 hours ago").
+        with tempfile.TemporaryDirectory() as root:
+            mgr = S.__new__(S)
+            first = {"id": "sf_w1", "choom_name": "Genesis", "prompt": "Nightly watch", "trigger_at": "2026-10-20T03:15:00Z",
+                     "created_at": "2026-10-20T00:20:49Z", "repeat": {"rule": "daily", "time": "21:15", "tz": TZ}, "series_id": "series_w"}
+            copies = [first]
+            for fired in ("2026-10-20T03:15:32Z", "2026-10-21T03:15:32Z"):
+                new_id = mgr._sf_requeue_routine(root, copies[-1], utc(fired))
+                with open(os.path.join(root, "pending", f"{new_id}.json")) as fh:
+                    copies.append(json.load(fh))
+            self.assertEqual([c.get("written_at") for c in copies[1:]], ["2026-10-20T00:20:49Z"] * 2)
+            self.assertEqual(copies[2]["created_at"], "2026-10-21T03:15:32Z")
+            self.assertEqual(_note_written_line(copies[2]["written_at"], utc("2026-10-27T03:15:32Z")),
+                             "[You wrote this note on Mon, Oct 19 at 6:20 PM — 7 days ago.]")
 
     def test_not_a_routine(self):
         with tempfile.TemporaryDirectory() as root:

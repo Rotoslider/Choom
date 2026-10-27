@@ -1795,6 +1795,9 @@ Be practical. Only work on things that can actually be accomplished with the too
             "reason": entry.get("reason", ""),
             "trigger_at": nxt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
             "created_at": now.isoformat().replace("+00:00", "Z"),
+            # When she wrote the words: the copy is new, the note isn't. Stamped at each re-queue, her
+            # Oct 19 watch for Donny's trip told Genesis on Oct 26 she had written it "24 hours ago".
+            "written_at": entry.get("written_at") or entry.get("created_at"),
             "consumed": False,
             "status": "pending",
             "repeat": repeat,
@@ -1983,7 +1986,7 @@ Be practical. Only work on things that can actually be accomplished with the too
 
                 # Build grounding context from available state
                 awareness_parts = [f"[You are waking up — it is {now_str}.]"]
-                written = _note_written_line(entry.get("created_at"), now)
+                written = _note_written_line(entry.get("written_at") or entry.get("created_at"), now)
                 if written:
                     awareness_parts.append(written)
 
