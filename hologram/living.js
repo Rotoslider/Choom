@@ -48,7 +48,14 @@ const manifest = await getJSON('/portraits/manifest.json');
 const settings = await fetch('/glass-settings.json', { cache: 'no-store' }).then((r) => (r.ok ? r.json() : {})).catch(() => ({}));
 const setting = (key, fallback) => (typeof settings[key] === typeof fallback ? settings[key] : fallback);
 
-const lkg = new LookingGlassRenderer({ canvas: document.getElementById('c'), calibration });
+// The views and their smoothing, lighter for a smaller GPU (the travel glass on a laptop's Intel
+// graphics): 48 views with 4x smoothing here; 32 without smoothing ran 30 fps on Iris Xe, where the
+// smoothing alone took it down to 3 (2026-10-28). Each view is 420x560 either way.
+const [VIEW_COLS, VIEW_ROWS] = { 48: [8, 6], 32: [8, 4], 24: [6, 4] }[setting('views', 48)] || [8, 6];
+const lkg = new LookingGlassRenderer({
+  canvas: document.getElementById('c'), calibration, cols: VIEW_COLS, rows: VIEW_ROWS,
+  quiltWidth: 420 * VIEW_COLS, quiltHeight: 560 * VIEW_ROWS, samples: setting('smoothing', true) ? 4 : 0,
+});
 // A lost graphics context (a driver reset, the GPU out of memory: twice on Oct 10) leaves the glass
 // black for good: reload the page after a moment.
 document.getElementById('c').addEventListener('webglcontextlost', (e) => {

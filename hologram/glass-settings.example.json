@@ -1,5 +1,5 @@
 {
-  "_about": "Copy to glass-settings.json (beside living.html, not in git) and change what you like; anything left out keeps its default. Hours are 0-23 local time, temperatures °F from the weather station, lengths in minutes; circleOrder is who sits where at the campfire circle, left to right. Relaunch the glass to apply.",
+  "_about": "Copy to glass-settings.json (beside living.html, not in git) and change what you like; anything left out keeps its default. Hours are 0-23 local time, temperatures °F from the weather station, lengths in minutes; circleOrder is who sits where at the campfire circle, left to right; views (48, 32 or 24) and smoothing are for a smaller GPU (a travel glass on a laptop: 32 and false). Relaunch the glass to apply.",
   "sleepFrom": 23,
   "sleepUntil": 7,
   "sleepAfterQuietMinutes": 10,
@@ -17,5 +17,7 @@
   "dailyMinutesPerClip": 2,
   "placeMinutes": 10,
   "circleFrom": 19,
-  "circleOrder": ["aloy", "eve", "optic", "genesis"]
+  "circleOrder": ["aloy", "eve", "optic", "genesis"],
+  "views": 48,
+  "smoothing": true
 }

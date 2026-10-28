@@ -71,6 +71,9 @@ happening in the Choom app: listening, thinking, using tools, changing clothes, 
   Rain and snow fall through it while they fall outside.
 - **Home Assistant presence.** She greets you when you come home. Optional desk and bed sensors add
   greeting you when you sit down, and sleeping when you go to bed.
+- **A travel glass.** A spare Portrait on a laptop plays the same clips on the road, with her voice and
+  your mic ([choom-glass-player](https://github.com/Rotoslider/choom-glass-player)); the clips are made
+  here ([Travel glass](docs/reference.md#travel-glass)).
 
 | | |
 |:---:|:---:|

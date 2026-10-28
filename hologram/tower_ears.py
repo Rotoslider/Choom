@@ -2,9 +2,9 @@
 """The tower's ears: say "OK Aloy" (or OK Optic, OK Genesis, OK Eve) and that Choom comes to the
 glass and listens; what you say next goes to her main chat and she answers in the glass.
 
-Listens to the default microphone (the EMEET on the tower) through PipeWire, finds speech with
-WebRTC VAD, and checks how each utterance begins for a wake phrase with a small Whisper model on
-the GPU (faster-whisper small.en). The phrase must open the utterance, so naming a Choom mid-sentence
+Listens to the default microphone (the EMEET on the tower) through PipeWire, or elsewhere (the travel
+glass on Windows) through PortAudio, finds speech with WebRTC VAD, and checks how each utterance begins
+for a wake phrase with a small Whisper model (faster-whisper small.en, on the GPU here). The phrase must open the utterance, so naming a Choom mid-sentence
 never calls her. Nothing is kept or sent anywhere until a wake phrase is heard; then the words (the
 rest of that utterance, or the next one) go to the Choom app's speech-to-text and on to
 /api/hologram/talk, and the hologram follows her turn. After she answers, the mic stays open a few
@@ -12,7 +12,11 @@ seconds for a reply without the wake phrase.
 
 Run with the hologram's own venv (launch.sh starts it when the venv exists):
     .venv-ears/bin/python tower_ears.py
+Settings from the environment, for a glass away from home (choom-glass-player sets them): CHOOM_URL,
+CHOOM_AUTH (user:password for the tunnel), CHOOM_GLASS (its name, e.g. travel), EARS_MIC (part of the
+mic's name, e.g. EMEET), EARS_DEVICE (cuda or cpu), EARS_COMPUTE and EARS_MODEL.
 """
+import base64
 import collections
 import io
 import json
@@ -20,6 +24,7 @@ import os
 import queue
 import re
 import select
+import shutil
 import subprocess
 import threading
 import time
@@ -34,6 +39,16 @@ from faster_whisper import WhisperModel
 
 CHOOM_URL = os.environ.get("CHOOM_URL", "http://donnys-mac-studio-3.local:3000")
 HOLOGRAM_URL = os.environ.get("HOLOGRAM_URL", "http://127.0.0.1:8765")
+# Away from home the Choom app is reached through its tunnel, which wants a login, and a glass there
+# says which it is (the app speaks a conversation only on the glass in front of him).
+CHOOM_HEADERS = {**({"Authorization": "Basic " + base64.b64encode(os.environ["CHOOM_AUTH"].encode()).decode()}
+                    if os.environ.get("CHOOM_AUTH") else {}),
+                 **({"X-Choom-Glass": os.environ["CHOOM_GLASS"], "ngrok-skip-browser-warning": "1"}
+                    if os.environ.get("CHOOM_GLASS") else {})}
+MIC_NAME = os.environ.get("EARS_MIC", "")  # PortAudio only: part of the mic's name; else the default mic
+WHISPER_DEVICE = os.environ.get("EARS_DEVICE", "cuda")
+WHISPER_COMPUTE = os.environ.get("EARS_COMPUTE", "float16" if WHISPER_DEVICE == "cuda" else "int8")
+WHISPER_MODEL = os.environ.get("EARS_MODEL", "small.en")
 RATE = 16000                     # what VAD and Whisper get
 CAPTURE_RATE = 16000             # the EMEET's microphone runs at 16 kHz (it plays at 48 kHz)
 FRAME = 480                      # 30 ms at RATE
@@ -126,7 +141,8 @@ def choom_for(word):
 
 
 def post_json(url, payload, timeout=10):
-    request = urllib.request.Request(url, data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"})
+    request = urllib.request.Request(url, data=json.dumps(payload).encode(), headers={
+        "Content-Type": "application/json", **(CHOOM_HEADERS if url.startswith(CHOOM_URL) else {})})
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return json.loads(response.read() or b"{}")
 
@@ -165,7 +181,7 @@ def speech_to_text(pcm):
     body = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"audio\"; filename=\"tower.wav\"\r\n"
             f"Content-Type: audio/wav\r\n\r\n").encode() + wav_bytes(pcm) + f"\r\n--{boundary}--\r\n".encode()
     request = urllib.request.Request(f"{CHOOM_URL}/api/stt", data=body,
-                                     headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+                                     headers={"Content-Type": f"multipart/form-data; boundary={boundary}", **CHOOM_HEADERS})
     with urllib.request.urlopen(request, timeout=60) as response:
         return (json.loads(response.read()).get("text") or "").strip()
 
@@ -176,7 +192,7 @@ class Ears:
         self.floor = 30.0                    # the room's background level (frame RMS), tracked
         self.last_capture = {}
         self.voice_told = 0.0
-        self.model = WhisperModel("small.en", device="cuda", compute_type="float16")
+        self.model = WhisperModel(WHISPER_MODEL, device=WHISPER_DEVICE, compute_type=WHISPER_COMPUTE)
         list(self.model.transcribe(np.zeros(RATE, np.float32), language="en")[0])  # the first call takes seconds
         self.frames = queue.Queue()
         self.invite = None                   # a Choom who just spoke to him unasked (a welcome back)
@@ -186,7 +202,10 @@ class Ears:
     def capture(self):
         """Mono from the default PipeWire source, restarted if it ever stops. The recorder dies with
         this process: recorders orphaned by relaunches once wedged PipeWire's capture of the EMEET,
-        and the mic went silent for every app (the browser's mic button too) until PipeWire restarted."""
+        and the mic went silent for every app (the browser's mic button too) until PipeWire restarted.
+        Without PipeWire (Windows, a Mac), through PortAudio instead."""
+        if not shutil.which("pw-record"):
+            return self.capture_portaudio()
         stalled_since, reset_at = None, 0.0
         while True:
             proc = subprocess.Popen(["pw-record", "--rate", str(CAPTURE_RATE), "--channels", "1", "--format", "s16", "-"],
@@ -212,6 +231,32 @@ class Ears:
                 tell_hologram("mic_reset" if ok else "error", message=f"mic reset: {what}")
                 if ok:
                     time.sleep(8)  # back on the USB bus and PipeWire's default source again before recording
+            time.sleep(2)
+
+    def capture_portaudio(self):
+        """Mono 16-bit at RATE through PortAudio (sounddevice), from the mic named by EARS_MIC or the
+        default one, in 30 ms blocks (one VAD frame each). Opened again if it fails or goes silent."""
+        import sounddevice as sd
+        while True:
+            last = [time.time()]
+
+            def got(data, frames, when, status):
+                last[0] = time.time()
+                self.frames.put(bytes(data))
+            try:
+                device = None
+                if MIC_NAME:
+                    device = next((i for i, d in enumerate(sd.query_devices())
+                                   if d["max_input_channels"] > 0 and MIC_NAME.lower() in d["name"].lower()), None)
+                    if device is None:
+                        tell_hologram("error", message=f"no microphone named {MIC_NAME}; using the default one")
+                with sd.RawInputStream(samplerate=RATE, channels=1, dtype="int16", blocksize=FRAME, device=device,
+                                       callback=got):
+                    while time.time() - last[0] < 5:
+                        time.sleep(1)
+                tell_hologram("error", message="mic stalled: no audio for 5 s")
+            except Exception as e:
+                tell_hologram("error", message=f"mic: {type(e).__name__}: {e}")
             time.sleep(2)
 
     def watch_hologram(self):

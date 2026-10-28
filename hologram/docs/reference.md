@@ -119,7 +119,9 @@ and status entries carry `paused`.
 `lenticular.js` draws 48 views (an 8x6 quilt, 3360x3360, each view rendered with 4x MSAA) from an
 off-axis camera rig. It interleaves them with the Portrait's factory calibration (`calibration/`), so
 Looking Glass Bridge is not needed. `living.js` is the page. It renders at 30 frames a second: the
-clips are 24 fps, and 60 kept two CPU cores busy for no visible gain.
+clips are 24 fps, and 60 kept two CPU cores busy for no visible gain. A smaller GPU can draw fewer
+views and skip the smoothing: `views` (48, 32 or 24) and `smoothing` in `glass-settings.json`. On a
+laptop's Intel Iris Xe, 48 views with smoothing ran 3 fps, and 32 without it ran 30 (the travel glass).
 
 Each Choom is an RGB-D relief (her colour, per-pixel depth and cut-out) with her own particles:
 - Aloy: embers, and an atom of four orbs in her sisters' colours and her own.
@@ -445,12 +447,13 @@ and correlation against the voice heard) to `telemetry.log`.
 
 She speaks only a conversation a browser at home has open (the app marks each sentence `speak`), and
 the app's mute button stops her. Routes that act at home refuse requests from away (ngrok or a public
-address).
+address), except from the [travel glass](#travel-glass).
 
 ## Talking at the tower
 
 `tower_ears.py` (run with `.venv-ears`):
-1. Records the speakerphone's microphone through PipeWire (16 kHz).
+1. Records the speakerphone's microphone through PipeWire (16 kHz), or through PortAudio where there's
+   no PipeWire (the travel glass on Windows).
 2. Finds speech with WebRTC VAD, or anything clearly louder than the room's tracked background.
 3. Checks how each utterance begins with faster-whisper small.en on the GPU.
 
@@ -897,6 +900,26 @@ Each wake and blank is logged as `screens`.
 - **A fifth Choom.** Her frame and orb colours come from `manifest.json` (`color`), her voice from
   `voice` there if set, the stage arranges any number of sisters on an arc behind the speaker, number
   keys go to 9, and her home pose comes from `alive.json` (`home`) when the build writes it.
+
+## Travel glass
+
+A second glass for the road: a spare Portrait on a laptop, run by
+[choom-glass-player](https://github.com/Rotoslider/choom-glass-player). The clips and depth are made
+here; the laptop only plays them. Before a trip, start `tools/share_glass.py` here and run the
+player's sync on the home network. It copies the page, `tower_ears.py`, the props, and each Choom's
+pictures and the clips her `alive.json` plays (about 11 GB; not the build caches). The share answers
+private addresses only and stops by itself after 3 hours.
+
+On the road the player reaches the Choom app through its tunnel with the tunnel's login, and says it's
+the travel glass (`X-Choom-Glass: travel`):
+- Its heartbeat takes the voice of a browser at the same address (the laptop in front of it).
+- What that browser has open is spoken there: the app marks those sentences `speakTravel`, and the
+  player plays only those.
+- Talking at its mic (`tower_ears.py` with an EMEET) goes to her chat as at the tower, and her reply is
+  spoken there.
+
+The glass at home stays quiet meanwhile: nobody at home has those conversations open. The page's
+`glass-settings.json` there has `"views": 32, "smoothing": false`.
 
 ## Debugging
 
