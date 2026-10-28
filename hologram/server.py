@@ -941,6 +941,12 @@ class Presence:
             else:
                 self.absent_since.setdefault(role, t)
                 now[role] = t - self.absent_since[role] < option(role, "away_after", AWAY_GRACE_S)
+        # Not home, the bed doesn't count at all. Leaving home ends it (above), but it counted again on the
+        # next reading, so it blinked every 5 s: Genesis fell asleep and woke by turns for five minutes
+        # (2026-10-27, 9:54 pm, his phone off the home Wi-Fi since the morning).
+        if now.get("home") is False:
+            for role in stays:
+                now[role] = False
         self.shown = dict(now)
         # In bed this moment, for the welcome back: no other zone reads him (getting up into the office,
         # the bed zone still reads him for a few seconds), and the bed does, or still counts him.
