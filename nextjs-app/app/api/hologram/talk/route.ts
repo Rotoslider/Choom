@@ -6,8 +6,9 @@
  * chat that isn't an autonomous, delegation, briefing or group-scratch thread), with the server's
  * own settings, as a message he started. While her turn runs, the chat stays marked as open at home,
  * so the hologram speaks her reply. Answers as soon as the turn has started; the turn runs on here
- * and the hologram follows it on its own feed. Ignored from away. { dryRun: true } only reports
- * which chat it would use.
+ * and the hologram follows it on its own feed. Ignored from away, except from the travel glass
+ * (its mic, choom-glass-player): then the conversation is kept open there, so that glass speaks
+ * the reply and the one at home doesn't. { dryRun: true } only reports which chat it would use.
  *
  * { room: true, text } ("OK Chooms, ..."): his words go to the Signal room (the room set as "Signal
  * room" on the Rooms page), or else the room he last spoke in, as if he had typed them there, and the
@@ -17,7 +18,7 @@ import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/db';
-import { markViewing, requestFromAway } from '@/lib/hologram-bus';
+import { fromTravelGlass, markViewing, requestFromAway, type GlassPlace } from '@/lib/hologram-bus';
 import { GET as serverSettings } from '@/app/api/settings/defaults/route';
 
 export const dynamic = 'force-dynamic';
@@ -25,11 +26,12 @@ export const dynamic = 'force-dynamic';
 const NOT_HIS_CONVERSATION = /^(\[Delegation\]|\[Autonomous\]|Briefing )/;
 
 export async function POST(request: Request) {
-  if (requestFromAway(request)) return NextResponse.json({ ok: false, away: true }, { status: 403 });
+  const place: GlassPlace = fromTravelGlass(request) ? 'travel' : 'home';
+  if (requestFromAway(request) && place !== 'travel') return NextResponse.json({ ok: false, away: true }, { status: 403 });
   const body = (await request.json().catch(() => ({}))) as { choom?: unknown; text?: unknown; dryRun?: unknown; room?: unknown };
   const name = typeof body.choom === 'string' ? body.choom.trim().toLowerCase() : '';
   const text = typeof body.text === 'string' ? body.text.trim() : '';
-  if (body.room === true) return talkToRoom(request, text, body.dryRun === true);
+  if (body.room === true) return talkToRoom(request, text, body.dryRun === true, place);
   if (!name || !text) return NextResponse.json({ ok: false, error: 'choom and text are required' }, { status: 400 });
 
   const choom = (await prisma.choom.findMany()).find((c) => c.name.toLowerCase() === name);
@@ -44,8 +46,8 @@ export async function POST(request: Request) {
 
   const settings = await (await serverSettings(request)).json();
   // Her reply can take half a minute to start; keep the chat "open at home" until the turn ends.
-  markViewing('chat', chat.id);
-  const keepOpen = setInterval(() => markViewing('chat', chat.id), 10_000);
+  markViewing('chat', chat.id, place);
+  const keepOpen = setInterval(() => markViewing('chat', chat.id, place), 10_000);
 
   let response: Response;
   try {
@@ -80,7 +82,7 @@ function drain(response: Response, keepOpen: ReturnType<typeof setInterval>) {
   })();
 }
 
-async function talkToRoom(request: Request, text: string, dryRun: boolean) {
+async function talkToRoom(request: Request, text: string, dryRun: boolean, place: GlassPlace) {
   if (!text) return NextResponse.json({ ok: false, error: 'text is required' }, { status: 400 });
   // The Signal room if one is set (bridge-config defaultGroupRoomId), else the room he last spoke in
   // (his messages have no Choom as author); the Chooms' own rooms update all the time, so "most
@@ -99,8 +101,8 @@ async function talkToRoom(request: Request, text: string, dryRun: boolean) {
   if (dryRun) return NextResponse.json({ ok: true, dryRun: true, roomId: room.id, room: room.title });
 
   const settings = await (await serverSettings(request)).json();
-  markViewing('room', room.id);
-  const keepOpen = setInterval(() => markViewing('room', room.id), 10_000);
+  markViewing('room', room.id, place);
+  const keepOpen = setInterval(() => markViewing('room', room.id, place), 10_000);
   let response: Response;
   try {
     response = await fetch(new URL('/api/group-chat', request.url), {

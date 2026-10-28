@@ -20,6 +20,7 @@ jest.mock('fs/promises', () => {
 import { prisma, teardown } from './helpers/scratch-db';
 import { POST as welcome } from '@/app/api/hologram/welcome/route';
 import { POST as talk } from '@/app/api/hologram/talk/route';
+import { startHologramTurn, subscribeHologram } from '@/lib/hologram-bus';
 
 jest.setTimeout(30_000);
 
@@ -145,6 +146,23 @@ describe('talking at the tower', () => {
     const res = await talk(req('/api/hologram/talk', { choom: 'Aloy', text: 'hi', dryRun: true }));
     const { chatId } = await res.json();
     expect((await prisma.chat.findUnique({ where: { id: chatId } }))!.title).toBeNull();
+  });
+
+  test('from the travel glass his words go through, and that glass speaks her reply', async () => {
+    // Optic, whose chat no test opened at home.
+    const optic = (await prisma.choom.create({ data: { name: 'Optic' } })).id;
+    const road = { host: 'abc.ngrok-free.app', 'x-forwarded-for': '203.0.113.30' };
+    expect((await talk(req('/api/hologram/talk', { choom: 'Optic', text: 'hi' }, road))).status).toBe(403);
+    const res = await talk(req('/api/hologram/talk', { choom: 'Optic', text: 'hi from the road' }, { ...road, 'x-choom-glass': 'travel' }));
+    const body = await res.json();
+    expect(body).toMatchObject({ ok: true, choom: 'Optic' });
+    const events: Record<string, unknown>[] = [];
+    const off = subscribeHologram((e) => events.push(e));
+    const turn = startHologramTurn({ choom: 'Optic', choomId: optic, chatId: body.chatId, voice: 'Eva_zu_Beck', source: 'chat', roomId: null });
+    turn.event({ type: 'content', content: 'Hello out there.' });
+    turn.end();
+    off();
+    expect(events.filter((e) => e.type === 'content').map((e) => [e.speak, e.speakTravel])).toEqual([[false, true]]);
   });
 
   test('unknown Choom, missing words, away from home', async () => {

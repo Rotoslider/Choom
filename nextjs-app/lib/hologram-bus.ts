@@ -19,6 +19,11 @@
  * Like the web app, the hologram speaks a conversation only while a browser at home has that
  * chat or room open: each content event carries `speak`, decided when it is sent. Rooms the
  * Chooms run on their own, Signal chats and heartbeats are shown but stay silent.
+ *
+ * A travel glass (choom-glass-player on a laptop away from home, through the tunnel) follows the
+ * same feed and plays `speakTravel` instead: the conversations open in a browser in front of it,
+ * or begun by talking at it. So only the glass where Donny is speaks, and the home glass keeps
+ * quiet while he's away.
  */
 import { isSentenceEnd, stripForTTS } from '@/lib/utils';
 
@@ -41,6 +46,7 @@ const store = globalThis as unknown as {
   __choomHologramVoice?: { voice: boolean; at: number };
   __choomHologramViewing?: Map<string, number>;
   __choomHologramMuted?: boolean;
+  __choomTravelGlass?: { voice: boolean; at: number; ip: string };
 };
 const listeners = (store.__choomHologramListeners ??= new Set<Listener>());
 
@@ -104,6 +110,48 @@ export function hologramMuted(): boolean {
   return store.__choomHologramMuted === true;
 }
 
+// ---- The travel glass ----------------------------------------------------------------------
+/**
+ * A second glass away from home (choom-glass-player on a laptop, reaching the app through the
+ * tunnel) says so in an `X-Choom-Glass: travel` header. Like the one at home it posts voice
+ * heartbeats; a browser at the address they come from (the laptop in front of it) hands it the
+ * voice and reports what it has open, and talking at it counts as being in front of it.
+ */
+export type GlassPlace = 'home' | 'travel';
+
+/** The client's own address, as the tunnel passes it on ('' if none). */
+export function forwardedFor(request: Request): string {
+  return (request.headers.get('x-forwarded-for') ?? '').split(',')[0].trim().replace(/^::ffff:/, '');
+}
+
+/** The travel glass's player itself: only from away, and with its header. */
+export function fromTravelGlass(request: Request): boolean {
+  return requestFromAway(request) && request.headers.get('x-choom-glass') === 'travel';
+}
+
+export function setTravelGlassVoice(voice: boolean, ip: string): void {
+  store.__choomTravelGlass = { voice, at: Date.now(), ip };
+}
+
+/** The travel glass is running with its voice on (a fresh heartbeat). */
+export function travelGlassActive(): boolean {
+  const t = store.__choomTravelGlass;
+  return !!t && t.voice && Date.now() - t.at < VOICE_FRESH_MS;
+}
+
+/**
+ * A browser away from home in front of the travel glass: one at the address its heartbeats come
+ * from. A laptop's browser and its player can reach the tunnel over different IP versions (IPv6
+ * for one, IPv4 for the other); those addresses can't be compared, so it counts as there.
+ */
+export function atTravelGlass(request: Request): boolean {
+  const t = store.__choomTravelGlass;
+  if (!requestFromAway(request) || !t || Date.now() - t.at >= VOICE_FRESH_MS) return false;
+  const ip = forwardedFor(request);
+  if (!ip || !t.ip || ip === t.ip) return true;
+  return ip.includes(':') !== t.ip.includes(':');
+}
+
 // ---- Donny talking to them -----------------------------------------------------------------
 /**
  * Donny typing to a Choom or talking into the mic (from the chat input at home): the hologram
@@ -132,22 +180,22 @@ export function requestFromAway(request: Request): boolean {
   return forwarded !== '' && !PRIVATE_IP.test(forwarded.replace(/^::ffff:/, ''));
 }
 
-// ---- What browsers at home have open -------------------------------------------------------
+// ---- What browsers have open (at home, or in front of the travel glass) --------------------
 const viewing = (store.__choomHologramViewing ??= new Map<string, number>());
 
-/** A browser at home has this chat or room open (reported with each hand-off poll, every 10 s). */
-export function markViewing(kind: 'chat' | 'room', id: string): void {
-  viewing.set(`${kind}:${id}`, Date.now());
+/** A browser at home (or at the travel glass) has this chat or room open (each hand-off poll, every 10 s). */
+export function markViewing(kind: 'chat' | 'room', id: string, place: GlassPlace = 'home'): void {
+  viewing.set(`${place}:${kind}:${id}`, Date.now());
 }
 
-function isViewing(kind: 'chat' | 'room', id: string | null): boolean {
-  const at = id ? viewing.get(`${kind}:${id}`) : undefined;
+function isViewing(kind: 'chat' | 'room', id: string | null, place: GlassPlace): boolean {
+  const at = id ? viewing.get(`${place}:${kind}:${id}`) : undefined;
   return at !== undefined && Date.now() - at < VOICE_FRESH_MS;
 }
 
-function shouldSpeak(turn: HologramTurn): boolean {
-  if (turn.source === 'chat') return isViewing('chat', turn.chatId);
-  if (turn.source === 'group') return isViewing('room', turn.roomId);
+function shouldSpeak(turn: HologramTurn, place: GlassPlace = 'home'): boolean {
+  if (turn.source === 'chat') return isViewing('chat', turn.chatId, place);
+  if (turn.source === 'group') return isViewing('room', turn.roomId, place);
   return false; // heartbeats and delegation are shown, never spoken
 }
 
@@ -250,7 +298,7 @@ export function startHologramTurn(
   prompt?: string,
 ): { event: (data: Record<string, unknown>) => void; end: () => void } {
   const speech = new SpeechSegmenter((text) =>
-    publishHologram({ type: 'content', ...turn, text, speak: shouldSpeak(turn) }));
+    publishHologram({ type: 'content', ...turn, text, speak: shouldSpeak(turn), speakTravel: shouldSpeak(turn, 'travel') }));
   const said = (turn.source === 'chat' || turn.source === 'group') && prompt ? prompt.slice(0, 500) : undefined;
   publishHologram({ type: 'turn_start', ...turn, ...(said ? { prompt: said } : {}) });
   // Which tool made the next image: a self-portrait, a camera snapshot, or any other picture.

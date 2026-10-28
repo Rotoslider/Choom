@@ -7,26 +7,40 @@
  *                            the browser has open; the hologram speaks only those conversations.
  * "At home" is decided here, not by the browser's own address: a request that came in through
  * ngrok (a phone away from home) keeps its own voice, since nobody is in front of the hologram.
+ *
+ * The travel glass (choom-glass-player away from home) posts its heartbeat with its header
+ * (X-Choom-Glass: travel), and a browser away from home at its address hands its voice to it
+ * instead, and what it has open is spoken there (lib/hologram-bus.ts).
  */
 import { NextResponse } from 'next/server';
-import { hologramVoiceActive, markViewing, requestFromAway, setHologramVoice } from '@/lib/hologram-bus';
+import {
+  atTravelGlass, forwardedFor, fromTravelGlass, hologramVoiceActive, markViewing, requestFromAway,
+  setHologramVoice, setTravelGlassVoice, travelGlassActive,
+} from '@/lib/hologram-bus';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request) {
   const away = requestFromAway(request);
-  if (!away) {
+  const travel = away && atTravelGlass(request);
+  if (!away || travel) {
     const params = new URL(request.url).searchParams;
     const chat = params.get('chat');
     const room = params.get('room');
-    if (chat) markViewing('chat', chat);
-    if (room) markViewing('room', room);
+    const place = travel ? 'travel' : 'home';
+    if (chat) markViewing('chat', chat, place);
+    if (room) markViewing('room', room, place);
   }
+  if (travel) return NextResponse.json({ voice: travelGlassActive() });
   return NextResponse.json({ voice: hologramVoiceActive() && !away });
 }
 
 export async function POST(request: Request) {
   const body = (await request.json().catch(() => ({}))) as { voice?: unknown };
+  if (fromTravelGlass(request)) {
+    setTravelGlassVoice(body.voice === true, forwardedFor(request));
+    return NextResponse.json({ voice: travelGlassActive() });
+  }
   setHologramVoice(body.voice === true);
   return NextResponse.json({ voice: hologramVoiceActive() });
 }

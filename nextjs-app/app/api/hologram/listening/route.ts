@@ -2,17 +2,17 @@
  * POST /api/hologram/listening { listening, source: 'mic' | 'typing', chat?, room?, choom? }:
  * Donny typing to a Choom or talking into the mic at home, so the Looking Glass hologram shows her
  * listening. Sent by lib/hologram-voice.ts from the chat input; ignored from away (nobody is in
- * front of the hologram then).
+ * front of the hologram then), except from a browser in front of the travel glass.
  */
 import { NextResponse } from 'next/server';
-import { requestFromAway, setHologramListening } from '@/lib/hologram-bus';
+import { atTravelGlass, requestFromAway, setHologramListening } from '@/lib/hologram-bus';
 
 export const dynamic = 'force-dynamic';
 
 const text = (v: unknown): string | null => (typeof v === 'string' && v ? v : null);
 
 export async function POST(request: Request) {
-  if (requestFromAway(request)) return NextResponse.json({ ok: false, away: true });
+  if (requestFromAway(request) && !atTravelGlass(request)) return NextResponse.json({ ok: false, away: true });
   const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
   setHologramListening({
     listening: body.listening === true,

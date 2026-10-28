@@ -1,13 +1,18 @@
 import {
+  atTravelGlass,
+  fromTravelGlass,
   hologramVoiceActive,
   markViewing,
   requestFromAway,
   setHologramListening,
   setHologramVoice,
+  setTravelGlassVoice,
   startHologramTurn,
   subscribeHologram,
+  travelGlassActive,
   type HologramTurn,
 } from '@/lib/hologram-bus';
+import { GET as voiceGet, POST as voicePost } from '@/app/api/hologram/voice/route';
 
 const turn = (source: HologramTurn['source'], chatId: string, roomId: string | null = null): HologramTurn =>
   ({ choom: 'Genesis', choomId: 'g', chatId, voice: 'sophie', source, roomId });
@@ -125,4 +130,57 @@ test("a failed tool reaches the hologram, a working one does not", () => {
   t.end();
   off();
   expect(events.filter((e) => e.type === "tool_failed").map((e) => e.tool)).toEqual(["generate_image", "ha_get_home_status"]);
+});
+
+describe('the travel glass', () => {
+  const away = (ip: string, extra: Record<string, string> = {}, path = '/api/hologram/voice', init: RequestInit = {}) =>
+    new Request(`http://localhost${path}`, { ...init, headers: { host: 'abc.ngrok-free.app', 'x-forwarded-for': ip, ...extra } });
+  const say = (t: HologramTurn) => {
+    const h = startHologramTurn(t);
+    h.event({ type: 'content', content: 'Hi there.' });
+    h.end();
+  };
+
+  test('only its own header, from away, makes a request the travel glass', () => {
+    expect(fromTravelGlass(away('203.0.113.9', { 'x-choom-glass': 'travel' }))).toBe(true);
+    expect(fromTravelGlass(away('203.0.113.9'))).toBe(false);
+    expect(fromTravelGlass(new Request('http://localhost/x', { headers: { host: 'localhost:3000', 'x-choom-glass': 'travel' } }))).toBe(false);
+  });
+
+  test('a browser away from home is in front of it when it comes from its address', () => {
+    setTravelGlassVoice(true, '203.0.113.9');
+    expect(travelGlassActive()).toBe(true);
+    expect(atTravelGlass(away('203.0.113.9'))).toBe(true);
+    expect(atTravelGlass(away('198.51.100.4'))).toBe(false); // a phone somewhere else
+    expect(atTravelGlass(away('2001:db8::5'))).toBe(true);   // the laptop over IPv6: can't be compared, counts
+    expect(atTravelGlass(new Request('http://localhost/x', { headers: { host: 'localhost:3000' } }))).toBe(false); // at home
+    setTravelGlassVoice(false, '203.0.113.9');
+    expect(travelGlassActive()).toBe(false);
+  });
+
+  test('a conversation open in front of it is spoken there, and one open at home only at home', () => {
+    const { events, off } = capture();
+    markViewing('chat', 'roadChat', 'travel');
+    say(turn('chat', 'roadChat'));
+    markViewing('chat', 'homeChat');
+    say(turn('chat', 'homeChat'));
+    off();
+    expect(events.filter((e) => e.type === 'content').map((e) => [e.speak, e.speakTravel])).toEqual([[false, true], [true, false]]);
+  });
+
+  test('its heartbeat takes the voice of the browser in front of it, not of a phone elsewhere', async () => {
+    setHologramVoice(false);
+    const beat = await voicePost(away('203.0.113.20', { 'x-choom-glass': 'travel', 'Content-Type': 'application/json' },
+      '/api/hologram/voice', { method: 'POST', body: JSON.stringify({ voice: true }) }));
+    expect(await beat.json()).toEqual({ voice: true });
+    expect(hologramVoiceActive()).toBe(false); // the hand-off at home is untouched
+    expect(await (await voiceGet(away('203.0.113.20', {}, '/api/hologram/voice?chat=dellChat'))).json()).toEqual({ voice: true });
+    expect(await (await voiceGet(away('198.51.100.7', {}, '/api/hologram/voice?chat=phoneChat'))).json()).toEqual({ voice: false });
+    const { events, off } = capture();
+    say(turn('chat', 'dellChat'));
+    say(turn('chat', 'phoneChat'));
+    off();
+    expect(events.filter((e) => e.type === 'content').map((e) => e.speakTravel)).toEqual([true, false]);
+    setTravelGlassVoice(false, '203.0.113.20');
+  });
 });
