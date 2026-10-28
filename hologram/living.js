@@ -158,6 +158,7 @@ function layerMaterial({ segX, segY, edgeThreshold, useMask, own = false }) {
       maskMap: { value: null },
       useMask: { value: useMask ? 1 : 0 },
       sparkle: { value: 0 },
+      motesMap: { value: null },                          // her picture with its motes moved, this frame (drawMotes)
       mouthOn: { value: 0 },
       mouthC: { value: new THREE.Vector2(0.5, 0.5) },
       mouthSize: { value: new THREE.Vector3(1, 1, 1) },  // half width, half lip height, chin distance (texture px)
@@ -217,29 +218,38 @@ const LAYER_VERT = /* glsl */ `
       gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
     }`;
 
-const LAYER_FRAG = /* glsl */ `
-    uniform sampler2D colorMap, maskMap;
-    uniform float opacity, glow, edgeThreshold, sparkle, time, bottomFade;
-    uniform int useMask, mouthOn, mouthStyle;
-    uniform vec2 mouthC, texSize;
-    uniform vec3 mouthSize, mouthShape;
-    uniform float mouthTilt, mouthGap, mouthGain, mouthLift;
-    varying vec2 vUv;
-    varying float vEdge;
-    ${PACKED_GLSL}
-    float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-    // Video frames arrive as raw sRGB values; still images are decoded by the GPU.
+// Video frames arrive as raw sRGB values; still images are decoded by the GPU.
+const COLOR_GLSL = /* glsl */ `
     vec3 colorAt(vec2 uv) {
       vec3 c = texture2D(colorMap, colorUv(uv)).rgb;
       if (packed == 1) c = mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c));
       return c;
-    }
+    }`;
+
+// Genesis is made of motes, and they move: the glitter in her image drifts in slow little circles
+// across her (each patch on its own), every mote twinkles as it goes, and a soft wave of light rises
+// through her. Only the bright specks move; her features stay put. The motes are the same in every
+// view, so they're worked out once a frame over her picture (drawMotes) and every view reads the
+// result. Worked out in each of the 48 views, they halved the frame rate on Donny's travel laptop
+// and were the heaviest thing on the glass at home (2026-10-28).
+const MOTES_FRAG = /* glsl */ `
+    uniform sampler2D colorMap, maskMap;
+    uniform int useMask;
+    uniform float time;
+    uniform vec2 texSize;
+    varying vec2 vUv;
+    ${PACKED_GLSL}
+    float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+    // Her texels as stored (raw sRGB in a video, see COLOR_GLSL) and their decoding, apart: an
+    // average is taken before decoding, so a pixel decodes four times instead of ten.
+    vec3 rawAt(vec2 uv) { return texture2D(colorMap, colorUv(uv)).rgb; }
+    vec3 decoded(vec3 c) { return packed == 1 ? mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c)) : c; }
     // Her neighborhood's average around uv: the mip chain for a still, a few nearby taps for a video.
-    vec3 localAt(vec2 uv, vec3 here) {
+    vec3 localAt(vec2 uv, vec3 hereRaw) {
       if (packed == 1) {
         vec2 o = 3.0 / texSize;
-        return 0.2 * (here + colorAt(uv + vec2(o.x, 0.0)) + colorAt(uv - vec2(o.x, 0.0))
-                           + colorAt(uv + vec2(0.0, o.y)) + colorAt(uv - vec2(0.0, o.y)));
+        return decoded(0.2 * (hereRaw + rawAt(uv + vec2(o.x, 0.0)) + rawAt(uv - vec2(o.x, 0.0))
+                                      + rawAt(uv + vec2(0.0, o.y)) + rawAt(uv - vec2(0.0, o.y))));
       }
       return texture2D(colorMap, uv, 3.5).rgb;
     }
@@ -248,6 +258,36 @@ const LAYER_FRAG = /* glsl */ `
       f = f * f * (3.0 - 2.0 * f);
       return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
     }
+    void main() {
+      const vec3 W = vec3(0.3, 0.5, 0.2);
+      vec3 cRaw = rawAt(vUv), c = decoded(cRaw);
+      // Outside her cut-out none of her is drawn: no motes to work out there.
+      if (useMask == 1 && maskAt(maskMap, vUv) < 0.5) { gl_FragColor = vec4(c, 1.0); return; }
+      vec3 local = localAt(vUv, cRaw);
+      float speckHere = smoothstep(0.03, 0.22, dot(c - local, W));
+      float turn = vnoise(vUv * 7.0) * 12.566 + time * (0.5 + 0.4 * vnoise(vUv * 3.0 + 7.0));
+      vec2 at = vUv + 5.0 * vec2(cos(turn), sin(turn)) / texSize;  // where this pixel's mote comes from
+      vec3 thereRaw = rawAt(at), there = decoded(thereRaw);
+      vec3 detail = there - localAt(at, thereRaw);
+      float speckThere = smoothstep(0.03, 0.22, dot(detail, W));
+      float n = hash(floor(at * texSize / 1.5));                  // each mote keeps its own twinkle
+      float twinkle = 0.3 + 1.4 * (0.5 + 0.5 * sin(time * (1.5 + 2.5 * n) + n * 6.2831));
+      float wave = 0.7 + 0.6 * smoothstep(0.6, 1.0, sin(vUv.y * 14.0 - time * 1.3 + vnoise(vUv * 4.0) * 3.0));
+      vec3 lifted = c - (c - local) * speckHere;                  // her, with the glitter lifted off
+      gl_FragColor = vec4(lifted + detail * speckThere * twinkle * wave, 1.0);
+    }`;
+
+const LAYER_FRAG = /* glsl */ `
+    uniform sampler2D colorMap, maskMap, motesMap;
+    uniform float opacity, glow, edgeThreshold, sparkle, time, bottomFade;
+    uniform int useMask, mouthOn, mouthStyle;
+    uniform vec2 mouthC, texSize;
+    uniform vec3 mouthSize, mouthShape;
+    uniform float mouthTilt, mouthGap, mouthGain, mouthLift;
+    varying vec2 vUv;
+    varying float vEdge;
+    ${PACKED_GLSL}
+    ${COLOR_GLSL}
 
     // Talking, the way a mouth opens: the corners stay put and the lips part in a lens shape from
     // corner to corner. Right under the lips the lower lip drops by that lens profile (zero at the
@@ -348,6 +388,8 @@ const LAYER_FRAG = /* glsl */ `
       vec4 spot = vec4(0.0);
       vec2 uv = mouthOn == 1 ? mouthWarp(vUv, gap, spot) : vUv;
       vec3 c = colorAt(uv);
+      // Her motes (MOTES_FRAG), read where her picture is: they move with her jaw as she talks.
+      if (sparkle > 0.0) c = mix(c, texture2D(motesMap, uv).rgb, sparkle);
       if (gap > 0.0) {
         // The inside of her mouth, tinted from her own lips so it matches each Choom's light. Not a
         // black void: a warm dark red, darkest up under the upper lip, with a soft tongue rising
@@ -385,24 +427,6 @@ const LAYER_FRAG = /* glsl */ `
         }
         c = mix(c, inside, gap);
       }
-      if (sparkle > 0.0) {
-        // Genesis is made of motes, and they move: the glitter in her image drifts in slow little
-        // circles across her (each patch on its own), every mote twinkles as it goes, and a soft
-        // wave of light rises through her. Only the bright specks move; her features stay put.
-        const vec3 W = vec3(0.3, 0.5, 0.2);
-        vec3 local = localAt(vUv, c);
-        float speckHere = smoothstep(0.03, 0.22, dot(c - local, W));
-        float turn = vnoise(vUv * 7.0) * 12.566 + time * (0.5 + 0.4 * vnoise(vUv * 3.0 + 7.0));
-        vec2 at = vUv + 5.0 * vec2(cos(turn), sin(turn)) / texSize;  // where this pixel's mote comes from
-        vec3 there = colorAt(at);
-        vec3 detail = there - localAt(at, there);
-        float speckThere = smoothstep(0.03, 0.22, dot(detail, W));
-        float n = hash(floor(at * texSize / 1.5));                  // each mote keeps its own twinkle
-        float twinkle = 0.3 + 1.4 * (0.5 + 0.5 * sin(time * (1.5 + 2.5 * n) + n * 6.2831));
-        float wave = 0.7 + 0.6 * smoothstep(0.6, 1.0, sin(vUv.y * 14.0 - time * 1.3 + vnoise(vUv * 4.0) * 3.0));
-        vec3 lifted = c - (c - local) * speckHere;                  // her, with the glitter lifted off
-        c = mix(c, lifted + detail * speckThere * twinkle * wave, sparkle);
-      }
       // On the group stage her picture's bottom edge would float in the glass as a straight cut:
       // she fades out toward it instead (fully faded pixels are dropped, so they hide no one). The
       // fade is shaped for the eye (the screen is sRGB): linear, it would still look a fifth bright
@@ -417,6 +441,44 @@ const LAYER_FRAG = /* glsl */ `
       }
       gl_FragColor = vec4(c * glow * opacity, 1.0);
     }`;
+
+// Her motes for this frame, once for each picture with motes on show (the speaker, a sister on the
+// stage), before the views are drawn. Each picture keeps its own target, the size of its color.
+const motesMaterial = new THREE.ShaderMaterial({
+  uniforms: { colorMap: { value: null }, maskMap: { value: null }, useMask: { value: 0 }, packed: { value: 0 },
+    texSize: { value: new THREE.Vector2() }, time: shared.time },
+  vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+  fragmentShader: MOTES_FRAG,
+  depthTest: false,
+  depthWrite: false,
+});
+const motesScene = new THREE.Scene();
+motesScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), motesMaterial));
+const motesCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+function drawMotes() {
+  scene.traverseVisible((o) => {
+    const u = o.material?.uniforms;
+    if (!u?.motesMap || !(u.sparkle.value > 0) || !u.colorMap.value) return;
+    const { x: w, y: h } = u.texSize.value;
+    let target = o.material.userData.motes;
+    if (!target) {
+      target = o.material.userData.motes = new THREE.WebGLRenderTarget(w, h, {
+        colorSpace: THREE.SRGBColorSpace, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter,
+        generateMipmaps: false, depthBuffer: false,
+      });
+    } else if (target.width !== w || target.height !== h) target.setSize(w, h);
+    const m = motesMaterial.uniforms;
+    m.colorMap.value = u.colorMap.value;
+    m.maskMap.value = u.maskMap.value;
+    m.useMask.value = u.useMask.value && u.maskMap.value ? 1 : 0;
+    m.packed.value = u.packed.value;
+    m.texSize.value.copy(u.texSize.value);
+    renderer.setRenderTarget(target);
+    renderer.render(motesScene, motesCamera);
+    u.motesMap.value = target.texture;
+  });
+  renderer.setRenderTarget(null);
+}
 
 const frontMaterial = layerMaterial({ segX: 384, segY: 512, edgeThreshold: 0.35, useMask: true });
 const plateMaterial = layerMaterial({ segX: 192, segY: 256, edgeThreshold: 0.22, useMask: false });
@@ -3202,6 +3264,7 @@ renderer.setAnimationLoop((now) => {
   const labelFade = labelT < 0.6 ? labelT / 0.6 : labelT < 3.6 ? 1 : Math.max(0, 1 - (labelT - 3.6) / 0.8);
   labelMaterial.opacity = labelFade * presence;
 
+  drawMotes();
   lkg.renderQuilt(scene);
   lkg.present();
 
