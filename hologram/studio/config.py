@@ -27,7 +27,7 @@ DEFAULTS = {
     # reference model, which takes up to nine pictures besides her start and end ones.
     "reference_model": "minimax_h3_ref2va_pdd",
     "picture_model": "flux2_klein_9b",
-    "minutes_per_clip": 5.5,  # a five-second clip on an RTX PRO 6000 Blackwell; seven seconds take longer
+    "minutes_per_clip": 2.2,  # a five-second clip on an RTX PRO 6000 Blackwell, Wan2GP v18.84 (5.5 on v12.72); longer clips by their frames
     "port": 8767,
     "hologram_url": "http://127.0.0.1:8765",
     # A short Signal message through the Choom app when a scheduled render or build finishes or fails

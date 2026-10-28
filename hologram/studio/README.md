@@ -564,7 +564,7 @@ you leave out uses the default in `config.py`:
   "video_model": "minimax_h3_fl2va_pdd",
   "reference_model": "minimax_h3_ref2va_pdd",
   "picture_model": "flux2_klein_9b",
-  "minutes_per_clip": 5.5,
+  "minutes_per_clip": 2.2,
   "port": 8767,
   "notify": {"url": "http://your-mac.local:3000", "choom": "Aloy", "quiet": ["22:00", "07:00"], "dry_run": false}
 }

@@ -37,7 +37,7 @@ const secondsOf = (c) => c.seconds || ({ 124: 5, 141: 6, 175: 7, 243: 10, 294: 1
 const state = {
   chooms: [], cid: null, choom: null, tab: 'review',
   reviewFilter: 'rendered', reviewLook: '', reviewShown: 40,
-  planLook: null, options: [], picked: new Set(), edits: {}, jobs: [], minutesPerClip: 5.5,
+  planLook: null, options: [], picked: new Set(), edits: {}, jobs: [], minutesPerClip: 2.2,
 };
 try { Object.assign(state, JSON.parse(localStorage.getItem('glass-studio') || '{}'), { choom: null, options: [], picked: new Set(), edits: {}, jobs: [] }); } catch { /* fine without */ }
 state.planLooks ||= {};  // the look last planned for, per Choom
