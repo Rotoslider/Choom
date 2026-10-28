@@ -93,6 +93,28 @@ def choom_ok(cid):
     return isinstance(cid, str) and bool(CHOOM_ID.match(cid)) and Project.file(cid).exists()
 
 
+def save_pictures(cid, sent):
+    """Pictures sent from his computer as data URLs, [(tag, url)], saved in clean/ as
+    <choom>_ref_<when>_<tag>.<ext>; returns {tag: file name}. Nothing is saved if one isn't a picture."""
+    stamp, decoded = time.strftime("%Y%m%d-%H%M%S"), []
+    for tag, url in sent:
+        raw = base64.b64decode(str(url).split(",", 1)[-1])
+        ext = ".jpg" if raw[:3] == b"\xff\xd8\xff" else ".png" if raw[:8] == b"\x89PNG\r\n\x1a\n" else ".webp" if raw[8:12] == b"WEBP" else None
+        if not ext:
+            raise ValueError("pictures should be PNG, JPEG or WebP")
+        decoded.append((tag, raw, ext))
+    saved = {}
+    for tag, raw, ext in decoded:
+        name = f"{cid}_ref_{stamp}_{tag}{ext}"
+        n = 2
+        while (PICTURES / name).exists():  # two sends in the same second
+            name = f"{cid}_ref_{stamp}-{n}_{tag}{ext}"
+            n += 1
+        (PICTURES / name).write_bytes(raw)
+        saved[tag] = name
+    return saved
+
+
 def active_queues():
     with jobs.lock:
         return [q for j in jobs.jobs if j["kind"] == "render" and j["status"] in jobs.ACTIVE
@@ -322,8 +344,21 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"renamed": names, "choom": details(proj)})
             elif action == "plan":
                 library = {(a["pack"], a["key"]): a for a in plan.library()["actions"]}
-                items = [library[(i["pack"], i["key"])] if "pack" in i else i for i in data["items"]]
+                items = [library[(i["pack"], i["key"])] if "pack" in i else dict(i) for i in data["items"]]
+                # Your own clip can bring pictures from his computer (a mug she sips from): saved in clean/,
+                # picture 2, 3 ... in its wording, and rendered with the reference model.
+                for item in items:
+                    if item.get("refs") and "pack" not in item:
+                        if len(item["refs"]) > prompts.MAX_REFS:
+                            return self.fail(f"up to {prompts.MAX_REFS} pictures for a clip")
+                        saved = save_pictures(cid, [(str(i + 2), r) for i, r in enumerate(item["refs"])])
+                        item["refs"] = list(saved.values())
+                    else:
+                        item.pop("refs", None)
                 results = plan.add(proj, data["look"], items)
+                used = {f for c in proj.clips.values() for f in c.get("refs", [])}
+                for f in {f for item in items for f in item.get("refs", [])} - used:  # not planned (the name's taken)
+                    (PICTURES / f).unlink(missing_ok=True)
                 return self.send_json({"results": results, "choom": details(proj)})
             elif action == "change":  # a change of clothes on screen, from one look to another
                 name, message = plan.add_change(proj, data["from"], data["to"], data.get("key"), data["text"], data.get("seconds", 5))
@@ -386,17 +421,9 @@ class Handler(BaseHTTPRequestHandler):
                     return self.fail(f"she already has {look_id}" + ("; give it another name" if kind == "outfit" else ""))
                 # Pictures sent from his computer: one to start from instead of the look's (`upload`),
                 # and more for Klein to take things from (`refs`: a dress, shoes, her face close up).
-                stamp = time.strftime("%Y%m%d-%H%M%S")
                 sent = [("start", data["upload"])] if data.get("upload") else []
                 sent += [(str(i + 2), r) for i, r in enumerate(data.get("refs") or [])]
-                saved = {}
-                for tag, url in sent:
-                    raw = base64.b64decode(url.split(",", 1)[-1])
-                    ext = ".jpg" if raw[:3] == b"\xff\xd8\xff" else ".png" if raw[:8] == b"\x89PNG\r\n\x1a\n" else ".webp" if raw[8:12] == b"WEBP" else None
-                    if not ext:
-                        return self.fail("pictures should be PNG, JPEG or WebP")
-                    saved[tag] = f"{cid}_ref_{stamp}_{tag}{ext}"
-                    (PICTURES / saved[tag]).write_bytes(raw)
+                saved = save_pictures(cid, sent)
                 source = saved.pop("start", proj.looks[base]["picture"])
                 refs = list(saved.values())
                 wearing = data.get("wearing", "").strip()

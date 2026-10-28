@@ -23,6 +23,9 @@ DEFAULTS = {
     "wan2gp": "~/pinokio/api/wan2gp/app",
     "forge_python": "~/pinokio/api/forge-neo/app/venv/bin/python",
     "video_model": "minimax_h3_fl2va_pdd",
+    # A clip with pictures of its own (Write your own clip: a mug she sips from) renders with H3's
+    # reference model, which takes up to nine pictures besides her start and end ones.
+    "reference_model": "minimax_h3_ref2va_pdd",
     "picture_model": "flux2_klein_9b",
     "minutes_per_clip": 5.5,  # a five-second clip on an RTX PRO 6000 Blackwell; seven seconds take longer
     "port": 8767,

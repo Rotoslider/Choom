@@ -152,7 +152,9 @@ def many(targets, picks, preview=True):
     return {"looks": out, "clips": clips, "minutes": round(minutes), "results": results}
 
 
-def prompt_for(proj, start, end, text, seconds, ending=None):
+def prompt_for(proj, start, end, text, seconds, ending=None, refs=()):
+    """A clip's prompt from its looks; `refs`, its own pictures (a mug she sips from), make it a prompt
+    for H3's reference model."""
     # Walking on from the empty glass: she's described as she ends (the empty glass has no subject line).
     look = proj.looks[start] if proj.looks[start].get("subject") else proj.looks[end]
     if ending is None:
@@ -160,12 +162,14 @@ def prompt_for(proj, start, end, text, seconds, ending=None):
     # The look's keep line (Genesis's motes stay on her) only if the look she ends in keeps it too: on
     # the way to her plain or night look her motes go.
     keep = look.get("keep", "") if look.get("keep") == proj.looks.get(end, {}).get("keep") else ""
+    if refs:
+        return prompts.build_ref(look["subject"], text, seconds, ending, keep, len(refs))
     return prompts.build(look["subject"], text, seconds, ending, keep)
 
 
 def add(proj, look_id, items):
     """Plan clips in a look. items: [{key, text, seconds, kind or names, ending}] (library actions
-    or your own). Returns [(name or None, message)]."""
+    or your own; your own can have `refs`, its own pictures in clean/). Returns [(name or None, message)]."""
     results, wanted = [], []
     for item in items:
         part = action_name(item, look_id)
@@ -185,11 +189,15 @@ def add(proj, look_id, items):
     for (name, start, end, item), seed in zip(wanted, next_seeds(len(wanted))):
         seconds = int(item.get("seconds", 5))
         text = for_look(item["text"], proj.looks[look_id])
-        prompt = prompt_for(proj, start, end, text, seconds, item.get("ending"))
+        refs = list(item.get("refs") or [])
+        prompt = prompt_for(proj, start, end, text, seconds, item.get("ending"), refs)
         proj.add_clip(name, prompt=prompt, action=text, seconds=seconds, ending=item.get("ending"),
                       frames=prompts.SECONDS[seconds][0], seed=seed,
-                      start=proj.looks[start]["picture"], end=proj.looks[end]["picture"], queue=None)
+                      start=proj.looks[start]["picture"], end=proj.looks[end]["picture"], queue=None,
+                      **({"refs": refs} if refs else {}))
         warnings = prompts.lint(prompt, loop=start == end, leaves="gone" in (start, end))
+        if refs:
+            warnings += prompts.lint_refs(text, len(refs))
         results.append((name, "; ".join(f"{w}: {why}" for w, why in warnings) or "ok"))
     return results
 
@@ -204,8 +212,10 @@ def rewrite(proj, name, text=None, seconds=None):
     if seconds is not None:
         clip["seconds"] = int(seconds)
         clip["frames"] = prompts.SECONDS[int(seconds)][0]
-    clip["prompt"] = prompt_for(proj, clip["from"], clip["to"], clip["action"], clip["seconds"], clip.get("ending"))
-    return prompts.lint(clip["prompt"], loop=clip["from"] == clip["to"], leaves="gone" in (clip["from"], clip["to"]))
+    clip["prompt"] = prompt_for(proj, clip["from"], clip["to"], clip["action"], clip["seconds"], clip.get("ending"),
+                                clip.get("refs", ()))
+    warnings = prompts.lint(clip["prompt"], loop=clip["from"] == clip["to"], leaves="gone" in (clip["from"], clip["to"]))
+    return warnings + (prompts.lint_refs(clip["action"], len(clip["refs"])) if clip.get("refs") else [])
 
 
 def add_change(proj, start, end, key, text, seconds=5):
@@ -238,7 +248,7 @@ def refresh_prompts(proj, look_id):
     """Rewrite the prompts of the look's planned clips (its subject, keep line or ending changed)."""
     for c in proj.clips.values():
         if c["status"] == "planned" and look_id in (c["from"], c["to"]) and c.get("action"):
-            c["prompt"] = prompt_for(proj, c["from"], c["to"], c["action"], c["seconds"], c.get("ending"))
+            c["prompt"] = prompt_for(proj, c["from"], c["to"], c["action"], c["seconds"], c.get("ending"), c.get("refs", ()))
 
 
 def repicture(proj, look_id):
@@ -254,5 +264,5 @@ def repicture(proj, look_id):
         else:
             proj.reroll(n, seed)
         c["start"], c["end"] = proj.looks[c["from"]]["picture"], proj.looks[c["to"]]["picture"]
-        c["prompt"] = prompt_for(proj, c["from"], c["to"], c["action"], c["seconds"], c.get("ending"))
+        c["prompt"] = prompt_for(proj, c["from"], c["to"], c["action"], c["seconds"], c.get("ending"), c.get("refs", ()))
     return redo, [n for n in names if n not in redo]

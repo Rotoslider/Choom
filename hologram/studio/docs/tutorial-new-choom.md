@@ -261,6 +261,21 @@ each with its own full body if you like. See [the outfit tutorial](tutorial-outf
   - *She lays one hand flat on her heart for a moment, then lowers it with a soft smile.*
 
   In the full-body look, the same kinds become full-body moves.
+- **Pictures for the clip** (optional): something she holds or uses, looking the way it really does.
+  Without a picture, the video model makes up a lookalike from your words. Add up to four pictures
+  from your computer. Picture 1 is her, and the ones you add are picture 2, 3 and so on, in the order
+  you chose them. Say which holds what:
+  - *She lifts the blue fox mug from picture 2 up into view from below the frame in her right hand,
+    brings her left hand up to cradle it, takes a slow sip, and smiles at the viewer over the rim. Then
+    she lowers the mug back down out of the frame and her arms relax at her sides again.*
+
+  Whatever she takes from a picture has to leave the frame again before the end, so the clip ends on
+  her picture. Up from below the frame and back down works. A photo of one thing on a plain
+  background, filling most of the picture, works best. The clip renders with H3's reference model,
+  which copies the thing from its picture, and takes about as long as any other clip. Its planned card
+  shows its pictures, and the Studio warns if the wording doesn't say which one holds what.
+
+  ![The fox mug clip in her plan, with its picture](images/planned-pictures.jpg)
 
 What the video model gets wrong, and how to word around it:
 
@@ -270,7 +285,7 @@ What the video model gets wrong, and how to word around it:
 | "a deep breath", "a sigh", "exhales" | Breathing words bring a cloud of fog | Say what her face or shoulders do |
 | "leans in", "studies the viewer closely" | Draws the eye to her face, so the camera pushes in | Keep her where she is |
 | "walks away", "leaves the frame" | Every clip must end on her picture | Keep the move on the spot |
-| A mug that appears, hair that gets tied | Nothing can appear, vanish or change in a loop | Use a new look (picture) for a different hairstyle |
+| A mug that appears in her hand, hair that gets tied | Nothing can appear from nowhere, vanish or change in a loop | Bring a thing up from below the frame and back down, with its picture added; use a new look (picture) for a different hairstyle |
 | Hands busy while she holds something | The held thing melts or moves | Say how she frees a hand and puts it back |
 
 The Studio warns about most of these when you plan.

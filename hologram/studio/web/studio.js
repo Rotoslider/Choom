@@ -642,17 +642,22 @@ function updatePlanButton() {
 }
 
 $('#planLook').addEventListener('change', (e) => { state.planLook = state.planLooks[state.cid] = e.target.value; remember(); state.picked.clear(); renderPlan(); });
+$('#customRefs').addEventListener('change', () => { $('#customRefsHint').hidden = !$('#customRefs').files.length; });
 $('#customAdd').addEventListener('click', attempt(async () => {
   const key = $('#customKey').value.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
   const text = $('#customText').value.trim();
   if (!key || !text) return toast('Give it a short name and say what she does', true);
+  // Its own pictures (a mug she sips from): picture 2, 3 ... in the wording, rendered with the reference model.
+  const refs = [...$('#customRefs').files];
+  if (refs.length > 4) return toast('Up to four pictures for a clip', true);
   const { results, choom } = await api(`/api/choom/${state.cid}/plan`, {
-    look: state.planLook, items: [{ key, text, seconds: Number($('#customSeconds').value), kind: $('#customKind').value }],
+    look: state.planLook, items: [{ key, text, seconds: Number($('#customSeconds').value), kind: $('#customKind').value,
+      refs: refs.length ? await Promise.all(refs.map(readFile)) : undefined }],
   });
   state.choom = choom;
   const [name, message] = results[0];
   toast(name ? `${short(state.cid, name)} planned${message !== 'ok' ? ` (check: ${message})` : ''}` : message, !name);
-  if (name) { $('#customKey').value = ''; $('#customText').value = ''; }
+  if (name) { $('#customKey').value = ''; $('#customText').value = ''; $('#customRefs').value = ''; $('#customRefsHint').hidden = true; }
   render();
 }));
 
@@ -791,7 +796,7 @@ function renderPlanned() {
 
 function plannedItem(name) {
   const c = state.choom.clips[name];
-  const lint = lintOf(c.prompt, c.from === c.to);
+  const lint = [...lintOf(c.prompt, c.from === c.to), ...refsLint(c)];
   const text = el('textarea', { rows: 3, value: c.action || '' });
   // A re-roll can be longer too (a full turn that came out rushed in five seconds).
   const length = el('select', { tip: 'How long the clip is; longer clips take longer to render' },
@@ -808,6 +813,7 @@ function plannedItem(name) {
     el('div', { className: 'row' }, el('code', {}, short(state.cid, name)), el('span', { className: 'tag' }, c.from), `${secondsOf(c)} s`,
       c.history?.length ? el('span', { className: 'tag' }, `take ${c.history.length + 1}`) : null),
     el('div', { className: 'muted' }, c.action || ''),
+    refThumbs(c),
     ...lint.map((w) => el('div', { className: 'lint' }, w)),
     editing,
     el('div', { className: 'row' },
@@ -819,6 +825,22 @@ function plannedItem(name) {
         }),
         tip: c.history?.length ? 'Forget this re-roll and go back to the take she had' : 'Take it out of the plan',
       }, c.history?.length ? 'Keep the old take' : 'Remove')));
+}
+
+// A clip's own pictures (Write your own clip), numbered as its wording says them: picture 1 is her.
+function refThumbs(c) {
+  if (!c.refs?.length) return null;
+  return el('div', { className: 'row ref-thumbs', tip: 'Its own pictures: it renders with the reference model, which copies them' },
+    ...c.refs.map((f, i) => el('figure', {},
+      el('img', { src: pictureUrl(f), alt: `picture ${i + 2}`, loading: 'lazy', onclick: () => window.open(pictureUrl(f)) }),
+      el('figcaption', {}, `picture ${i + 2}`))));
+}
+function refsLint(c) {
+  if (!c.refs?.length) return [];
+  const named = [...(c.action || '').matchAll(/\bpicture (\d+)\b/gi)].map((m) => Number(m[1]));
+  if (!named.length) return ['say which picture holds what (“the mug from picture 2”; picture 1 is her)'];
+  const over = named.find((n) => n > c.refs.length + 1);
+  return over ? [`there’s no picture ${over}: the added ones are picture 2${c.refs.length > 1 ? ` to ${c.refs.length + 1}` : ''}`] : [];
 }
 
 // The same checks as prompts.py, so the page can warn before anything is queued.

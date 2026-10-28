@@ -189,6 +189,26 @@ seconds.
 
 ![Writing your own clip: a ten-second dance](docs/images/custom-clip.jpg)
 
+**Pictures for the clip** bring in something she holds or uses, looking the way it really does: a
+mug, a flower, a gift. Add up to four from your computer and say which picture holds what, as in New
+look: picture 1 is her, and the ones you add are picture 2, 3 and so on, in the order you chose them
+(*She lifts the blue fox mug from picture 2 up into view from below the frame, takes a slow sip, and
+lowers it back down out of the frame again*). Whatever she takes from them has to leave the frame
+again before the end, so the clip ends on her picture. In a waist-up look, up from below the frame
+and back down works.
+
+- **How it renders:** a clip with pictures renders with H3's reference model
+  (`minimax_h3_ref2va_pdd`), which copies the thing from its picture. Words alone get a lookalike:
+  Aloy's fox mug, described in detail, came out a generic one with a black rim, and its rim peeked in
+  at the bottom edge at the start and end.
+- **Which pictures work best:** one thing on a plain background, filling most of the picture.
+- **Where they're kept:** in `clean/` (`<choom>_ref_<when>_<n>.png`). They stay with the clip
+  through **Edit** and **Re-roll**, and its planned card shows them.
+- **Render order:** clips with pictures go last in a render, so Wan2GP changes models only once
+  (loading a model takes about a minute). They take about as long as other clips.
+
+![Write your own clip with a picture: Aloy's sip from a fox mug](docs/images/custom-clip-pictures.jpg)
+
 **Change of clothes** plans a clip from one waist-up look to another in the same pose, rendered from
 the first look's picture to the second's (`genesis_eveningdress-change_nightcold_melt`). The glass
 plays it instead of the camera cut when she changes between them. Make one each way (into her night
@@ -206,11 +226,15 @@ framing, so make the second as an outfit started from the first (see [New look](
 ![A change of clothes from the burgundy dress to the cold-night look](docs/images/change-clip.jpg)
 
 Each prompt is built from the look's subject line, its keep line, the action, the camera line and the
-loop ending. Wording that has gone wrong before gets a warning:
+loop ending. A clip with pictures of its own gets the same lines in the reference model's six-part
+prompt: who she is and what each picture shows come first. The pictures are numbered there as the
+model counts them, her start and end pictures first, so "picture 2" reaches it as `<Picture 3>`.
+Wording that has gone wrong before gets a warning:
 - naming an effect you don't want
 - breathing words, which bring fog
 - "leans in", which pushes the camera in
 - camera words outside the camera line
+- a clip with pictures whose wording doesn't say which picture holds what, or names one it doesn't have
 
 The planned clips are listed on the right. **Edit** changes what a clip does and how long it is
 (5 to 15 seconds); its prompt is rebuilt from the look. **Remove** takes it out of the plan, and on a
@@ -522,8 +546,9 @@ The [tutorial](docs/tutorial-new-choom.md) walks through all of it.
 ## Setup
 
 - The hologram running on a Looking Glass Portrait ([hologram README](../README.md)).
-- [Wan2GP](https://github.com/deepbeepmeep/Wan2GP) with MiniMax H3 (`minimax_h3_fl2va_pdd`) for clips
-  and Flux.2 Klein 9B (`flux2_klein_9b`) for pictures. Its venv also has rembg (U2-Net) and numpy,
+- [Wan2GP](https://github.com/deepbeepmeep/Wan2GP) with MiniMax H3 (`minimax_h3_fl2va_pdd`) for clips,
+  its reference model (`minimax_h3_ref2va_pdd`) for clips with pictures of their own, and Flux.2
+  Klein 9B (`flux2_klein_9b`) for pictures. Its venv also has rembg (U2-Net) and numpy,
   which the cut-outs and checks use.
 - A Python with Depth Anything V2 and MediaPipe for `tools/make_alive.py` (Forge Neo's venv here).
 - A GPU with room for H3: about 5½ minutes per five-second clip on an RTX PRO 6000 Blackwell.
@@ -537,6 +562,7 @@ you leave out uses the default in `config.py`:
   "wan2gp": "~/pinokio/api/wan2gp/app",
   "forge_python": "~/pinokio/api/forge-neo/app/venv/bin/python",
   "video_model": "minimax_h3_fl2va_pdd",
+  "reference_model": "minimax_h3_ref2va_pdd",
   "picture_model": "flux2_klein_9b",
   "minutes_per_clip": 5.5,
   "port": 8767,

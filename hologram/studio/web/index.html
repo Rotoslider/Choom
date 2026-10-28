@@ -110,6 +110,9 @@
                 </select></label>
               <label class="wide">What she does
                 <textarea id="customText" rows="3" placeholder="She sways her hips and turns once on the spot with a happy smile, her hair swinging out, then settles facing the viewer."></textarea></label>
+              <label class="wide" data-tip="Something she holds or uses in the clip, as it really looks: the clip is rendered with H3's reference model, which copies it from the picture. Words alone get a lookalike">Pictures for the clip (optional): a mug, a flower, a gift, up to four
+                <input type="file" id="customRefs" multiple accept="image/png,image/jpeg,image/webp"></label>
+              <p class="wide hint" id="customRefsHint" hidden>Say which picture holds what: picture 1 is her, the ones you added are picture 2, 3 and so on in the order chosen (“She lifts the mug from picture 2 up into view, takes a sip, and lowers it out of the frame again”). Whatever she takes from them has to leave the frame again before the end, so the clip ends on her picture. One thing on a plain background, filling most of the picture, works best.</p>
               <button id="customAdd" type="button" data-tip="Plan it with the look's subject line, camera line and ending; check the warnings before rendering">Add to the plan</button>
             </div>
           </details>

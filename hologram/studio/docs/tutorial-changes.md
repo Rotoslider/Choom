@@ -293,6 +293,11 @@ What matters for a move she can ask for:
   moment in that outfit.
 - **Full body for big moves.** A dance, a turn, a curtsy reads best head to toe: plan it in the
   outfit's full body (**Big moves** has 7 to 15 second ones).
+- **Something in her hands for a moment:** a mug to sip from, a flower to smell, a gift to show you.
+  Add its picture under **Pictures for the clip** and say "the mug from picture 2". She brings it up
+  into view and puts it away again before the end. The thing comes out as in its picture; words alone
+  get a lookalike. Aloy's sip from a fox mug was the first. The [new-Choom tutorial](tutorial-new-choom.md#your-own-moves-a-dance-turning-her-back-to-you-anything)
+  has the wording.
 
 ---
 

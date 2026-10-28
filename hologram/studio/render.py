@@ -1,7 +1,7 @@
 """Rendering clips with Wan2GP: queue zips, the headless run, and collecting the finished clips.
 
 A queue is queue/<name>.zip holding queue.json (one MiniMax H3 task per clip: its prompt, seed,
-length and start/end pictures) and the pictures; queue/<name>_plan.json maps each seed to its clip
+length and start/end pictures, and a clip's own pictures for the reference model) and the pictures; queue/<name>_plan.json maps each seed to its clip
 name. Wan2GP names its outputs by date, seed and prompt; collect() renames them <clip name>.mp4.
 """
 import json
@@ -37,14 +37,23 @@ def make_queue(name, picks):
                 raise ValueError(f"{cid} has no clip {clip_name}")
             if clip["status"] != "planned":
                 raise ValueError(f"{clip_name} is {clip['status']}, not planned")
-            for pic in (clip["start"], clip["end"]):
+            refs = clip.get("refs") or []
+            for pic in (clip["start"], clip["end"], *refs):
                 if not (PICTURES / pic).is_file():
                     raise ValueError(f"{clip_name}: its picture {pic} is missing from {PICTURES}")
             params = dict(template, model_type=CFG["video_model"], prompt=clip["prompt"], seed=clip["seed"],
                           video_length=clip["frames"], image_start=clip["start"], image_end=clip["end"])
-            tasks.append({"id": len(tasks) + 1, "params": params})
+            if refs:  # its own pictures (a mug she sips from): picture 3 on in the reference model's prompt
+                params.update(model_type=CFG["reference_model"], base_model_type=CFG["reference_model"],
+                              video_prompt_type="I", image_refs=list(refs), image_refs_relative_size=100,
+                              remove_background_images_ref=0)
+            tasks.append({"id": 0, "params": params})
             plan[str(clip["seed"])] = clip_name
-            pictures.update((clip["start"], clip["end"]))
+            pictures.update((clip["start"], clip["end"], *refs))
+    # Clips with pictures last, so Wan2GP changes models once (loading one takes about a minute).
+    tasks.sort(key=lambda t: t["params"]["model_type"] != CFG["video_model"])
+    for i, t in enumerate(tasks):
+        t["id"] = i + 1
     write_zip(name, tasks, plan, {pic: PICTURES / pic for pic in pictures})
     marked = []
     try:
@@ -95,7 +104,7 @@ def requeue(name, new_name):
         return 0
     for i, t in enumerate(keep):
         t["id"] = i + 1
-    used = {t["params"][k] for t in keep for k in ("image_start", "image_end")}
+    used = {pic for t in keep for pic in (t["params"]["image_start"], t["params"]["image_end"], *(t["params"].get("image_refs") or []))}
     write_zip(new_name, keep, {str(t["params"]["seed"]): plan[str(t["params"]["seed"])] for t in keep},
               {n: b for n, b in pics.items() if n in used})
     for cid in Project.ids():

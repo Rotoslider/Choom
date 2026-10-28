@@ -259,7 +259,9 @@ light"), then render the clips.
 - **Short clips fail less.** Five seconds is the sweet spot. Longer clips (up to 15 s, for a dance)
   drift more into new shots and colour shifts.
 - **An outfit-specific moment** makes it feel worn: tugging a sweater back onto her shoulder, pulling
-  up a jacket collar. Add one with **Write your own clip** on the Plan page.
+  up a jacket collar. Add one with **Write your own clip** on the Plan page. Something that goes with
+  the outfit and comes and goes in her hands (a thermos with the cold-day coat) can bring its own
+  picture there, so it looks the way it really does.
 - **The Chooms can know their closet.** They aren't told what they're wearing at any moment, since
   that would steer every picture they make. They can see what their closet holds with
   `glass_closet`, and change into an outfit with `glass_wear` once it's built. Clothes they ask for
