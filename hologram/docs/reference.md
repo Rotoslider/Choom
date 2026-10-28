@@ -910,8 +910,9 @@ player's sync on the home network. It copies the page, `tower_ears.py`, the prop
 pictures and the clips her `alive.json` plays (about 11 GB; not the build caches). The share answers
 private addresses only and stops by itself after 3 hours.
 
-On the road the player reaches the Choom app through its tunnel with the tunnel's login, and says it's
-the travel glass (`X-Choom-Glass: travel`):
+On the road the player reaches the Choom app over Tailscale (free, no data cap; ngrok's free plan ran out
+of data in an afternoon) or a tunnel, and says it's the travel glass (`X-Choom-Glass: travel`). The app
+counts Tailscale's addresses as away from home:
 - Its heartbeat takes the voice of a browser at the same address (the laptop in front of it).
 - What that browser has open is spoken there: the app marks those sentences `speakTravel`, and the
   player plays only those.
