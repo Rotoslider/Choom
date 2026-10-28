@@ -37,7 +37,7 @@ Open the Studio (http://127.0.0.1:8767), click her name at the top, and go to **
   | hot days | over 85°F |
   | daytime | a different day outfit each day, taking turns with her usual clothes |
   | nights | from 10 pm until she wakes; she can sleep in it (step 9) |
-  | only when she chooses it herself | never by the clock: only when she asks for it with `glass_wear` |
+  | only when she chooses it herself | never by the clock: only when she asks for it with `glass_wear`; she can sleep in it too (step 9) |
 
   The outfit's name carries this (`evening…`), which is how the glass decides.
 - **Name:** tells two outfits for the same time apart: `dress` makes the look `main@eveningdress`.
@@ -239,6 +239,11 @@ and keeps it until morning.
 
 Until it has its own asleep look, she wears it from 10 pm and changes back to her usual clothes to
 fall asleep.
+
+An outfit she chooses herself (`chosen…`) can have the same: its asleep look (step 2, **Starts
+from** `main@chosenunder`) and the **Sleep** pack in it (step 3). When she has chosen it, it stays on
+past 10 pm, she falls asleep in it, and she wears it until morning, even if she wakes in the night.
+Without them, the glass puts her night clothes on for bed.
 
 ## A new picture for a look
 

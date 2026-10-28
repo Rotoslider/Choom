@@ -161,7 +161,8 @@ Still on **Plan & render**, open **Change of clothes**:
 
 ![The Change of clothes form (shown here for the burgundy dress to her night look)](images/change-clip.jpg)
 
-The way back plays when she goes to sleep: at bedtime the glass puts her night clothes back on.
+The way back plays when she goes to sleep: at bedtime the glass puts her night clothes back on
+(unless the outfit has its own asleep look, in step 6).
 Plan it the same way:
 
 - **From** `full@chosenunder`, **To** `full@nightwarm`, **Short name** `on`, 7 s.
@@ -191,6 +192,10 @@ and both changes on the glass, and **Build**.
 - She keeps it on until she falls asleep; then the glass puts her night clothes back on (the way back)
   and she sleeps in them. Put on before 10 pm, it comes off at 10 for her night clothes, as any
   clothes she chose by day do.
+- To let her sleep in it, give it an asleep look and sleep clips as for a night outfit
+  ([outfit tutorial](tutorial-outfit.md), step 9): **New look**, *Asleep*, **Starts from**
+  `main@chosenunder`, then the **Sleep** pack in `main@chosenunder`. Once they're on the glass, the
+  outfit she chose stays on past 10 pm, she falls asleep in it, and she wears it until morning.
 - Her wish is on the Plan page. **Made it** moves it to her wishes that came true; whether to tell her
   it's ready is up to you.
 
@@ -310,7 +315,7 @@ Everything starts with **Looks → New look**. Which kind to use:
 | New clothes (her everyday picture changes) | An outfit | her main look, or another outfit to keep its skin or hair (Genesis's night looks start from her plain look) |
 | Her whole figure in clothes she has, for twirls and full-body cuts | Full body | the waist-up look of those clothes |
 | Her whole figure in new clothes, in the same stance as another full body (for a full-body change) | An outfit | that full body |
-| Her asleep, to doze off in her night clothes | Asleep | the night outfit |
+| Her asleep, to doze off in her night clothes or an outfit she chooses | Asleep | that outfit |
 | Somewhere she goes and stays a while | A place | her full body |
 
 And when the glass puts an outfit on comes from **She wears it on**:
@@ -322,7 +327,7 @@ And when the glass puts an outfit on comes from **She wears it on**:
 | hot days | over 85°F |
 | daytime | a different day outfit each day, taking turns with her usual clothes |
 | nights | from 10 pm until she wakes; she can sleep in it |
-| only when she chooses it herself | never by the clock: only when she asks for it with `glass_wear` |
+| only when she chooses it herself | never by the clock: only when she asks for it with `glass_wear`; she can sleep in it if it has an asleep look |
 
 The [outfit tutorial](tutorial-outfit.md) goes through an outfit from start to finish, with its full
 body and a night look she sleeps in.

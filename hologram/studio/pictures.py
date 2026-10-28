@@ -23,7 +23,7 @@ DRAFTS = PICTURES / "drafts"
 WHEN = {"cold": "cold days (under 45°F)", "hot": "hot days (over 85°F)", "evening": "evenings, 6 to 11 pm",
         "day": "daytime, taking turns with her usual clothes",
         "night": "nights, from 10 pm until she wakes (she sleeps in it)",
-        "chosen": "only when she chooses it herself (glass_wear)"}
+        "chosen": "only when she chooses it herself (glass_wear); she sleeps in it if it has an asleep look"}
 BACKGROUND = "the lighting, the framing, and the pure black background"
 CLEAN_PROMPT = ("Clean up this picture of her: the same young woman with exactly the same face, hair, expression "
                 "and clothes, facing the viewer, framed from the waist up with a little black space above her head, "

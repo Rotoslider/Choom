@@ -992,7 +992,7 @@ function firstPicture(look, l) {
 // --- New looks: outfits, full body, asleep, places (Klein), the empty glass -----------------------
 const draftUrl = (f) => `/media/draft/${encodeURIComponent(f.replace(/^drafts\//, ''))}`;
 const WHEN = { evening: 'evenings, 6 to 11 pm', cold: 'cold days (under 45°F)', hot: 'hot days (over 85°F)', day: 'daytime, taking turns with her usual clothes',
-  night: 'nights, from 10 pm until she wakes (she sleeps in it)', chosen: 'only when she chooses it herself (glass_wear)' };
+  night: 'nights, from 10 pm until she wakes (she sleeps in it)', chosen: 'only when she chooses it herself (glass_wear); she sleeps in it if it has an asleep look' };
 // A new picture for a look she has, when it's the colour that's wrong (pictures.TRUE_COLOR_PROMPT).
 const TRUE_COLOR = 'Make this picture look natural and true to life: clean neutral white light with accurate, realistic skin tones and colours and no colour cast. '
   + 'Keep everything else exactly the same: her face, expression, hair, clothes and pose, the framing, and the pure black background.';
@@ -1070,15 +1070,15 @@ function updateOutfitForm() {
   }
 }
 function renderOutfitForm() {
-  // Klein can start from any of her waist-up looks (an outfit too; asleep only from her usual clothes
-  // or a night outfit), and a new picture for a look from any look at all.
+  // Klein can start from any of her waist-up looks (an outfit too; asleep only from her usual clothes,
+  // a night outfit or a chosen one), and a new picture for a look from any look at all.
   const kind = outfitKind(), looks = state.choom.looks;
   const withPicture = lookOrder(looks).filter((l) => looks[l].picture);
   // A place starts from her full body (or a waist-up look): it's framed wide like the full body.
   // An outfit can start from a full body too (its clothes changed on her whole figure, for a full-body change).
   const bases = withPicture.filter((l) => kind === 'redo' || (kind === 'place' && l === 'full') ||
                                           (kind === 'outfit' && l.split('@')[0] === 'full') ||
-                                          (waistUp(l) && (kind !== 'asleep' || !l.includes('@') || /^night/.test(l.split('@')[1]))));
+                                          (waistUp(l) && (kind !== 'asleep' || !l.includes('@') || /^(night|chosen)/.test(l.split('@')[1]))));
   const wasTarget = $('#outfitTarget').value;
   $('#outfitTarget').replaceChildren(...withPicture.map((l) => el('option', { value: l, selected: l === (wasTarget || state.planLook) }, l)));
   const home = state.choom.sequence.length ? state.choom.clips[state.choom.sequence[0]].from : bases[0];

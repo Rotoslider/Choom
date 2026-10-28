@@ -32,7 +32,7 @@ stands in the glass in 3D, and her lips follow her voice over any clip she talks
   - outfits in a waist-up pose (`main@evening`, `relaxed@cold`)
   - other looks in her usual clothes (Genesis without her motes, `main@plain`)
   - full body (`full`), and an outfit's own full body (`full@dayspandex`)
-  - asleep (`asleep`), and asleep in a night outfit (`asleep@nightcold`)
+  - asleep (`asleep`), and asleep in a night outfit (`asleep@nightcold`) or one she chooses (`asleep@chosenunder`)
   - places, named by you: somewhere she goes and stays a while (Genesis's `campfire`, sitting on the
     ground by a fire), framed wide like her full body
   - the empty glass (`gone`), a black picture she walks off into and on from
@@ -162,7 +162,7 @@ holds something (Optic's heart, crossed arms).
 | Quiet moments | about 40 small things she does while nobody talks |
 | Expressions | happy, surprised, sad, concerned (main look and outfits; an outfit without them borrows its nearest smile, raised brows or head tilt) |
 | Oops | her face at her own mishap |
-| Sleep | dozing off, sleeping, waking, a yawn; needs an asleep look; offered for night outfits too |
+| Sleep | dozing off, sleeping, waking, a yawn; needs an asleep look; offered for night and chosen outfits too |
 | Windy days | her hair and clothes in the wind, on windy days only; each outfit needs its own |
 | Selfie moves | look-at-me moves for a picture she made (her usual looks and outfits; an outfit without them has only its full body's moves, if it has a full body) |
 | Full body | moves and twirls for a full-body look |
@@ -373,7 +373,7 @@ it, the page asks before deleting them with it. Both ask in the page before doin
 |---|---|
 | An outfit | her in new clothes, in the pose of the look it starts from (`main@eveningdress`); started from one of her full bodies, that outfit's full body in the same pose and framing (`full@chosenunder` from `full@nightwarm`), for a change of clothes in her whole figure |
 | Full body | her head to toe: `full` from her usual look, `full@<outfit>` from an outfit |
-| Asleep | her with her eyes closed, for the sleep clips: `asleep` from her usual clothes, `asleep@<outfit>` from a night outfit |
+| Asleep | her with her eyes closed, for the sleep clips: `asleep` from her usual clothes, `asleep@<outfit>` from a night outfit or a chosen one |
 | A place | somewhere she goes and stays a while, from her full body: name it (`campfire`) and say where she is and how ("sitting on the ground beside a small campfire, her knees drawn up and her hands held out over the flames, palms down, looking up at the viewer"). By a fire, hands warm palms down and move a little; palms up looks like holding something out (Genesis's first campfire). A pass on a picture keeps her hands as they are (Genesis's stayed palms up through three, even with a palms-down picture as the reference); what turned them was a clip from the picture alone, no end picture, in which she turns them over, and its last frame sent from the computer as a new picture for the look ("keep this picture exactly as it is, only sharper") |
 | The empty glass | a black picture for walking on and off (`gone`); made at once, no Klein |
 | A seat at the campfire circle | made as A place named `circleside` (sitting, turned three-quarters toward the left of the picture: an end seat) or `circle` (facing the viewer: a middle seat), from her full body. Say "warm orange light falls on her from the lower left" but leave the word campfire out of the Klein prompt, or Klein draws a fire in (the glass has its own); a fire that slips in comes out with a second pass on that draft ("Remove the flames and the glowing ground ...", started from the draft). Clothes can come from a picture added as a reference (her camping clothes from the trip photo). Around the fire the Chooms are realistic: every seat has natural skin (Genesis's from a pass on the draft with her plain picture as the reference; Optic's without her cyan outline or her heart), and the glass adds no motes there. A face that drifts (Klein starts from her small full-body face) comes back with a pass on the draft that has her main picture's face, cropped close, as the reference (Eve's). A side seat made from her facing one turns her head more than her body; that's enough for the glass. After picking the picture, check the look's subject: it's made from her full body's, so rewrite it for the seat's clothes and skin, and keep the word campfire out of it too. Something in her hands (a mug, as in the photo, or Genesis's notebook) gives her hands a place while she talks; the pack's warm-hands clip has her let go with a hand and hold it palms down toward the warmth, so say how in its wording before rendering |
@@ -444,7 +444,7 @@ An outfit's name tells the glass when she wears it (`OUTFIT_RULES` in `living.js
 | `hot…` | over 85°F |
 | `evening…` | 6 to 11 pm |
 | `day…` | a different day outfit each day, taking turns with her usual clothes |
-| `chosen…` | never by the clock: only when she asks for it herself (`glass_wear`), until she goes to sleep or changes again |
+| `chosen…` | never by the clock: only when she asks for it herself (`glass_wear`), until she goes to sleep or changes again; she sleeps in it if it has its own asleep look |
 
 The rules are checked in that order. Temperatures come from your own weather station when Home
 Assistant has one (see the [reference](../docs/reference.md)).
@@ -453,15 +453,17 @@ Assistant has one (see the [reference](../docs/reference.md)).
   then goes back to her usual clothes for at least 25 minutes. Each outfit also has a daily total of
   two minutes per clip. More clips mean longer visits. A night outfit stays on all night.
 - **Changes** happen at a quiet moment, with a camera cut or a change-of-clothes clip made for that
-  pair of looks. She changes back to her usual clothes to sleep unless her night outfit has its own
-  asleep look.
+  pair of looks. She changes back to her usual clothes to sleep unless her night outfit (or the
+  chosen one she has on) has its own asleep look.
 - **Other looks in her usual clothes** (Genesis's `plain`, Optic's `noheart`) take about a third of
   the time she'd otherwise spend in her usual clothes, decided every twenty minutes, and change on
   screen with clips made for them.
 - **Clothes she chooses herself** (`glass_wear`) stay on until she goes to sleep or changes again, at
   most until midnight. Day clothes chosen before 10 pm come off then for her night clothes, and so does
   a `chosen…` outfit put on before 10 pm; put on after 10 pm, it stays on until she falls asleep, and
-  she changes into her night clothes to sleep.
+  she changes into her night clothes to sleep. A `chosen…` outfit with its own asleep look
+  (`asleep@chosenunder`, with sleep and wake clips) is bedtime clothes she chose: it stays on past
+  10 pm, she falls asleep in it, and it stays on until morning, also if she wakes in the night.
 - **Windy days:** wind clips play only when it's windy (a 10-minute average of 12 mph or gusts of 20,
   held for 20 minutes after the last such reading), in the look she has on.
 

@@ -1032,8 +1032,9 @@ const nightNow = () => { const h = hourNow(); return h >= NIGHT_FROM || h < SLEE
 const msUntilHour = (hour) => { const d = new Date(), t = new Date(d); t.setHours(hour, 0, 0, 0); if (t <= d) t.setDate(t.getDate() + 1); return t - d; };
 function nightOutfit(p, outfits) {
   const nights = outfits.filter((o) => /^night/.test(o));
+  const kept = p.nightPick && performance.now() < p.nightPick.until && p.nightPick.o;
+  if (kept && (nights.includes(kept) || canSleepIn(p, kept))) return kept;  // (a chosen… one she fell asleep in)
   if (!nights.length) return null;
-  if (p.nightPick && performance.now() < p.nightPick.until && nights.includes(p.nightPick.o)) return p.nightPick.o;
   const t = weather.temperature, warm = typeof t === 'number' ? t >= NIGHT_WARM_F : null;
   const o = (warm !== null && nights.find((x) => (warm ? /warm/ : /cold/).test(x))) || nights.find((x) => !/warm|cold/.test(x)) || nights[0];
   p.nightPick = { o, until: performance.now() + msUntilHour(nightNow() ? SLEEP_UNTIL : NIGHT_FROM) };
@@ -1099,7 +1100,8 @@ function noteWorn(p, pose, ms) {
 }
 // Clothes she chose herself (glass_wear): kept until she goes to sleep or chooses again, at most
 // until midnight (the wardrobe starts fresh each day). Day clothes chosen before night-clothes time
-// come off then: Genesis chose denim at 2:45 pm and was still in it past 10 pm (2026-10-16).
+// come off then, unless she can sleep in them: Genesis chose denim at 2:45 pm and was still in it past
+// 10 pm (2026-10-16).
 function nightStartedAt() {
   const d = new Date();
   if (hourNow() < NIGHT_FROM) d.setDate(d.getDate() - 1);  // after midnight: last night's
@@ -1109,7 +1111,7 @@ function nightStartedAt() {
 function chosenOutfit(p) {
   const w = wardrobe(p), c = w.chosen;
   if (!c) return undefined;
-  if (nightNow() && !/^night/.test(c.o || '') && (c.at || 0) < nightStartedAt()) {
+  if (nightNow() && !/^night/.test(c.o || '') && !canSleepIn(p, c.o) && (c.at || 0) < nightStartedAt()) {
     w.chosen = null;
     saveWardrobe(p);
     return undefined;
@@ -1119,7 +1121,7 @@ function chosenOutfit(p) {
 }
 // The outfits she can wear: those with a loop she can talk over.
 const wearable = (p) => [...new Set(p.alive.clips.filter((c) => clipMoods(c).includes('talk')).map((c) => outfitOf(poseFrom(c))).filter(Boolean))];
-// Night clothes she can sleep in: their own asleep look (asleep@nightcold) to sleep and wake in.
+// Clothes she can sleep in: their own asleep look (asleep@nightcold, asleep@chosenunder) to sleep and wake in.
 const canSleepIn = (p, o) => ['sleep', 'wake'].every((mood) => p.alive.clips.some((c) => clipMoods(c).includes(mood) && poseFrom(c) === `asleep@${o}`));
 function bedOutfit(p) {
   const o = nightOutfit(p, wearable(p));
@@ -1129,9 +1131,11 @@ function wantedOutfit(p, want) {
   if (want === 'sleep') {
     const w = wardrobe(p), chosen = w.chosen?.o;
     if (w.chosen) { w.chosen = null; saveWardrobe(p); }
-    // Night clothes she put on herself (glass_wear) stay on to sleep in, and until morning.
-    if (chosen && /^night/.test(chosen) && canSleepIn(p, chosen)) {
-      p.nightPick = { o: chosen, until: performance.now() + msUntilHour(SLEEP_UNTIL) };
+    // Clothes she put on herself (glass_wear) that she can sleep in stay on to sleep in, and until
+    // morning: her night clothes, or a chosen… outfit with its own asleep look ("sometimes that's how
+    // she wants to dress for bed", 2026-10-28).
+    if (chosen && canSleepIn(p, chosen)) {
+      p.nightPick = { o: chosen, until: performance.now() + msUntilHour(nightNow() ? SLEEP_UNTIL : NIGHT_FROM) };
       return chosen;
     }
     return bedOutfit(p);

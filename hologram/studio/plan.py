@@ -81,12 +81,12 @@ def unique_name(proj, name, numbered):
 
 def options(proj, look_id):
     """The library's actions for a look: [{pack, key, text, seconds, hands, name, have}], `have`
-    naming the clip she already has for it (any status but dropped). A night outfit (she sleeps in
-    it) also gets the Sleep pack. A pack that "needs" looks (Pose changes: her relaxed pose) is left
+    naming the clip she already has for it (any status but dropped). A night or chosen outfit (she
+    can sleep in it) also gets the Sleep pack. A pack that "needs" looks (Pose changes: her relaxed pose) is left
     out for a Choom without them: the Studio can't make a second pose, and Genesis's main look showed
     Aloy's hand-lowering clips."""
     lib, kind = library(), look_kind(look_id)
-    kinds = {kind} | ({"night"} if kind == "outfit" and outfit_of(look_id).startswith("night") else set())
+    kinds = {kind} | ({"night"} if kind == "outfit" and outfit_of(look_id).startswith(("night", "chosen")) else set())
     packs = {p["id"]: p for p in lib["packs"]}
     out = []
     for a in lib["actions"]:

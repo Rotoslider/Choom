@@ -401,8 +401,8 @@ class Handler(BaseHTTPRequestHandler):
                 elif kind == "full":
                     look_id = f"full@{outfit_of(base)}" if outfit_of(base) else "full"  # an outfit's own full body
                 elif kind == "asleep":
-                    if outfit_of(base) and not outfit_of(base).startswith("night"):
-                        return self.fail("she sleeps in her usual clothes or a night outfit")
+                    if outfit_of(base) and not outfit_of(base).startswith(("night", "chosen")):
+                        return self.fail("she sleeps in her usual clothes, a night outfit or one she chooses")
                     look_id = f"asleep@{outfit_of(base)}" if outfit_of(base) else "asleep"
                 elif kind == "place":
                     # A place she goes to and stays a while (sitting by her campfire), named by him.
