@@ -139,6 +139,12 @@ export function travelGlassActive(): boolean {
   return !!t && t.voice && Date.now() - t.at < VOICE_FRESH_MS;
 }
 
+/** The travel glass is running (a fresh heartbeat, its voice on or muted). */
+export function travelGlassRunning(): boolean {
+  const t = store.__choomTravelGlass;
+  return !!t && Date.now() - t.at < VOICE_FRESH_MS;
+}
+
 /**
  * A browser away from home in front of the travel glass: one at the address its heartbeats come
  * from. A laptop's browser and its player can reach the tunnel over different IP versions (IPv6
@@ -200,13 +206,15 @@ function isOpen(turn: HologramTurn, place: GlassPlace): boolean {
 }
 
 /**
- * A conversation open in front of the travel glass (on the laptop, or begun at its mic) is his there,
- * and only that glass speaks it, even while a browser at home still has it open: her chat left open
- * on the desk at home made the home glass answer "OK Genesis" said at the travel glass too
- * (2026-10-28).
+ * While the travel glass runs, Donny is in front of it: it speaks what's open there (on the laptop,
+ * or begun at its mic), and the glass at home says nothing, even for a conversation a browser at home
+ * still has open. Her chat left open on the desk at home made the home glass answer "OK Genesis" said
+ * at the travel glass too (2026-10-28); a tab forgotten at home would have it talk to an empty house
+ * while he's away.
  */
 function shouldSpeak(turn: HologramTurn, place: GlassPlace = 'home'): boolean {
-  return isOpen(turn, place) && (place === 'travel' || !isOpen(turn, 'travel'));
+  if (place === 'travel') return isOpen(turn, 'travel');
+  return isOpen(turn, 'home') && !travelGlassRunning();
 }
 
 // ---- Turn mirroring ------------------------------------------------------------------------

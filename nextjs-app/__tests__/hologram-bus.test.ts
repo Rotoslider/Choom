@@ -158,14 +158,19 @@ describe('the travel glass', () => {
     expect(travelGlassActive()).toBe(false);
   });
 
-  test('a conversation open in front of it is spoken there, and one open at home only at home', () => {
+  test('while it runs, what is open in front of it is spoken there, and the glass at home says nothing', () => {
     const { events, off } = capture();
     markViewing('chat', 'roadChat', 'travel');
     say(turn('chat', 'roadChat'));
-    markViewing('chat', 'homeChat');
+    markViewing('chat', 'homeChat');           // a tab forgotten open at home
     say(turn('chat', 'homeChat'));
+    const clock = jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 30_000); // its heartbeats stopped
+    markViewing('chat', 'homeChat');
+    say(turn('chat', 'homeChat'));             // home again
+    clock.mockRestore();
     off();
-    expect(events.filter((e) => e.type === 'content').map((e) => [e.speak, e.speakTravel])).toEqual([[false, true], [true, false]]);
+    expect(events.filter((e) => e.type === 'content').map((e) => [e.speak, e.speakTravel]))
+      .toEqual([[false, true], [false, false], [true, false]]);
   });
 
   test('open at home and in front of it as well, only the travel glass speaks it', () => {
