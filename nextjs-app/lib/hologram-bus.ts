@@ -193,10 +193,20 @@ function isViewing(kind: 'chat' | 'room', id: string | null, place: GlassPlace):
   return at !== undefined && Date.now() - at < VOICE_FRESH_MS;
 }
 
-function shouldSpeak(turn: HologramTurn, place: GlassPlace = 'home'): boolean {
+function isOpen(turn: HologramTurn, place: GlassPlace): boolean {
   if (turn.source === 'chat') return isViewing('chat', turn.chatId, place);
   if (turn.source === 'group') return isViewing('room', turn.roomId, place);
   return false; // heartbeats and delegation are shown, never spoken
+}
+
+/**
+ * A conversation open in front of the travel glass (on the laptop, or begun at its mic) is his there,
+ * and only that glass speaks it, even while a browser at home still has it open: her chat left open
+ * on the desk at home made the home glass answer "OK Genesis" said at the travel glass too
+ * (2026-10-28).
+ */
+function shouldSpeak(turn: HologramTurn, place: GlassPlace = 'home'): boolean {
+  return isOpen(turn, place) && (place === 'travel' || !isOpen(turn, 'travel'));
 }
 
 // ---- Turn mirroring ------------------------------------------------------------------------

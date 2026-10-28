@@ -168,6 +168,15 @@ describe('the travel glass', () => {
     expect(events.filter((e) => e.type === 'content').map((e) => [e.speak, e.speakTravel])).toEqual([[false, true], [true, false]]);
   });
 
+  test('open at home and in front of it as well, only the travel glass speaks it', () => {
+    const { events, off } = capture();
+    markViewing('chat', 'bothChat');           // her chat left open on the desk at home
+    markViewing('chat', 'bothChat', 'travel'); // and "OK Genesis" said at the travel glass
+    say(turn('chat', 'bothChat'));
+    off();
+    expect(events.filter((e) => e.type === 'content').map((e) => [e.speak, e.speakTravel])).toEqual([[false, true]]);
+  });
+
   test('its heartbeat takes the voice of the browser in front of it, not of a phone elsewhere', async () => {
     setHologramVoice(false);
     const beat = await voicePost(away('203.0.113.20', { 'x-choom-glass': 'travel', 'Content-Type': 'application/json' },
