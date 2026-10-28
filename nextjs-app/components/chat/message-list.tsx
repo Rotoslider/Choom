@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useRef, useEffect, useCallback } from 'react';
+import React, { useRef, useEffect, useLayoutEffect, useCallback, useState } from 'react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { MessageBubble } from './message-bubble';
 import { ToolProgress } from './tool-progress';
@@ -29,13 +29,46 @@ interface MessageListProps {
   planProgress?: PlanProgress | null;
 }
 
+// A long chat is drawn from its latest messages, with a button for earlier ones. Drawing all of
+// Genesis's 1,700+ messages made typing stall every time the page refreshed (the chat list and
+// service checks, twice a minute). This is only what the page shows: her memory is untouched.
+const PAGE = 150;
+
 export function MessageList({ messages, isLoading = false, streamingImage, agentProgress, planProgress }: MessageListProps) {
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const userScrolledUp = useRef(false);
   const isProgrammaticScroll = useRef(false);
   const lastMessageCount = useRef(messages.length);
-  const { isStreaming, streamingContent, streamingThinking, thinkingByMessage, currentChoom, streamRecovery } = useAppStore();
+  const { isStreaming, streamingContent, streamingThinking, thinkingByMessage, currentChoom, currentChatId, streamRecovery } = useAppStore();
+  // How many of the latest messages are drawn, for the chat it was set in: another chat opens on
+  // its latest messages again.
+  const [shown, setShown] = useState({ chat: currentChatId, count: PAGE });
+  const shownCount = shown.chat === currentChatId ? shown.count : PAGE;
+  const keepFromBottom = useRef<number | null>(null);
+
+  const viewportOf = useCallback(() =>
+    scrollAreaRef.current?.querySelector('[data-radix-scroll-area-viewport]') as HTMLElement | null, []);
+
+  // Earlier messages go in above: keep the ones in view where they were.
+  const showEarlier = () => {
+    const viewport = viewportOf();
+    keepFromBottom.current = viewport ? viewport.scrollHeight - viewport.scrollTop : null;
+    setShown({ chat: currentChatId, count: shownCount + PAGE });
+  };
+  useLayoutEffect(() => {
+    const viewport = viewportOf();
+    if (viewport && keepFromBottom.current !== null) {
+      isProgrammaticScroll.current = true;
+      viewport.scrollTop = viewport.scrollHeight - keepFromBottom.current;
+      setTimeout(() => { isProgrammaticScroll.current = false; }, 50);
+    }
+    keepFromBottom.current = null;
+  }, [shownCount, viewportOf]);
+
+  const visible = messages.filter((m) => m.role !== 'system');
+  const hiddenCount = Math.max(0, visible.length - shownCount);
+  const drawn = hiddenCount ? visible.slice(hiddenCount) : visible;
 
   // Helper: scroll to bottom without triggering the "user scrolled up" detection
   const scrollToBottom = useCallback((behavior: ScrollBehavior = 'instant') => {
@@ -103,11 +136,23 @@ export function MessageList({ messages, isLoading = false, streamingImage, agent
           </div>
         )}
 
-        {messages.filter((m) => m.role !== 'system').map((message, index, shown) => {
+        {hiddenCount > 0 && (
+          <div className="flex justify-center">
+            <button
+              type="button"
+              onClick={showEarlier}
+              className="text-xs text-muted-foreground hover:text-foreground border border-border rounded-full px-3 py-1"
+            >
+              Show earlier messages ({hiddenCount} more)
+            </button>
+          </div>
+        )}
+
+        {drawn.map((message, index) => {
           // Check if this is the last assistant message and we're streaming
           const isLastAssistant =
             message.role === 'assistant' &&
-            index === shown.length - 1 &&
+            index === drawn.length - 1 &&
             isStreaming;
 
           return (

@@ -295,7 +295,7 @@ function ImageById({ imageId, choomName }: { imageId: string; choomName?: string
   );
 }
 
-export function MessageBubble({
+function MessageBubbleView({
   message,
   isStreaming = false,
   streamingContent,
@@ -453,3 +453,7 @@ export function MessageBubble({
     </div>
   );
 }
+
+// Drawn again only when its own message changes: the page refreshes its chat list and service
+// checks twice a minute, and redrawing every bubble (markdown and all) each time made typing stall.
+export const MessageBubble = React.memo(MessageBubbleView);
