@@ -174,16 +174,20 @@ export function setHologramListening(e: {
 }
 
 const PRIVATE_IP = /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|::1$|fe80:|fc|fd)/i;
+// Tailscale's addresses (100.64.0.0/10, and fd7a:115c:a1e0::/48 inside the private fc00::/7) are a
+// device of his reaching the app over the tailnet, from away: at home everything uses the home network.
+const TAILSCALE_IP = /^(100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.|fd7a:115c:a1e0:)/i;
 
 /**
- * True when a request came from away from home: through ngrok, or from a public address. Nobody
- * is in front of the hologram then, so it neither takes that browser's voice nor reacts to it.
+ * True when a request came from away from home: through ngrok, over Tailscale, or from a public
+ * address. Nobody is in front of the hologram then, so it neither takes that browser's voice nor
+ * reacts to it. (Next puts the socket's own address in x-forwarded-for when no proxy did.)
  */
 export function requestFromAway(request: Request): boolean {
   const host = request.headers.get('host') ?? '';
   if (/ngrok/i.test(host)) return true;
-  const forwarded = (request.headers.get('x-forwarded-for') ?? '').split(',')[0].trim();
-  return forwarded !== '' && !PRIVATE_IP.test(forwarded.replace(/^::ffff:/, ''));
+  const forwarded = (request.headers.get('x-forwarded-for') ?? '').split(',')[0].trim().replace(/^::ffff:/, '');
+  return forwarded !== '' && (TAILSCALE_IP.test(forwarded) || !PRIVATE_IP.test(forwarded));
 }
 
 // ---- What browsers have open (at home, or in front of the travel glass) --------------------

@@ -90,6 +90,10 @@ test('requests through ngrok or from a public address count as away from home', 
   expect(requestFromAway(req({ host: 'donnys-mac-studio-3.local:3443', 'x-forwarded-for': '203.0.113.7' }))).toBe(true);
   expect(requestFromAway(req({ host: 'donnys-mac-studio-3.local:3443', 'x-forwarded-for': '192.168.1.20' }))).toBe(false);
   expect(requestFromAway(req({ host: 'localhost:3000' }))).toBe(false);
+  // over Tailscale (no proxy: Next fills in the socket's address)
+  expect(requestFromAway(req({ host: 'donnys-mac-studio-3:3000', 'x-forwarded-for': '100.101.102.103' }))).toBe(true);
+  expect(requestFromAway(req({ host: 'donnys-mac-studio-3:3000', 'x-forwarded-for': 'fd7a:115c:a1e0::5' }))).toBe(true);
+  expect(requestFromAway(req({ host: 'donnys-mac-studio-3.local:3000', 'x-forwarded-for': 'fd12:3456::7' }))).toBe(false);
 });
 
 test('a chat turn tells the hologram what Donny said, heartbeats do not', () => {
