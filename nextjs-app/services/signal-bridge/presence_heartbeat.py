@@ -684,6 +684,11 @@ def _wifi_presence(all_states: list, ha: dict) -> str:
 
 
 def _get_presence_context() -> str:
+    """Where Donny is (_presence_statement), then the doors opened in the last hour (_recent_doors)."""
+    return " ".join(p for p in (_presence_statement(), _recent_doors()) if p)
+
+
+def _presence_statement() -> str:
     """Query HA for Donny's presence state and return a clear statement.
 
     Checks multiple entity types in priority order:
@@ -789,6 +794,84 @@ def _get_presence_context() -> str:
 
     except Exception as e:
         logger.warning(f"Failed to get HA presence: {e}")
+        return ""
+
+
+def _doors_line(history: dict, doors: list, now: datetime) -> str:
+    """What the doors did in the window `history` covers, doorway by doorway; "" if none was opened.
+
+    history: {entity_id: [(time, state), ...]}, the first entry its state at the window's start.
+    doors: [{"name", "door", "screen" (optional), "leads"}]. He can only go through a doorway with
+    the door and its screen both open, so only openings count: the north door left open all summer
+    night with its screen shut says nothing, and a door opened while its screen stays shut wasn't
+    gone through (2026-10-28).
+    """
+    from zoneinfo import ZoneInfo
+
+    def when(t):
+        minutes = round((now - t).total_seconds() / 60)
+        clock = t.astimezone(ZoneInfo("America/Denver")).strftime("%I:%M %p").lstrip("0")
+        return f"{clock} ({'just now' if minutes < 1 else f'{minutes} min ago'})"
+
+    parts = []
+    for d in doors:
+        sensors = [(part, d[part]) for part in ("door", "screen") if d.get(part) and history.get(d[part])]
+        if not sensors:
+            continue
+        state = {part: history[eid][0][1] for part, eid in sensors}
+        changes, through, opened = [], False, False
+        for t, part, s in sorted((t, part, s) for part, eid in sensors for t, s in history[eid][1:]):
+            if (state[part], s) in (("off", "on"), ("on", "off")):  # not a restart's unavailable and back
+                changes.append((t, part, s))
+                opened = opened or s == "on"
+            state[part] = s
+            through = through or (opened and all(v == "on" for v in state.values()))
+        if not opened:
+            continue
+        did = ", ".join(f"{part} {'opened' if s == 'on' else 'closed'} {when(t)}" for t, part, s in changes[-6:])
+        name = d.get("name", "door")
+        leads = f" (leads {d['leads']})" if d.get("leads") else ""
+        if len(sensors) == 1:
+            verdict = "He may have gone through."
+        elif through:
+            verdict = "Door and screen were open together, so he may have gone through."
+        else:
+            verdict = "Door and screen were never open together, so nobody went through."
+        now_is = ", ".join(f"{part} {dict(on='open', off='closed').get(s, s)}" for part, s in state.items())
+        parts.append(f"{name[:1].upper()}{name[1:]}{leads}: {did}. {verdict} Now: {now_is}.")
+    return ("Doors in the last hour — " + " ".join(parts)) if parts else ""
+
+
+def _recent_doors(minutes: int = 60) -> str:
+    """The doors opened in the last hour (_doors_line) from HA's history. Set in bridge-config.json
+    "homeAssistant": "doors": [{"name": "east door", "door": entity, "screen": entity, "leads": "outside"}]."""
+    config_path = os.path.join(os.path.dirname(__file__), "bridge-config.json")
+    try:
+        with open(config_path) as f:
+            ha = json.load(f).get("homeAssistant", {})
+        doors = ha.get("doors") or []
+        base_url, token = ha.get("baseUrl", ""), ha.get("accessToken", "")
+        if not doors or not base_url or not token:
+            return ""
+
+        import urllib.request
+        from datetime import timedelta, timezone
+
+        now = datetime.now(timezone.utc)
+        start = (now - timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        ids = ",".join(e for d in doors for e in (d.get("door"), d.get("screen")) if e)
+        req = urllib.request.Request(
+            f"{base_url}/api/history/period/{start}?filter_entity_id={ids}&minimal_response&no_attributes",
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            series = json.loads(resp.read())
+        history = {s[0]["entity_id"]: [(datetime.fromisoformat(x["last_changed"].replace("Z", "+00:00")), x["state"])
+                                       for x in s] for s in series if s}
+        return _doors_line(history, doors, now)
+
+    except Exception as e:
+        logger.warning(f"Failed to get HA door history: {e}")
         return ""
 
 
