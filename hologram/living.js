@@ -229,9 +229,10 @@ const COLOR_GLSL = /* glsl */ `
 // Genesis is made of motes, and they move: the glitter in her image drifts in slow little circles
 // across her (each patch on its own), every mote twinkles as it goes, and a soft wave of light rises
 // through her. Only the bright specks move; her features stay put. The motes are the same in every
-// view, so they're worked out once a frame over her picture (drawMotes) and every view reads the
-// result. Worked out in each of the 48 views, they halved the frame rate on Donny's travel laptop
-// and were the heaviest thing on the glass at home (2026-10-28).
+// view, so each frame they're drawn into her picture once (drawMotes), and every view reads her color
+// from that picture instead of the video: one read a pixel, as without motes. Worked out in each of
+// the 48 views, they halved the frame rate on Donny's travel laptop and were the heaviest thing on
+// the glass at home; reading both the video and the motes still cost the laptop a fifth (2026-10-28).
 const MOTES_FRAG = /* glsl */ `
     uniform sampler2D colorMap, maskMap;
     uniform int useMask;
@@ -387,9 +388,10 @@ const LAYER_FRAG = /* glsl */ `
       float gap = 0.0;
       vec4 spot = vec4(0.0);
       vec2 uv = mouthOn == 1 ? mouthWarp(vUv, gap, spot) : vUv;
-      vec3 c = colorAt(uv);
-      // Her motes (MOTES_FRAG), read where her picture is: they move with her jaw as she talks.
-      if (sparkle > 0.0) c = mix(c, texture2D(motesMap, uv).rgb, sparkle);
+      // With motes, her color comes from her picture as the motes pass drew it this frame (MOTES_FRAG),
+      // read where her picture is, so they move with her jaw as she talks.
+      vec3 c = sparkle >= 1.0 ? texture2D(motesMap, uv).rgb : colorAt(uv);
+      if (sparkle > 0.0 && sparkle < 1.0) c = mix(c, texture2D(motesMap, uv).rgb, sparkle);
       if (gap > 0.0) {
         // The inside of her mouth, tinted from her own lips so it matches each Choom's light. Not a
         // black void: a warm dark red, darkest up under the upper lip, with a soft tongue rising
@@ -443,7 +445,8 @@ const LAYER_FRAG = /* glsl */ `
     }`;
 
 // Her motes for this frame, once for each picture with motes on show (the speaker, a sister on the
-// stage), before the views are drawn. Each picture keeps its own target, the size of its color.
+// stage), before the views are drawn. Every frame: the views read all of her color from it. Each
+// picture keeps its own target, the size of its color.
 const motesMaterial = new THREE.ShaderMaterial({
   uniforms: { colorMap: { value: null }, maskMap: { value: null }, useMask: { value: 0 }, packed: { value: 0 },
     texSize: { value: new THREE.Vector2() }, time: shared.time },
