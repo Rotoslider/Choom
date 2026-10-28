@@ -330,7 +330,7 @@ And when the glass puts an outfit on comes from **She wears it on**:
 | only when she chooses it herself | never by the clock: only when she asks for it with `glass_wear`; she can sleep in it if it has an asleep look |
 
 The [outfit tutorial](tutorial-outfit.md) goes through an outfit from start to finish, with its full
-body and a night look she sleeps in.
+body and clothes she sleeps in.
 
 ---
 

@@ -211,7 +211,7 @@ wears the outfit.
 The glass cuts to them only while she wears that outfit, and she can only wear it once its waist-up
 clips, with their talk loop, are on the glass. Build the outfit first, or both together.
 
-## 9. A night look she sleeps in (optional)
+## 9. Clothes she sleeps in (optional)
 
 A `night…` outfit is worn from 10 pm until she wakes, all night, and she can fall asleep in it. With
 two, name them `warm` and `cold` (`main@nightwarm`, `main@nightcold`): the glass picks the warm one
@@ -240,10 +240,17 @@ and keeps it until morning.
 Until it has its own asleep look, she wears it from 10 pm and changes back to her usual clothes to
 fall asleep.
 
-An outfit she chooses herself (`chosen…`) can have the same: its asleep look (step 2, **Starts
-from** `main@chosenunder`) and the **Sleep** pack in it (step 3). When she has chosen it, it stays on
-past 10 pm, she falls asleep in it, and she wears it until morning, even if she wakes in the night.
-Without them, the glass puts her night clothes on for bed.
+**An outfit she chooses herself** (`chosen…`, her underthings) can have the same, so she can go to
+bed in it when she wants:
+
+1. **Its asleep look:** **New look**, *Asleep*, **Starts from** the outfit (`main@chosenunder`).
+   The new look is `asleep@chosenunder`.
+2. **Its sleep clips:** the outfit's look offers the **Sleep** pack too (`genesis_chosenunder-fallasleep`,
+   `genesis_chosenunder-sleep`, ...).
+3. **Render, review and build** them.
+
+When she has chosen it, it stays on past 10 pm, she falls asleep in it, and she wears it until
+morning, even if she wakes in the night. Without them, the glass puts her night clothes on for bed.
 
 ## A new picture for a look
 

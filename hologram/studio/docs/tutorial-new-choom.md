@@ -234,8 +234,9 @@ minutes, and wakes in the morning or when you talk to her.
 
 ### Outfits
 
-Clothes for the evening, cold days, hot days, a different one each day, or nights she sleeps in,
-each with its own full body if you like. See [the outfit tutorial](tutorial-outfit.md).
+Clothes for the evening, cold days, hot days, a different one each day, nights she sleeps in, or
+only when she chooses them (those she can sleep in too, with their own asleep look), each with its
+own full body if you like. See [the outfit tutorial](tutorial-outfit.md).
 
 ### Your own moves: a dance, turning her back to you, anything
 

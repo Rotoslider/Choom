@@ -365,7 +365,7 @@ An outfit's name says when she wears it (`OUTFIT_RULES`, `nightOutfit` and `want
 | `hot…` | over 85°F |
 | `evening…` | 6 to 11 pm |
 | `day…` | takes turns with her usual clothes: one pick a day from the date, held all day (while it rests, she's in her usual clothes, not another day outfit) |
-| `chosen…` | never by the clock (a rule that's never true): only when she chooses it herself, and no visit carries on after (Genesis's underthings, Oct 24 2026) |
+| `chosen…` | never by the clock (a rule that's never true): only when she chooses it herself, and no visit carries on after (Genesis's underthings, Oct 24 2026). With its own asleep look she sleeps in it (below) |
 | `plain`, `noheart` | looks in her usual clothes (Genesis without her glow, Optic without her heart): about a third of the time, decided every 20 minutes, changed on screen with clips made for it |
 
 The temperature comes from the weather feed ([Weather](#weather)). An outfit is wearable only if it
@@ -401,13 +401,17 @@ order) are defaults. Copy `glass-settings.example.json` to `glass-settings.json`
 - Change clips play only to change clothes, never to reach an expression or a move.
 - Before sleeping she changes back into her usual clothes. She stays in her night clothes instead
   when they have their own asleep look (`asleep@nightcold`, with sleep and wake clips such as
-  `<id>_nightcold-fallasleep`).
+  `<id>_nightcold-fallasleep`), and in a `chosen…` outfit she has on when it has one
+  (`asleep@chosenunder`; `canSleepIn`).
 
 **Her own choice.** Clothes she chooses herself (`glass_wear`, below) take priority over these rules,
 the day outfit included, until she goes to sleep, until she chooses again, or at most until midnight.
 Day clothes chosen before night-clothes time (`nightClothesFrom`, 10 pm) come off then for her night
 clothes; whatever she chooses after it stays on. Night clothes she chose stay on to sleep in when
-they have an asleep look.
+they have an asleep look. So does a `chosen…` outfit with an asleep look, and that one also stays on
+past 10 pm when she put it on before ("sometimes that's how she wants to dress for bed", Donny,
+2026-10-28). What she sleeps in is kept until 7 am (`nightPick`; until 10 pm after a nap by day), so a
+wake in the night doesn't change her into other night clothes.
 
 Neither the Choom app's prompts nor the glass ever tell the Chooms what they are wearing at a given
 moment, so it doesn't steer the selfies they make. They can ask what is in their closet.

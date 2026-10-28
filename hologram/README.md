@@ -48,7 +48,8 @@ happening in the Choom app: listening, thinking, using tools, changing clothes, 
   walks on (or appears), for Chooms who have those clips.
 - **Their own choices.** The Chooms can ask the glass for a move or for clothes from their closet,
   their usual clothes included ("my cream blouse"). Clothes she picks take priority: day clothes until
-  the 10 pm night clothes, anything later until she sleeps. A
+  the 10 pm night clothes, anything later until she sleeps. An outfit she chooses that has its own
+  asleep look (her underthings, made in Glass Studio) she can sleep in, until morning. A
   move plays in the clothes she has on, at her next quiet moment on the glass within half an hour.
   Anything they don't have yet goes on a wish list in Glass Studio.
 
@@ -64,8 +65,8 @@ happening in the Choom app: listening, thinking, using tools, changing clothes, 
 
 **Days, nights and weather**
 - **Sleep.** Late at night, after a quiet spell, she dozes off and the glass dims. She wakes when you
-  talk to her, or in the morning. From 5 am she stays awake while the room sensor has you at the desk. She sleeps in her night clothes when they have their own asleep look,
-  and changes out of them once she's up after 7 am.
+  talk to her, or in the morning. From 5 am she stays awake while the room sensor has you at the desk. She sleeps in her night clothes when they have their own asleep look
+  (or in an outfit she chose that has one), and changes out of them once she's up after 7 am.
 - **Weather.** On windy days her hair and clothes blow in the wind and dust drifts through the glass.
   Rain and snow fall through it while they fall outside.
 - **Home Assistant presence.** She greets you when you come home. Optional desk and bed sensors add
