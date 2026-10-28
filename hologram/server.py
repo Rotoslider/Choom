@@ -10,6 +10,7 @@ Buttons and Choom activity reach the page over /events.
 """
 import argparse
 import base64
+import collections
 import fcntl
 import json
 import os
@@ -320,6 +321,8 @@ def follow_choom():
                             chat_turns.pop(turn, None)
                         latest["chat_turns"] = sorted({c for (c, source, _), at in chat_turns.items()
                                                        if source == "chat" and time.time() - at < 600})
+                    if event.get("type") == "content" and event.get("speak") is True and isinstance(event.get("text"), str):
+                        spoken.append((time.time(), event["text"]))  # for tower_ears' echo guard
                     broadcast({**event, "type": "choom", "event": event.get("type")})
         except Exception as e:  # network drop, app restart, timeout
             choom_feed.update(state=f"disconnected ({type(e).__name__})")
@@ -430,7 +433,9 @@ ROOMS_PAUSED_S = 15 * 60         # a room paused for a welcome picks up again af
 rooms_paused = [0.0]             # never says he's done (not while he's talking at it)
 ears_at = [0.0]                  # tower_ears' last word (a wake, a window, what he said)
 tower_talk = {"open": False, "at": 0.0}  # a conversation at the tower under way (relaunch_when_quiet waits for it)
-voice_heard = {"count": 0, "at": 0.0}  # tower_ears' "someone is talking nearby" since the last log entry
+voice_heard = {"count": 0, "at": 0.0}
+SPOKEN_S = 90                    # what she said this long ago may still come back to the mic (tower_ears' echo guard)
+spoken = collections.deque(maxlen=30)  # (when, sentence) of what the glass was given to speak  # tower_ears' "someone is talking nearby" since the last log entry
 TOWER_TALK_STALE_S = 180         # open with no word from tower_ears for this long: it died mid-conversation
 
 
@@ -1160,7 +1165,8 @@ class Handler(SimpleHTTPRequestHandler):
         if self.path == "/status":
             talking = tower_talk["open"] and time.time() - max(tower_talk["at"], ears_at[0]) < TOWER_TALK_STALE_S
             return self._send_json({**latest, "buttons": buttons, "choom_feed": choom_feed,
-                                    "tower_conversation": {"open": talking}})
+                                    "tower_conversation": {"open": talking},
+                                    "spoken": [text for at, text in list(spoken) if time.time() - at < SPOKEN_S]})
         if self.path == "/events":
             return self._stream_events()
         if self.path.startswith("/choom-image/"):

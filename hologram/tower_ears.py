@@ -165,6 +165,17 @@ def hologram_status(key="status"):
         return None
 
 
+def is_echo(heard, spoken):
+    """Her own words coming back to the mic: most of what it heard (at least four words) is in
+    something she said in the last minute and a half (the glass's server keeps that, as "spoken").
+    Without echo cancelling (a laptop's speaker beside the mic, a Bluetooth speakerphone) the mic hears
+    her; on the travel glass her words went back to her as Donny's, and she answered herself."""
+    words = set(re.findall(r"[a-z0-9']{3,}", heard.lower()))
+    if len(words) < 4:
+        return False
+    return any(len(words & set(re.findall(r"[a-z0-9']{3,}", said.lower()))) >= 0.7 * len(words) for said in spoken)
+
+
 def wav_bytes(pcm):
     buffer = io.BytesIO()
     with wave.open(buffer, "wb") as w:
@@ -235,8 +246,13 @@ class Ears:
 
     def capture_portaudio(self):
         """Mono 16-bit at RATE through PortAudio (sounddevice), from the mic named by EARS_MIC or the
-        default one, in 30 ms blocks (one VAD frame each). Opened again if it fails or goes silent."""
+        default one, in 30 ms blocks (one VAD frame each). Opened again if it fails or goes silent.
+        PortAudio lists the devices once, so it's restarted before each opening: a speakerphone moved
+        from Bluetooth to USB was never found. A named mic that isn't there is waited for, never
+        swapped for the default: the travel laptop's own mic, beside the speaker and without its echo
+        cancelling, heard Genesis and sent her words back to her as Donny's (2026-10-28)."""
         import sounddevice as sd
+        missing = False
         while True:
             last = [time.time()]
 
@@ -244,12 +260,19 @@ class Ears:
                 last[0] = time.time()
                 self.frames.put(bytes(data))
             try:
+                sd._terminate()
+                sd._initialize()
                 device = None
                 if MIC_NAME:
                     device = next((i for i, d in enumerate(sd.query_devices())
                                    if d["max_input_channels"] > 0 and MIC_NAME.lower() in d["name"].lower()), None)
                     if device is None:
-                        tell_hologram("error", message=f"no microphone named {MIC_NAME}; using the default one")
+                        if not missing:
+                            tell_hologram("error", message=f"no microphone named {MIC_NAME}: waiting for it")
+                        missing = True
+                        time.sleep(3)
+                        continue
+                    missing = False
                 with sd.RawInputStream(samplerate=RATE, channels=1, dtype="int16", blocksize=FRAME, device=device,
                                        callback=got):
                     while time.time() - last[0] < 5:
@@ -362,6 +385,9 @@ class Ears:
             text = local_rest
         if len(text.split()) < 1:
             return None  # nothing said after all (a cough, the tail of her voice): keep listening
+        if is_echo(text, hologram_status("spoken") or []):
+            tell_hologram("ignored", choom, echo=True, **self.last_capture)
+            return None  # her own words coming back: keep listening for his
         try:
             target = {"room": True} if choom == ROOM else {"choom": choom}
             post_json(f"{CHOOM_URL}/api/hologram/talk", {**target, "text": text}, timeout=60)
