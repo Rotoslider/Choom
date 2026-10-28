@@ -654,11 +654,41 @@ def _format_self_state_block(state: dict) -> str:
 # Home Assistant Presence Detection
 # ============================================================================
 
+HOME_PATTERNS = ["lazy k", "animas"]
+
+
+def _wifi_presence(all_states: list, ha: dict) -> str:
+    """Where Donny is by his phone's Wi-Fi and the truck, before any GPS; "" when they don't say.
+
+    His phone on the nightstand, on the home Wi-Fi all night, placed itself at an RV park 6 km away
+    twice, and the wake notes said he was AWAY (2026-10-28). Set in bridge-config.json
+    "homeAssistant": "phoneWifiSensor" (the companion app's Wi-Fi connection sensor), "homeWifi"
+    ({network name: where it is on the property, "" for the house}), "truckWifi" (the truck's
+    network names) and "truckSensor" (the phone's Android Auto sensor).
+    """
+    states = {e.get("entity_id", ""): e.get("state", "") for e in all_states}
+    ssid = states.get(ha.get("phoneWifiSensor", ""), "")
+    gps = next((e.get("state", "") for e in all_states if "geocoded_location" in e.get("entity_id", "")
+                and e.get("state", "") not in ("unknown", "unavailable", "")), "")
+    home_wifi = ha.get("homeWifi") or {}
+    if ssid in home_wifi:
+        where = home_wifi[ssid]
+        line = (f"Donny is HOME — at {where}. (His phone is on the Wi-Fi there, {ssid}.)" if where
+                else f"Donny is HOME. (His phone is on the home Wi-Fi, {ssid}.)")
+        if gps and not any(p in gps.lower() for p in HOME_PATTERNS):
+            line += f' Its GPS reads "{gps}", a bad fix: the Wi-Fi is what counts.'
+        return line
+    if ssid in (ha.get("truckWifi") or []) or states.get(ha.get("truckSensor", "")) == "on":
+        return f"Donny is in his truck. (GPS: {gps})" if gps else "Donny is in his truck."
+    return ""
+
+
 def _get_presence_context() -> str:
     """Query HA for Donny's presence state and return a clear statement.
 
     Checks multiple entity types in priority order:
-    1. sensor.*geocoded_location — most reliable, contains street address
+    0. his phone's Wi-Fi (the home networks) and the truck (_wifi_presence)
+    1. sensor.*geocoded_location — street address
     2. person.* — HA's built-in presence (home/not_home/zone)
     3. device_tracker.* — raw GPS/WiFi trackers
 
@@ -686,9 +716,13 @@ def _get_presence_context() -> str:
         with urllib.request.urlopen(req, timeout=5) as resp:
             all_states = json.loads(resp.read())
 
-        home_patterns = ["lazy k", "animas"]
+        line = _wifi_presence(all_states, ha)
+        if line:
+            return line
 
-        # Priority 1: geocoded_location sensors (most reliable — street address)
+        home_patterns = HOME_PATTERNS
+
+        # Priority 1: geocoded_location sensors (street address)
         for entity in all_states:
             eid = entity.get("entity_id", "")
             if "geocoded_location" not in eid:
