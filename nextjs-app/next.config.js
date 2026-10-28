@@ -13,6 +13,8 @@ const nextConfig = {
     '192.168.1.*',
     '*.local',
     'cool-sincerely-lioness.ngrok-free.app',
+    // Tailscale: a device of his away from home (the travel glass laptop) by its MagicDNS name.
+    '*.ts.net',
   ],
   // Hide the floating dev-build "N" badge — on phones it sits right over the
   // message input. (Dev-only indicator; has no effect on the app itself.)
