@@ -102,6 +102,17 @@ describe('POST /api/hologram/glass and /glass/result', () => {
     expect((await glassResult(post({ ok: true }))).status).toBe(400);
     expect((await glassResult(post({ id, ok: true }, { 'x-forwarded-for': '8.8.8.8' }))).status).toBe(403);
   });
+
+  test('what the glass at home showed goes out on the feed for the travel glass, and never to her', async () => {
+    const g = glass(() => null);
+    const asked = askGlass('Genesis', 'wear', 'her denim');
+    const id = String(g.requests()[0].id);
+    const page = [{ type: 'glass', choom: 'genesis', wear: 'daydenim' }];
+    await glassResult(post({ id, ok: true, done: true, message: 'On the glass you change.', page }));
+    g.off();
+    expect(await asked).toEqual({ ok: true, done: true, message: 'On the glass you change.' });
+    expect(g.events.find((e) => e.type === 'glass_shown')).toMatchObject({ events: page });
+  });
 });
 
 describe('the looking-glass skill', () => {
