@@ -14,6 +14,11 @@ export interface ForgeResult {
   data?: unknown;
 }
 
+// Calls that can end in ForgeRAG's LLM answer step. When the NUC has no model
+// loaded, ForgeRAG answers with the Mac's LM Studio, which needs ~2.5 min to
+// read ~15 page images (measured 2026-10-29), past the default 2 min.
+const ANSWER_TIMEOUT_MS = 240000;
+
 export class ForgeRAGClient {
   private endpoint: string;
 
@@ -24,7 +29,8 @@ export class ForgeRAGClient {
   private async request(
     path: string,
     method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'GET',
-    body?: Record<string, unknown>
+    body?: Record<string, unknown>,
+    timeoutMs = 120000
   ): Promise<ForgeResult> {
     const url = ensureEndpoint(this.endpoint, path);
     try {
@@ -38,7 +44,7 @@ export class ForgeRAGClient {
         method,
         headers,
         body: body ? JSON.stringify(body) : undefined,
-        signal: AbortSignal.timeout(120000), // 2 min timeout for VLM answers
+        signal: AbortSignal.timeout(timeoutMs),
       });
       if (!response.ok) {
         const error = await response.text();
@@ -89,7 +95,7 @@ export class ForgeRAGClient {
       use_graph: options.use_graph !== false,
       include_adjacent: options.include_adjacent !== false,
       ...(options.collection ? { filters: { collection: options.collection } } : {}),
-    });
+    }, ANSWER_TIMEOUT_MS);
   }
 
   async searchKeyword(
@@ -239,7 +245,7 @@ export class ForgeRAGClient {
       query,
       ...(options.mode ? { mode: options.mode } : {}),
       ...(options.limit ? { limit: options.limit } : {}),
-    });
+    }, ANSWER_TIMEOUT_MS);
   }
 
   /**
@@ -248,7 +254,7 @@ export class ForgeRAGClient {
   async batchSearch(
     queries: Array<{ query: string; mode?: string; limit?: number }>
   ): Promise<ForgeResult> {
-    return this.request('/skills/batch', 'POST', { queries });
+    return this.request('/skills/batch', 'POST', { queries }, ANSWER_TIMEOUT_MS);
   }
 
   // ---- Manifest ----
