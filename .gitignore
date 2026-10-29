@@ -9,10 +9,13 @@ node_modules/
 *.db
 *.db-journal
 
-# Environment files
+# Environment files, and any copy or backup of one (.env.bak-forgerag sat
+# untracked here on 2026-10-29); the .env.example templates stay tracked
 .env
 .env.local
 .env.production
+.env.*
+!.env.example
 
 # Google OAuth credentials
 **/google_auth/credentials.json
