@@ -52,23 +52,37 @@ export async function POST(request: Request) {
   markViewing('chat', chat.id, place);
   const keepOpen = setInterval(() => markViewing('chat', chat.id, place), 10_000);
 
-  let response: Response;
-  try {
-    response = await fetch(new URL('/api/chat', request.url), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ choomId: choom.id, chatId: chat.id, message: text, settings, userInitiated: true }),
-    });
-  } catch (e) {
-    clearInterval(keepOpen);
-    return NextResponse.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, { status: 502 });
-  }
-  if (!response.ok || !response.body) {
-    clearInterval(keepOpen);
-    return NextResponse.json({ ok: false, error: `chat answered ${response.status}` }, { status: 502 });
-  }
-  drain(response, keepOpen);
+  const failed = await startTurn(new URL('/api/chat', request.url),
+    { choomId: choom.id, chatId: chat.id, message: text, settings, userInitiated: true }, keepOpen, 'chat');
+  if (failed) return NextResponse.json({ ok: false, error: failed }, { status: 502 });
   return NextResponse.json({ ok: true, choom: choom.name, chatId: chat.id });
+}
+
+/**
+ * Send his words on, and answer once the turn has begun: as soon as the chat accepts them, or after a few
+ * seconds while it's still thinking. Its answer only starts with her first words, and a local model
+ * reading a long chat took 84 s to them (Eve, 2026-10-28): the tower gave up at 60 s and never opened its
+ * reply window. The turn streams on here to its end either way. An error text, or null when it's under way.
+ */
+async function startTurn(url: URL, body: unknown, keepOpen: ReturnType<typeof setInterval>, what: string): Promise<string | null> {
+  const reply = fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    .then((response) => {
+      if (!response.ok || !response.body) {
+        clearInterval(keepOpen);
+        return `${what} answered ${response.status}`;
+      }
+      drain(response, keepOpen);
+      return null;
+    }, (e: unknown) => {
+      clearInterval(keepOpen);
+      return e instanceof Error ? e.message : String(e);
+    });
+  const startedMs = Number(process.env.HOLOGRAM_TALK_STARTED_MS) || 5_000;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const thinking = new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), startedMs); });
+  const first = await Promise.race([reply, thinking]);
+  clearTimeout(timer);
+  return first;
 }
 
 /** The turn streams on here to its end (the hologram has its own feed); then the room or chat closes. */
@@ -106,21 +120,7 @@ async function talkToRoom(request: Request, text: string, dryRun: boolean, place
   const settings = await (await serverSettings(request)).json();
   markViewing('room', room.id, place);
   const keepOpen = setInterval(() => markViewing('room', room.id, place), 10_000);
-  let response: Response;
-  try {
-    response = await fetch(new URL('/api/group-chat', request.url), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ roomId: room.id, message: text, settings }),
-    });
-  } catch (e) {
-    clearInterval(keepOpen);
-    return NextResponse.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, { status: 502 });
-  }
-  if (!response.ok || !response.body) {
-    clearInterval(keepOpen);
-    return NextResponse.json({ ok: false, error: `group chat answered ${response.status}` }, { status: 502 });
-  }
-  drain(response, keepOpen);
+  const failed = await startTurn(new URL('/api/group-chat', request.url), { roomId: room.id, message: text, settings }, keepOpen, 'group chat');
+  if (failed) return NextResponse.json({ ok: false, error: failed }, { status: 502 });
   return NextResponse.json({ ok: true, roomId: room.id, room: room.title });
 }

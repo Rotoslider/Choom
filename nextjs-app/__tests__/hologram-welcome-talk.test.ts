@@ -165,6 +165,18 @@ describe('talking at the tower', () => {
     expect(events.filter((e) => e.type === 'content').map((e) => [e.speak, e.speakTravel])).toEqual([[false, true]]);
   });
 
+  test('a turn slow to say its first word is under way within seconds, not when she starts speaking', async () => {
+    process.env.HOLOGRAM_TALK_STARTED_MS = '200';
+    let begin: (r: Response) => void = () => {};
+    chatAnswer = () => new Promise<Response>((resolve) => { begin = resolve; }); // her first words, much later
+    const started = Date.now();
+    const res = await talk(req('/api/hologram/talk', { choom: 'Eve', text: 'how are you?' }));
+    delete process.env.HOLOGRAM_TALK_STARTED_MS;
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(await res.json()).toMatchObject({ ok: true, choom: 'Eve' });
+    begin(streamed());
+  });
+
   test('while the travel glass runs, the tower mic at home is refused', async () => {
     setTravelGlassVoice(true, '203.0.113.40');
     const res = await talk(req('/api/hologram/talk', { choom: 'Eve', text: 'hi from the tower' }));
