@@ -7,6 +7,7 @@ import prisma from '@/lib/db';
 import { cameraSnapshotFolder, pruneExpiredCaptures, CAPTURE_RETENTION_HOURS } from '@/lib/captured-images';
 import type { ToolCall, ToolResult } from '@/lib/types';
 import { askGlassCamera, isGlassCameraName } from '@/lib/glass-camera';
+import ImageAnalysisHandler from '@/skills/core/image-analysis/handler';
 
 const TOOL_NAMES = new Set([
   'ha_get_state',
@@ -37,8 +38,11 @@ function scoreEntities(ref: string, entities: HAEntity[]): Array<{ e: HAEntity; 
   return entities
     .map((e, i) => {
       const hay = norm(`${e.entity_id} ${String(e.attributes?.friendly_name || '')}`);
+      // Also against the name run together: "southeast" is
+      // camera.outside_south_east_camera_snapshot (2026-10-27, 3 misses).
+      const compact = hay.replace(/ /g, '');
       let score = 0;
-      for (const t of tokens) if (hay.includes(t)) score++;
+      for (const t of tokens) if (hay.includes(t) || compact.includes(t)) score++;
       return { e, score, i };
     })
     .sort((a, b) => b.score - a.score || a.i - b.i)
@@ -58,6 +62,51 @@ function entityListText(entities: HAEntity[], max = 12): string {
     return fn && fn !== e.entity_id ? `${e.entity_id} ("${fn}")` : e.entity_id;
   }).join(', ');
   return entities.length > max ? `${head}, …(+${entities.length - max} more)` : head;
+}
+
+/**
+ * "Did you mean" across every domain. A guessed id with the wrong domain
+ * (switch.kitchen1_sink_light; the real one is light.sink_light) used to get
+ * only that domain's list back: 7 history and 6 logbook misses for Aloy in
+ * five days (2026-10-25 → 29). Words few entities share count most, so
+ * "sink" outranks "kitchen1" and "light".
+ */
+export function closestInAnyDomain(ref: string, entities: HAEntity[], max = 5): HAEntity[] {
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const objectPart = ref.includes('.') ? ref.slice(ref.indexOf('.') + 1) : ref;
+  const tokens = [...new Set(norm(objectPart).split(/\s+/).filter(t => t.length > 1))];
+  if (!tokens.length) return [];
+  const hays = entities.map(e => {
+    const h = norm(`${e.entity_id} ${String(e.attributes?.friendly_name || '')}`);
+    return { e, h, c: h.replace(/ /g, '') };
+  });
+  const has = (x: { h: string; c: string }, t: string) => x.h.includes(t) || x.c.includes(t);
+  const df = new Map(tokens.map(t => [t, hays.filter(x => has(x, t)).length]));
+  return hays
+    .map(x => ({ e: x.e, score: tokens.reduce((s, t) => s + (has(x, t) ? 1 / (df.get(t) || 1) : 0), 0) }))
+    .filter(x => x.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, max)
+    .map(x => x.e);
+}
+
+/** The "doesn't exist" answer for a loose or guessed entity: the closest
+ *  entities in any domain first, then the scoped list. Keeps the wording the
+ *  loop reads as recoverable ("doesn't exist", "Real … entities on THIS system"). */
+async function entityMissingText(
+  ha: HomeAssistantService,
+  ref: string,
+  r: { candidates: HAEntity[]; domain: string },
+  discover: string,
+): Promise<string> {
+  let closest = '';
+  try {
+    const near = closestInAnyDomain(ref, await ha.listStates());
+    if (near.length) closest = ` Closest matches in any domain: ${entityListText(near, 5)}.`;
+  } catch { /* best effort — the scoped list below still helps */ }
+  return `Entity "${ref}" doesn't exist — don't guess ids.${closest}${r.candidates.length
+    ? ` Real ${r.domain ? `${r.domain} ` : ''}entities on THIS system: ${entityListText(r.candidates)}. Use one of these exact ids.`
+    : ` ${discover}`}`;
 }
 
 /**
@@ -132,18 +181,129 @@ async function findCameraPresetSelect(
 ): Promise<{ entity_id: string; options: string[] } | null> {
   try {
     const all = await ha.listStates();
-    const selects = all.filter(e => e.entity_id.startsWith('select.') && /ptz|preset/i.test(e.entity_id));
+    const selects = ptzSelects(all);
     if (!selects.length) return null;
-    const cam = all.find(e => e.entity_id === cameraEntityId);
-    const camName = `${cameraEntityId.replace(/^camera\./, '')} ${String(cam?.attributes?.friendly_name || '')}`;
-    const best = scoreEntities(camName, selects)[0];
-    const chosen = best && best.score > 0 ? best.e : (selects.length === 1 ? selects[0] : null);
+    // The camera's own words, without the stream-flavour ones ("camera",
+    // "snapshot", "clear"…) that every select shares: matched on those, the
+    // shop camera got the garage camera's presets. All of them must match.
+    const stem = cameraStem(cameraEntityId.replace(/^camera\./, ''));
+    const words = stem.split(' ').filter(t => t.length > 1);
+    const best = words.length ? scoreEntities(stem, selects)[0] : undefined;
+    const chosen = best && best.score === words.length ? best.e : (selects.length === 1 ? selects[0] : null);
     if (!chosen) return null;
-    const options = Array.isArray(chosen.attributes?.options) ? chosen.attributes.options as string[] : [];
-    return { entity_id: chosen.entity_id, options };
+    return { entity_id: chosen.entity_id, options: presetOptions(chosen) };
   } catch {
     return null;
   }
+}
+
+/** A camera or select id's own words: "outside_south_east_camera_snapshot" → "outside south east". */
+function cameraStem(raw: string): string {
+  return raw.toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(CAMERA_FLAVOUR_WORDS, ' ')
+    .replace(/\bptz\b|\bpreset\b/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/** Camera PTZ preset controls (select.*ptz*), not the lights' "light preset" selects. */
+function ptzSelects(all: HAEntity[]): HAEntity[] {
+  return all.filter(e => e.entity_id.startsWith('select.') && /ptz/i.test(e.entity_id));
+}
+
+function presetOptions(e: HAEntity): string[] {
+  return Array.isArray(e.attributes?.options) ? (e.attributes.options as unknown[]).map(String) : [];
+}
+
+/** The camera a preset control belongs to (select.garage_camera_ptz_preset → the garage camera). */
+function cameraForPresetSelect(selectId: string, cameras: HAEntity[]): HAEntity | null {
+  const stem = cameraStem(selectId.replace(/^select\./, ''));
+  const words = stem.split(' ').filter(t => t.length > 1);
+  if (!words.length) return null;
+  const scored = scoreEntities(stem, cameras).filter(s => s.score === words.length);
+  return scored.length ? pickCameraAmongTies(scored.map(s => s.e)) : null;
+}
+
+/** " Preset controls on THIS system: select.x (a, b, …); …" for messages; empty when none. */
+async function presetControlsText(ha: HomeAssistantService, maxOptions = 6): Promise<string> {
+  try {
+    const sel = ptzSelects(await ha.listStates());
+    if (!sel.length) return '';
+    return ` Preset controls on THIS system: ${sel.map(e => {
+      const o = presetOptions(e);
+      return `${e.entity_id} (${o.slice(0, maxOptions).join(', ')}${o.length > maxOptions ? ', …' : ''})`;
+    }).join('; ')}.`;
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * The preset a loose request names: exact, then case- and punctuation-blind,
+ * then a partial match only when it is the sole one ("north side" →
+ * "house north side"; "driveway gate" stays unmatched between "Driveway" and
+ * "gate").
+ */
+export function matchPresetOption(requested: string, options: string[]): string | null {
+  const norm = (s: string) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '');
+  const want = norm(requested);
+  if (!want) return null;
+  const exact = options.find(o => o === requested) || options.find(o => norm(o) === want);
+  if (exact) return exact;
+  const partial = options.filter(o => norm(o) && (norm(o).includes(want) || want.includes(norm(o))));
+  return partial.length === 1 ? partial[0] : null;
+}
+
+/**
+ * Cameras that see only darkness while their room is shut, still and unlit.
+ * The shop camera is black whenever the shop door is closed (Donny,
+ * 2026-10-29), and Aloy's watch shot and analyzed it every hour anyway. The
+ * shop's PIR is the motion test: its mmWave also sees the bushes moving
+ * outside. The light level only lets a lit shop (lights left on) be shot.
+ */
+export const DARK_WHEN_SHUT: Record<string, { place: string; door: string; motion: string; light?: string }> = {
+  'camera.shop_camera': {
+    place: 'shop',
+    door: 'binary_sensor.shop_shop_door_sensor_shop_door',
+    motion: 'binary_sensor.shop_prox_sensor_shop_pir',
+    light: 'sensor.shop_prox_sensor_shop_illuminance',
+  },
+};
+const DARK_LUX = 10;
+
+/** Why a picture from this camera would be pointless right now (its room is
+ *  shut, still and dark), or null to take it — also whenever a sensor can't
+ *  be read. */
+export async function shutStillAndDark(
+  ha: HomeAssistantService,
+  cameraId: string,
+): Promise<{ place: string; doorSince: string; stillSince: string; lux: number | null } | null> {
+  const rule = DARK_WHEN_SHUT[cameraId];
+  if (!rule) return null;
+  try {
+    const [door, motion, light] = await Promise.all([
+      ha.getState(rule.door),
+      ha.getState(rule.motion),
+      rule.light ? ha.getState(rule.light).catch(() => null) : Promise.resolve(null),
+    ]);
+    if (door.state !== 'off' || motion.state !== 'off') return null;
+    const lux = light ? Number(light.state) : NaN;
+    if (Number.isFinite(lux) && lux >= DARK_LUX) return null;
+    const when = (iso: string) => {
+      const d = new Date(iso);
+      return Number.isNaN(d.getTime()) ? 'a while' : localTimeString(d);
+    };
+    return { place: rule.place, doorSince: when(door.last_changed), stillSince: when(motion.last_changed), lux: Number.isFinite(lux) ? lux : null };
+  } catch {
+    return null;
+  }
+}
+
+/** Cameras that have a preset by this name, for a "driveway" asked for as a camera. */
+function camerasWithPreset(requested: string, all: HAEntity[]): Array<{ camera: string; preset: string }> {
+  const cameras = all.filter(e => e.entity_id.startsWith('camera.'));
+  return ptzSelects(all).flatMap(sel => {
+    const preset = matchPresetOption(requested, presetOptions(sel));
+    const cam = preset ? cameraForPresetSelect(sel.entity_id, cameras) : null;
+    return preset && cam ? [{ camera: cam.entity_id, preset }] : [];
+  });
 }
 
 function coerceServiceData(raw: unknown): Record<string, unknown> | undefined {
@@ -227,9 +387,7 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
             } else {
               return this.error(
                 toolCall,
-                `Entity "${ref}" doesn't exist — don't guess ids.${r.candidates.length
-                  ? ` Real ${r.domain ? `${r.domain} ` : ''}entities on THIS system: ${entityListText(r.candidates)}. Use one of these exact ids.`
-                  : ` Call ha_list_entities(${r.domain ? `domain="${r.domain}"` : ''}) to discover them.`}`,
+                await entityMissingText(ha, ref, r, `Call ha_list_entities(${r.domain ? `domain="${r.domain}"` : ''}) to discover them.`),
               );
             }
           }
@@ -305,19 +463,41 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
             return this.error(toolCall, 'domain and service are required');
           }
 
+          // HA's own YAML puts the entity inside the data ({entity_id, option});
+          // take it from there, so the preset matching and settle wait below see it.
+          if (!entityId && typeof serviceData?.entity_id === 'string' && serviceData.entity_id) {
+            entityId = serviceData.entity_id;
+            delete serviceData.entity_id;
+          }
+
           // Specific entity_id-missing catch for entity-scoped services. Chooms often
           // forget to specify which entity to act on, sending {service, service_data,
           // domain} only. HA responds with a bare 400 which our generic diagnostic
           // can't disambiguate from real shape errors. Detect this pre-dispatch.
+          // The answer must start "entity_id is required" (a param error to the
+          // loop): the older "requires you to specify WHICH entity" counted as a
+          // hard failure, disabled ha_call_service after two, and Aloy and Genesis
+          // re-issued it 56 times into the block (2026-10-25 → 29), most of them
+          // select_option calls that arrived as just {domain, service}.
           const hasAnyEntityTarget = Boolean(
             entityId
             || (target && (target.entity_id || target.area_id || target.device_id))
           );
           const ENTITY_SCOPED_SERVICES = /^(select|light|switch|fan|cover|climate|button|media_player|lock|input_boolean|input_select|input_number|input_text|input_datetime|scene|automation|script)\./;
           if (!hasAnyEntityTarget && ENTITY_SCOPED_SERVICES.test(`${domain}.${service}`)) {
+            if (domain === 'select' && service === 'select_option') {
+              return this.error(
+                toolCall,
+                `entity_id is required: select.select_option moves ONE preset control, and this call named none (no entity_id or target). ` +
+                `To aim a camera at a preset AND take the picture in one step, call ha_get_camera_snapshot(entity_id="<camera>", preset="<preset>") — it moves the camera, waits for it to settle, then shoots.` +
+                `${await presetControlsText(ha)}`
+              );
+            }
             return this.error(
               toolCall,
-              `Service "${domain}.${service}" requires you to specify WHICH entity to act on. You provided service_data but no entity_id or target. Add either entity_id:"<entity>" at the top level OR target:{"entity_id":"<entity>"}. Example for your call: ha_call_service(domain="${domain}", service="${service}", entity_id="<your entity>", service_data=${JSON.stringify(serviceData || {})}).`
+              `entity_id is required: "${domain}.${service}" acts on one entity, and this call named none (no entity_id or target). ` +
+              `Add entity_id="<entity>" at the top level, or target={"entity_id":"<entity>"}. ` +
+              `Example: ha_call_service(domain="${domain}", service="${service}", entity_id="<your entity>"${serviceData ? `, service_data=${JSON.stringify(serviceData)}` : ''}).`
             );
           }
 
@@ -548,7 +728,7 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
                 service_called: `${domain}.${service}`,
                 moved_to: requested,
                 new_state: requested ?? newState,
-                note: `Camera moved to "${requested}" and I waited ${settleSeconds}s for it to settle and refocus. The select entity reports state "unknown" because Reolink/HA does not read the active preset back — this is NORMAL and does NOT mean the move failed. Do not re-select or call ha_get_state to "confirm"; trust this success. Now call ha_get_camera_snapshot for a sharp frame.`,
+                note: `Camera moved to "${requested}" and I waited ${settleSeconds}s for it to settle and refocus. The select entity reports state "unknown" because Reolink/HA does not read the active preset back — this is NORMAL and does NOT mean the move failed. Do not re-select or call ha_get_state to "confirm"; trust this success. Now call ha_get_camera_snapshot for a sharp frame — and next time ha_get_camera_snapshot(entity_id=..., preset="${requested ?? '<preset>'}") does the move and the picture in one call.`,
               });
             }
             return this.success(toolCall, {
@@ -656,7 +836,7 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
           if (!histRef) return this.error(toolCall, 'entity_id is required — the entity to chart, e.g. entity_id="sensor.outdoor_temperature" or a loose name like "outdoor temperature". Call ha_get_home_status to see what exists.');
           const histResolved = await resolveEntity(ha, histRef);
           if (!('entityId' in histResolved)) {
-            return this.error(toolCall, `Entity "${histRef}" doesn't exist — don't guess ids.${histResolved.candidates.length ? ` Real ${histResolved.domain ? `${histResolved.domain} ` : ''}entities on THIS system: ${entityListText(histResolved.candidates)}. Use one of these exact ids.` : ' Call ha_get_home_status to discover them.'}`);
+            return this.error(toolCall, await entityMissingText(ha, histRef, histResolved, 'Call ha_get_home_status to discover them.'));
           }
           const entityId = histResolved.entityId;
 
@@ -694,7 +874,7 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
           if (!logRef) return this.error(toolCall, 'entity_id is required — the entity whose activity you want, e.g. entity_id="binary_sensor.front_door" or a loose name like "front door". Call ha_get_home_status to see what exists.');
           const logResolved = await resolveEntity(ha, logRef);
           if (!('entityId' in logResolved)) {
-            return this.error(toolCall, `Entity "${logRef}" doesn't exist — don't guess ids.${logResolved.candidates.length ? ` Real ${logResolved.domain ? `${logResolved.domain} ` : ''}entities on THIS system: ${entityListText(logResolved.candidates)}. Use one of these exact ids.` : ' Call ha_get_home_status to discover them.'}`);
+            return this.error(toolCall, await entityMissingText(ha, logRef, logResolved, 'Call ha_get_home_status to discover them.'));
           }
           const entityId = logResolved.entityId;
 
@@ -807,21 +987,84 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
             ? { entityId: 'camera.glass', resolvedFrom: camRef === 'glass' ? undefined : camRef }
             : await resolveEntity(ha, camRef, 'camera', pickCameraAmongTies);
           if (!('entityId' in camResolved)) {
+            // "driveway" is a preset on three cameras, not a camera (2026-10-27,
+            // 5 misses across all three Chooms): say where it is.
+            let presetHint = '';
+            try {
+              const hits = camerasWithPreset(camRef.replace(/^camera\./i, ''), await ha.listStates());
+              if (hits.length) {
+                presetHint = ` "${camRef}" is a PTZ preset, not a camera: ${hits.map(h => `${h.camera} has preset "${h.preset}"`).join('; ')}. Take it in one call: ha_get_camera_snapshot(entity_id="${hits[0].camera}", preset="${hits[0].preset}").`;
+              }
+            } catch { /* the camera list below still helps */ }
             return this.error(
               toolCall,
-              `No camera matches "${camRef}".${camResolved.candidates.length
+              `No camera matches "${camRef}".${presetHint}${camResolved.candidates.length
                 ? ` Cameras on THIS system: ${entityListText(camResolved.candidates)}, and "glass" (the camera on the Looking Glass at Donny's desk). Use one of these.`
                 : ' No camera entities found on this Home Assistant.'}`,
             );
           }
           const entityId = camResolved.entityId;
 
+          // A shut, still, dark shop needs no picture: the sensors already
+          // say all the camera could (see DARK_WHEN_SHUT). force=true shoots anyway.
+          if (!glass && args.force !== true && args.force !== 'true') {
+            const shut = await shutStillAndDark(ha, entityId);
+            if (shut) {
+              return this.success(toolCall, {
+                success: true,
+                entity_id: entityId,
+                skipped: true,
+                [`${shut.place}_door`]: `closed since ${shut.doorSince}`,
+                [`${shut.place}_motion`]: `none (PIR) since ${shut.stillSince}`,
+                ...(shut.lux !== null && { [`${shut.place}_light_lx`]: shut.lux }),
+                message: `No picture taken: the ${shut.place} door has been closed since ${shut.doorSince}, its motion sensor (PIR) has seen nothing since ${shut.stillSince}${shut.lux !== null ? `, and it is dark inside (${shut.lux} lx)` : ''}, so the ${shut.place} camera would only show black. Count the ${shut.place} as checked: shut and still. If you truly need the frame (Donny asked to see it), call again with force=true.`,
+              });
+            }
+          }
+
+          // A look at a preset in ONE call: move, settle, shoot (2026-10-29).
+          // It used to take three rounds (select_option, snapshot, analyze_image),
+          // and the select_option step was the one that kept arriving without
+          // its entity. A camera with no presets just gives its fixed view.
+          const presetReq = typeof args.preset === 'string' ? args.preset.trim() : '';
+          let movedTo: string | undefined;
+          let movedSettle = 0;
+          let presetNote = '';
+          if (presetReq && !glass) {
+            const sel = await findCameraPresetSelect(ha, entityId);
+            if (!sel || !sel.options.length) {
+              presetNote = ` ${entityId} has no PTZ presets, so this is its fixed view (not "${presetReq}").`;
+            } else {
+              const option = matchPresetOption(presetReq, sel.options);
+              if (!option) {
+                const elsewhere = camerasWithPreset(presetReq, await ha.listStates())
+                  .filter(h => h.camera !== entityId);
+                return this.success(toolCall, {
+                  redirected: true,
+                  success: false,
+                  entity_id: entityId,
+                  message: `"${presetReq}" is not one of ${entityId}'s presets, so the camera did not move and no picture was taken.`,
+                  valid_presets: sel.options,
+                  ...(elsewhere.length && {
+                    hint: `"${presetReq}" is a preset on a different camera: ${elsewhere.map(h => `${h.camera} ("${h.preset}")`).join(', ')}.`,
+                  }),
+                });
+              }
+              await ha.callService('select', 'select_option', sel.entity_id, { option });
+              const s = Number(args.settle_seconds);
+              movedSettle = Number.isFinite(s) && s > 0 ? Math.max(1, Math.min(20, s)) : 10;
+              console.log(`   🎯 Camera ${entityId} → preset "${option}" via ${sel.entity_id}; settling ${movedSettle}s`);
+              await new Promise(r => setTimeout(r, movedSettle * 1000));
+              movedTo = option;
+            }
+          }
+
           // Optional settle BEFORE capture — a backstop for blur/focus. A preset
           // MOVE via ha_call_service already auto-waits ~10s, but pass settle_seconds
           // here to wait when the camera was just moved another way, is waking from
           // sleep, or a prior frame came back blurry. Clamped 1-20s.
           const snapSettle = Number(args.settle_seconds);
-          if (!glass && Number.isFinite(snapSettle) && snapSettle > 0) {
+          if (!glass && !movedTo && Number.isFinite(snapSettle) && snapSettle > 0) {
             const s = Math.max(1, Math.min(20, snapSettle));
             console.log(`   ⏳ Camera snapshot settle: waiting ${s}s before capturing ${entityId}`);
             await new Promise(r => setTimeout(r, s * 1000));
@@ -928,23 +1171,57 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
           console.log(`   📷 Camera snapshot: ${entityId} → ${savePath} (${(imageBuffer.length / 1024).toFixed(1)}KB)${savedImageId ? ` [imageId ${savedImageId}]` : ''}`);
 
           // Drill-down level 2: surface THIS camera's PTZ presets (scoped — only
-          // this camera's, not every entity) plus the exact call to move it, so she
-          // can reposition without hunting for the select.*_ptz entity id.
+          // this camera's, not every entity) plus the one call that looks at any
+          // of them, so she can reposition without hunting for the select id.
           const presetInfo = glass ? null : await findCameraPresetSelect(ha, entityId);
+
+          // question: the look in the same call (2026-10-29). Every snapshot used
+          // to cost a second round for analyze_image — 777 of them for Aloy in
+          // five days, most of her overnight watch. Same vision settings, same
+          // code: it is the analyze_image handler. A failed look still returns
+          // the saved picture.
+          const question = typeof args.question === 'string' ? args.question.trim() : '';
+          let analysis: string | undefined;
+          let analysisModel: string | undefined;
+          let analysisError: string | undefined;
+          if (question) {
+            const look = await new ImageAnalysisHandler().execute(
+              { id: `${toolCall.id}-look`, name: 'analyze_image', arguments: { image_path: savePath, prompt: question } },
+              ctx,
+            );
+            const lr = look.result as { analysis?: string; model?: string } | null;
+            if (look.error || !lr?.analysis) analysisError = look.error || 'The vision model gave no answer.';
+            else { analysis = lr.analysis; analysisModel = lr.model; }
+          }
+
+          const presetsLine = presetInfo && presetInfo.options.length
+            ? ` This camera's PTZ presets: ${presetInfo.options.join(', ')} — look at any of them in one call with preset="<name>".`
+            : '';
+          const viewLine = movedTo
+            ? ` The camera was moved to preset "${movedTo}" and given ${movedSettle}s to settle, so this frame IS that view.`
+            : ` This frame shows wherever the camera was already pointing; it is not any particular preset view unless you passed preset.${presetNote}`;
+          const lookLine = analysis
+            ? ' The vision answer to your question is in "analysis" — no need to call analyze_image for this frame.'
+            : analysisError
+              ? ` The picture was saved but the look failed (${analysisError.slice(0, 200)}).`
+              : ` To look at it, pass question="…" next time (one call), or use analyze_image(image_path="${savePath}").`;
 
           return this.success(toolCall, {
             success: true,
             entity_id: entityId,
             ...(camResolved.resolvedFrom && { resolved_from: camResolved.resolvedFrom }),
+            ...(movedTo && { preset: movedTo }),
             path: savePath,
             ...(savedImageId && { imageId: savedImageId }),
             sizeKB: Math.round(imageBuffer.length / 1024),
             captured_at: localTimeString(),
+            ...(analysis && { analysis, analysis_model: analysisModel }),
+            ...(analysisError && { analysis_error: analysisError }),
             ...(presetInfo && presetInfo.options.length && {
               presets: presetInfo.options,
-              move_to_preset: `ha_call_service(domain="select", service="select_option", entity_id="${presetInfo.entity_id}", service_data={"option":"<one of presets>"})`,
+              look_at_preset: `ha_get_camera_snapshot(entity_id="${entityId}", preset="<one of presets>", question="<what to check>")`,
             }),
-            message: `Saved snapshot from ${entityId} to ${savePath}${savedImageId ? ' and displayed in chat' : ''}.${presetInfo && presetInfo.options.length ? ` This camera's PTZ presets: ${presetInfo.options.join(', ')} — move it with the move_to_preset call, then snapshot again.` : ''} IMPORTANT: this snapshot shows whatever the camera was pointing at when you called this tool — it is NOT associated with any PTZ preset unless you successfully called select.select_option on the preset selector entity BEFORE this snapshot and that call succeeded. Do NOT claim the image shows a specific preset view unless you verified the preset change succeeded. Snapshots are kept ${CAPTURE_RETENTION_HOURS}h and do not go in your gallery — if something in this frame matters longer, write what you saw to a note. For analysis use analyze_image(image_path="${savePath}"). To text it to the user use send_notification(file_paths=["${savePath}"]).`,
+            message: `Saved snapshot from ${entityId} to ${savePath}${savedImageId ? ' and displayed in chat' : ''}.${viewLine}${lookLine}${presetsLine} Snapshots are kept ${CAPTURE_RETENTION_HOURS}h and do not go in your gallery — if something in this frame matters longer, write what you saw to a note. To text it to the user use send_notification(file_paths=["${savePath}"]).`,
           });
         }
 

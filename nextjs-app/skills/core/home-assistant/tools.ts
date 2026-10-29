@@ -38,7 +38,7 @@ export const tools: ToolDefinition[] = [
   },
   {
     name: 'ha_call_service',
-    description: 'Call a Home Assistant service — NOT for cameras (use ha_get_camera_snapshot) or PTZ presets (use select.select_option). Works for device control (light, switch, climate, fan, cover), global services (notify.*, tts.speak, scene.turn_on, scene.create, automation.trigger, script.turn_on, homeassistant.*), and area/device-targeted calls. Only domain + service are required — use entity_id for single-entity control, target for area/device/multi-entity, or neither for global services.',
+    description: 'Call a Home Assistant service. NOT for camera pictures: ha_get_camera_snapshot takes them, and with preset="<name>" it also turns a PTZ camera to that preset first, in the same call. Works for device control (light, switch, climate, fan, cover), moving a camera without a picture (domain="select", service="select_option", entity_id="select.<camera>_ptz_preset", service_data={"option":"<preset>"}), global services (notify.*, tts.speak, scene.turn_on, scene.create, automation.trigger, script.turn_on, homeassistant.*), and area/device-targeted calls. Only domain + service are required — use entity_id for single-entity control, target for area/device/multi-entity, or neither for global services.',
     parameters: {
       type: 'object',
       properties: {
@@ -149,7 +149,7 @@ export const tools: ToolDefinition[] = [
   },
   {
     name: 'ha_get_camera_snapshot',
-    description: 'Fetch a JPEG frame from a Home Assistant camera and save it to the workspace. Use this for camera.* entities (Reolink, generic MJPEG, etc.) — do NOT use ha_call_service with camera.snapshot. You can pass a loose camera name (e.g. "garage", "tower") — it resolves to the real camera, or returns the camera list if unclear, so do NOT guess ids. Pass "glass" for the camera on top of the Looking Glass at Donny\'s desk (it looks at him in his chair; Donny can turn your access to it off, and then it says so). For PTZ cameras the result also lists THAT camera\'s presets plus the exact call to move it. Returns a workspace path usable with analyze_image, send_notification(file_paths=...), or inline display in chat.',
+    description: 'Fetch a JPEG frame from a Home Assistant camera and save it to the workspace — and, in the SAME call, turn a PTZ camera to a preset first (preset) and/or have the picture looked at (question). One call per look: no separate select_option or analyze_image needed. Use this for camera.* entities (Reolink, generic MJPEG, etc.) — do NOT use ha_call_service with camera.snapshot. You can pass a loose camera name (e.g. "garage", "tower") — it resolves to the real camera, or returns the camera list if unclear, so do NOT guess ids. Pass "glass" for the camera on top of the Looking Glass at Donny\'s desk (it looks at him in his chair; Donny can turn your access to it off, and then it says so). For PTZ cameras the result lists THAT camera\'s presets. Returns a workspace path usable with analyze_image, send_notification(file_paths=...), or inline display in chat.',
     parameters: {
       type: 'object',
       properties: {
@@ -161,9 +161,21 @@ export const tools: ToolDefinition[] = [
           type: 'string',
           description: 'Optional workspace-relative path, must end in .jpg. Defaults to selfies_{choom}/camera/{entity}_{YYYY-MM-DD_HH-mm}.jpg — leave it unset for routine checks. Snapshots in the default camera/ folder are kept 72h and never go in your gallery. Only set a path to keep a frame longer: selfies_{slug}/ (personal) or choom_commons/ (shared with other Chooms). NEVER use sibling_journal/ — that folder is text-only and append-only; snapshots there cannot be deleted later. If omitted or misrouted, the tool will place it in your personal camera folder.',
         },
+        preset: {
+          type: 'string',
+          description: 'Optional PTZ preset to turn the camera to BEFORE the picture, e.g. "driveway" or "container door" (loose spelling is fine). The tool moves it, waits ~10s for it to settle, then shoots — so the frame IS that view. A camera without presets just gives its fixed view.',
+        },
+        question: {
+          type: 'string',
+          description: 'Optional: what to look for in the picture, e.g. "Is the container door closed? Any people, animals or vehicles?". The vision model answers in the same call (result field "analysis"), so you do not need analyze_image for this frame.',
+        },
+        force: {
+          type: 'boolean',
+          description: 'Only if you truly need the frame: the shop camera is skipped while the shop door is closed, its PIR sees no motion and it is dark inside (it would show only black; the result tells you the shop is shut and still). force=true takes it anyway.',
+        },
         settle_seconds: {
           type: 'number',
-          description: 'Optional seconds to wait BEFORE capturing (1-20), to avoid a blurry/stale frame. NOT needed right after moving to a preset via ha_call_service — that already auto-waits ~10s. Use it if the camera just moved another way, is waking up, or a previous snapshot came back blurry (e.g. settle_seconds: 10).',
+          description: 'Optional seconds to wait for the camera to settle (1-20). With preset it replaces the default 10s after the move; without preset it waits before capturing — use it if the camera just moved another way, is waking up, or a previous snapshot came back blurry.',
         },
       },
       required: ['entity_id'],

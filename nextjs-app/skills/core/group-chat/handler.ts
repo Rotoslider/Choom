@@ -501,15 +501,22 @@ export default class GroupChatHandler extends BaseSkillHandler {
     if (!message) return this.error(toolCall, 'The "message" parameter is required: provide your opening line for the conversation, in your own voice.');
 
     const askedRounds = typeof args.rounds === 'number' ? Math.max(1, Math.min(MAX_ROUNDS, args.rounds)) : undefined;
-    const roomQuery = typeof args.room === 'string' ? args.room.trim() : '';
+    let roomQuery = typeof args.room === 'string' ? args.room.trim() : '';
     // new_room: the user asked for a FRESH room. Before this existed (2026-09-21)
     // Aloy was told twice to start a new room for Eve and Genesis; the only path
     // was "drop room to start a fresh one", which reuses the existing room for
     // that exact set of sisters — so she landed in the 456-message room, believed
     // it was new, and renamed it. Creating a room must be sayable.
-    const newRoomName = typeof args.new_room === 'string' ? args.new_room.trim().slice(0, 80) : '';
-    if (newRoomName && roomQuery) {
-      return this.error(toolCall, 'Pass either "room" (an existing room to use) or "new_room" (a name for a brand-new one), not both.');
+    let newRoomName = typeof args.new_room === 'string' ? args.new_room.trim().slice(0, 80) : '';
+    // The same name in both (room: "The Campfire", new_room: "The Campfire")
+    // only means "this room": 7 of Aloy's 12 failed calls, 2026-10-25 → 29.
+    // Below, it becomes the room if one exists, else a new one by that name.
+    const roomKey = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '');
+    const sameRoomTwice = Boolean(newRoomName && roomQuery && roomKey(newRoomName) === roomKey(roomQuery));
+    if (newRoomName && roomQuery && !sameRoomTwice) {
+      // "Please provide": a param error to the loop, so the tool stays on for
+      // her next try instead of being disabled after two of these.
+      return this.error(toolCall, `Please provide either "room" (an existing room to use) or "new_room" (a name for a brand-new one), not both — you gave room "${roomQuery}" and new_room "${newRoomName}". To talk in "${roomQuery}", send just room.`);
     }
 
     // A named room already has members, so `sisters` is optional there. Without
@@ -537,6 +544,13 @@ export default class GroupChatHandler extends BaseSkillHandler {
     }
 
     const existingRooms = await this.allRooms();
+    if (sameRoomTwice) {
+      const named = await this.matchForChange(existingRooms, roomQuery);
+      if (named.room || named.refusal) newRoomName = '';
+      else if (sisters.length === 0) {
+        return this.error(toolCall, `The "sisters" parameter is required to create the new room "${newRoomName}": no room by that name exists yet. Pass sisters: ["Eve", …] with new_room, or pick an existing room for room.`);
+      } else roomQuery = '';
+    }
 
     let room: RoomWithParticipants | null = null;
     let addedNames: string[] = [];

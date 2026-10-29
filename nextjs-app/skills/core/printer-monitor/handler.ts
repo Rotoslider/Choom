@@ -22,12 +22,41 @@ import { WorkspaceService } from '@/lib/workspace-service';
 import { WORKSPACE_ROOT } from '@/lib/config';
 import prisma from '@/lib/db';
 import { pruneExpiredCaptures } from '@/lib/captured-images';
+import { HomeAssistantService, type HomeAssistantSettings } from '@/lib/homeassistant-service';
 import type { ToolCall, ToolResult } from '@/lib/types';
 
 const TOOL_NAMES = new Set(['printer_status', 'printer_job_history', 'printer_files', 'printer_camera_snapshot']);
 
 export const PRINTER_URL = (process.env.MOONRAKER_URL || 'http://192.168.1.139').replace(/\/+$/, '');
 const TIMEOUT_MS = 8000;
+
+/**
+ * The printer is on a switched outlet ("3D Printer and Workbench Tools" on
+ * the shop powerstrip). Donny turns it off when he isn't printing, and every
+ * look at a dark printer used to end in "did not answer" plus a hunt for its
+ * power reading: 12 failed printer calls in five days (2026-10-25 → 29), all
+ * with the outlet off. One read of the outlet answers that.
+ */
+export const PRINTER_POWER_ENTITY = process.env.PRINTER_POWER_ENTITY || 'switch.shop_powerstrip_3d_printer_and_workbench_tools';
+const OUTLET_TIMEOUT_MS = 3000;
+
+/** The outlet's state ("on"/"off") from Home Assistant, or null when HA isn't
+ *  set up or doesn't answer in time — then the printer is asked as before. */
+export async function printerOutletState(settings: HomeAssistantSettings | undefined): Promise<string | null> {
+  if (!settings?.baseUrl || !settings?.accessToken) return null;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const entity = await Promise.race([
+      new HomeAssistantService(settings).getState(PRINTER_POWER_ENTITY),
+      new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), OUTLET_TIMEOUT_MS); }),
+    ]);
+    return entity ? entity.state : null;
+  } catch {
+    return null;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 /** Every path this skill may ever request. Anything else is refused before a socket opens. */
 export const ALLOWED_PATHS: RegExp[] = [
@@ -253,13 +282,30 @@ const STATUS_OBJECTS = [
 ];
 
 export default class PrinterMonitorHandler extends BaseSkillHandler {
-  constructor(private readonly fetchImpl: typeof fetch = fetch) { super(); }
+  constructor(
+    private readonly fetchImpl: typeof fetch = fetch,
+    private readonly outletState: typeof printerOutletState = printerOutletState,
+  ) { super(); }
 
   canHandle(toolName: string): boolean {
     return TOOL_NAMES.has(toolName);
   }
 
   async execute(toolCall: ToolCall, ctx: SkillHandlerContext): Promise<ToolResult> {
+    if (!TOOL_NAMES.has(toolCall.name)) return this.error(toolCall, `Unknown printer tool: ${toolCall.name}`);
+    const outlet = await this.outletState(
+      (ctx?.settings as Record<string, unknown> | undefined)?.homeAssistant as HomeAssistantSettings | undefined,
+    );
+    // Off at the outlet is an answer, not a failure: nothing to check, and
+    // nothing for the doctor to flag.
+    if (outlet === 'off') {
+      return this.success(toolCall, {
+        success: true,
+        powered: false,
+        outlet: PRINTER_POWER_ENTITY,
+        message: `The 3D printer is switched off at its outlet (${PRINTER_POWER_ENTITY} is off in Home Assistant). Donny turns it off when he isn't printing, so there is nothing to check — no need to look further or try again until he switches it on.`,
+      });
+    }
     try {
       switch (toolCall.name) {
         case 'printer_status': return await this.status(toolCall);
@@ -269,7 +315,10 @@ export default class PrinterMonitorHandler extends BaseSkillHandler {
         default: return this.error(toolCall, `Unknown printer tool: ${toolCall.name}`);
       }
     } catch (err) {
-      return this.error(toolCall, err instanceof Error ? err.message : String(err));
+      const msg = err instanceof Error ? err.message : String(err);
+      return this.error(toolCall, err instanceof PrinterUnreachable && outlet === 'on'
+        ? `${msg} Its outlet is on, so it may still be starting up (give it a few minutes) or be off the network.`
+        : msg);
     }
   }
 

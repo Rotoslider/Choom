@@ -96,5 +96,29 @@ describe('talk_with_sisters new_room', () => {
   test('room and new_room together is rejected', async () => {
     const r = await run(aloy.id, { sisters: ['Eve'], room: 'Family Time', new_room: 'Other', message: 'x' });
     expect(r.error).toMatch(/not both/);
+    // Worded as a param error, so the loop keeps the tool on for her retry.
+    expect(r.error).toMatch(/^Please provide/);
+  });
+
+  // 2026-10-29: 7 of Aloy's 12 failed calls named the same room in both.
+  test('the same name in room and new_room uses that room when it exists', async () => {
+    const before = await prisma.groupRoom.count();
+    const r = await run(aloy.id, { sisters: ['Eve'], room: 'Family Time', new_room: 'family time', message: 'back again' });
+    expect(r.error).toBeUndefined();
+    expect(result(r).room_title).toBe('Family Time');
+    expect(result(r).created_new_room).toBe(false);
+    expect(await prisma.groupRoom.count()).toBe(before);
+  });
+
+  test('the same name in both creates the room when none exists yet', async () => {
+    const r = await run(aloy.id, { sisters: ['Eve', 'Genesis'], room: 'The Porch', new_room: 'The Porch', message: 'hello' });
+    expect(r.error).toBeUndefined();
+    expect(result(r).created_new_room).toBe(true);
+    expect(result(r).room_title).toBe('The Porch');
+  });
+
+  test('the same name in both, no such room and no sisters, asks for sisters', async () => {
+    const r = await run(aloy.id, { room: 'The Barn', new_room: 'The Barn', message: 'hi' });
+    expect(r.error).toMatch(/"sisters" parameter is required/);
   });
 });

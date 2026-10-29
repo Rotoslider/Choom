@@ -3,7 +3,7 @@ import type { ToolDefinition } from '@/lib/types';
 export const tools: ToolDefinition[] = [
   {
     name: 'printer_status',
-    description: 'READ-ONLY dashboard for the 3D printer (Qidi, Klipper/Moonraker): job state, file, progress %, layer x of y, time printed and remaining, extruder/bed/chamber temperatures, fans, filament sensor and usage, Klipper health and warnings. Nothing is changed on the printer — this skill can only look.',
+    description: 'READ-ONLY dashboard for the 3D printer (Qidi, Klipper/Moonraker): job state, file, progress %, layer x of y, time printed and remaining, extruder/bed/chamber temperatures, fans, filament sensor and usage, Klipper health and warnings. Nothing is changed on the printer — this skill can only look. When the printer is switched off at its outlet, every printer tool says so at once.',
     parameters: { type: 'object', properties: {} },
   },
   {

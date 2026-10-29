@@ -3,7 +3,7 @@
  * printer (host mkspi) on 2026-09-20, right after the eMeet speaker holder
  * finished.
  */
-import PrinterMonitorHandler, { buildStatus, buildHistory, fmtDuration, isAllowedPath, moonrakerGet } from '@/skills/core/printer-monitor/handler';
+import PrinterMonitorHandler, { buildStatus, buildHistory, fmtDuration, isAllowedPath, moonrakerGet, printerOutletState, PRINTER_POWER_ENTITY } from '@/skills/core/printer-monitor/handler';
 
 const IDLE_STATUS = {
   print_stats: { filename: '.cache/rack emeet speaker holder.gcode', total_duration: 9527.5, print_duration: 9435.1, filament_used: 14744.5, state: 'complete', message: '', info: { total_layer: 216, current_layer: 215 } },
@@ -122,5 +122,37 @@ describe('read-only guard', () => {
     expect(r.error).toMatch(/did not answer/);
     expect(r.error).not.toMatch(/ECONNREFUSED/);
     expect(r.error).toMatch(/Home Assistant power reading/);
+  });
+});
+
+// 2026-10-29: Donny switches the printer's outlet off when he isn't printing;
+// 12 printer calls in five days failed against the dark printer.
+describe('printer outlet', () => {
+  const ctx = { settings: { homeAssistant: { baseUrl: 'http://ha', accessToken: 't' } } } as never;
+
+  it('answers "switched off" for every printer tool without touching the printer', async () => {
+    const fake = jest.fn(async () => new Response('{"result":{}}', { status: 200 })) as unknown as typeof fetch;
+    const h = new PrinterMonitorHandler(fake, async () => 'off');
+    for (const name of ['printer_status', 'printer_job_history', 'printer_files', 'printer_camera_snapshot']) {
+      const r = await h.execute({ id: '1', name, arguments: {} }, ctx);
+      expect(r.error).toBeUndefined();
+      const res = r.result as Record<string, unknown>;
+      expect(res.powered).toBe(false);
+      expect(res.outlet).toBe(PRINTER_POWER_ENTITY);
+      expect(String(res.message)).toMatch(/switched off at its outlet/);
+    }
+    expect(fake).not.toHaveBeenCalled();
+  });
+
+  it('with the outlet on, a silent printer is said to be starting up or off the network', async () => {
+    const dead = (async () => { throw new Error('fetch failed'); }) as unknown as typeof fetch;
+    const r = await new PrinterMonitorHandler(dead, async () => 'on').execute({ id: '1', name: 'printer_status', arguments: {} }, ctx);
+    expect(r.error).toMatch(/did not answer/);
+    expect(r.error).toMatch(/outlet is on/);
+  });
+
+  it('asks the printer as before when Home Assistant is not set up', async () => {
+    expect(await printerOutletState(undefined)).toBeNull();
+    expect(await printerOutletState({ baseUrl: '', accessToken: '' } as never)).toBeNull();
   });
 });
