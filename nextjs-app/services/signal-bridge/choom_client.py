@@ -4,6 +4,8 @@ Handles communication with the Choom Next.js API
 """
 import os
 import re
+import shutil
+import subprocess
 import requests
 import json
 import logging
@@ -905,10 +907,11 @@ class TTSClient:
         Args:
             text: Text to synthesize
             voice: Voice ID to use
-            output_path: Path to save audio file
+            output_path: Path to save audio file (a .wav name; see compress_voice_note)
 
         Returns:
-            Path to audio file or None on failure
+            Path to the audio file (the .m4a it became, or the .wav), or base64 WAV without
+            output_path, or None on failure
         """
         try:
             text = normalize_times_for_speech(text)
@@ -939,7 +942,7 @@ class TTSClient:
                     if output_path:
                         with open(output_path, 'wb') as f:
                             f.write(response.content)
-                        return output_path
+                        return compress_voice_note(output_path)
                     else:
                         # Return base64 encoded audio
                         return base64.b64encode(response.content).decode()
@@ -953,6 +956,35 @@ class TTSClient:
         except Exception as e:
             logger.error(f"TTS error: {e}")
             return None
+
+
+def _ffmpeg() -> Optional[str]:
+    for path in ("/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"):
+        if os.path.exists(path):
+            return path
+    return shutil.which("ffmpeg")
+
+
+def compress_voice_note(wav_path: str) -> str:
+    """Her voice for Signal as AAC in .m4a (Signal's own voice-note format) at 48 kbit/s mono: about an
+    eighth of the WAV Chatterbox makes. It comes down on Donny's phone data, and his expedition rig's
+    Starlink has little (2026-10-28). The WAV is removed once the .m4a is made; without ffmpeg, or if
+    it fails, the WAV goes as before. Returns the path to send."""
+    ffmpeg = _ffmpeg()
+    if not ffmpeg:
+        return wav_path
+    m4a = os.path.splitext(wav_path)[0] + ".m4a"
+    try:
+        result = subprocess.run([ffmpeg, "-loglevel", "error", "-y", "-i", wav_path, "-c:a", "aac", "-b:a", "48k",
+                                 "-ac", "1", "-movflags", "+faststart", m4a], capture_output=True, timeout=120)
+        if result.returncode == 0 and os.path.getsize(m4a) > 0:
+            logger.info(f"Voice note as AAC: {os.path.getsize(wav_path)} -> {os.path.getsize(m4a)} bytes")
+            os.remove(wav_path)
+            return m4a
+        logger.warning(f"Voice note AAC encoding failed ({result.returncode}): {result.stderr.decode()[:200]}; sending WAV")
+    except Exception as e:
+        logger.warning(f"Voice note AAC encoding failed: {e}; sending WAV")
+    return wav_path
 
 
 _STT_MAX_PHRASE_WORDS = 12

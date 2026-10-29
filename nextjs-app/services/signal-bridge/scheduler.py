@@ -343,8 +343,9 @@ class ScheduledTaskManager:
                 tts_text = strip_markup_for_tts(message)
 
                 audio_path = f"{config.TEMP_AUDIO_PATH}/scheduled_{datetime.now().strftime('%Y%m%d_%H%M%S')}.wav"
-                if self.tts.synthesize(tts_text, voice=voice_id, output_path=audio_path):
-                    attachments.append(audio_path)
+                made = self.tts.synthesize(tts_text, voice=voice_id, output_path=audio_path)
+                if made:
+                    attachments.append(made)  # the .m4a it became (compress_voice_note)
 
             # Format message with Choom attribution
             if choom_name:
@@ -1089,7 +1090,9 @@ Be practical. Only work on things that can actually be accomplished with the too
                     voice_id = choom.voice_id
 
                 tts_message = f"Aurora forecast update. I've sent you the current northern hemisphere forecast and Kp index images. Check them to see if there's any aurora activity expected."
-                if self.tts.synthesize(tts_message, voice=voice_id, output_path=audio_path):
+                made = self.tts.synthesize(tts_message, voice=voice_id, output_path=audio_path)
+                if made:
+                    audio_path = made  # the .m4a it became (compress_voice_note)
                     self.signal.send_message(self.owner_phone, "", attachments=[audio_path])
                     try:
                         os.remove(audio_path)

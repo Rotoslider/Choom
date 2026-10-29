@@ -1300,7 +1300,9 @@ class SignalBridge:
                 if tts_text:  # Only generate if there's actual text after stripping
                     audio_path = f"{config.TEMP_AUDIO_PATH}/response_{datetime.now().strftime('%Y%m%d_%H%M%S')}.wav"
                     logger.info(f"Generating TTS audio ({len(tts_text)} chars) with voice '{voice_id}'")
-                    if self.tts.synthesize(tts_text, voice=voice_id, output_path=audio_path):
+                    made = self.tts.synthesize(tts_text, voice=voice_id, output_path=audio_path)
+                    if made:
+                        audio_path = made  # the .m4a it became (compress_voice_note)
                         attachments.append(audio_path)
                         logger.info(f"Audio generated: {audio_path}")
                     else:
