@@ -298,6 +298,8 @@ def follow_choom():
                     if event.get("type") == "glass_request":  # a Choom asking the glass (answered here)
                         threading.Thread(target=answer_glass, args=(event,), daemon=True).start()
                         continue
+                    if event.get("type") == "glass_shown":  # what this page was already told, for the travel glass
+                        continue
                     if event.get("type") == "mute" and isinstance(event.get("muted"), bool):
                         app_mute["muted"] = event["muted"]
                     source = event.get("source")
@@ -678,7 +680,13 @@ def answer_camera(event):
 # glass_closet() and glass_wish("a silk slip dress") go down the feed as glass_request events. The
 # answer is worked out here from what is built on the glass (tools/closet.py), the page is told what
 # to play or wear, and the answer goes back to /api/hologram/glass/result, the way the camera's do.
-def glass_answer(request):
+def glass_answer(request, shown=None):
+    """Her answer to a glass request; what the page is told to do is also added to `shown`."""
+    def show(event):
+        broadcast(event)
+        if shown is not None:
+            shown.append(event)
+
     choom = str(request.get("choom") or "").strip()
     cid, op = choom.lower(), request.get("op")
     what = str(request.get("what") or "").strip()[:200]
@@ -707,7 +715,7 @@ def glass_answer(request):
         sit = closet.can_sit(alive)
         own = next((w for w in spots if "fire" in w or "fire" in spots[w]), None)
         if sit:
-            broadcast({"type": "glass", "choom": cid, "circle": True,
+            show({"type": "glass", "choom": cid, "circle": True,
                        **({"move": sorted(moves[own]), "name": own} if own else {})})
             return {"ok": True, "done": True,
                     "message": "When you're talking with your sisters in a room, the glass sits you all around a "
@@ -730,7 +738,7 @@ def glass_answer(request):
         sources = sorted({s for _, srcs in found for s in srcs})
         if word in spots:
             # One of her places: the page takes her there and she stays a while (living.js PLACE_STAY_MS).
-            broadcast({"type": "glass", "choom": cid, "move": sources, "name": word})
+            show({"type": "glass", "choom": cid, "move": sources, "name": word})
             return {"ok": True, "done": True,
                     "message": f"On the glass you go to your {word} at your next quiet moment: "
                                f"{closet.as_you(spots[word])}. You stay about ten minutes, then get up and come back."}
@@ -746,7 +754,7 @@ def glass_answer(request):
             return {"ok": True, "done": False,
                     "message": f"You have a move like that only in clothes you can't wear on the glass yet. \"{what}\" is on Donny's wish list in Glass Studio now.",
                     "moves": names}
-        broadcast({"type": "glass", "choom": cid, "move": sources, "name": word})
+        show({"type": "glass", "choom": cid, "move": sources, "name": word})
         if anywhere:
             return {"ok": True, "done": True, "message": f"On the glass you {phrase} next time you're on the glass and quiet."}
         clothes = " or ".join(outfits[o]["wearing"] or o for o in wearable)
@@ -763,7 +771,7 @@ def glass_answer(request):
                     "message": f"There's nothing like \"{what}\" in your closet on the glass yet. It's on Donny's wish list in Glass Studio now.",
                     "clothes": [o["wearing"] or ", ".join(o["tags"]) for o in outfits.values()]}
         name, outfit = match
-        broadcast({"type": "glass", "choom": cid, "wear": None if name == "usual" else name})
+        show({"type": "glass", "choom": cid, "wear": None if name == "usual" else name})
         if name == "usual":
             return {"ok": True, "done": True, "message": "On the glass you change back into your usual clothes at your next quiet moment."}
         return {"ok": True, "done": True,
@@ -783,13 +791,14 @@ def studio_main_subject(cid):
 
 
 def answer_glass(event):
+    shown = []  # what the page here was told: the app passes it on to the travel glass (glass_shown)
     try:
-        answer = glass_answer(event)
+        answer = glass_answer(event, shown)
     except Exception as e:  # a broken closet file must not leave her waiting
         answer = {"ok": False, "error": f"the glass couldn't answer ({type(e).__name__})"}
     try:
         request = urllib.request.Request(f"{CHOOM_URL}/api/hologram/glass/result",
-                                         data=json.dumps({**answer, "id": event.get("id")}).encode(),
+                                         data=json.dumps({**answer, "id": event.get("id"), "page": shown}).encode(),
                                          headers={"Content-Type": "application/json"})
         urllib.request.urlopen(request, timeout=15).read()
     except Exception as e:
