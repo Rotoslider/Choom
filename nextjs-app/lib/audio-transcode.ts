@@ -22,8 +22,22 @@ export function ffmpegPath(): string {
 /** Returns the input untouched when it is already WAV; otherwise 16 kHz mono PCM WAV. */
 export function toWav(input: Buffer, timeoutMs = 30_000): Promise<Buffer> {
   if (isWav(input)) return Promise.resolve(input);
+  return runFfmpeg(['-loglevel', 'error', '-i', 'pipe:0', '-ar', '16000', '-ac', '1', '-f', 'wav', 'pipe:1'], input, timeoutMs);
+}
+
+/**
+ * Her voice for a listener away from home, as Ogg Opus (2026-10-28). Chatterbox makes 24 kHz 16-bit WAV,
+ * about 48 KB a second; Opus at 32 kbit/s is about 4 KB a second, a twelfth, and speech sounds the same.
+ * Donny's expedition rig has a Starlink plan with little data.
+ */
+export function toOpus(wav: Buffer, kbps = 32, timeoutMs = 30_000): Promise<Buffer> {
+  return runFfmpeg(['-loglevel', 'error', '-i', 'pipe:0', '-c:a', 'libopus', '-b:a', `${kbps}k`, '-ac', '1',
+    '-application', 'audio', '-f', 'ogg', 'pipe:1'], wav, timeoutMs);
+}
+
+function runFfmpeg(args: string[], input: Buffer, timeoutMs: number): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    const proc = spawn(ffmpegPath(), ['-loglevel', 'error', '-i', 'pipe:0', '-ar', '16000', '-ac', '1', '-f', 'wav', 'pipe:1']);
+    const proc = spawn(ffmpegPath(), args);
     const out: Buffer[] = []; const err: Buffer[] = [];
     const timer = setTimeout(() => { proc.kill('SIGKILL'); reject(new Error('ffmpeg timed out')); }, timeoutMs);
     proc.stdout.on('data', d => out.push(d));

@@ -4,6 +4,7 @@ import { log } from './log-store';
 import { withAudioLock } from './audio-lock';
 import { registerAudioPlayer } from './audio-registry';
 import { hologramHasVoice } from './hologram-voice';
+import { playableVoiceFormats, voiceDataUrl } from './voice-format';
 
 interface QueueEntry {
   audio: HTMLAudioElement;
@@ -238,6 +239,7 @@ export class StreamingTTS {
           voice: this.voiceId,
           endpoint: this.endpoint,
           speed: this.speed,
+          formats: playableVoiceFormats(),
         }),
       });
 
@@ -258,7 +260,7 @@ export class StreamingTTS {
       log.ttsResponse(audioBytes, Date.now() - startTime, text);
 
       // Create Audio element from base64 (same as old working app)
-      const audio = new Audio(`data:audio/wav;base64,${data.audio}`);
+      const audio = new Audio(voiceDataUrl(data));
 
       // Pre-decode so playback starts without a gap.
       await new Promise<void>((resolve) => {
@@ -367,6 +369,7 @@ export async function speakText(
         voice: settings.defaultVoice,
         endpoint: settings.endpoint,
         speed: settings.speed,
+        formats: playableVoiceFormats(),
       }),
     });
 
@@ -380,7 +383,7 @@ export async function speakText(
       throw new Error(data.error || 'TTS failed');
     }
 
-    const audio = new Audio(`data:audio/wav;base64,${data.audio}`);
+    const audio = new Audio(voiceDataUrl(data));
 
     // Return promise that resolves when audio finishes
     return new Promise((resolve) => {

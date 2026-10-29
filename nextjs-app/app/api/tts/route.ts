@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { stripForTTS } from '@/lib/utils';
+import { toOpus } from '@/lib/audio-transcode';
+import { requestFromAway } from '@/lib/hologram-bus';
 
 export const dynamic = 'force-dynamic';
 
@@ -50,7 +52,7 @@ function recordFailure() {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { text, voice, endpoint, speed } = body ?? {};
+    const { text, voice, endpoint, speed, formats } = body ?? {};
 
     if (!text?.trim()) {
       return NextResponse.json(
@@ -116,14 +118,25 @@ export async function POST(request: NextRequest) {
     }
 
     const audioBuffer = await response.arrayBuffer();
-    const base64Audio = Buffer.from(audioBuffer).toString('base64');
+    const wav = Buffer.from(audioBuffer);
 
     console.log(`🔊 TTS Success: ${audioBuffer.byteLength} bytes`);
     recordSuccess();
 
+    // A listener away from home whose player plays Opus gets it: a twelfth the size (lib/voice-format.ts).
+    if (Array.isArray(formats) && formats.includes('opus') && requestFromAway(request)) {
+      try {
+        const opus = await toOpus(wav);
+        console.log(`🔊 TTS as Opus (away): ${opus.length} bytes`);
+        return NextResponse.json({ success: true, audio: opus.toString('base64'), format: 'opus', mimeType: 'audio/ogg' });
+      } catch (e) {
+        console.warn('TTS Opus encoding failed, sending WAV:', e);
+      }
+    }
+
     return NextResponse.json({
       success: true,
-      audio: base64Audio,
+      audio: wav.toString('base64'),
       format: 'wav',
     });
 

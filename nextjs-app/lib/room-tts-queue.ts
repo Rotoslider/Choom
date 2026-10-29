@@ -3,6 +3,7 @@ import { stripForTTS } from './utils';
 import { withAudioLock } from './audio-lock';
 import { registerAudioPlayer } from './audio-registry';
 import { hologramHasVoice } from './hologram-voice';
+import { playableVoiceFormats, voiceDataUrl } from './voice-format';
 
 // Split a block of text into sentence-sized chunks for snappy, incremental TTS.
 // Splits after sentence-ending punctuation followed by whitespace; very short
@@ -106,12 +107,12 @@ export class RoomTTSQueue {
       const res = await fetch('/api/tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, voice: voiceId, endpoint, speed: this.speed }),
+        body: JSON.stringify({ text, voice: voiceId, endpoint, speed: this.speed, formats: playableVoiceFormats() }),
       });
       if (!res.ok) return null;
       const data = await res.json();
       if (!data.success || !data.audio) return null;
-      const audio = new Audio(`data:audio/wav;base64,${data.audio}`);
+      const audio = new Audio(voiceDataUrl(data));
       audio.load();
       return audio;
     } catch {

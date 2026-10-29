@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Loader2, Volume2, Square } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { registerAudioPlayer } from '@/lib/audio-registry';
+import { withVoiceFormats } from '@/lib/voice-format';
 
 // Only one message plays at a time — starting a new one stops the current.
 let activeStop: (() => void) | null = null;
@@ -47,7 +48,7 @@ export function TtsPlayButton({ src, className }: { src: string; className?: str
       let audio = audioRef.current;
       if (!audio) {
         setState('loading');
-        audio = new Audio(src);
+        audio = new Audio(withVoiceFormats(src));
         audio.preload = 'auto';
         audioRef.current = audio;
         audio.onended = () => {

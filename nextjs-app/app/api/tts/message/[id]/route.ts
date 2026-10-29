@@ -3,6 +3,8 @@ import prisma from '@/lib/db';
 import { resolveTTSEndpoint } from '@/lib/tts-provider';
 import { stripForTTS } from '@/lib/utils';
 import { createHash } from 'crypto';
+import { toOpus } from '@/lib/audio-transcode';
+import { requestFromAway } from '@/lib/hologram-bus';
 import fs from 'fs';
 import path from 'path';
 
@@ -134,12 +136,30 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     const hash = createHash('sha1').update(`${spoken}|${voice}|${speed}`).digest('hex').slice(0, 10);
     const cachePath = path.join(CACHE_DIR, `${kind}-${id}-${hash}.wav`);
 
-    if (fs.existsSync(cachePath)) {
-      const cached = fs.readFileSync(cachePath);
-      return new NextResponse(new Uint8Array(cached), {
+    // Away from home, and the browser plays Opus (?formats=opus): a twelfth the size, kept beside the WAV.
+    const wantOpus = (request.nextUrl.searchParams.get('formats') || '').split(',').includes('opus') && requestFromAway(request);
+    const reply = async (wav: Buffer) => {
+      if (wantOpus) {
+        const opusPath = cachePath.replace(/\.wav$/, '.ogg');
+        try {
+          if (!fs.existsSync(opusPath)) {
+            const tmp = `${opusPath}.tmp-${process.pid}`;
+            fs.writeFileSync(tmp, await toOpus(wav));
+            fs.renameSync(tmp, opusPath);
+          }
+          return new NextResponse(new Uint8Array(fs.readFileSync(opusPath)), {
+            headers: { 'Content-Type': 'audio/ogg', 'Cache-Control': 'private, max-age=31536000' },
+          });
+        } catch (e) {
+          console.warn('Message TTS Opus encoding failed, sending WAV:', e);
+        }
+      }
+      return new NextResponse(new Uint8Array(wav), {
         headers: { 'Content-Type': 'audio/wav', 'Cache-Control': 'private, max-age=31536000' },
       });
-    }
+    };
+
+    if (fs.existsSync(cachePath)) return reply(fs.readFileSync(cachePath));
 
     // Synthesize sequentially (Chatterbox crashes under burst load)
     const chunks = chunkForTTS(spoken);
@@ -167,9 +187,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     fs.renameSync(tmpPath, cachePath);
     console.log(`   🔊 Message TTS cached: ${kind}/${id} — ${chunks.length} chunk(s), ${(full.length / 1024).toFixed(0)} KB, voice=${voice}`);
 
-    return new NextResponse(new Uint8Array(full), {
-      headers: { 'Content-Type': 'audio/wav', 'Cache-Control': 'private, max-age=31536000' },
-    });
+    return reply(full);
   } catch (error) {
     console.error('Message TTS failed:', error);
     return NextResponse.json({ error: 'Failed to generate message audio' }, { status: 500 });
