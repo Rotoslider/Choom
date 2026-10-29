@@ -8,6 +8,7 @@ import { PlanDisplay } from './plan-display';
 import type { PlanProgress } from './plan-display';
 import { TypingIndicator } from './typing-indicator';
 import { useAppStore } from '@/lib/store';
+import { MESSAGE_PAGE, earlierOf, prependOlder } from '@/lib/chat-messages';
 import type { Message } from '@/lib/types';
 import { Loader2, AlertTriangle } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -31,8 +32,10 @@ interface MessageListProps {
 
 // A long chat is drawn from its latest messages, with a button for earlier ones. Drawing all of
 // Genesis's 1,700+ messages made typing stall every time the page refreshed (the chat list and
-// service checks, twice a minute). This is only what the page shows: her memory is untouched.
-const PAGE = 150;
+// service checks, twice a minute). It's also loaded that way: the chat opens on its latest page, and
+// the button fetches the page before once what's loaded is all shown (lib/chat-messages.ts). This is
+// only what the page shows and loads: her memory is untouched.
+const PAGE = MESSAGE_PAGE;
 
 export function MessageList({ messages, isLoading = false, streamingImage, agentProgress, planProgress }: MessageListProps) {
   const scrollAreaRef = useRef<HTMLDivElement>(null);
@@ -40,7 +43,10 @@ export function MessageList({ messages, isLoading = false, streamingImage, agent
   const userScrolledUp = useRef(false);
   const isProgrammaticScroll = useRef(false);
   const lastMessageCount = useRef(messages.length);
-  const { isStreaming, streamingContent, streamingThinking, thinkingByMessage, currentChoom, currentChatId, streamRecovery } = useAppStore();
+  const { isStreaming, streamingContent, streamingThinking, thinkingByMessage, currentChoom, currentChatId, streamRecovery, earlierMessages } = useAppStore();
+  // Messages of this chat still on the server, before the ones loaded.
+  const onServer = earlierMessages.chatId === currentChatId ? earlierMessages.count : 0;
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
   // How many of the latest messages are drawn, for the chat it was set in: another chat opens on
   // its latest messages again.
   const [shown, setShown] = useState({ chat: currentChatId, count: PAGE });
@@ -50,8 +56,30 @@ export function MessageList({ messages, isLoading = false, streamingImage, agent
   const viewportOf = useCallback(() =>
     scrollAreaRef.current?.querySelector('[data-radix-scroll-area-viewport]') as HTMLElement | null, []);
 
-  // Earlier messages go in above: keep the ones in view where they were.
-  const showEarlier = () => {
+  // Earlier messages go in above: keep the ones in view where they were. Those already loaded first,
+  // then the page before them from the server.
+  const showEarlier = async () => {
+    const loadedHidden = messages.filter((m) => m.role !== 'system').length - shownCount;
+    if (loadedHidden < PAGE && onServer > 0 && messages.length > 0 && currentChatId) {
+      if (loadingEarlier) return;
+      setLoadingEarlier(true);
+      try {
+        const res = await fetch(`/api/chats/${currentChatId}/messages?limit=${PAGE}&beforeId=${encodeURIComponent(messages[0].id)}`);
+        const state = useAppStore.getState();
+        if (!res.ok || state.currentChatId !== currentChatId) return;
+        const older = await res.json();
+        const viewport = viewportOf();
+        keepFromBottom.current = viewport ? viewport.scrollHeight - viewport.scrollTop : null;
+        state.setEarlierMessages({ chatId: currentChatId, count: earlierOf(res) });
+        state.setMessages(prependOlder(state.messages, older));
+        setShown({ chat: currentChatId, count: shownCount + PAGE });
+      } catch (error) {
+        console.error('Failed to load earlier messages:', error);
+      } finally {
+        setLoadingEarlier(false);
+      }
+      return;
+    }
     const viewport = viewportOf();
     keepFromBottom.current = viewport ? viewport.scrollHeight - viewport.scrollTop : null;
     setShown({ chat: currentChatId, count: shownCount + PAGE });
@@ -67,8 +95,8 @@ export function MessageList({ messages, isLoading = false, streamingImage, agent
   }, [shownCount, viewportOf]);
 
   const visible = messages.filter((m) => m.role !== 'system');
-  const hiddenCount = Math.max(0, visible.length - shownCount);
-  const drawn = hiddenCount ? visible.slice(hiddenCount) : visible;
+  const hiddenCount = Math.max(0, visible.length - shownCount) + onServer;
+  const drawn = visible.length > shownCount ? visible.slice(visible.length - shownCount) : visible;
 
   // Helper: scroll to bottom without triggering the "user scrolled up" detection
   const scrollToBottom = useCallback((behavior: ScrollBehavior = 'instant') => {
@@ -141,9 +169,10 @@ export function MessageList({ messages, isLoading = false, streamingImage, agent
             <button
               type="button"
               onClick={showEarlier}
+              disabled={loadingEarlier}
               className="text-xs text-muted-foreground hover:text-foreground border border-border rounded-full px-3 py-1"
             >
-              Show earlier messages ({hiddenCount} more)
+              {loadingEarlier ? 'Loading earlier messages…' : `Show earlier messages (${hiddenCount} more)`}
             </button>
           </div>
         )}

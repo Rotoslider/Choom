@@ -1,11 +1,24 @@
 /**
- * Loading only what's new in an open chat. A long chat is large (Genesis's main chat: 1,694 messages,
+ * Loading only what's needed of an open chat. A long chat is large (Genesis's main chat: 1,694 messages,
  * 10 MB), and the page used to load it whole every 30 s with the chat list, and again after every
  * reply: over a metered link (ngrok's free 1 GB a month) that ran out in an afternoon (2026-10-28).
- * GET /api/chats/[id]/messages?since=<time> sends the messages from that time on; the page keeps the
- * older ones it has and replaces the rest.
+ * Now a chat opens with its latest MESSAGE_PAGE messages (GET /api/chats/[id]/messages?limit=), earlier
+ * ones come a page at a time when asked for (&beforeId=), and ?since=<time> sends what's new: the
+ * page keeps the older ones it has and replaces the rest.
  */
 import type { Message } from '@/lib/types';
+
+/** How many messages a chat opens with, and how many more each "Show earlier messages" brings. */
+export const MESSAGE_PAGE = 150;
+
+/** The earlier messages the server has for a page it sent (its X-Earlier-Messages). */
+export const earlierOf = (res: Response): number => Number(res.headers.get('X-Earlier-Messages')) || 0;
+
+/** Earlier messages put in front of the ones on screen (any already there aren't doubled). */
+export function prependOlder(current: Message[], older: Message[]): Message[] {
+  const have = new Set(current.map((m) => m.id));
+  return [...older.filter((m) => !have.has(m.id)), ...current];
+}
 
 /** A message shown before it's saved (a send's own words, until the reply is in). */
 export const isTemporary = (m: Message): boolean => m.id.startsWith('temp-');

@@ -1,19 +1,40 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
 
-// GET /api/chats/[id]/messages - Get messages for a chat
-// ?since=<ISO time>: only the messages from that time on (the page loads a long chat once, then only
-// what's new: see lib/chat-messages.ts).
+// GET /api/chats/[id]/messages - Get messages for a chat (see lib/chat-messages.ts):
+//   ?since=<ISO time>        only the messages from that time on (what's new since the page looked)
+//   ?limit=<n>               only the latest n; with &beforeId=<message id>, the n just before that one
+// A page of messages comes with X-Earlier-Messages: how many come before it.
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const { id } = await params;
-    const sinceParam = request.nextUrl.searchParams.get('since');
+    const query = request.nextUrl.searchParams;
+    const sinceParam = query.get('since');
     const since = sinceParam ? new Date(sinceParam) : null;
     if (since && Number.isNaN(since.getTime())) {
       return NextResponse.json({ error: 'since must be a time' }, { status: 400 });
+    }
+    const limit = query.has('limit') ? Number(query.get('limit')) : null;
+    if (limit !== null && !(Number.isInteger(limit) && limit > 0)) {
+      return NextResponse.json({ error: 'limit must be a whole number above 0' }, { status: 400 });
+    }
+    if (limit !== null) {
+      // Newest first so the page is the latest ones (before the cursor, if any), then put in order.
+      const beforeId = query.get('beforeId');
+      const page = (await prisma.message.findMany({
+        where: { chatId: id },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: limit,
+        ...(beforeId ? { cursor: { id: beforeId }, skip: 1 } : {}),
+      })).reverse();
+      const oldest = page[0];
+      const earlier = oldest ? await prisma.message.count({
+        where: { chatId: id, OR: [{ createdAt: { lt: oldest.createdAt } }, { createdAt: oldest.createdAt, id: { lt: oldest.id } }] },
+      }) : 0;
+      return NextResponse.json(page, { headers: { 'X-Earlier-Messages': String(earlier) } });
     }
     const messages = await prisma.message.findMany({
       where: { chatId: id, ...(since ? { createdAt: { gte: since } } : {}) },

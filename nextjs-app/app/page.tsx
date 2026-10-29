@@ -16,7 +16,7 @@ import { recoverReply } from '@/lib/stream-recovery';
 import type { Message, Choom, Chat, StreamingChatChunk, ServiceHealth } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { setHologramViewing } from '@/lib/hologram-voice';
-import { changedSince, mergeSince, newestSaved } from '@/lib/chat-messages';
+import { MESSAGE_PAGE, changedSince, earlierOf, mergeSince, newestSaved } from '@/lib/chat-messages';
 
 export default function Home() {
   const {
@@ -202,19 +202,23 @@ export default function Home() {
     return () => clearInterval(interval);
   }, [currentChoomId, chooms]);
 
-  // Fetch messages when chat changes: the whole chat, once. It used to reload whole each time the chat
-  // list refreshed (every 30 s): 10 MB a time for Genesis's main chat (see lib/chat-messages.ts).
+  // Fetch messages when chat changes: its latest page, once (earlier ones when asked for, in the message
+  // list). It used to reload whole each time the chat list refreshed (every 30 s): 10 MB a time for
+  // Genesis's main chat (see lib/chat-messages.ts).
   useEffect(() => {
     if (!currentChatId) {
       setMessages([]);
+      useAppStore.getState().setEarlierMessages({ chatId: null, count: 0 });
       return;
     }
 
     const fetchMessages = async () => {
       try {
-        const res = await fetch(`/api/chats/${currentChatId}/messages`);
+        const res = await fetch(`/api/chats/${currentChatId}/messages?limit=${MESSAGE_PAGE}`);
         if (res.ok && useAppStore.getState().currentChatId === currentChatId) {
-          setMessages(await res.json());
+          const page = await res.json();
+          useAppStore.getState().setEarlierMessages({ chatId: currentChatId, count: earlierOf(res) });
+          setMessages(page);
         }
       } catch (error) {
         console.error('Failed to fetch messages:', error);
@@ -607,6 +611,7 @@ export default function Home() {
 
     if (recovered) {
       setMessages(recovered);
+      useAppStore.getState().setEarlierMessages({ chatId, count: 0 }); // the whole chat came back
       setStreamRecovery(null);
       log.system('Reply recovered — the server had finished it.', 'success');
     } else if (sendGenerationRef.current === generation) {

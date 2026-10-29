@@ -1,4 +1,4 @@
-import { changedSince, mergeSince, newestSaved } from '@/lib/chat-messages';
+import { changedSince, mergeSince, newestSaved, prependOlder } from '@/lib/chat-messages';
 import type { Message } from '@/lib/types';
 
 const msg = (id: string, at: string, content = id): Message =>
@@ -24,3 +24,10 @@ test('the chat list says when the open chat changed after what is on screen', ()
   expect(changedSince('2026-10-28T10:05:00Z', '2026-10-28T10:05:00.000Z')).toBe(false);
   expect(changedSince('2026-10-28T10:06:00Z', null)).toBe(false);
 });
+
+test('earlier messages go in front, without doubling any already there', () => {
+  const current = [msg('c', '2026-10-28T10:02:00Z'), msg('d', '2026-10-28T10:03:00Z')];
+  const older = [msg('a', '2026-10-28T10:00:00Z'), msg('b', '2026-10-28T10:01:00Z'), msg('c', '2026-10-28T10:02:00Z')];
+  expect(prependOlder(current, older).map((m) => m.id)).toEqual(['a', 'b', 'c', 'd']);
+});
+

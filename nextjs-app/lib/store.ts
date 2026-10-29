@@ -177,6 +177,9 @@ interface AppState {
    * hard-refresh, which kills the very recovery that was about to succeed.
    */
   streamRecovery: { status: 'recovering' | 'failed' } | null;
+  // How many messages of the open chat are still on the server, before the ones loaded (a long chat
+  // opens on its latest page: lib/chat-messages.ts).
+  earlierMessages: { chatId: string | null; count: number };
 
   // TTS state
   ttsQueue: string[];
@@ -257,6 +260,7 @@ interface AppState {
   setThinkingForMessage: (messageId: string, text: string) => void;
   setIsStreaming: (streaming: boolean) => void;
   setStreamRecovery: (state: { status: 'recovering' | 'failed' } | null) => void;
+  setEarlierMessages: (state: { chatId: string | null; count: number }) => void;
 
   // Actions - TTS
   addToTTSQueue: (text: string) => void;
@@ -445,6 +449,7 @@ export const useAppStore = create<AppState>()(
       streamingThinking: '',
       thinkingByMessage: {},
       streamRecovery: null,
+      earlierMessages: { chatId: null, count: 0 },
 
       ttsQueue: [],
       isSpeaking: false,
@@ -695,6 +700,7 @@ export const useAppStore = create<AppState>()(
         set((state) => ({ thinkingByMessage: { ...state.thinkingByMessage, [messageId]: text } })),
       setIsStreaming: (streaming) => set({ isStreaming: streaming }),
       setStreamRecovery: (state) => set({ streamRecovery: state }),
+      setEarlierMessages: (state) => set({ earlierMessages: state }),
 
       // TTS actions
       addToTTSQueue: (text) => set((state) => ({ ttsQueue: [...state.ttsQueue, text] })),
