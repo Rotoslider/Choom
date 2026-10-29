@@ -8,7 +8,9 @@
  * so the hologram speaks her reply. Answers as soon as the turn has started; the turn runs on here
  * and the hologram follows it on its own feed. Ignored from away, except from the travel glass
  * (its mic, choom-glass-player): then the conversation is kept open there, so that glass speaks
- * the reply and the one at home doesn't. { dryRun: true } only reports which chat it would use.
+ * the reply and the one at home doesn't. While the travel glass runs, the tower's own mic is refused
+ * (409): he's at the travel glass, the home glass is quiet, and in one room both mics heard "OK Genesis"
+ * and sent it twice. { dryRun: true } only reports which chat it would use.
  *
  * { room: true, text } ("OK Chooms, ..."): his words go to the Signal room (the room set as "Signal
  * room" on the Rooms page), or else the room he last spoke in, as if he had typed them there, and the
@@ -18,7 +20,7 @@ import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/db';
-import { fromTravelGlass, markViewing, requestFromAway, type GlassPlace } from '@/lib/hologram-bus';
+import { fromTravelGlass, markViewing, requestFromAway, travelGlassRunning, type GlassPlace } from '@/lib/hologram-bus';
 import { GET as serverSettings } from '@/app/api/settings/defaults/route';
 
 export const dynamic = 'force-dynamic';
@@ -28,6 +30,7 @@ const NOT_HIS_CONVERSATION = /^(\[Delegation\]|\[Autonomous\]|Briefing )/;
 export async function POST(request: Request) {
   const place: GlassPlace = fromTravelGlass(request) ? 'travel' : 'home';
   if (requestFromAway(request) && place !== 'travel') return NextResponse.json({ ok: false, away: true }, { status: 403 });
+  if (place === 'home' && travelGlassRunning()) return NextResponse.json({ ok: false, travelGlass: true }, { status: 409 });
   const body = (await request.json().catch(() => ({}))) as { choom?: unknown; text?: unknown; dryRun?: unknown; room?: unknown };
   const name = typeof body.choom === 'string' ? body.choom.trim().toLowerCase() : '';
   const text = typeof body.text === 'string' ? body.text.trim() : '';

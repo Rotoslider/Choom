@@ -20,7 +20,7 @@ jest.mock('fs/promises', () => {
 import { prisma, teardown } from './helpers/scratch-db';
 import { POST as welcome } from '@/app/api/hologram/welcome/route';
 import { POST as talk } from '@/app/api/hologram/talk/route';
-import { startHologramTurn, subscribeHologram } from '@/lib/hologram-bus';
+import { setTravelGlassVoice, startHologramTurn, subscribeHologram } from '@/lib/hologram-bus';
 
 jest.setTimeout(30_000);
 
@@ -163,6 +163,17 @@ describe('talking at the tower', () => {
     turn.end();
     off();
     expect(events.filter((e) => e.type === 'content').map((e) => [e.speak, e.speakTravel])).toEqual([[false, true]]);
+  });
+
+  test('while the travel glass runs, the tower mic at home is refused', async () => {
+    setTravelGlassVoice(true, '203.0.113.40');
+    const res = await talk(req('/api/hologram/talk', { choom: 'Eve', text: 'hi from the tower' }));
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ ok: false, travelGlass: true });
+    expect(calls.some((c) => c.url.endsWith('/api/chat'))).toBe(false);
+    // its heartbeats stop: the tower mic works again (the other tests need it)
+    delete (globalThis as { __choomTravelGlass?: unknown }).__choomTravelGlass;
+    expect((await talk(req('/api/hologram/talk', { choom: 'Eve', text: 'hi', dryRun: true }))).status).toBe(200);
   });
 
   test('unknown Choom, missing words, away from home', async () => {
