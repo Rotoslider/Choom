@@ -14,6 +14,7 @@ import {
 import { getOwnerIdentity } from '@/lib/owner';
 import { getRoomCreatorModel } from '@/lib/group-model-config';
 import { Agent, fetch as undiciFetch } from 'undici';
+import { avatarLink } from '@/lib/choom-avatar';
 
 const baseUrl = process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
 // Per-speaker ABSOLUTE turn ceiling (default 15min). Overridable via
@@ -493,7 +494,7 @@ export async function POST(request: NextRequest) {
               type: 'speaker_start',
               speakerChoomId: p.choomId,
               speakerName: p.choom.name,
-              avatarUrl: p.choom.avatarUrl || null,
+              avatarUrl: avatarLink(p.choom.id, p.choom.avatarUrl),
               round,
             });
 
@@ -541,7 +542,7 @@ export async function POST(request: NextRequest) {
                 type: 'speaker_start',
                 speakerChoomId: p.choomId,
                 speakerName: p.choom.name,
-                avatarUrl: p.choom.avatarUrl || null,
+                avatarUrl: avatarLink(p.choom.id, p.choom.avatarUrl),
                 round,
                 retry: true,
               });
@@ -627,7 +628,7 @@ export async function POST(request: NextRequest) {
               type: 'speaker_done',
               speakerChoomId: p.choomId,
               speakerName: p.choom.name,
-              avatarUrl: p.choom.avatarUrl || null,
+              avatarUrl: avatarLink(p.choom.id, p.choom.avatarUrl),
               messageId: savedId,
               content: result.content,
               imageUrl: result.imageUrl,

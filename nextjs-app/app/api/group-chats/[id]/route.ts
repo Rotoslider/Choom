@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { writeFile } from 'fs/promises';
 import { loadConfig, snapshotConfig, CONFIG_PATH } from '@/lib/bridge-config-store';
 import prisma from '@/lib/db';
+import { roomWithAvatarLinks } from '@/lib/choom-avatar';
 
 // GET /api/group-chats/[id] - Room + participants
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -12,7 +13,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       include: { participants: { include: { choom: true }, orderBy: { order: 'asc' } } },
     });
     if (!room) return NextResponse.json({ error: 'Room not found' }, { status: 404 });
-    return NextResponse.json(room);
+    return NextResponse.json(roomWithAvatarLinks(room));
   } catch (error) {
     console.error('Failed to fetch room:', error);
     return NextResponse.json({ error: 'Failed to fetch room' }, { status: 500 });
@@ -49,7 +50,7 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
       },
       include: { participants: { include: { choom: true }, orderBy: { order: 'asc' } } },
     });
-    return NextResponse.json(room);
+    return NextResponse.json(roomWithAvatarLinks(room));
   } catch (error) {
     console.error('Failed to update room:', error);
     return NextResponse.json({ error: 'Failed to update room' }, { status: 500 });

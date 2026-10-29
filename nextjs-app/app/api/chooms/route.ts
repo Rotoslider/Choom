@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
 import { normalizeChoomPermissions, serializeChoomPermissions } from '@/lib/choom-permissions';
+import { avatarLink } from '@/lib/choom-avatar';
 
-// Helper to parse Choom JSON fields
+// Helper to parse Choom JSON fields; the avatar goes out as a link to the picture (lib/choom-avatar.ts)
 function parseChoomData(choom: Record<string, unknown>) {
   return {
     ...choom,
+    avatarUrl: avatarLink(choom.id as string, choom.avatarUrl as string | null),
     imageSettings: choom.imageSettings ? JSON.parse(choom.imageSettings as string) : null,
     permissions: normalizeChoomPermissions(choom.permissions),
   };

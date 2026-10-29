@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync } from 'fs';
 import path from 'path';
 import prisma from '@/lib/db';
 import { normalizeChoomPermissions, serializeChoomPermissions } from '@/lib/choom-permissions';
+import { avatarLink, isAvatarLink } from '@/lib/choom-avatar';
 
 // GET /api/chooms/[id] - Get a single choom
 export async function GET(
@@ -31,6 +32,7 @@ export async function GET(
     // Parse JSON fields
     const parsedChoom = {
       ...choom,
+      avatarUrl: avatarLink(choom.id, choom.avatarUrl),
       imageSettings: choom.imageSettings ? JSON.parse(choom.imageSettings) : null,
       permissions: normalizeChoomPermissions(choom.permissions),
     };
@@ -45,10 +47,11 @@ export async function GET(
   }
 }
 
-// Helper to parse Choom JSON fields
+// Helper to parse Choom JSON fields; the avatar goes out as a link to the picture (lib/choom-avatar.ts)
 function parseChoomData(choom: Record<string, unknown>) {
   return {
     ...choom,
+    avatarUrl: avatarLink(choom.id as string, choom.avatarUrl as string | null),
     imageSettings: choom.imageSettings ? JSON.parse(choom.imageSettings as string) : null,
     permissions: normalizeChoomPermissions(choom.permissions),
   };
@@ -69,7 +72,8 @@ export async function PUT(
       data: {
         ...(name !== undefined && { name }),
         ...(description !== undefined && { description }),
-        ...(avatarUrl !== undefined && { avatarUrl }),
+        // Her avatar link coming back unchanged (the edit panel saves what it was given) keeps the picture.
+        ...(avatarUrl !== undefined && !isAvatarLink(avatarUrl, id) && { avatarUrl }),
         ...(systemPrompt !== undefined && { systemPrompt }),
         ...(voiceId !== undefined && { voiceId }),
         ...(llmModel !== undefined && { llmModel }),

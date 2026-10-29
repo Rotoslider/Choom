@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import prisma from '@/lib/db';
+import { roomWithAvatarLinks } from '@/lib/choom-avatar';
 import { WORKSPACE_ROOT } from '@/lib/config';
 import { getOwnerIdentity } from '@/lib/owner';
 
@@ -18,7 +19,7 @@ export async function GET(request: NextRequest) {
       },
       orderBy: { updatedAt: 'desc' },
     });
-    return NextResponse.json(rooms);
+    return NextResponse.json(rooms.map(roomWithAvatarLinks));
   } catch (error) {
     console.error('Failed to fetch group rooms:', error);
     return NextResponse.json({ error: 'Failed to fetch group rooms' }, { status: 500 });
@@ -89,7 +90,7 @@ export async function POST(request: NextRequest) {
       },
     }).catch(() => { /* logging is best-effort */ });
 
-    return NextResponse.json(updated, { status: 201 });
+    return NextResponse.json(roomWithAvatarLinks(updated), { status: 201 });
   } catch (error) {
     console.error('Failed to create group room:', error);
     return NextResponse.json({ error: 'Failed to create group room' }, { status: 500 });
