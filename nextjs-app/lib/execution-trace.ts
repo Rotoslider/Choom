@@ -75,6 +75,9 @@ export interface ExecutionTrace {
   completionTokens: number;
   totalTokens: number;
   maxPromptTokens: number;
+  /** Of promptTokens, how many the provider served from its prompt cache.
+   *  Absent when the provider didn't say (local LM Studio, older traces). */
+  cachedPromptTokens?: number;
   tokensEstimated: boolean;
 
   // Content metrics
@@ -256,6 +259,7 @@ export class TraceBuilder {
     promptTokens: number;
     completionTokens: number;
     maxPromptTokens?: number;
+    cachedPromptTokens?: number;
     tokensEstimated: boolean;
     responseLength: number;
     brokenTools: string[];
@@ -272,6 +276,7 @@ export class TraceBuilder {
     this.trace.completionTokens = data.completionTokens;
     this.trace.totalTokens = data.promptTokens + data.completionTokens;
     this.trace.maxPromptTokens = data.maxPromptTokens || 0;
+    if (data.cachedPromptTokens !== undefined) this.trace.cachedPromptTokens = data.cachedPromptTokens;
     this.trace.tokensEstimated = data.tokensEstimated;
     this.trace.responseLength = data.responseLength;
     this.trace.brokenTools = data.brokenTools;

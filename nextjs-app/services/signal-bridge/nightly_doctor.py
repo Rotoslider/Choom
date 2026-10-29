@@ -386,6 +386,17 @@ def analyze_traces(traces: List[Dict[str, Any]]) -> Dict[str, Any]:
         choom_stats[cn]["nudges"] += t.get("nudgeCount", 0)
         if status == "error":
             choom_stats[cn]["errors"] += 1
+        # Round-cap hits and prompt volume per Choom, and how much of that
+        # prompt the provider served from its cache (traces from 2026-10-29
+        # on carry cachedPromptTokens when the provider reports it).
+        cs_now = choom_stats[cn]
+        if status == "max_iterations":
+            cs_now["cap_hits"] = cs_now.get("cap_hits", 0) + 1
+        prompt_tok = t.get("promptTokens", 0) or 0
+        cs_now["prompt_tokens"] = cs_now.get("prompt_tokens", 0) + prompt_tok
+        if t.get("cachedPromptTokens") is not None:
+            cs_now["cache_seen_prompt"] = cs_now.get("cache_seen_prompt", 0) + prompt_tok
+            cs_now["cached_tokens"] = cs_now.get("cached_tokens", 0) + (t.get("cachedPromptTokens") or 0)
 
         # Per-tool stats
         real_failures_this_trace = 0
@@ -968,6 +979,18 @@ def format_report(report: Dict[str, Any]) -> str:
             f"tools {pct(pt['tool_ms'])}, prep {pct(pt['prep_ms'])}, other {pct(pt['other_ms'])}"
         )
 
+    # Prompt volume and cache: input is ~70x the output and nearly all of the
+    # cloud cost, so say how much of it the provider's cache absorbed.
+    cstats = report.get("choom_stats", {}).values()
+    total_prompt = sum(c.get("prompt_tokens", 0) for c in cstats)
+    seen = sum(c.get("cache_seen_prompt", 0) for c in cstats)
+    cached = sum(c.get("cached_tokens", 0) for c in cstats)
+    if total_prompt:
+        cache_part = (f", {cached / seen * 100:.0f}% served from cache"
+                      + (f" (of the {seen / total_prompt * 100:.0f}% whose provider reports it)" if seen < total_prompt else "")
+                      if seen else ", cache hits not reported")
+        lines.append(f"  Prompt tokens: {total_prompt / 1e6:.1f}M{cache_part}")
+
     # Tools
     tc = report["tool_calls"]
     lines.append(f"\nTools: {tc['total']} calls ({tc['avg_per_request']}/req), {tc['success_rate']}% success")
@@ -1030,6 +1053,12 @@ def format_report(report: Dict[str, Any]) -> str:
             if cs["failures"] > 0:
                 parts.append(f"{cs['failures']} fails")
             parts.append(f"avg {avg_iter:.1f} iter")
+            if cs.get("cap_hits"):
+                parts.append(f"{cs['cap_hits']} hit the round cap")
+            if cs.get("prompt_tokens"):
+                share = (f", {cs['cached_tokens'] / cs['cache_seen_prompt'] * 100:.0f}% cached"
+                         if cs.get("cache_seen_prompt") else "")
+                parts.append(f"{cs['prompt_tokens'] / 1e6:.1f}M prompt tok{share}")
             if cs["nudges"] > 0:
                 parts.append(f"{cs['nudges']} nudges")
             if cs["errors"] > 0:

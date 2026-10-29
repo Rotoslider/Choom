@@ -134,9 +134,22 @@ export default class WorkspaceFilesHandler extends BaseSkillHandler {
       const sanitizedPath = stripMisplacedSharedPrefix(this.sanitizePath(filePath));
 
       const ws = new WorkspaceService(WORKSPACE_ROOT, WORKSPACE_MAX_FILE_SIZE_KB, WORKSPACE_ALLOWED_EXTENSIONS);
-      const result = await ws.writeFile(sanitizedPath, content);
+      // append: add to the end of the file. A long file sent in one call can
+      // arrive empty from a local model (Eve, 2026-10-25: four 2½-minute writes
+      // lost), so writing it in parts has to be possible. No file yet: starts it.
+      const append = toolCall.arguments.append === true || toolCall.arguments.append === 'true';
+      let appendedTo: number | null = null;
+      let toWrite = content;
+      if (append) {
+        try {
+          const existing = await ws.readFile(sanitizedPath);
+          appendedTo = existing.length;
+          toWrite = existing + (existing && !existing.endsWith('\n') && content ? '\n' : '') + content;
+        } catch { /* no file yet */ }
+      }
+      const result = await ws.writeFile(sanitizedPath, toWrite);
 
-      sessionFileCount.created++;
+      if (appendedTo === null) sessionFileCount.created++;
 
       ctx.send({ type: 'file_created', path: sanitizedPath });
 
@@ -144,8 +157,9 @@ export default class WorkspaceFilesHandler extends BaseSkillHandler {
       const inferredNote = inferredPath
         ? ` [Note: no path was provided in the tool call — a filename was inferred from the content and the file was saved to "${sanitizedPath}". Next time, include a "path" parameter explicitly.]`
         : '';
-      console.log(`   📝 Workspace write: ${sanitizedPath}${pathNote}${inferredPath ? ' (inferred)' : ''}`);
-      return this.success(toolCall, { success: true, message: result + pathNote + inferredNote, path: sanitizedPath });
+      const appendNote = appendedTo !== null ? ` (appended ${content.length} chars after the existing ${appendedTo})` : '';
+      console.log(`   📝 Workspace write: ${sanitizedPath}${pathNote}${inferredPath ? ' (inferred)' : ''}${appendNote}`);
+      return this.success(toolCall, { success: true, message: result + appendNote + pathNote + inferredNote, path: sanitizedPath, ...(appendedTo !== null && { appended: true }) });
     } catch (err) {
       console.error('   ❌ Workspace write error:', err instanceof Error ? err.message : err);
       return this.error(toolCall, `Failed to write file: ${err instanceof Error ? err.message : 'Unknown error'}`);

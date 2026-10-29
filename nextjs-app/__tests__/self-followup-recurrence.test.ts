@@ -175,8 +175,14 @@ describe('handler slot guard', () => {
     const r = parse(await h.execute(call('schedule_self_followup', { at: `${hh}:${String(mm).padStart(2, '0')}`, repeat: 'daily', prompt: 'Daily midday routine' }), ctx));
     expect(r.routine).toMatch(/^every day at/);
     expect(r.now_redundant).toEqual([a.id]);
-    // and a one-shot at the routine's time on another day is now covered by the routine
-    const c = parse(await h.execute(call('schedule_self_followup', { delay_minutes: 3 * 24 * 60, prompt: 'Thursday midday' }), ctx));
+    // and a one-shot at the routine's time on another day is now covered by the routine.
+    // Two calendar days on at the same local time — not "+72 hours", which lands an
+    // hour off when a daylight-saving change falls in between (failed Oct 29-31, 2026).
+    const p = localParts(firstAt, TZ);
+    const later = new Date(Date.UTC(p.y, p.m - 1, p.d + 2));
+    const ampm = `${((hh + 11) % 12) + 1}:${String(mm).padStart(2, '0')}${hh < 12 ? 'am' : 'pm'}`;
+    const laterAt = `${later.getUTCFullYear()}-${String(later.getUTCMonth() + 1).padStart(2, '0')}-${String(later.getUTCDate()).padStart(2, '0')} ${ampm}`;
+    const c = parse(await h.execute(call('schedule_self_followup', { at: laterAt, prompt: 'Thursday midday' }), ctx));
     expect(c.already_scheduled).toBe(true); expect(c.covered_by).toMatch(/^routine/);
   });
 });

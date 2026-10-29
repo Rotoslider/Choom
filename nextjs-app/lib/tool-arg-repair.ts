@@ -53,3 +53,29 @@ export function repairMissingRequiredArg(
   }
   return { args: repaired, renamed: { from, to } };
 }
+
+/**
+ * A call that arrives with no arguments after a long generation was lost on
+ * the way, not left empty. Eve (Qwen 3.8 27B, 2026-10-25) spent ~2½ minutes
+ * writing a long file four times, and each workspace_write_file came through
+ * as {} with "Retry with all required parameters" — so she sent the same long
+ * call again. Past this many output tokens, the answer is to split it.
+ */
+export const LONG_CALL_TOKENS = 1500;
+
+export function emptyArgsError(toolName: string, required: string[], completionTokens: number): { error: string; lost: boolean } {
+  const lost = completionTokens >= LONG_CALL_TOKENS;
+  if (!lost) {
+    return {
+      lost,
+      error: `${toolName} was called without any arguments, but requires: ${required.join(', ')}. Retry the call with all required parameters. Do not call ${toolName} with an empty args object again — include the required fields explicitly.`,
+    };
+  }
+  const split = toolName === 'workspace_write_file'
+    ? ' For a file: write the first part with workspace_write_file, then add the rest a few hundred lines at a time with workspace_write_file(path=<same path>, content=<next part>, append=true).'
+    : ' Send less in one call: shorter text, or several calls.';
+  return {
+    lost,
+    error: `${toolName} arrived with no arguments after you wrote about ${completionTokens} tokens: a call that long gets lost on the way. You didn't leave anything out, and sending the same long call again will lose it again — split it.${split}`,
+  };
+}

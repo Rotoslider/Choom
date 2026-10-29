@@ -592,6 +592,7 @@ export async function runChatTurn(params: ChatTurnParams): Promise<void> {
             promptTokens: finalPromptTokens,
             completionTokens: finalCompletionTokens,
             maxPromptTokens,
+            ...(loop.cacheReported && { cachedPromptTokens: loop.totalCachedPromptTokens }),
             tokensEstimated: isEstimatedTokens,
             responseLength: fullContent.length,
             brokenTools: [...brokenTools],

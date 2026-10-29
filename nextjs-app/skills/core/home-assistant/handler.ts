@@ -90,6 +90,79 @@ export function closestInAnyDomain(ref: string, entities: HAEntity[], max = 5): 
     .map(x => x.e);
 }
 
+/**
+ * Read tie-break: among equally good loose matches, the one whose name has the
+ * fewest words beyond what was asked ("north door" and "north_door_contact" →
+ * North Door, not North Screen door). Aloy and Genesis guessed the north
+ * door's id on six different days (2026-10-18 → 29). Only for reads, where a
+ * wrong pick shows in resolved_from and changes nothing; a wide tie (a vague
+ * word) or a tie on extra words stays a list. The pick must also carry every
+ * asked word that names something somewhere in the house: "sink" in
+ * switch.kitchen1_sink_light points at light.sink_light, so no switch is
+ * picked, while "contact" in north_door_contact names nothing and is let go.
+ */
+export function pickFewestExtraWords(ref: string, tied: HAEntity[], all: HAEntity[]): HAEntity | null {
+  if (tied.length < 2 || tied.length > 4) return tied.length === 1 ? tied[0] : null;
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const words = (s: string) => new Set(norm(s).split(' ').filter(Boolean));
+  const hay = (e: HAEntity) => { const h = norm(`${e.entity_id} ${String(e.attributes?.friendly_name || '')}`); return `${h} ${h.replace(/ /g, '')}`; };
+  const asked = words(ref.includes('.') ? ref.slice(ref.indexOf('.') + 1) : ref);
+  const extra = (e: HAEntity) =>
+    [...words(String(e.attributes?.friendly_name || e.entity_id.split('.')[1] || ''))].filter(w => !asked.has(w)).length;
+  const ranked = tied.map(e => ({ e, x: extra(e) })).sort((a, b) => a.x - b.x);
+  if (ranked[0].x === ranked[1].x) return null;
+  const pick = ranked[0].e;
+  const pickHay = hay(pick);
+  const unmet = [...asked].filter(w => w.length > 1 && !pickHay.includes(w));
+  if (unmet.some(w => all.some(e => hay(e).includes(w)))) return null;
+  return pick;
+}
+
+// What a state object has (light.entity_id, sensor.state in a loop over
+// states.light): never entity ids.
+const STATE_PROPERTIES = new Set(['entity_id', 'state', 'attributes', 'last_changed', 'last_updated', 'last_reported', 'name', 'object_id', 'domain', 'context']);
+
+/**
+ * Entity ids a template names that don't exist. Home Assistant renders them
+ * as "unknown" (or None) without a word: Aloy's door sweep on 2026-10-29 read
+ * the north door as "unknown" from a guessed id. Checks every domain.object
+ * pair in a dotted chain, so states.binary_sensor.x.last_changed counts too.
+ */
+export function missingTemplateEntities(template: string, entities: HAEntity[]): string[] {
+  const ids = new Set(entities.map(e => e.entity_id));
+  const domains = new Set(entities.map(e => e.entity_id.split('.')[0]));
+  const missing = new Set<string>();
+  for (const chain of template.match(/[a-z_][a-z0-9_]*(?:\.[a-z0-9_]+)+/g) || []) {
+    const parts = chain.split('.');
+    for (let i = 0; i + 1 < parts.length; i++) {
+      if (!domains.has(parts[i]) || STATE_PROPERTIES.has(parts[i + 1])) continue;
+      const id = `${parts[i]}.${parts[i + 1]}`;
+      if (!ids.has(id)) missing.add(id);
+      i++; // the object part can't start another pair
+    }
+  }
+  return [...missing];
+}
+
+/** " These ids in your template don't exist…" with the closest real ones; empty when all exist. */
+async function templateMissingNote(ha: HomeAssistantService, template: string): Promise<{ note: string; ids: string[] }> {
+  try {
+    const all = await ha.listStates();
+    const ids = missingTemplateEntities(template, all);
+    if (!ids.length) return { note: '', ids };
+    const each = ids.slice(0, 6).map(id => {
+      const near = closestInAnyDomain(id, all, 3);
+      return near.length ? `${id} (closest: ${entityListText(near, 3)})` : id;
+    });
+    return {
+      ids,
+      note: ` These entity ids in your template don't exist, so Home Assistant read them as "unknown"/None — that is NOT the real state: ${each.join('; ')}. Use the exact ids.`,
+    };
+  } catch {
+    return { note: '', ids: [] };
+  }
+}
+
 /** The "doesn't exist" answer for a loose or guessed entity: the closest
  *  entities in any domain first, then the scoped list. Keeps the wording the
  *  loop reads as recoverable ("doesn't exist", "Real … entities on THIS system"). */
@@ -380,7 +453,8 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
           } catch (e) {
             const m = e instanceof Error ? e.message : String(e);
             if (!/HA API 404\b/.test(m)) throw e;
-            const r = await resolveEntity(ha, ref);
+            const everyEntity = await ha.listStates();
+            const r = await resolveEntity(ha, ref, undefined, tied => pickFewestExtraWords(ref, tied, everyEntity));
             if ('entityId' in r) {
               entity = await ha.getState(r.entityId);
               resolvedFrom = ref;
@@ -802,11 +876,20 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
           const local = localTemplateTimes(template);
           let rendered: string;
           try {
-            rendered = await ha.renderTemplate(local);
+            try {
+              rendered = await ha.renderTemplate(local);
+            } catch (err) {
+              if (local === template) throw err;
+              rendered = await ha.renderTemplate(template);
+            }
           } catch (err) {
-            if (local === template) throw err;
-            rendered = await ha.renderTemplate(template);
+            // A guessed id is the usual cause of "'None' has no attribute…":
+            // name it ("doesn't exist" also marks the error as recoverable).
+            const missing = await templateMissingNote(ha, template);
+            if (!missing.note) throw err;
+            return this.error(toolCall, `Home Assistant error: ${err instanceof Error ? err.message : String(err)}.${missing.note}`);
           }
+          const missing = await templateMissingNote(ha, template);
           // A template can loop over every sensor in the house — Qwen wrote one
           // that rendered 30k chars (2026-09-12). Bound it like every other
           // result; the note tells her how to get the rest.
@@ -826,6 +909,7 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
           return this.success(toolCall, {
             success: true,
             rendered: parsed,
+            ...(missing.note && { missing_entities: missing.ids, warning: missing.note.trim() }),
             ...(renderTruncated && { truncated: true, note: `Output cut at ${RENDER_CAP} chars. Narrow the template (filter by name/domain, or render a few entities at a time).` }),
             ...(typeof parsed === 'string' && parsed !== rendered && { raw: rendered }),
           });
@@ -834,7 +918,8 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
         case 'ha_get_history': {
           const histRef = String(args.entity_id ?? args.entity ?? args.name ?? '').trim();
           if (!histRef) return this.error(toolCall, 'entity_id is required — the entity to chart, e.g. entity_id="sensor.outdoor_temperature" or a loose name like "outdoor temperature". Call ha_get_home_status to see what exists.');
-          const histResolved = await resolveEntity(ha, histRef);
+          const everyEntity = await ha.listStates();
+          const histResolved = await resolveEntity(ha, histRef, undefined, tied => pickFewestExtraWords(histRef, tied, everyEntity));
           if (!('entityId' in histResolved)) {
             return this.error(toolCall, await entityMissingText(ha, histRef, histResolved, 'Call ha_get_home_status to discover them.'));
           }
@@ -872,7 +957,8 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
           // ha_get_state does so "front door" works without a second call.
           const logRef = String(args.entity_id ?? args.entity ?? args.name ?? '').trim();
           if (!logRef) return this.error(toolCall, 'entity_id is required — the entity whose activity you want, e.g. entity_id="binary_sensor.front_door" or a loose name like "front door". Call ha_get_home_status to see what exists.');
-          const logResolved = await resolveEntity(ha, logRef);
+          const everyEntity = await ha.listStates();
+          const logResolved = await resolveEntity(ha, logRef, undefined, tied => pickFewestExtraWords(logRef, tied, everyEntity));
           if (!('entityId' in logResolved)) {
             return this.error(toolCall, await entityMissingText(ha, logRef, logResolved, 'Call ha_get_home_status to discover them.'));
           }

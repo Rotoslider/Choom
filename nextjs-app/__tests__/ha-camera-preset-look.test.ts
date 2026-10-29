@@ -36,8 +36,15 @@ const STATES: HAEntity[] = [
   { ...ent('binary_sensor.shop_prox_sensor_shop_pir', 'Prox_sensor_shop PIR', { device_class: 'motion' }, 'off'), last_changed: '2026-10-30T03:24:38+00:00' },
   { ...ent('sensor.shop_prox_sensor_shop_illuminance', 'Prox_sensor_shop Illuminance', { unit_of_measurement: 'lx' }, '0.0'), last_changed: '2026-10-30T03:25:10+00:00' },
 ];
+STATES.push(
+  ent('binary_sensor.kitchen1_home_east_door_window', 'East door', { device_class: 'door' }, 'off'),
+  ent('binary_sensor.kitchen1_home_east_screen_door_east_screen_door', 'East Screen door', { device_class: 'door' }, 'on'),
+  ent('binary_sensor.living_room_home_north_screen_door_screen_door', 'North Screen door', { device_class: 'door' }, 'off'),
+  ent('binary_sensor.living_room_home_north_door_north_door', 'North Door', { device_class: 'door' }, 'on'),
+);
 const setState = (id: string, state: string) => { STATES.find(e => e.entity_id === id)!.state = state; };
 
+const renderTemplate = jest.fn(async (_t: string) => 'unknown');
 const callService = jest.fn(async (..._a: unknown[]) => [] as HAEntity[]);
 jest.mock('@/lib/homeassistant-service', () => ({
   HomeAssistantService: class {
@@ -49,6 +56,8 @@ jest.mock('@/lib/homeassistant-service', () => ({
     }
     async callService(...a: unknown[]) { return callService(...a); }
     async verifyServiceExists() { return true; }
+    async renderTemplate(t: string) { return renderTemplate(t); }
+    async getLogbook() { return []; }
   },
 }));
 
@@ -70,7 +79,7 @@ jest.mock('@/lib/glass-camera', () => ({ askGlassCamera: jest.fn(), isGlassCamer
 let root: string;
 jest.mock('@/lib/config', () => ({ ...jest.requireActual('@/lib/config'), get WORKSPACE_ROOT() { return root; } }));
 
-import HomeAssistantHandler, { closestInAnyDomain, matchPresetOption } from '@/skills/core/home-assistant/handler';
+import HomeAssistantHandler, { closestInAnyDomain, matchPresetOption, missingTemplateEntities, pickFewestExtraWords } from '@/skills/core/home-assistant/handler';
 import { PARAM_ERROR } from '@/lib/tool-error-classification';
 
 const JPEG = new Uint8Array(4096).fill(0xff);
@@ -242,5 +251,66 @@ describe('guessed ids in the wrong domain', () => {
     expect(r.error).toMatch(/doesn't exist/);
     expect(r.error).toMatch(/Closest matches in any domain: light\.sink_light \("Sink Light"\)/);
     expect(r.error).toMatch(/Real switch entities on THIS system/); // still read as recoverable
+  });
+});
+
+// 2026-10-29: Aloy's door sweep read the north door as "unknown" from a guessed
+// id in a template; she and Genesis guessed its id on six different days.
+describe('templates that name entities that do not exist', () => {
+  test('missingTemplateEntities finds guessed ids, not loop variables or real ids', () => {
+    const t = "{{ states('binary_sensor.north_door') }} {{ states.binary_sensor.living_room_home_north_door_north_door.last_changed }} " +
+      "{% for light in states.light %}{{ light.entity_id }} {{ light.state }}{% endfor %} {{ is_state('binary_sensor.shop_shop_door_sensor_shop_door', 'off') }}";
+    expect(missingTemplateEntities(t, STATES)).toEqual(['binary_sensor.north_door']);
+  });
+
+  test('a rendered template with a guessed id carries a warning naming the real one', async () => {
+    renderTemplate.mockResolvedValueOnce('north: unknown');
+    const r = await call('ha_render_template', { template: "north: {{ states('binary_sensor.north_door') }}" });
+    expect(r.error).toBeUndefined();
+    expect(res(r).missing_entities).toEqual(['binary_sensor.north_door']);
+    expect(String(res(r).warning)).toMatch(/don't exist, so Home Assistant read them as "unknown"\/None/);
+    expect(String(res(r).warning)).toMatch(/binary_sensor\.north_door \(closest: .*binary_sensor\.living_room_home_north_door_north_door/);
+  });
+
+  test('a template that fails on a guessed id says which id, as a recoverable error', async () => {
+    // Both tries fail: the local-time version of the template, then the original.
+    const undef = new Error("HA template 400: UndefinedError: 'None' has no attribute 'last_changed'");
+    renderTemplate.mockRejectedValueOnce(undef).mockRejectedValueOnce(undef);
+    const r = await call('ha_render_template', { template: '{{ states.binary_sensor.north_door_contact.last_changed }}' });
+    expect(r.error).toMatch(/^Home Assistant error: HA template 400/);
+    expect(r.error).toMatch(/binary_sensor\.north_door_contact \(closest:/);
+    expect(r.error).toMatch(/don't exist/); // PATH_ERROR: not counted as a tool failure
+  });
+
+  test('a template with only real ids has no warning', async () => {
+    renderTemplate.mockResolvedValueOnce('off');
+    const r = await call('ha_render_template', { template: "{{ states('binary_sensor.shop_shop_door_sensor_shop_door') }}" });
+    expect(res(r).warning).toBeUndefined();
+  });
+});
+
+describe('loose names for reads prefer the name with no extra words', () => {
+  test('north_door_contact reads the North Door, not the North Screen door', async () => {
+    const r = await call('ha_get_state', { entity_id: 'binary_sensor.north_door_contact' });
+    expect(r.error).toBeUndefined();
+    expect(res(r).entity_id).toBe('binary_sensor.living_room_home_north_door_north_door');
+    expect(res(r).resolved_from).toBe('binary_sensor.north_door_contact');
+  });
+
+  test('"east door" logbook reads the East door', async () => {
+    const r = await call('ha_get_logbook', { entity_id: 'east door', hours: 3 });
+    expect(r.error).toBeUndefined();
+    expect(res(r).entity_id).toBe('binary_sensor.kitchen1_home_east_door_window');
+  });
+
+  test('a word that names something elsewhere blocks the pick', () => {
+    const tied = [ent('switch.kitchen1_light', 'Kitchen1 light'), ent('switch.kitchen1_stove_powerstrip_x', 'Kitchen1 stove powerstrip x')];
+    expect(pickFewestExtraWords('switch.kitchen1_sink_light', tied, [...STATES, ...tied])).toBeNull(); // light.sink_light has "sink"
+    expect(pickFewestExtraWords('switch.kitchen1_light', tied, [...STATES, ...tied])?.entity_id).toBe('switch.kitchen1_light');
+  });
+
+  test('a wide tie stays a list', () => {
+    const many = ['a', 'b', 'c', 'd', 'e'].map(x => ent(`sensor.temp_${x}`, `Temp ${x}`));
+    expect(pickFewestExtraWords('temp', many, many)).toBeNull();
   });
 });

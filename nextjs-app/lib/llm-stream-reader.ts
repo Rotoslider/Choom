@@ -49,7 +49,9 @@ export interface StreamState {
   callStart: number;
   /** Timestamp of the first chunk; 0 if none arrived. */
   firstChunkAt: number;
-  usage: { promptTokens: number; completionTokens: number; maxPromptTokens: number };
+  /** cachedPromptTokens: prompt tokens the provider served from its prompt
+   *  cache; cacheReported: whether it said at all (0 cached vs not told). */
+  usage: { promptTokens: number; completionTokens: number; maxPromptTokens: number; cachedPromptTokens: number; cacheReported: boolean };
 }
 
 export function newStreamState(): StreamState {
@@ -58,7 +60,7 @@ export function newStreamState(): StreamState {
     capturedXml: [], capturedJson: [], capturedGemma: [], capturedTagged: [],
     thinkTokensFiltered: false, abortedForRepetition: false,
     callStart: 0, firstChunkAt: 0,
-    usage: { promptTokens: 0, completionTokens: 0, maxPromptTokens: 0 },
+    usage: { promptTokens: 0, completionTokens: 0, maxPromptTokens: 0, cachedPromptTokens: 0, cacheReported: false },
   };
 }
 
@@ -238,6 +240,15 @@ export async function readLlmStream(st: StreamState, opts: ReadLlmStreamOptions)
         st.usage.promptTokens += chunk.usage.prompt_tokens || 0;
         st.usage.completionTokens += chunk.usage.completion_tokens || 0;
         st.usage.maxPromptTokens = Math.max(st.usage.maxPromptTokens, chunk.usage.prompt_tokens || 0);
+        // Prompt-cache hits: OpenAI's (and OpenRouter's) prompt_tokens_details,
+        // or DeepSeek's own prompt_cache_hit_tokens. Measured before moving the
+        // per-turn context so more of each prompt can be cached (2026-10-29).
+        const u = chunk.usage as { prompt_tokens_details?: { cached_tokens?: number } | null; prompt_cache_hit_tokens?: number };
+        const cached = u.prompt_tokens_details?.cached_tokens ?? u.prompt_cache_hit_tokens;
+        if (typeof cached === 'number') {
+          st.usage.cachedPromptTokens += cached;
+          st.usage.cacheReported = true;
+        }
       }
       if (!chunk.choices || !chunk.choices[0]) continue;
       const choice = chunk.choices[0];

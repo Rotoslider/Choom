@@ -16,6 +16,10 @@ export const tools: ToolDefinition[] = [
           type: 'string',
           description: 'File content to write',
         },
+        append: {
+          type: 'boolean',
+          description: 'true = add content to the end of the file instead of replacing it (starts the file if it does not exist). Write a long file in parts this way — a few hundred lines per call.',
+        },
       },
       required: ['path', 'content'],
     },

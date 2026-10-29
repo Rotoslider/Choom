@@ -49,6 +49,7 @@ import {
 } from '@/lib/chat-shared';
 import { type ToolContext, executeToolCall, executeToolCallViaSkills } from '@/lib/tool-execution';
 import { dropStaleReads } from '@/lib/tool-dedup';
+import { emptyArgsError } from '@/lib/tool-arg-repair';
 import type { LLMSettings, ToolCall, ToolResult, ToolDefinition, LLMProviderConfig, LLMModelProfile } from '@/lib/types';
 import type { Choom, Chat, Message } from '@prisma/client';
 
@@ -106,6 +107,9 @@ export interface LoopOutcome {
   totalPromptTokens: number;
   totalCompletionTokens: number;
   maxPromptTokens: number;
+  /** Prompt tokens served from the provider's cache; only meaningful when cacheReported. */
+  totalCachedPromptTokens: number;
+  cacheReported: boolean;
   llmMsTotal: number;
   llmPrefillMsTotal: number;
   llmCallCount: number;
@@ -394,6 +398,8 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
           // every LLM call in the turn, so in traces it reads like one giant prompt
           // when it's really 3×~89k — this field records what one call actually sent.
           let maxPromptTokens = 0;
+          let totalCachedPromptTokens = 0;
+          let cacheReported = false;
           // Per-phase wall-clock (C-11): a 17-minute 2-iteration request is
           // undiagnosable from durationMs alone. llmMsTotal counts time inside
           // LLM streaming calls — failed calls and fallback attempts included,
@@ -871,6 +877,8 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
               totalPromptTokens += st.usage.promptTokens;
               totalCompletionTokens += st.usage.completionTokens;
               maxPromptTokens = Math.max(maxPromptTokens, st.usage.maxPromptTokens);
+              totalCachedPromptTokens += st.usage.cachedPromptTokens;
+              cacheReported = cacheReported || st.usage.cacheReported;
             };
 
             // Raw estimate of this call, for calibration against the real count below.
@@ -1254,12 +1262,15 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                   const requiredParams = (toolDef?.parameters as { required?: string[] })?.required;
                   if (requiredParams && requiredParams.length > 0) {
                     const requiredList = requiredParams.join(', ');
-                    console.warn(`   ⚠️  ${choomTag} ${tc.name} called with empty arguments but requires [${requiredList}] — converting to error for retry`);
+                    // After a long generation the arguments were lost, not left out:
+                    // say so and say how to split (see emptyArgsError).
+                    const empty = emptyArgsError(tc.name, requiredParams, stream.usage.completionTokens);
+                    console.warn(`   ⚠️  ${choomTag} ${tc.name} called with empty arguments but requires [${requiredList}]${empty.lost ? ` after ${stream.usage.completionTokens} output tokens (lost, not omitted)` : ''} — converting to error for retry`);
                     const r: ToolResult = {
                       toolCallId: tc.id,
                       name: tc.name,
                       result: null,
-                      error: `${tc.name} was called without any arguments, but requires: ${requiredList}. Retry the call with all required parameters. Do not call ${tc.name} with an empty args object again — include the required fields explicitly.`,
+                      error: empty.error,
                     };
                     droppedForEmptyArgs.push(r);
                     // Push the synthetic error result so the model sees it on the next iteration
@@ -1277,10 +1288,13 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                       parallel: false,
                       blocked: true,
                     });
-                    // Count toward failure limits so repeated empty-args don't loop forever
-                    const emptyFails = (toolFailureCounts.get(r.name) || 0) + 1;
+                    // Count toward failure limits so repeated empty-args don't loop forever.
+                    // A lost long call doesn't count: blocking the tool then refused
+                    // the shorter call she was told to send, and saved no time — the
+                    // generation happens before the block anyway (Eve, 2026-10-25).
+                    const emptyFails = (toolFailureCounts.get(r.name) || 0) + (empty.lost ? 0 : 1);
                     toolFailureCounts.set(r.name, emptyFails);
-                    if (emptyFails >= failureCapFor(r.name)) {
+                    if (!empty.lost && emptyFails >= failureCapFor(r.name)) {
                       brokenTools.add(r.name);
                       console.log(`   🚫 ${choomTag} ${r.name} blocked after ${emptyFails} empty-args failures`);
                     }
@@ -3018,7 +3032,7 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
           }
   return {
     iteration, maxIterations, fullContent, allToolCalls, resolvedProvider,
-    totalPromptTokens, totalCompletionTokens, maxPromptTokens,
+    totalPromptTokens, totalCompletionTokens, maxPromptTokens, totalCachedPromptTokens, cacheReported,
     llmMsTotal, llmPrefillMsTotal, llmCallCount, maxLlmCallMs, firstLlmCallAt,
     compressionSavedChars, brokenTools,
   };
