@@ -77,12 +77,20 @@ export async function GET(req: NextRequest) {
       let totalIterations = 0;
       let totalToolCalls = 0;
       let totalSaved = 0;
+      // Prompt cache (2026-10-29): cached = prompt tokens the provider served
+      // from its cache; cacheSeen = prompt tokens of the requests whose
+      // provider reported it at all, so the share isn't diluted by older rows
+      // and by local LM Studio, which keeps its cache numbers to its own log.
+      let totalCached = 0;
+      let totalCacheSeen = 0;
 
-      const byChoom: Record<string, { name: string; prompt: number; completion: number; total: number; requests: number }> = {};
-      const byModel: Record<string, { prompt: number; completion: number; total: number; requests: number }> = {};
-      const byProvider: Record<string, { prompt: number; completion: number; total: number; requests: number }> = {};
-      const bySource: Record<string, { prompt: number; completion: number; total: number; requests: number }> = {};
-      const daily: Record<string, { prompt: number; completion: number; total: number; requests: number; saved: number }> = {};
+      type Bucket = { prompt: number; completion: number; total: number; requests: number; cached: number; cacheSeen: number };
+      const bucket = (): Bucket => ({ prompt: 0, completion: 0, total: 0, requests: 0, cached: 0, cacheSeen: 0 });
+      const byChoom: Record<string, Bucket & { name: string }> = {};
+      const byModel: Record<string, Bucket> = {};
+      const byProvider: Record<string, Bucket> = {};
+      const bySource: Record<string, Bucket> = {};
+      const daily: Record<string, Bucket & { saved: number }> = {};
 
       for (const e of entries) {
         totalPrompt += e.promptTokens;
@@ -92,42 +100,28 @@ export async function GET(req: NextRequest) {
         totalIterations += e.iterations;
         totalToolCalls += e.toolCalls;
         totalSaved += e.savedTokens || 0;
+        const reported = e.cachedPromptTokens !== null;
+        if (reported) {
+          totalCached += e.cachedPromptTokens!;
+          totalCacheSeen += e.promptTokens;
+        }
 
-        // By Choom
-        if (!byChoom[e.choomId]) byChoom[e.choomId] = { name: e.choomName, prompt: 0, completion: 0, total: 0, requests: 0 };
-        byChoom[e.choomId].prompt += e.promptTokens;
-        byChoom[e.choomId].completion += e.completionTokens;
-        byChoom[e.choomId].total += e.totalTokens;
-        byChoom[e.choomId].requests++;
-
-        // By Model
-        if (!byModel[e.model]) byModel[e.model] = { prompt: 0, completion: 0, total: 0, requests: 0 };
-        byModel[e.model].prompt += e.promptTokens;
-        byModel[e.model].completion += e.completionTokens;
-        byModel[e.model].total += e.totalTokens;
-        byModel[e.model].requests++;
-
-        // By Provider
-        if (!byProvider[e.provider]) byProvider[e.provider] = { prompt: 0, completion: 0, total: 0, requests: 0 };
-        byProvider[e.provider].prompt += e.promptTokens;
-        byProvider[e.provider].completion += e.completionTokens;
-        byProvider[e.provider].total += e.totalTokens;
-        byProvider[e.provider].requests++;
-
-        // By Source
-        if (!bySource[e.source]) bySource[e.source] = { prompt: 0, completion: 0, total: 0, requests: 0 };
-        bySource[e.source].prompt += e.promptTokens;
-        bySource[e.source].completion += e.completionTokens;
-        bySource[e.source].total += e.totalTokens;
-        bySource[e.source].requests++;
-
-        // Daily
         const dayKey = e.timestamp.toISOString().slice(0, 10);
-        if (!daily[dayKey]) daily[dayKey] = { prompt: 0, completion: 0, total: 0, requests: 0, saved: 0 };
-        daily[dayKey].prompt += e.promptTokens;
-        daily[dayKey].completion += e.completionTokens;
-        daily[dayKey].total += e.totalTokens;
-        daily[dayKey].requests++;
+        if (!byChoom[e.choomId]) byChoom[e.choomId] = { name: e.choomName, ...bucket() };
+        if (!byModel[e.model]) byModel[e.model] = bucket();
+        if (!byProvider[e.provider]) byProvider[e.provider] = bucket();
+        if (!bySource[e.source]) bySource[e.source] = bucket();
+        if (!daily[dayKey]) daily[dayKey] = { ...bucket(), saved: 0 };
+        for (const b of [byChoom[e.choomId], byModel[e.model], byProvider[e.provider], bySource[e.source], daily[dayKey]] as Bucket[]) {
+          b.prompt += e.promptTokens;
+          b.completion += e.completionTokens;
+          b.total += e.totalTokens;
+          b.requests++;
+          if (reported) {
+            b.cached += e.cachedPromptTokens!;
+            b.cacheSeen += e.promptTokens;
+          }
+        }
         daily[dayKey].saved += e.savedTokens || 0;
       }
 
@@ -139,6 +133,8 @@ export async function GET(req: NextRequest) {
           totalCompletionTokens: totalCompletion,
           totalTokens,
           totalSavedTokens: totalSaved,
+          totalCachedTokens: totalCached,
+          totalCacheSeenTokens: totalCacheSeen,
           totalDurationMs: totalDuration,
           totalIterations,
           totalToolCalls,

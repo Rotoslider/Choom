@@ -208,6 +208,7 @@ model TokenUsage {
   completionTokens Int      @default(0) // Output tokens
   totalTokens      Int      @default(0) // Total tokens (prompt + completion)
   savedTokens      Int      @default(0) // Est. tokens trimmed by tool-output compression (counterfactual)
+  cachedPromptTokens Int? // Of promptTokens, served from the provider's prompt cache (null = provider didn't report it)
   iterations       Int      @default(1) // Agentic loop iterations
   toolCalls        Int      @default(0) // Number of tool calls in request
   toolNames        String? // JSON array of tool names used

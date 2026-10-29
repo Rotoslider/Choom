@@ -8,6 +8,17 @@ import * as path from 'path';
 import { nextOccurrence, describeRepeat, seriesKey, parseRule, parseWeekday, localParts, findCoveringEntry, oneShotsCoveredByRoutine, type Repeat } from '@/lib/self-followup-recurrence';
 
 const TZ = 'America/Denver';
+
+// The handler reads "now" from the clock, and its answers depend on it: run
+// near 6:00 PM local, "tomorrow 6:00pm" and "6pm" fall into different slot
+// windows and the dedupe tests failed (2026-10-29 17:49; 2026-09-20 16:46
+// before that). The handler tests run on a fixed Wednesday morning, before
+// the Nov 1 DST change. Only Date is faked — timers and ticks stay real.
+const FIXED_NOW = new Date('2026-10-28T16:00:00Z'); // Wed Oct 28, 10:00 MDT
+const fixClock = () => jest.useFakeTimers({
+  now: FIXED_NOW,
+  doNotFake: ['nextTick', 'setImmediate', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'queueMicrotask', 'hrtime', 'performance'],
+});
 const local = (d: Date) => { const p = localParts(d, TZ); return `${p.y}-${String(p.m).padStart(2, '0')}-${String(p.d).padStart(2, '0')} ${String(p.hh).padStart(2, '0')}:${String(p.mm).padStart(2, '0')} ${['sun','mon','tue','wed','thu','fri','sat'][p.wd]}`; };
 
 describe('nextOccurrence', () => {
@@ -57,8 +68,8 @@ describe('nextOccurrence', () => {
 describe('self-scheduling handler routines', () => {
   let tmp: string; let prevCwd: string;
   // QUEUE_ROOT is resolved from cwd at module load, so the store is required after chdir.
-  beforeAll(() => { prevCwd = process.cwd(); tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sf-')); process.chdir(tmp); });
-  afterAll(() => { process.chdir(prevCwd); fs.rmSync(tmp, { recursive: true, force: true }); });
+  beforeAll(() => { fixClock(); prevCwd = process.cwd(); tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sf-')); process.chdir(tmp); });
+  afterAll(() => { jest.useRealTimers(); process.chdir(prevCwd); fs.rmSync(tmp, { recursive: true, force: true }); });
 
   const ctx = { choomId: 'choom-1', choom: { name: 'Genesis' } } as never;
   const call = (name: string, args: Record<string, unknown>) => ({ id: 'tc', name, arguments: args });
@@ -156,8 +167,8 @@ describe('slot guard (2026-09-12: two Monday-noon entries, six 7 AM one-shots un
 
 describe('handler slot guard', () => {
   let tmp: string; let prevCwd: string;
-  beforeAll(() => { prevCwd = process.cwd(); tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sf2-')); process.chdir(tmp); });
-  afterAll(() => { process.chdir(prevCwd); fs.rmSync(tmp, { recursive: true, force: true }); });
+  beforeAll(() => { fixClock(); prevCwd = process.cwd(); tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sf2-')); process.chdir(tmp); });
+  afterAll(() => { jest.useRealTimers(); process.chdir(prevCwd); fs.rmSync(tmp, { recursive: true, force: true }); });
   const ctx = { choomId: 'choom-2', choom: { name: 'Genesis' } } as never;
   const call = (name: string, args: Record<string, unknown>) => ({ id: 'tc', name, arguments: args });
   const parse = (r: { result?: unknown }) => (typeof r.result === 'string' ? JSON.parse(r.result) : r.result) as Record<string, any>;

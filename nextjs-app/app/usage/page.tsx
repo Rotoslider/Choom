@@ -13,6 +13,7 @@ import {
   Wrench,
   DollarSign,
   Scissors,
+  Database,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -46,6 +47,10 @@ interface BreakdownEntry {
   total: number;
   requests: number;
   saved?: number;
+  /** Prompt tokens the provider served from its cache, and the prompt tokens
+   *  of the requests whose provider reported that at all. */
+  cached?: number;
+  cacheSeen?: number;
 }
 
 interface UsageStats {
@@ -54,6 +59,8 @@ interface UsageStats {
   totalCompletionTokens: number;
   totalTokens: number;
   totalSavedTokens: number;
+  totalCachedTokens?: number;
+  totalCacheSeenTokens?: number;
   totalDurationMs: number;
   totalIterations: number;
   totalToolCalls: number;
@@ -112,6 +119,11 @@ function formatTokens(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
   if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K';
   return n.toString();
+}
+
+/** Share of reported prompt tokens served from cache, or null when none were reported. */
+function cachePct(e: { cached?: number; cacheSeen?: number }): number | null {
+  return e.cacheSeen ? Math.round((100 * (e.cached || 0)) / e.cacheSeen) : null;
 }
 
 function formatDuration(ms: number): string {
@@ -216,6 +228,19 @@ export default function UsagePage() {
           saved: v.saved || 0,
         }))
     : [];
+
+  // Prompt cache: daily hit rate (days with reported data), and per Choom / model.
+  const cacheDailyData = stats
+    ? Object.entries(stats.daily)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .filter(([, v]) => (v.cacheSeen || 0) > 0)
+        .map(([date, v]) => ({ date: date.slice(5), pct: cachePct(v) ?? 0, cached: v.cached || 0, seen: v.cacheSeen || 0 }))
+    : [];
+  const cacheRows = (src: Record<string, BreakdownEntry> | undefined) =>
+    Object.entries(src || {})
+      .map(([key, v]) => ({ key, name: v.name || key, pct: cachePct(v), cached: v.cached || 0, seen: v.cacheSeen || 0, prompt: v.prompt }))
+      .sort((a, b) => b.prompt - a.prompt);
+  const overallCachePct = stats ? cachePct({ cached: stats.totalCachedTokens, cacheSeen: stats.totalCacheSeenTokens }) : null;
 
   const sourceData = stats
     ? Object.entries(stats.bySource).map(([name, v]) => ({
@@ -367,6 +392,14 @@ export default function UsagePage() {
                   />
                 )}
                 <StatCard
+                  icon={<Database className="h-4 w-4 text-sky-500" />}
+                  label="Prompt Cache"
+                  value={overallCachePct === null ? '—' : `${overallCachePct}%`}
+                  sub={overallCachePct === null
+                    ? 'not reported yet'
+                    : `${formatTokens(stats.totalCachedTokens || 0)} of ${formatTokens(stats.totalCacheSeenTokens || 0)} prompt cached`}
+                />
+                <StatCard
                   icon={<MessageSquare className="h-4 w-4 text-blue-500" />}
                   label="Requests"
                   value={stats.totalRequests}
@@ -425,6 +458,63 @@ export default function UsagePage() {
                   </ResponsiveContainer>
                 </div>
               )}
+
+              {/* Prompt cache: how much of each prompt the provider reused */}
+              <div className="bg-card border border-border rounded-lg p-4">
+                <h3 className="text-sm font-medium">Prompt Cache</h3>
+                <p className="text-xs text-muted-foreground mt-0.5 mb-3">
+                  Share of prompt tokens the provider served from its cache, which is cheaper and faster than reading them fresh.
+                  Counted from Oct 29, 2026; local LM Studio caches too but doesn&apos;t report it, so it shows as not reported.
+                </p>
+                {cacheDailyData.length > 0 && (
+                  <ResponsiveContainer width="100%" height={180}>
+                    <LineChart data={cacheDailyData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgb(var(--border))" />
+                      <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'rgb(var(--muted-foreground))' }} stroke="rgb(var(--border))" />
+                      <YAxis
+                        domain={[0, 100]}
+                        tick={{ fontSize: 10, fill: 'rgb(var(--muted-foreground))' }}
+                        stroke="rgb(var(--border))"
+                        tickFormatter={(v) => `${v}%`}
+                      />
+                      <Tooltip
+                        contentStyle={{
+                          backgroundColor: 'rgb(var(--card))',
+                          border: '1px solid rgb(var(--border))',
+                          borderRadius: 8,
+                          fontSize: 12,
+                        }}
+                        formatter={(value, _name, item) => {
+                          const p = (item as { payload?: { cached: number; seen: number } }).payload;
+                          return [`${value}% (${formatTokens(p?.cached || 0)} of ${formatTokens(p?.seen || 0)})`, 'Cached'];
+                        }}
+                      />
+                      <Line type="monotone" dataKey="pct" stroke="#0ea5e9" strokeWidth={2} dot={{ r: 3 }} name="Cached" />
+                    </LineChart>
+                  </ResponsiveContainer>
+                )}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3">
+                  {([['By Choom', cacheRows(stats.byChoom)], ['By Model', cacheRows(stats.byModel)]] as const).map(([title, rows]) => (
+                    <div key={title}>
+                      <div className="text-xs text-muted-foreground mb-1">{title}</div>
+                      <div className="divide-y divide-border text-sm">
+                        {rows.map((r) => (
+                          <div key={r.key} className="flex items-center justify-between py-1.5">
+                            <span className="truncate mr-2" title={r.name}>{r.name.length > 34 ? r.name.slice(0, 34) + '...' : r.name}</span>
+                            {r.pct === null ? (
+                              <span className="text-xs text-muted-foreground">not reported</span>
+                            ) : (
+                              <span className="font-mono text-xs">
+                                {r.pct}% <span className="text-muted-foreground">({formatTokens(r.cached)} of {formatTokens(r.seen)})</span>
+                              </span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
 
               {/* Row: By Choom + By Source */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

@@ -568,6 +568,8 @@ export async function runChatTurn(params: ChatTurnParams): Promise<void> {
                 completionTokens: finalCompletionTokens,
                 totalTokens: totalTok,
                 savedTokens: Math.round(compressionSavedChars / 4),
+                // null when the provider didn't report cache hits (LM Studio).
+                cachedPromptTokens: loop.cacheReported && !isEstimated ? loop.totalCachedPromptTokens : null,
                 iterations: iteration,
                 toolCalls: allToolCalls.length,
                 toolNames: allToolCalls.length > 0 ? JSON.stringify(allToolCalls.map(t => t.name)) : null,
@@ -576,7 +578,7 @@ export async function runChatTurn(params: ChatTurnParams): Promise<void> {
               },
             }).catch(err => console.warn('[TokenUsage] Write failed:', err instanceof Error ? err.message : err));
             if (totalTok > 0) {
-              console.log(`   📊 ${choomTag} Tokens: ${finalPromptTokens.toLocaleString()} prompt + ${finalCompletionTokens.toLocaleString()} completion = ${totalTok.toLocaleString()} total${isEstimated ? ' (estimated)' : ''}`);
+              console.log(`   📊 ${choomTag} Tokens: ${finalPromptTokens.toLocaleString()} prompt${loop.cacheReported ? ` (${loop.totalCachedPromptTokens.toLocaleString()} cached)` : ''} + ${finalCompletionTokens.toLocaleString()} completion = ${totalTok.toLocaleString()} total${isEstimated ? ' (estimated)' : ''}`);
             }
             if (compressionSavedChars > 0) {
               console.log(`   🗜️  ${choomTag} Tool-output compression saved ~${Math.round(compressionSavedChars / 4).toLocaleString()} tokens (${compressionSavedChars.toLocaleString()} chars trimmed from stale re-sends)`);
