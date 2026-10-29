@@ -2,14 +2,21 @@ import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
 
 // GET /api/chats/[id]/messages - Get messages for a chat
+// ?since=<ISO time>: only the messages from that time on (the page loads a long chat once, then only
+// what's new: see lib/chat-messages.ts).
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const { id } = await params;
+    const sinceParam = request.nextUrl.searchParams.get('since');
+    const since = sinceParam ? new Date(sinceParam) : null;
+    if (since && Number.isNaN(since.getTime())) {
+      return NextResponse.json({ error: 'since must be a time' }, { status: 400 });
+    }
     const messages = await prisma.message.findMany({
-      where: { chatId: id },
+      where: { chatId: id, ...(since ? { createdAt: { gte: since } } : {}) },
       orderBy: { createdAt: 'asc' },
     });
 

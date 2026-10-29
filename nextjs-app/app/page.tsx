@@ -16,6 +16,7 @@ import { recoverReply } from '@/lib/stream-recovery';
 import type { Message, Choom, Chat, StreamingChatChunk, ServiceHealth } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { setHologramViewing } from '@/lib/hologram-voice';
+import { changedSince, mergeSince, newestSaved } from '@/lib/chat-messages';
 
 export default function Home() {
   const {
@@ -201,7 +202,8 @@ export default function Home() {
     return () => clearInterval(interval);
   }, [currentChoomId, chooms]);
 
-  // Fetch messages when chat changes
+  // Fetch messages when chat changes: the whole chat, once. It used to reload whole each time the chat
+  // list refreshed (every 30 s): 10 MB a time for Genesis's main chat (see lib/chat-messages.ts).
   useEffect(() => {
     if (!currentChatId) {
       setMessages([]);
@@ -211,17 +213,8 @@ export default function Home() {
     const fetchMessages = async () => {
       try {
         const res = await fetch(`/api/chats/${currentChatId}/messages`);
-        if (res.ok) {
-          const messagesData = await res.json();
-          setMessages(messagesData);
-
-          // Update current chat data
-          const chat = chats.find((c) => c.id === currentChatId);
-          if (chat) {
-            setCurrentChatData(chat);
-            // Sync the header dropdown to this chat's persisted project pin.
-            setActiveProject(currentChatId, chat.activeProjectFolder || '');
-          }
+        if (res.ok && useAppStore.getState().currentChatId === currentChatId) {
+          setMessages(await res.json());
         }
       } catch (error) {
         console.error('Failed to fetch messages:', error);
@@ -229,6 +222,35 @@ export default function Home() {
     };
 
     fetchMessages();
+  }, [currentChatId]);
+
+  // With each refresh of the chat list: the open chat's details, and when the list says it changed after
+  // its newest message (a Signal or tower turn), only what's new since then. Never mid-send, only once
+  // the messages on screen are this chat's, and once for each change the list shows.
+  const lookedAtChange = useRef<string | null>(null);
+  useEffect(() => {
+    const chat = chats.find((c) => c.id === currentChatId);
+    if (!currentChatId || !chat) return;
+    setCurrentChatData(chat);
+    // Sync the header dropdown to this chat's persisted project pin.
+    setActiveProject(currentChatId, chat.activeProjectFolder || '');
+    const ours = (list: Message[]) => list.length > 0 && list.every((m) => m.chatId === currentChatId);
+    const { messages: shown, isStreaming: sending } = useAppStore.getState();
+    const since = newestSaved(shown);
+    if (sending || !since || !ours(shown)) return; // looked at again with the next refresh
+    const change = `${currentChatId} ${String(chat.updatedAt)}`;
+    if (lookedAtChange.current === change) return;
+    lookedAtChange.current = change;
+    if (!changedSince(chat.updatedAt, since)) return;
+    fetch(`/api/chats/${currentChatId}/messages?since=${encodeURIComponent(since)}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((fresh) => {
+        const now = useAppStore.getState();
+        if (Array.isArray(fresh) && now.currentChatId === currentChatId && !now.isStreaming && ours(now.messages)) {
+          setMessages(mergeSince(now.messages, fresh, since));
+        }
+      })
+      .catch((error) => console.error('Failed to fetch new messages:', error));
   }, [currentChatId, chats]);
 
   // The Looking Glass hologram speaks only the conversation someone at home has open.
@@ -603,6 +625,9 @@ export default function Home() {
     // Save last user message for regenerate
     setLastUserMessage(content);
 
+    // The newest message already saved: after the reply, only what came since is fetched.
+    const savedBefore = newestSaved(useAppStore.getState().messages.filter((m) => m.chatId === chatId));
+
     // Add optimistic user message
     const userMessage: Message = {
       id: `temp-${Date.now()}`,
@@ -806,10 +831,16 @@ export default function Home() {
                 setAgentProgress(prev => prev ? { ...prev, isActive: false } : null);
                 // Refresh messages from server BEFORE clearing streaming state
                 // This prevents the flash where content/images disappear then reappear
+                // Only this turn's messages (from the newest saved one before it), not the whole chat.
                 {
-                  const msgRes = await fetch(`/api/chats/${chatId}/messages`);
-                  if (msgRes.ok) {
-                    const messagesData = await msgRes.json();
+                  const msgRes = await fetch(savedBefore
+                    ? `/api/chats/${chatId}/messages?since=${encodeURIComponent(savedBefore)}`
+                    : `/api/chats/${chatId}/messages`);
+                  if (msgRes.ok && useAppStore.getState().currentChatId === chatId) {
+                    const fresh = await msgRes.json();
+                    const messagesData = savedBefore && Array.isArray(fresh)
+                      ? mergeSince(useAppStore.getState().messages, fresh, savedBefore)
+                      : fresh;
                     setMessages(messagesData);
                     // Keep the thinking box on the saved message (until reload).
                     if (fullThinking.trim() && Array.isArray(messagesData)) {
