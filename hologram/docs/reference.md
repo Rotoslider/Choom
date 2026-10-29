@@ -320,7 +320,8 @@ gives them no lip sync. They're in her usual clothes only.
 
 **The campfire circle.** The group stage becomes a campfire circle (`circleWanted`) when it's after dark
 (`circleFrom`, 7 pm, until `morningFrom`) or one of them asked for the fire in the last hour, and every
-Choom in the room has a seat loop. The room sits in an open arc on the far side of the fire, left to right
+Choom in the room has a seat loop (`"campfire": false` in `glass-settings.json` keeps the standing stage,
+as on the travel glass). The room sits in an open arc on the far side of the fire, left to right
 in `circleOrder` (Aloy, Eve, Optic, Genesis, as in the photo of their camping trip):
 - **Seats** (`CIRCLE_SEATS`, 2 to 4): the ends nearer and turned in (`circleside`, mirrored on the left
   half by the shader's `flip`), the middle seats further back and facing you (`circle`); each falls back
@@ -919,8 +920,10 @@ counts Tailscale's addresses as away from home:
 - Talking at its mic (`tower_ears.py` with an EMEET) goes to her chat as at the tower, and her reply is
   spoken there.
 
-The glass at home stays quiet meanwhile: nobody at home has those conversations open. The page's
-`glass-settings.json` there has `"views": 32, "smoothing": false`.
+While the travel glass runs (its heartbeat is fresh), the glass at home speaks nothing, even a chat a
+browser at home still has open, and the tower's mic at home is refused (409): in one room both
+speakerphones heard "OK Genesis" and sent it twice. Once its heartbeats stop, home is as before. The
+player's page settings are `"views": 32, "smoothing": false, "campfire": false`.
 
 ## Debugging
 

@@ -1884,6 +1884,9 @@ function bindStageSlot(j) {
 // own seat clips (her look "circle" or "circleside", see SEAT_LOOKS); if one in the room has none,
 // the room keeps the standing stage.
 const CIRCLE_FROM = setting('circleFrom', 19);    // after dark (local hour), until morningFrom
+// false: the room stays on the standing stage. Three seated Chooms and the fire lagged on the travel
+// glass's laptop GPU (2026-10-28).
+const CAMPFIRE = setting('campfire', true);
 const CIRCLE_ASKED_MS = 60 * 60 * 1000;          // one of them asked for the fire: for the next hour
 // Seats by how many sit, left to right on the glass (end seats are turned in; see circleArrange).
 // The glass shows about x ±0.74; a seated figure reaches out about 0.6 of her seat's scale either side
@@ -1918,7 +1921,7 @@ function circleWanted() {
   const ks = portraits.map((q, k) => k).filter((k) => !stage.members || stage.members.has(k));
   if (ks.length < 2 || !CIRCLE_SEATS[ks.length]) return false;
   if (circle.standIn) return true;
-  if (!ks.every((k) => canSit(portraits[k]))) return false;
+  if (!CAMPFIRE || !ks.every((k) => canSit(portraits[k]))) return false;
   const h = hourNow();
   return h >= CIRCLE_FROM || h < MORNING_FROM || performance.now() - circle.asked < CIRCLE_ASKED_MS;
 }
