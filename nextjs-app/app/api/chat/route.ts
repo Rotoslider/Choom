@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { NextRequest } from 'next/server';
 import prisma from '@/lib/db';
 import { LLMClient, ChatMessage } from '@/lib/llm-client';
@@ -8,7 +9,7 @@ import { ProjectService } from '@/lib/project-service';
 import type { LLMProviderConfig, LLMModelProfile } from '@/lib/types';
 import { findLLMProfile } from '@/lib/model-profiles';
 import { getSkillRegistry } from '@/lib/skill-registry';
-import { buildExposedTools, toolNamesFromHistory, openSkillToolDefinition, skillsModeNote, OPEN_SKILL_TOOL, type ToolExposure } from '@/lib/tool-exposure';
+import { buildExposedTools, toolNamesFromHistory, openSkillToolDefinition, skillsModeNote, stickyToolNames, OPEN_SKILL_TOOL, type ToolExposure } from '@/lib/tool-exposure';
 import { ensureRoomDigest } from '@/lib/room-digest';
 import { ensureCommonsLayout, inboxPath } from '@/lib/commons';
 import { getLiveContextWindow } from '@/lib/model-metadata';
@@ -1082,13 +1083,18 @@ export async function POST(request: NextRequest) {
         });
         const total = activeTools.length;
         const skillNames = registry.getSkillNames().filter(n => n !== 'skill-loader');
-        activeTools = exposure.tools.map(t => t.name === OPEN_SKILL_TOOL ? openSkillToolDefinition(skillNames) : t);
+        // The conversation keeps every tool it has been given, so the list (first
+        // in the prompt) stops changing per message (stickyToolNames).
+        const sticky = stickyToolNames(`${choomId}:${chatId}`, exposure.tools.map(t => t.name));
+        activeTools = activeTools
+          .filter(t => sticky.names.has(t.name))
+          .map(t => t.name === OPEN_SKILL_TOOL ? openSkillToolDefinition(skillNames) : t);
         // Which skills matched changes per message: with the turn context, not
         // in the system prompt the prompt cache reuses.
         const skillsNote = skillsModeNote(activeTools.length, total, exposure.matchedSkills);
         if (turnContextInSystem) currentMessages[0].content += skillsNote;
         else turnContext = buildTurnContext({ ...turnContextParts, skillDetails: [skillDetails, skillsNote.trim()].filter(Boolean).join('\n\n') });
-        console.log(`   🧰 Tool exposure: skills — ${activeTools.length}/${total} tools (core + ${exposure.matchedSkills.join(', ') || 'no matched skills'}${exposure.fromHistory.length ? ` + ${exposure.fromHistory.length} from chat history` : ''})`);
+        console.log(`   🧰 Tool exposure: skills — ${activeTools.length}/${total} tools (core + ${exposure.matchedSkills.join(', ') || 'no matched skills'}${exposure.fromHistory.length ? ` + ${exposure.fromHistory.length} from chat history` : ''}; conversation set ${sticky.reset ? 'started over' : sticky.added ? `+${sticky.added}` : 'unchanged'})`);
       } else {
         // Every tool is already loaded; open_skill would only confuse.
         activeTools = activeTools.filter(t => t.name !== OPEN_SKILL_TOOL);
@@ -1212,6 +1218,13 @@ export async function POST(request: NextRequest) {
     // Add current user message
     currentMessages.push({ role: 'user', content: turnContext + enrichedMessage });
     if (turnContext) console.log(`   🧊 Turn context with the message: ~${Math.round(turnContext.length / 4).toLocaleString()} tokens (system prompt kept stable for the prompt cache)`);
+    {
+      // Prompt-cache check: when these change between two requests of one
+      // chat, the cached prefix ends there (system prompt or tool list).
+      const fp = (s: string) => createHash('sha1').update(s).digest('hex').slice(0, 10);
+      const sys = String(currentMessages[0].content);
+      console.log(`   🧊 Prefix: system ${fp(sys)} (${sys.length.toLocaleString()} chars), tools ${fp(JSON.stringify(activeTools))} (${activeTools.length})`);
+    }
 
     // Log history sent to LLM for debugging conversation continuity
     const histMsgs = currentMessages.filter(m => m.role !== 'system');

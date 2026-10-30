@@ -182,3 +182,37 @@ export function unexposedToolMentions(
   }
   return out;
 }
+
+/**
+ * Skills mode, per conversation (2026-10-29). The tray above follows the
+ * message, so the tool list differed from turn to turn — and a model's chat
+ * template puts the tool list at the very start of the prompt (Qwen does), so
+ * every change meant the provider's prompt cache could reuse nothing, not even
+ * the unchanged system prompt and history after it. Now a conversation keeps
+ * every tool it has been given: the list only grows, settles after a few turns,
+ * and starts over from the current turn's tray only past STICKY_MAX_TOOLS (the
+ * point of skills mode is a short list for small models).
+ */
+export const STICKY_MAX_TOOLS = 48;
+const STICKY_MAX_CONVERSATIONS = 300;
+type StickyStore = Map<string, Set<string>>;
+// On globalThis so a dev-server hot reload keeps it; a restart just starts over.
+const stickyStore: StickyStore =
+  ((globalThis as { __choomStickyTools?: StickyStore }).__choomStickyTools ??= new Map());
+
+export function stickyToolNames(
+  conversation: string,
+  turnNames: Iterable<string>,
+  maxTools: number = STICKY_MAX_TOOLS,
+  store: StickyStore = stickyStore,
+): { names: Set<string>; added: number; reset: boolean } {
+  const turn = new Set(turnNames);
+  const prev = store.get(conversation);
+  const union = new Set([...(prev ?? []), ...turn]);
+  const reset = union.size > maxTools;
+  const names = reset ? turn : union;
+  store.delete(conversation); // re-insert: newest last, oldest first out
+  store.set(conversation, names);
+  while (store.size > STICKY_MAX_CONVERSATIONS) store.delete(store.keys().next().value as string);
+  return { names, added: reset ? 0 : names.size - (prev?.size ?? 0), reset };
+}

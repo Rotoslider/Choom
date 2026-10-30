@@ -52,6 +52,8 @@ export interface StreamState {
   /** cachedPromptTokens: prompt tokens the provider served from its prompt
    *  cache; cacheReported: whether it said at all (0 cached vs not told). */
   usage: { promptTokens: number; completionTokens: number; maxPromptTokens: number; cachedPromptTokens: number; cacheReported: boolean };
+  /** Who served the call, when the endpoint says (OpenRouter names its provider). */
+  servedBy?: string;
 }
 
 export function newStreamState(): StreamState {
@@ -236,6 +238,8 @@ export async function readLlmStream(st: StreamState, opts: ReadLlmStreamOptions)
       if (st.abortedForRepetition) break;
       // Capture token usage (OpenAI sends it in a trailing choice-less chunk;
       // the Anthropic adapter attaches it to the finish_reason chunk).
+      const servedBy = (chunk as { provider?: unknown }).provider;
+      if (typeof servedBy === 'string' && servedBy) st.servedBy = servedBy;
       if (chunk.usage) {
         st.usage.promptTokens += chunk.usage.prompt_tokens || 0;
         st.usage.completionTokens += chunk.usage.completion_tokens || 0;

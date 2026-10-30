@@ -879,6 +879,10 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
               maxPromptTokens = Math.max(maxPromptTokens, st.usage.maxPromptTokens);
               totalCachedPromptTokens += st.usage.cachedPromptTokens;
               cacheReported = cacheReported || st.usage.cacheReported;
+              // Per call, so a cold first call shows apart from the warm ones after it.
+              if (st.usage.promptTokens) {
+                console.log(`   💾 ${choomTag} call prompt ${st.usage.promptTokens.toLocaleString()}${st.usage.cacheReported ? `, ${st.usage.cachedPromptTokens.toLocaleString()} cached` : ''}${st.servedBy ? ` (${st.servedBy})` : ''}`);
+              }
             };
 
             // Raw estimate of this call, for calibration against the real count below.
