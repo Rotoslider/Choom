@@ -475,8 +475,11 @@ class ScheduledTaskManager:
                     choom_id = notif.get("choomId", "")
                     message = notif.get("message", "")
                     include_audio = notif.get("includeAudio", True)
-                    images = notif.get("images", [])  # Resolved by API: [{id, url}]
-                    file_paths = notif.get("filePaths", [])  # Absolute workspace paths
+                    # `or []`: the API copies the row, so a message without files comes with
+                    # "filePaths": null, and len() of it in the log line below made every delivery
+                    # log "Failed to deliver" after it had been sent and marked (2026-10-30).
+                    images = notif.get("images") or []  # Resolved by API: [{id, url}]
+                    file_paths = notif.get("filePaths") or []  # Absolute workspace paths
 
                     if not message and not images and not file_paths:
                         delivered_ids.append(notif["id"])
