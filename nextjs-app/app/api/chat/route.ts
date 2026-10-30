@@ -1252,6 +1252,7 @@ export async function POST(request: NextRequest) {
           choom, chat, choomId, chatId, logChatId, message,
           settings, clientLLMSettings, providers,
           isDelegation: !!isDelegation,
+          takesOver: userInitiated && !isNote && !isHeartbeat && !isGroupTurn && !isDelegation,
           suppressNotifications: !!suppressNotifications,
           noTools: !!noTools,
           maxIterationsOverride,

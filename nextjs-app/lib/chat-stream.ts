@@ -29,6 +29,7 @@ import {
 import { runAgenticLoop } from '@/lib/agentic-loop';
 import { buildHeartbeatGrounding } from '@/lib/heartbeat-grounding';
 import { startHologramTurn } from '@/lib/hologram-bus';
+import { startChatRun } from '@/lib/chat-runs';
 import type { LLMSettings, ToolCall, ToolResult, ToolDefinition, ImageGenSettings, WeatherSettings, LLMProviderConfig } from '@/lib/types';
 import type { Choom, Chat, Message } from '@prisma/client';
 
@@ -44,6 +45,9 @@ export interface ChatTurnParams {
   clientLLMSettings: Record<string, unknown>;
   providers: LLMProviderConfig[];
   isDelegation: boolean;
+  /** Donny wrote or said this message (not a note, heartbeat, room or delegation): it ends any older
+   *  reply still running in this chat. */
+  takesOver: boolean;
   suppressNotifications: boolean;
   noTools: boolean;
   maxIterationsOverride: unknown;
@@ -81,7 +85,7 @@ export async function runChatTurn(params: ChatTurnParams): Promise<void> {
   const {
     controller, choom, chat, choomId, chatId, logChatId, message,
     settings, clientLLMSettings, providers,
-    isDelegation, suppressNotifications, noTools, maxIterationsOverride,
+    isDelegation, takesOver, suppressNotifications, noTools, maxIterationsOverride,
     isHeartbeat, isGroupTurn, freshContext, delegatorName, groupRoomId, groupRoomMembers,
     taskModelOverride, taskOverrideActive,
     autoSetProjectInfo, detectedProject, choomMaxIterations, skillDispatch,
@@ -96,7 +100,19 @@ export async function runChatTurn(params: ChatTurnParams): Promise<void> {
   const choomTag = `[${choom.name}]`;
         // SSE state shared with the agentic loop (was a `streamClosed` local
         // closure variable before the C-22 split).
-        const sse = { closed: false };
+        // `superseded`: a newer message from Donny in this chat ended this reply (lib/chat-runs.ts).
+        const sse: { closed: boolean; superseded?: boolean } = { closed: false };
+        let spoke = false;
+        // Before this turn starts on the glass, so the older reply's speech is cleared first.
+        const run = isGroupTurn || isDelegation ? null : startChatRun(choomId, chatId, () => {
+          if (sse.superseded) return;
+          console.log(`   🛑 ${choomTag} A newer message in this chat — ending this reply`);
+          if (spoke) hologram.event({ type: 'retract_partial' }); // stops what it queued to say on the glass
+          sse.superseded = true;
+          sse.closed = true;
+          try { controller.close(); } catch { /* already closed */ } // the tower's route stops reading
+        }, takesOver);
+        if (run?.ended) console.log(`   🛑 ${choomTag} Ended ${run.ended} older repl${run.ended > 1 ? 'ies' : 'y'} in this chat`);
         // Mirror the turn to the Looking Glass hologram feed (a no-op with no subscriber). It runs
         // before the closed check: the hologram keeps speaking after a web client navigates away.
         const hologram = startHologramTurn({
@@ -109,6 +125,8 @@ export async function runChatTurn(params: ChatTurnParams): Promise<void> {
           ...(groupRoomMembers?.length ? { room: groupRoomMembers } : {}),
         }, message);
         const send = (data: Record<string, unknown>) => {
+          if (sse.superseded) return; // silent everywhere, the glass included
+          if (data.type === 'content') spoke = true;
           hologram.event(data);
           if (sse.closed) return; // Silently skip if controller already closed (e.g., aborted delegation)
           try {
@@ -511,8 +529,11 @@ export async function runChatTurn(params: ChatTurnParams): Promise<void> {
           }
           // Group turns: don't persist to the scratch chat — the group
           // orchestrator writes the canonical GroupMessage row from the streamed
-          // content. Avoids duplicate/scratch bloat.
-          if (!isGroupTurn) {
+          // content. Avoids duplicate/scratch bloat. An ended reply isn't saved
+          // either: it would land after his newer message and read as her answer to it.
+          if (sse.superseded) {
+            console.log(`   🛑 ${choomTag} Ended reply not saved (${fullContent.length} chars, ${iteration} iteration${iteration > 1 ? 's' : ''})`);
+          } else if (!isGroupTurn) {
             await prisma.message.create({
               data: {
                 chatId,
@@ -622,9 +643,12 @@ export async function runChatTurn(params: ChatTurnParams): Promise<void> {
             error: error instanceof Error ? error.message : 'Unknown error',
           });
         } finally {
-          hologram.end();
+          run?.finish();
+          // An ended reply leaves the glass and the activity marker to the newer one: its turn_end
+          // would close her new turn there and open his reply window while she's still working.
+          if (!sse.superseded) hologram.end();
           // Clear GUI activity marker so heartbeats can resume
-          if (!isDelegation) {
+          if (!isDelegation && !sse.superseded) {
             clearGuiActivity(choom.name);
           }
           if (!sse.closed) {

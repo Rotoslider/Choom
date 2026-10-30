@@ -55,7 +55,8 @@ import type { Choom, Chat, Message } from '@prisma/client';
 
 export interface AgenticLoopParams {
   send: (data: Record<string, unknown>) => void;
-  sse: { closed: boolean };
+  /** superseded: a newer message from Donny in this chat ended this reply (lib/chat-runs.ts). */
+  sse: { closed: boolean; superseded?: boolean };
   ctx: ToolContext;
   traceBuilder: TraceBuilder;
   currentMessages: ChatMessage[];
@@ -992,6 +993,7 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
               iterationContent = stream.content;
               const errMsg = timeoutError instanceof Error ? timeoutError.message : String(timeoutError);
               console.warn(`   ⚠️  LLM response error on iteration ${iteration}: ${errMsg}`);
+              if (sse.superseded) break; // a newer message took over: no fallback for this reply
 
               // Try fallback models on timeout/error. Even if partial content was streamed,
               // a broken response is worse than switching models. Partial text was already
@@ -1191,6 +1193,13 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                 break;
               }
               // If fallback succeeded, continue processing this iteration's results normally
+            }
+
+            // A newer message from Donny ended this reply while the model was answering: none of
+            // the tools it just asked for run.
+            if (sse.superseded) {
+              console.log(`   🛑 ${choomTag} Ended by a newer message — stopping at iteration ${iteration}, before its tools`);
+              break;
             }
 
             // Calibrate the estimator against what the provider actually counted
