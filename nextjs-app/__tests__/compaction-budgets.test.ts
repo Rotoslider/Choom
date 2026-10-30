@@ -21,10 +21,14 @@ const asst = (id: string, name: string): ChatMessage => ({
 const tool = (id: string, name: string, chars: number): ChatMessage => ({ role: 'tool', tool_call_id: id, name, content: big(chars) });
 
 describe('history is loaded newest-first', () => {
-  test('the chat query takes the newest 200 and the route restores oldest-first order', () => {
+  // Since 2026-10-29 the newest messages come oldest-first through a window
+  // whose start moves in steps (historyWindowStart, tested in
+  // prompt-cache-layout.test.ts) — still the newest, never the oldest 200.
+  test('the chat query skips to the window start and takes at most the window, oldest first', () => {
     const route = readFileSync(path.join(__dirname, '..', 'app', 'api', 'chat', 'route.ts'), 'utf-8');
-    expect(route).toContain("include: { messages: { orderBy: { createdAt: 'desc' }, take: 200 } }");
-    expect(route).toContain('if (chat?.messages) chat.messages.reverse();');
+    expect(route).toContain('const historySkip = historyWindowStart(await prisma.message.count({ where: { chatId } }));');
+    expect(route).toContain("include: { messages: { orderBy: { createdAt: 'asc' }, skip: historySkip, take: HISTORY_WINDOW_MAX } }");
+    expect(route).not.toContain('chat.messages.reverse()');
   });
 });
 

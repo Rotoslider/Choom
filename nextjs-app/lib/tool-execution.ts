@@ -2709,26 +2709,31 @@ export async function executeToolCallViaSkills(
  * Level 2: Injected for up to 3 relevant skills based on user message
  */
 export function buildSkillToolDocs(userMessage: string): string {
-  const registry = getSkillRegistry();
-  let docs = `## AVAILABLE SKILLS
+  const details = buildSkillDetailDocs(userMessage);
+  return details ? `${buildSkillSummaryDocs()}\n\n${details}` : buildSkillSummaryDocs();
+}
+
+/** The skill summary alone: the same for every message, so it can sit in the
+ *  system prompt that the provider's prompt cache reuses (2026-10-29). */
+export function buildSkillSummaryDocs(): string {
+  return `## AVAILABLE SKILLS
 
 You have access to the following tool categories:
 
-${registry.getLevel1Summaries()}
+${getSkillRegistry().getLevel1Summaries()}
 
 Call tools via function calls. Each tool is described in the tools array provided to you.`;
+}
 
-  // Inject Level 2 docs for up to 3 most relevant skills
+/** Level 2 docs for up to 3 skills this message matches — they differ per
+ *  message, so they travel with the message, not in the system prompt. */
+export function buildSkillDetailDocs(userMessage: string): string {
+  const registry = getSkillRegistry();
   const relevantSkills = registry.matchSkills(userMessage, 3);
-  if (relevantSkills.length > 0) {
-    docs += '\n\n## SKILL DETAILS\n';
-    for (const skill of relevantSkills) {
-      const l2 = registry.getLevel2Doc(skill.metadata.name);
-      if (l2) {
-        docs += `\n### ${skill.metadata.name}\n${l2}\n`;
-      }
-    }
+  let docs = '';
+  for (const skill of relevantSkills) {
+    const l2 = registry.getLevel2Doc(skill.metadata.name);
+    if (l2) docs += `\n### ${skill.metadata.name}\n${l2}\n`;
   }
-
-  return docs;
+  return docs ? `## SKILL DETAILS\n${docs}` : '';
 }

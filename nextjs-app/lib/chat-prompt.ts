@@ -30,6 +30,34 @@ export interface SystemPromptParams {
   groupImageDescriptions: Record<string, string>;
   groupIsInitiator: boolean;
   groupProjectFolder: string | undefined;
+  /** Put the per-turn blocks (time, weather, home status, recent images,
+   *  other conversations, recalled memories) in the system prompt, as before
+   *  2026-10-29. Off by default: they travel with the message instead (see
+   *  buildTurnContext). CHOOM_CONTEXT_IN_SYSTEM=1 turns it back on. */
+  turnContextInSystem?: boolean;
+}
+
+/**
+ * Prompt caching (2026-10-29). DeepSeek on OpenRouter and LM Studio both reuse
+ * a prompt's cached start, but only up to the first byte that differs from the
+ * last request. The time, weather, home status and recalled memories sat near
+ * the top of the system prompt and changed every turn, so nothing after them —
+ * the fixed rules, the tool docs, the whole chat history — was ever reused:
+ * a two-call Genesis chat cached 49% (only her second call), Eve's back-to-back
+ * turns restored 0 of ~26k tokens and spent 83 s reading them fresh. The
+ * system prompt now holds only what stays put, and the per-turn blocks lead
+ * the newest message, after the history.
+ */
+export function buildTurnContext(params: Pick<SystemPromptParams,
+  'timeInfo' | 'weatherInfo' | 'homeAssistantInfo' | 'recentImagesInfo' | 'autoMemoriesInfo' | 'crossSessionInfo'
+> & { skillDetails?: string }): string {
+  const body = [
+    params.timeInfo ? `## CURRENT TIME\n${params.timeInfo.trim()}` : '',
+    params.weatherInfo, params.homeAssistantInfo, params.recentImagesInfo,
+    params.crossSessionInfo, params.autoMemoriesInfo, params.skillDetails,
+  ].map(s => (s || '').trim()).filter(Boolean).join('\n\n');
+  if (!body) return '';
+  return `[Context for this turn, from the app — not something ${getOwnerIdentity().name} said]\n${body}\n[End of context]\n\n`;
 }
 
 export function buildSystemPrompt(params: SystemPromptParams): string {
@@ -40,17 +68,20 @@ export function buildSystemPrompt(params: SystemPromptParams): string {
     isGroupTurn, groupSpeakerName, groupParticipantNames, groupRoomTopic,
     groupRecentImages, groupImageDescriptions, groupIsInitiator, groupProjectFolder,
   } = params;
+  const inSystem = params.turnContextInSystem === true;
     // Build system prompt with explicit tool instructions
     const projectNameNote = `\n\n## PROJECT NAME\nThis project is called "Choom" (rhymes with "room"). If you see "Choo" in your memories or past conversations, it was a typo from Signal autocorrect — the correct name is always "Choom". Use "Choom" when referring to the project.`;
     // Who the Choom is talking to — the human owner, by their real name. This is
     // what lets a Choom say "Donny" instead of the cold generic "user" / "the user".
     const owner = getOwnerIdentity();
     const ownerInfo = `\n\n## WHO YOU'RE TALKING WITH\nThe person you talk and live with is **${owner.name}**${owner.location ? `, who lives in ${owner.location}` : ''}. Always call them by name — "${owner.name}" — in conversation and when referring to them to others. Never call them "the user" or "User"; that's cold and impersonal.`;
+    // Where the per-turn blocks went, so she knows to look at the message.
+    const turnContextNote = inSystem ? '' : `\n\n## THIS TURN'S CONTEXT\nThe current time, weather, home status, recent images, your other conversations and auto-recalled memories come at the start of each new message, between "[Context for this turn" and "[End of context]". That block is from the app, not something ${owner.name} said — use it as background, and answer what comes after it.`;
     const systemPrompt = `${choom.systemPrompt || 'You are a helpful AI assistant.'}
 ${projectNameNote}
 ${ownerInfo}
-${growthInfo}${crossSessionInfo}${autoMemoriesInfo}
-${timeInfo}${weatherInfo}${homeAssistantInfo}${recentImagesInfo}
+${growthInfo}${inSystem ? `${crossSessionInfo}${autoMemoriesInfo}` : turnContextNote}
+${inSystem ? `${timeInfo}${weatherInfo}${homeAssistantInfo}${recentImagesInfo}` : ''}
 
 ## TOOL USAGE (CRITICAL)
 You MUST use function calls to perform actions. NEVER describe what you would do — call the tool directly.

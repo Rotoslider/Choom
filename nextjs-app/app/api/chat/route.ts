@@ -20,7 +20,7 @@ import { choomHasSshPermission } from '@/lib/choom-permissions';
 
 import { buildChoomContext } from '@/lib/chat-context';
 import { stripTaggedToolMarkup } from '@/lib/tool-call-parsing';
-import { buildSystemPrompt } from '@/lib/chat-prompt';
+import { buildSystemPrompt, buildTurnContext } from '@/lib/chat-prompt';
 import type { LLMSettings, ToolDefinition, WeatherSettings } from '@/lib/types';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -36,10 +36,11 @@ import {
   WORKSPACE_ALLOWED_EXTENSIONS,
 } from '@/lib/config';
 
-import { getHardcodedToolDocs, buildSkillToolDocs } from '@/lib/tool-execution';
+import { getHardcodedToolDocs, buildSkillToolDocs, buildSkillSummaryDocs, buildSkillDetailDocs } from '@/lib/tool-execution';
 import {
   serverLog, smartMerge, recordGuiActivity,
   parseChoomMaxIterations, resolveMaxIterations,
+  historyWindowStart, HISTORY_WINDOW_MAX,
 } from '@/lib/chat-shared';
 import { runChatTurn } from '@/lib/chat-stream';
 
@@ -168,19 +169,18 @@ export async function POST(request: NextRequest) {
     }
 
     // Fetch choom and chat data
+    // The newest messages, oldest first, through a window whose start moves in
+    // steps (historyWindowStart) so the prompt cache can reuse the history.
+    // `asc` + take 200 alone returned the OLDEST 200 once a chat passed that
+    // size (Phase 3, 2026-09-12), hence the skip.
+    const historySkip = historyWindowStart(await prisma.message.count({ where: { chatId } }));
     const [choom, chat] = await Promise.all([
       prisma.choom.findUnique({ where: { id: choomId } }),
       prisma.chat.findUnique({
         where: { id: chatId },
-        // NEWEST 200. `asc` + take 200 returned the OLDEST 200 once a chat passed
-        // that size — the Choom would have seen the start of a long chat and
-        // none of its recent turns (Phase 3, 2026-09-12; biggest chat was 81
-        // messages when caught). Reversed below so the rest of the route keeps
-        // its oldest-first order.
-        include: { messages: { orderBy: { createdAt: 'desc' }, take: 200 } },
+        include: { messages: { orderBy: { createdAt: 'asc' }, skip: historySkip, take: HISTORY_WINDOW_MAX } },
       }),
     ]);
-    if (chat?.messages) chat.messages.reverse();
 
     if (!choom || !chat) {
       return new Response(
@@ -403,9 +403,14 @@ export async function POST(request: NextRequest) {
     // Build tool documentation section
     // When USE_SKILL_DISPATCH=true, uses progressive disclosure from skill registry
     // When false, uses the hardcoded tool documentation (original behavior)
+    // Per-turn context leads the newest message instead of sitting in the
+    // system prompt, so the prompt cache can reuse everything before it
+    // (buildTurnContext). CHOOM_CONTEXT_IN_SYSTEM=1 puts it back.
+    const turnContextInSystem = process.env.CHOOM_CONTEXT_IN_SYSTEM === '1';
     const toolDocs = skillDispatch
-      ? buildSkillToolDocs(message)
+      ? (turnContextInSystem ? buildSkillToolDocs(message) : buildSkillSummaryDocs())
       : getHardcodedToolDocs();
+    const skillDetails = skillDispatch && !turnContextInSystem ? buildSkillDetailDocs(message) : '';
 
     // Per-turn context blocks (time, weather, Home Assistant, recent images,
     // growth journal, auto-recalled memories, cross-session awareness) —
@@ -445,7 +450,14 @@ export async function POST(request: NextRequest) {
       growthInfo, autoMemoriesInfo, crossSessionInfo,
       isGroupTurn, groupSpeakerName, groupParticipantNames, groupRoomTopic,
       groupRecentImages, groupImageDescriptions, groupIsInitiator, groupProjectFolder,
+      turnContextInSystem,
     });
+    const turnContextParts = {
+      timeInfo, weatherInfo, homeAssistantInfo, recentImagesInfo,
+      autoMemoriesInfo, crossSessionInfo, skillDetails,
+    };
+    // Built again at the push below if skills mode adds its per-message note.
+    let turnContext = turnContextInSystem ? '' : buildTurnContext(turnContextParts);
 
     // Dynamic tool filtering: local models degrade with too many tools (>20).
     // Send ~15-25 tools: essential base + dynamically matched from message/context/history.
@@ -658,7 +670,7 @@ export async function POST(request: NextRequest) {
     if (historyMessages.length > 0 && !isGroupTurn) {
       try {
         const compactionResult = await compactionService.compactCrossTurn(
-          finalSystemPrompt, activeTools, historyMessages, compactionSummary, summarizationClient
+          finalSystemPrompt + turnContext, activeTools, historyMessages, compactionSummary, summarizationClient
         );
 
         if (compactionResult.summaryUpdated) {
@@ -1071,7 +1083,11 @@ export async function POST(request: NextRequest) {
         const total = activeTools.length;
         const skillNames = registry.getSkillNames().filter(n => n !== 'skill-loader');
         activeTools = exposure.tools.map(t => t.name === OPEN_SKILL_TOOL ? openSkillToolDefinition(skillNames) : t);
-        currentMessages[0].content += skillsModeNote(activeTools.length, total, exposure.matchedSkills);
+        // Which skills matched changes per message: with the turn context, not
+        // in the system prompt the prompt cache reuses.
+        const skillsNote = skillsModeNote(activeTools.length, total, exposure.matchedSkills);
+        if (turnContextInSystem) currentMessages[0].content += skillsNote;
+        else turnContext = buildTurnContext({ ...turnContextParts, skillDetails: [skillDetails, skillsNote.trim()].filter(Boolean).join('\n\n') });
         console.log(`   🧰 Tool exposure: skills — ${activeTools.length}/${total} tools (core + ${exposure.matchedSkills.join(', ') || 'no matched skills'}${exposure.fromHistory.length ? ` + ${exposure.fromHistory.length} from chat history` : ''})`);
       } else {
         // Every tool is already loaded; open_skill would only confuse.
@@ -1194,7 +1210,8 @@ export async function POST(request: NextRequest) {
     }
 
     // Add current user message
-    currentMessages.push({ role: 'user', content: enrichedMessage });
+    currentMessages.push({ role: 'user', content: turnContext + enrichedMessage });
+    if (turnContext) console.log(`   🧊 Turn context with the message: ~${Math.round(turnContext.length / 4).toLocaleString()} tokens (system prompt kept stable for the prompt cache)`);
 
     // Log history sent to LLM for debugging conversation continuity
     const histMsgs = currentMessages.filter(m => m.role !== 'system');

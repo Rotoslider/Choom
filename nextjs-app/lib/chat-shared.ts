@@ -213,3 +213,19 @@ export type DetectedProject = {
   folder: string;
   metadata: { maxIterations?: number; name?: string; llmProviderId?: string; llmModel?: string; assignedChoom?: string };
 };
+
+/**
+ * Which chat messages the model sees: the newest HISTORY_WINDOW_MAX at most,
+ * with a start that moves HISTORY_WINDOW_STEP messages at a time instead of
+ * one per turn (2026-10-29). Taking the newest 200 slid the window on every
+ * turn once a chat passed 200 (Genesis's and Aloy's main chats sit at ~1,900),
+ * so the history never matched the previous request and the provider's prompt
+ * cache could reuse none of it. Now the start stays put for ~25 turns and the
+ * window holds 151–200 messages. Returns how many of the oldest to skip.
+ */
+export const HISTORY_WINDOW_MAX = 200;
+export const HISTORY_WINDOW_STEP = 50;
+export function historyWindowStart(totalMessages: number): number {
+  if (totalMessages <= HISTORY_WINDOW_MAX) return 0;
+  return Math.ceil((totalMessages - HISTORY_WINDOW_MAX) / HISTORY_WINDOW_STEP) * HISTORY_WINDOW_STEP;
+}
