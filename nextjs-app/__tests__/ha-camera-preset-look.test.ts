@@ -42,6 +42,8 @@ STATES.push(
   ent('binary_sensor.living_room_home_north_screen_door_screen_door', 'North Screen door', { device_class: 'door' }, 'off'),
   ent('binary_sensor.living_room_home_north_door_north_door', 'North Door', { device_class: 'door' }, 'on'),
 );
+// Real entities the (Assist-exposed) list leaves out: getState finds them.
+const HIDDEN: HAEntity[] = [ent('binary_sensor.living_room_prox_lite_house_occupancy', 'House occupancy', { device_class: 'occupancy' }, 'on')];
 const setState = (id: string, state: string) => { STATES.find(e => e.entity_id === id)!.state = state; };
 
 const renderTemplate = jest.fn(async (_t: string) => 'unknown');
@@ -50,7 +52,7 @@ jest.mock('@/lib/homeassistant-service', () => ({
   HomeAssistantService: class {
     async listStates(domain?: string) { return domain ? STATES.filter(e => e.entity_id.startsWith(`${domain}.`)) : STATES; }
     async getState(id: string) {
-      const e = STATES.find(s => s.entity_id === id);
+      const e = STATES.find(s => s.entity_id === id) || HIDDEN.find(s => s.entity_id === id);
       if (!e) throw new Error('HA API 404: Entity not found');
       return e;
     }
@@ -279,7 +281,18 @@ describe('templates that name entities that do not exist', () => {
     const r = await call('ha_render_template', { template: '{{ states.binary_sensor.north_door_contact.last_changed }}' });
     expect(r.error).toMatch(/^Home Assistant error: HA template 400/);
     expect(r.error).toMatch(/binary_sensor\.north_door_contact \(closest:/);
-    expect(r.error).toMatch(/don't exist/); // PATH_ERROR: not counted as a tool failure
+    expect(r.error).toMatch(/Also, these entity ids in your template don't exist/); // PATH_ERROR: not counted as a tool failure
+    expect(r.error).not.toMatch(/read them as/); // nothing was rendered
+  });
+
+  // 2026-10-29 21:05: Eve's template failed on a Python-style dict
+  // comprehension, and the note called her five real occupancy sensors missing.
+  test('a real entity the trimmed list leaves out is not called missing', async () => {
+    // One try: with no change times in it, the template isn't rewritten and retried.
+    renderTemplate.mockRejectedValueOnce(new Error("HA template 400: TemplateSyntaxError: expected token ',', got 'for'"));
+    const r = await call('ha_render_template', { template: "{{ {e.entity_id: states(e.entity_id) for e in states if e.entity_id in ['binary_sensor.living_room_prox_lite_house_occupancy'] } }}" });
+    expect(r.error).toMatch(/TemplateSyntaxError/);
+    expect(r.error).not.toMatch(/don't exist/);
   });
 
   test('a template with only real ids has no warning', async () => {

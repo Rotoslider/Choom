@@ -145,10 +145,20 @@ export function missingTemplateEntities(template: string, entities: HAEntity[]):
 }
 
 /** " These ids in your template don't exist…" with the closest real ones; empty when all exist. */
-async function templateMissingNote(ha: HomeAssistantService, template: string): Promise<{ note: string; ids: string[] }> {
+async function templateMissingNote(ha: HomeAssistantService, template: string, rendered: boolean): Promise<{ note: string; ids: string[] }> {
   try {
     const all = await ha.listStates();
-    const ids = missingTemplateEntities(template, all);
+    // The list can be trimmed (assistExposedOnly), so each id not on it is
+    // asked for directly and called missing only on a 404: Eve's five real
+    // occupancy sensors were all reported missing (2026-10-29, 21:05).
+    const ids: string[] = [];
+    for (const id of missingTemplateEntities(template, all).slice(0, 8)) {
+      try {
+        await ha.getState(id);
+      } catch (e) {
+        if (/HA API 404\b/.test(e instanceof Error ? e.message : String(e))) ids.push(id);
+      }
+    }
     if (!ids.length) return { note: '', ids };
     const each = ids.slice(0, 6).map(id => {
       const near = closestInAnyDomain(id, all, 3);
@@ -156,7 +166,9 @@ async function templateMissingNote(ha: HomeAssistantService, template: string): 
     });
     return {
       ids,
-      note: ` These entity ids in your template don't exist, so Home Assistant read them as "unknown"/None — that is NOT the real state: ${each.join('; ')}. Use the exact ids.`,
+      note: rendered
+        ? ` These entity ids in your template don't exist, so Home Assistant read them as "unknown"/None — that is NOT the real state: ${each.join('; ')}. Use the exact ids.`
+        : ` Also, these entity ids in your template don't exist: ${each.join('; ')}. Use the exact ids.`,
     };
   } catch {
     return { note: '', ids: [] };
@@ -885,11 +897,11 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
           } catch (err) {
             // A guessed id is the usual cause of "'None' has no attribute…":
             // name it ("doesn't exist" also marks the error as recoverable).
-            const missing = await templateMissingNote(ha, template);
+            const missing = await templateMissingNote(ha, template, false);
             if (!missing.note) throw err;
             return this.error(toolCall, `Home Assistant error: ${err instanceof Error ? err.message : String(err)}.${missing.note}`);
           }
-          const missing = await templateMissingNote(ha, template);
+          const missing = await templateMissingNote(ha, template, true);
           // A template can loop over every sensor in the house — Qwen wrote one
           // that rendered 30k chars (2026-09-12). Bound it like every other
           // result; the note tells her how to get the rest.

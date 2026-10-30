@@ -1,6 +1,7 @@
 import { BaseSkillHandler, SkillHandlerContext } from '@/lib/skill-handler';
 import type { ToolCall, ToolResult } from '@/lib/types';
 import { WorkspaceService } from '@/lib/workspace-service';
+import ImageAnalysisHandler from '@/skills/core/image-analysis/handler';
 import { ProjectService } from '@/lib/project-service';
 // Canonical workspace write policy — do NOT shadow it with a local copy.
 // A stale private list here silently blocked .lisp writes (Genesis, 2026-08-25)
@@ -48,7 +49,7 @@ export default class WorkspaceFilesHandler extends BaseSkillHandler {
       case 'workspace_write_file':
         return this.writeFile(toolCall, ctx);
       case 'workspace_read_file':
-        return this.readFile(toolCall);
+        return this.readFile(toolCall, ctx);
       case 'workspace_list_files':
         return this.listFiles(toolCall);
       case 'workspace_create_folder':
@@ -166,7 +167,7 @@ export default class WorkspaceFilesHandler extends BaseSkillHandler {
     }
   }
 
-  private async readFile(toolCall: ToolCall): Promise<ToolResult> {
+  private async readFile(toolCall: ToolCall, ctx: SkillHandlerContext): Promise<ToolResult> {
     const filePath = stripMisplacedSharedPrefix(this.sanitizePath((toolCall.arguments.path || toolCall.arguments.file_path || toolCall.arguments.filename) as string || ''));
     const ws = new WorkspaceService(WORKSPACE_ROOT, WORKSPACE_MAX_FILE_SIZE_KB, WORKSPACE_ALLOWED_EXTENSIONS);
 
@@ -176,11 +177,27 @@ export default class WorkspaceFilesHandler extends BaseSkillHandler {
     const BINARY_EXTS = new Set(['pdf', 'zip', 'tar', 'gz', 'rar', '7z', 'exe', 'bin', 'dll', 'so', 'dylib', 'mp3', 'mp4', 'wav', 'avi', 'mov', 'mkv', 'flac', 'ogg', 'wma', 'psd', 'ai', 'sketch']);
     const fileExt = filePath.split('.').pop()?.toLowerCase() || '';
     if (IMAGE_EXTS.has(fileExt)) {
-      console.log(`   🖼️  Workspace read intercepted: ${filePath} is an image — redirecting to analyze_image`);
-      return this.error(
-        toolCall,
-        `"${filePath}" is an image file (.${fileExt}), not a text file. Reading raw image bytes is not useful. To view this image, call the analyze_image tool instead:\n\n  analyze_image({ image_path: "${filePath}", prompt: "Describe this image" })`
+      // Reading a picture means wanting to know what's in it: look at it now,
+      // in this call (2026-10-29). The redirect used to be an error, which cost
+      // her a round to call analyze_image and counted as a tool failure (Eve,
+      // tower_cam/evening_tower_oct28_2100.jpg). Same code as analyze_image.
+      console.log(`   🖼️  Workspace read of an image: ${filePath} — looking at it with analyze_image`);
+      const look = await new ImageAnalysisHandler().execute(
+        { id: `${toolCall.id}-look`, name: 'analyze_image', arguments: { image_path: filePath, prompt: 'Describe this image in detail: what it shows, any text in it, and anything notable.' } },
+        ctx,
       );
+      const seen = look.result as { analysis?: string; model?: string } | null;
+      if (!look.error && seen?.analysis) {
+        return this.success(toolCall, {
+          success: true,
+          path: filePath,
+          kind: 'image',
+          description: seen.analysis,
+          message: `"${filePath}" is an image, so here is what the vision model sees in it (not the file's bytes). For a closer look at one detail, call analyze_image(image_path="${filePath}", prompt="<your question>").`,
+        });
+      }
+      // The look itself failed (no such file, vision down): its error says why.
+      return this.error(toolCall, look.error || `"${filePath}" is an image file; the vision model gave no description. Try analyze_image(image_path="${filePath}").`);
     }
     if (BINARY_EXTS.has(fileExt)) {
       console.log(`   ⚠️  Workspace read blocked: ${filePath} is a binary file`);
