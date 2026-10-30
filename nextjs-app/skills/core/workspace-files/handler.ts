@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import { BaseSkillHandler, SkillHandlerContext } from '@/lib/skill-handler';
 import type { ToolCall, ToolResult } from '@/lib/types';
 import { WorkspaceService } from '@/lib/workspace-service';
@@ -25,6 +27,39 @@ const SHARED_TOP_LEVEL_DIRS = new Set([
   'sibling_journal',
   'choom_commons',
 ]);
+
+/**
+ * Workspace files with this exact name (any case), newest first. The sisters
+ * name shared files by name alone: REED_RULES.md lives in choom_commons/ and
+ * in their campfire room's folder, and on 2026-10-29 Aloy asked for
+ * campfire/REED_RULES.md and Eve for tower_cam/notes/REED_RULES.md; the next
+ * morning Aloy spent seven rounds of shell find/ls/cat on it. The two copies
+ * had drifted apart, so the newest comes first, with its date.
+ */
+export function findWorkspaceFilesNamed(root: string, name: string, maxResults = 5): Array<{ path: string; size: number; modified: Date }> {
+  const want = name.toLowerCase();
+  const found: Array<{ path: string; size: number; modified: Date }> = [];
+  const queue: Array<{ rel: string; depth: number }> = [{ rel: '', depth: 0 }];
+  let budget = 20000; // entries looked at, so a huge tree can't stall a read
+  while (queue.length && found.length < maxResults && budget > 0) {
+    const { rel, depth } = queue.shift()!;
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(path.join(root, rel), { withFileTypes: true }); } catch { continue; }
+    for (const e of entries) {
+      if (--budget <= 0 || found.length >= maxResults) break;
+      if (e.name.startsWith('.') || e.name === 'node_modules') continue;
+      const childRel = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) { if (depth < 5) queue.push({ rel: childRel, depth: depth + 1 }); }
+      else if (e.isFile() && e.name.toLowerCase() === want) {
+        try {
+          const st = fs.statSync(path.join(root, childRel));
+          found.push({ path: childRel, size: st.size, modified: st.mtime });
+        } catch { /* gone since the listing */ }
+      }
+    }
+  }
+  return found.sort((a, b) => b.modified.getTime() - a.modified.getTime());
+}
 
 function stripMisplacedSharedPrefix(filePath: string): string {
   if (!filePath) return filePath;
@@ -254,6 +289,20 @@ export default class WorkspaceFilesHandler extends BaseSkillHandler {
       // from wasting iterations retrying fantasy paths — they get actual filenames
       // to choose from instead of a bare ENOENT.
       if (isNotFound && filePath) {
+        // The same file name elsewhere in the workspace is almost always the
+        // file she meant; say where, before any directory listing.
+        const baseName = filePath.split('/').pop() || '';
+        const sameName = baseName.includes('.') ? findWorkspaceFilesNamed(WORKSPACE_ROOT, baseName) : [];
+        if (sameName.length > 0) {
+          const when = (d: Date) => d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+          const lines = sameName.map(f => `  📄 ${f.path} (${f.size < 1024 ? `${f.size}B` : `${(f.size / 1024).toFixed(1)}KB`}, changed ${when(f.modified)})`);
+          console.log(`   📁 ${filePath} not found — same name at ${sameName.map(f => f.path).join(', ')}`);
+          return this.error(
+            toolCall,
+            `File not found: "${filePath}". ${sameName.length === 1 ? 'A file with that name is at' : 'Files with that name, newest first'}:\n${lines.join('\n')}\n\nRead the one you meant with workspace_read_file and that exact path. If none of these is it, call workspace_list_files.`
+          );
+        }
+
         const ancestors: string[] = [];
         const segments = filePath.split('/').filter(Boolean);
         // Walk up: parent, grandparent, ..., workspace root
