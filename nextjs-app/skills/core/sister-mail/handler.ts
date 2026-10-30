@@ -25,21 +25,35 @@ export default class SisterMailHandler extends BaseSkillHandler {
       case 'check_inbox': {
         const includeSeen = toolCall.arguments.include_seen === true;
         const box = readInbox(me, { includeSeen });
+        const older = !includeSeen && box.olderCount > 0
+          ? `${box.olderCount} older item(s) you have already read are not listed (include_seen=true lists them).`
+          : '';
         if (box.items.length === 0) {
-          return this.success(toolCall, { success: true, inbox: box.path, items: [], new_count: 0, message: 'Your inbox is empty.' });
+          return this.success(toolCall, {
+            success: true, inbox: box.path, items: [], new_count: 0,
+            ...(box.olderCount && { older_count: box.olderCount }),
+            message: box.olderCount ? `Nothing new since you last looked. ${older}` : 'Your inbox is empty.',
+          });
         }
         return this.success(toolCall, {
           success: true,
           inbox: box.path,
           new_count: box.newCount,
+          ...(!includeSeen && box.olderCount && { older_count: box.olderCount }),
           items: box.items.map(i => ({
             file: i.path, kind: i.kind, size: i.size, modified: i.modifiedAt.slice(0, 16).replace('T', ' '),
             status: i.seen ? 'seen' : 'new',
             ...(i.text !== undefined ? { text: i.text } : {}),
           })),
-          note: box.newCount > 0
-            ? 'Items marked new are now marked seen. Images can be viewed with analyze_image using the file path.'
-            : 'Nothing new since you last looked.',
+          note: [
+            box.newCount > 0
+              ? 'New items shown here are now marked seen. Images can be viewed with analyze_image using the file path.'
+              : 'Nothing new since you last looked.',
+            box.heldBack > 0
+              ? `${box.heldBack} more new letter(s) are listed without their text and stay new: they come with your next check_inbox, or read one now with workspace_read_file(path).`
+              : '',
+            older,
+          ].filter(Boolean).join(' '),
         });
       }
 

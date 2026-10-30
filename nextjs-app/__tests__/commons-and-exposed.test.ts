@@ -70,6 +70,46 @@ describe('sister-mail tools', () => {
     expect(nobody.error).toMatch(/Your sisters: Eve, Aloy/);
   });
 
+  // 2026-10-29: Aloy's inbox had 257 files; every check listed them all (~11k
+  // tokens with nothing new) and one came back at 44k tokens.
+  test('a full inbox: new letters come five at a time, oldest first; read ones are only counted', () => {
+    ensureCommonsLayout(['Aloy'], root);
+    const dir = path.join(root, inboxPath('Aloy'));
+    for (let i = 1; i <= 8; i++) {
+      const f = path.join(dir, `2026-10-20_letter_${i}.md`);
+      fs.writeFileSync(f, `letter ${i}`);
+      const t = new Date(Date.UTC(2026, 9, 20, 12, i));
+      fs.utimesSync(f, t, t);
+    }
+    const first = readInbox('Aloy', { root });
+    expect(first.newCount).toBe(8);
+    expect(first.heldBack).toBe(3);
+    expect(first.items).toHaveLength(8); // all new ones listed, newest first
+    expect(first.items.filter(i => i.text).map(i => i.text)).toEqual(['letter 5', 'letter 4', 'letter 3', 'letter 2', 'letter 1']);
+    const second = readInbox('Aloy', { root });
+    expect(second.newCount).toBe(3); // the held-back three are still new
+    expect(second.olderCount).toBe(5);
+    expect(second.items.map(i => i.text)).toEqual(['letter 8', 'letter 7', 'letter 6']);
+    const third = readInbox('Aloy', { root });
+    expect(third.newCount).toBe(0);
+    expect(third.items).toEqual([]);
+    expect(third.olderCount).toBe(8);
+    const all = readInbox('Aloy', { root, includeSeen: true });
+    expect(all.items).toHaveLength(8);
+    expect(all.items.filter(i => i.text).map(i => i.text)).toEqual(['letter 8', 'letter 7', 'letter 6', 'letter 5', 'letter 4']);
+  });
+
+  test('check_inbox with nothing new counts the read items instead of listing them', async () => {
+    ensureCommonsLayout(['Eve'], root);
+    fs.writeFileSync(path.join(root, inboxPath('Eve'), '2026-10-20_hello.md'), 'hello');
+    const h = new SisterMailHandler();
+    await h.execute({ id: '1', name: 'check_inbox', arguments: {} }, ctx('Eve'));
+    const again = (await h.execute({ id: '2', name: 'check_inbox', arguments: {} }, ctx('Eve'))).result as Record<string, unknown>;
+    expect(again.items).toEqual([]);
+    expect(again.older_count).toBe(1);
+    expect(String(again.message)).toMatch(/Nothing new since you last looked\. 1 older item\(s\) you have already read are not listed \(include_seen=true lists them\)/);
+  });
+
   test('inbox read state survives and readInbox peek does not mark seen', () => {
     ensureCommonsLayout(['Genesis'], root);
     fs.writeFileSync(path.join(root, inboxPath('Genesis'), '2026-09-12_note.md'), 'hello');

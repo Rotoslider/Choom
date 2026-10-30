@@ -96,20 +96,35 @@ export interface InboxItem {
 const TEXT_EXT = new Set(['.md', '.txt']);
 const IMAGE_EXT = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif']);
 const LETTER_CAP = 4000;
+/** How many letters one check carries in full. The rest of the new ones stay
+ *  new and come with the next check (2026-10-29: see readInbox). */
+export const LETTERS_PER_CHECK = 5;
 
 function readSeen(dir: string): Record<string, string> {
   try { return JSON.parse(fs.readFileSync(path.join(dir, SEEN_FILE), 'utf-8')) as Record<string, string>; } catch { return {}; }
 }
 
 /**
- * List a Choom's inbox newest first. New items (never marked seen, or modified
- * since) carry their text when they are letters. Marks everything listed as
- * seen unless `peek`.
+ * A Choom's inbox, newest first: the NEW items (never marked seen, or modified
+ * since), with the text of up to `maxLetters` new letters — the oldest new
+ * ones, so letters are read in order — while further new letters are listed
+ * without text and stay new for the next check (`heldBack`). Items already
+ * read are only counted (`olderCount`) unless `includeSeen`, which lists them
+ * too with the text of the newest few. Marks what was delivered as seen
+ * unless `peek`.
+ *
+ * 2026-10-29: every check listed the whole inbox and every new letter in
+ * full. Aloy's had grown to 257 files: ~11k tokens of listing on every check
+ * even with nothing new, and one heartbeat's check came back at 44k tokens,
+ * re-sent with all 17 calls after it (1.59M prompt tokens for that run).
  */
-export function readInbox(name: string, opts: { includeSeen?: boolean; peek?: boolean; root?: string } = {}): { items: InboxItem[]; newCount: number; path: string } {
+export function readInbox(
+  name: string,
+  opts: { includeSeen?: boolean; peek?: boolean; root?: string; maxLetters?: number } = {},
+): { items: InboxItem[]; newCount: number; olderCount: number; heldBack: number; path: string } {
   const rel = inboxPath(name);
   const dir = abs(rel, opts.root);
-  if (!fs.existsSync(dir)) return { items: [], newCount: 0, path: rel };
+  if (!fs.existsSync(dir)) return { items: [], newCount: 0, olderCount: 0, heldBack: 0, path: rel };
   const seen = readSeen(dir);
   const entries = fs.readdirSync(dir, { withFileTypes: true })
     .filter(e => e.isFile() && !e.name.startsWith('.'))
@@ -120,14 +135,24 @@ export function readInbox(name: string, opts: { includeSeen?: boolean; peek?: bo
       const modifiedAt = st.mtime.toISOString();
       const isSeen = !!seen[e.name] && seen[e.name] >= modifiedAt;
       const item: InboxItem = { name: e.name, path: `${rel}/${e.name}`, kind, size: st.size, modifiedAt, seen: isSeen };
-      if (kind === 'letter' && (!isSeen || opts.includeSeen)) {
-        const text = fs.readFileSync(path.join(dir, e.name), 'utf-8');
-        item.text = text.length > LETTER_CAP ? text.slice(0, LETTER_CAP) + '\n…(letter truncated — read the file for the rest)' : text;
-      }
       return item;
     })
     .sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt));
+
+  const max = Math.max(0, opts.maxLetters ?? LETTERS_PER_CHECK);
+  const newLettersOldestFirst = entries.filter(i => !i.seen && i.kind === 'letter').reverse();
+  const withText = new Set(newLettersOldestFirst.slice(0, max));
+  const heldBackItems = new Set(newLettersOldestFirst.slice(max));
+  if (opts.includeSeen) {
+    for (const i of entries.filter(e => e.seen && e.kind === 'letter').slice(0, max)) withText.add(i);
+  }
+  for (const item of withText) {
+    const text = fs.readFileSync(path.join(dir, item.name), 'utf-8');
+    item.text = text.length > LETTER_CAP ? text.slice(0, LETTER_CAP) + '\n…(letter truncated — read the file for the rest)' : text;
+  }
+
   const newCount = entries.filter(i => !i.seen).length;
+  const olderCount = entries.length - newCount;
   if (!opts.peek) {
     // Record the mtime we just listed, not the wall clock. On APFS a file's
     // mtime carries sub-millisecond precision and lands up to ~1ms AHEAD of
@@ -135,10 +160,13 @@ export function readInbox(name: string, opts: { includeSeen?: boolean; peek?: bo
     // "seen at now" marker could be older than the file and the letter came
     // back as new on the next read. Seen-at-this-version is also the right
     // meaning: a later edit still shows as new.
-    for (const i of entries) seen[i.name] = i.modifiedAt;
+    for (const i of entries) if (!heldBackItems.has(i)) seen[i.name] = i.modifiedAt;
     try { fs.writeFileSync(path.join(dir, SEEN_FILE), JSON.stringify(seen, null, 2), 'utf-8'); } catch { /* read-only: fine */ }
   }
-  return { items: entries, newCount, path: rel };
+  return {
+    items: opts.includeSeen ? entries : entries.filter(i => !i.seen),
+    newCount, olderCount, heldBack: heldBackItems.size, path: rel,
+  };
 }
 
 /** A safe, dated file name for a letter. */

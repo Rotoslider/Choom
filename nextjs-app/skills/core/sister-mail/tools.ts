@@ -4,13 +4,13 @@ export const tools: ToolDefinition[] = [
   {
     name: 'check_inbox',
     description:
-      'Check your own inbox (choom_commons/for_<you>/): what your sisters or the user left for you, newest first, with the text of anything new. Call it when you wake up or when a sister says she left you something. Reading marks items as seen.',
+      'Check your own inbox (choom_commons/for_<you>/): what your sisters or the user left for you that is NEW, newest first, with the text of up to 5 new letters (the oldest new ones first; any more stay new and come with the next check). Items you have already read are only counted. Call it when you wake up or when a sister says she left you something. Reading marks what it shows as seen.',
     parameters: {
       type: 'object',
       properties: {
         include_seen: {
           type: 'boolean',
-          description: 'true = also return the text of items you have already seen (default false: only list them)',
+          description: 'true = also list the items you have already read, with the text of the newest few (default false: only new items are listed)',
         },
       },
     },
