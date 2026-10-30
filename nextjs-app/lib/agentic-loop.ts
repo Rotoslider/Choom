@@ -272,6 +272,10 @@ export function noteSuppressedNotifications(
   return notes;
 }
 
+/** The round-budget notes on a wake-up (see wrapUpOnLastRound in the loop). */
+export const WAKE_ROUNDS_LEFT_NOTE = '[System] This wake-up has 3 rounds left: 2 more with tools, then a last one with tools off for your message. Save now anything that has to be saved (a note, a follow-up), then write your message. (Automated note, not from the user — do not mention it.)';
+export const WAKE_LAST_ROUND_NOTE = '[System] Last round of this wake-up: tools are off now. Write your message from what you already found. If something is unfinished, say so in a sentence. (Automated note, not from the user — do not mention it.)';
+
 /** Tools that stay exposed beside an intent-narrowed forced tool (see the iterationTools build). */
 export const INTENT_COMPANION_TOOLS: Record<string, string[]> = {
   music_play: ['music_search', 'music_players'],
@@ -709,6 +713,14 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
           // eating the error each time. Past this streak every tool comes off
           // and the next call is text-only: she answers with what she has.
           const STREAK_STRIP_ALL = STREAK_BLOCK + 3;
+          // Round budget on a wake-up (2026-10-30): Aloy's 9:45 PM wind-down
+          // spent all 20 rounds on 60 lookups and never wrote a word, so what
+          // reached Donny was the cap's progress list ("[Reached maximum tool
+          // iterations — 60 tool calls completed] … Files read: …"). Three
+          // rounds from the end she is told what's left, and the last round
+          // has no tools, so it can only be her message.
+          const wrapUpOnLastRound = isHeartbeat && !noTools && maxIterations >= 6;
+          let textsBeforeLastRound = -1; // iterationTexts.length when the last round began; -1 = not reached
           // Set once an integrity nudge (fabrication callout / hedge) has fired
           // this turn. A reply that ANSWERS such a nudge with an apology must
           // end the turn, never be re-nudged (C-58: the 2026-08-06 spiral —
@@ -2905,6 +2917,21 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
               break;
             }
 
+            // --- Round budget on a wake-up (see wrapUpOnLastRound).
+            if (wrapUpOnLastRound && activeTools.length > 0) {
+              const roundsLeft = maxIterations - iteration;
+              if (roundsLeft === 3) {
+                console.log(`   ⏳ ${choomTag} 3 rounds left on this wake-up — told her`);
+                currentMessages.push({ role: 'user', content: WAKE_ROUNDS_LEFT_NOTE });
+              } else if (roundsLeft === 1) {
+                console.log(`   ⏳ ${choomTag} Last round of this wake-up — tools off so she writes her message`);
+                activeTools = [];
+                forceToolCall = false;
+                textsBeforeLastRound = iterationTexts.length;
+                currentMessages.push({ role: 'user', content: WAKE_LAST_ROUND_NOTE });
+              }
+            }
+
             // --- Semantic repetition guard: catch models that loop-generate the same
             // paragraph across iterations. Covers local models (Gemma, GLM) that have
             // weak repetition penalties. Applies to ALL flows, not just heartbeats.
@@ -2999,7 +3026,12 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
 
           // If we hit the max iterations limit, append a progress summary so "continue"
           // messages have context about what was already done (prevents redoing work)
-          if (iteration >= maxIterations) {
+          // A wake-up whose tools-off last round produced her message ends on
+          // that message: nobody says "continue" to a wake-up.
+          const spokeOnLastRound = textsBeforeLastRound >= 0 && iterationTexts.length > textsBeforeLastRound;
+          if (iteration >= maxIterations && spokeOnLastRound) {
+            console.log(`   ⏳ ${choomTag} Used all ${maxIterations} rounds; her last-round message stands (no progress list)`);
+          } else if (iteration >= maxIterations) {
             // Build progress summary from completed tool calls
             const toolSummaryLines: string[] = [];
             const delegationSummaries: string[] = [];
