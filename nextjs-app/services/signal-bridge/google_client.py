@@ -6,10 +6,14 @@ import os
 import json
 import logging
 import mimetypes
+import http.client
+import ssl
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict, Any
 from pathlib import Path
 
+import httplib2
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -18,6 +22,31 @@ from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 
 logger = logging.getLogger(__name__)
+
+# A connection that drops in the middle of a chunk is not retried by the client
+# library: next_chunk marks the upload broken and raises. Calling it again asks
+# Drive how many bytes it already holds and carries on from there, so a drop
+# costs a pause instead of the whole upload (2026-10-30: the 2.6 GB dev.db,
+# ~30 min to upload, died 28 s in with "[Errno 32] Broken pipe"; also 10-14).
+UPLOAD_RESUME_WAITS = (5, 15, 30, 60, 120, 300)
+
+
+def _is_transient_upload_error(e: BaseException) -> bool:
+    """A network drop or a server-side hiccup, worth resuming after a pause."""
+    if isinstance(e, HttpError):
+        return e.resp.status in (408, 429) or e.resp.status >= 500
+    return isinstance(e, (ConnectionError, TimeoutError, ssl.SSLError,
+                          http.client.HTTPException, httplib2.HttpLib2Error))
+
+
+def _drop_connections(http) -> None:
+    """Close pooled connections so the next request opens a fresh socket."""
+    inner = getattr(http, 'http', http)  # AuthorizedHttp wraps an httplib2.Http
+    for conn in list(getattr(inner, 'connections', {}).values()):
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 # OAuth2 scopes
 SCOPES = [
@@ -724,8 +753,21 @@ class GoogleClient:
                 body=body, media_body=media, fields='id, name, webViewLink, size'
             )
             file = None
+            resumes = 0
             while file is None:
-                status, file = request.next_chunk(num_retries=3)
+                try:
+                    status, file = request.next_chunk(num_retries=3)
+                except Exception as e:
+                    if resumes >= len(UPLOAD_RESUME_WAITS) or not _is_transient_upload_error(e):
+                        raise
+                    wait = UPLOAD_RESUME_WAITS[resumes]
+                    resumes += 1
+                    logger.warning(f"Upload {path.name}: {e} — resuming in {wait}s "
+                                   f"({resumes}/{len(UPLOAD_RESUME_WAITS)})")
+                    _drop_connections(request.http)
+                    time.sleep(wait)
+                    continue
+                resumes = 0  # each good chunk moved the upload on
                 if status:
                     logger.debug(f"Upload {path.name}: {int(status.progress() * 100)}%")
 

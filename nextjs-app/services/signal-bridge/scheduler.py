@@ -2817,6 +2817,24 @@ Be practical. Only work on things that can actually be accomplished with the too
 
             date_stamp = datetime.now().strftime('%Y-%m-%d')
             uploaded = []
+            failed: List[str] = []
+
+            def upload(local_path: str, drive_name: str, label: str) -> None:
+                # Each file on its own: a dropped dev.db upload used to end the
+                # whole job, so the small files after it were never sent and
+                # the message named only the error (2026-10-30).
+                try:
+                    result = google.upload_to_drive(local_path, folder_id, drive_name)
+                except Exception as e:
+                    logger.error(f"Failed to back up {label}: {e}")
+                    failed.append(f"{label} ({e})")
+                    return
+                if result:
+                    uploaded.append(drive_name)
+                    logger.info(f"Backed up {label} as {drive_name}")
+                else:
+                    logger.error(f"Failed to back up {label}")
+                    failed.append(label)
 
             # Upload transactionally consistent database snapshots.
             for base_name in ("dev.db", "memories.db"):
@@ -2826,15 +2844,10 @@ Be practical. Only work on things that can actually be accomplished with the too
                         "Skipping Google Drive backup for %s; local SQLite snapshot is unavailable",
                         base_name,
                     )
+                    failed.append(f"{base_name} (no local snapshot)")
                     continue
 
-                drive_name = f"{base_name.replace('.db', '')}-{date_stamp}.db"
-                result = google.upload_to_drive(str(file_path), folder_id, drive_name)
-                if result:
-                    uploaded.append(drive_name)
-                    logger.info(f"Backed up {base_name} as {drive_name}")
-                else:
-                    logger.error(f"Failed to back up {base_name}")
+                upload(str(file_path), f"{base_name.replace('.db', '')}-{date_stamp}.db", base_name)
 
             # Config bundle — all small config/state files in one tar.gz
             app_root = Path(APP_ROOT)
@@ -2863,13 +2876,7 @@ Be practical. Only work on things that can actually be accomplished with the too
                         if src_dir.is_dir():
                             tar.add(str(src_dir), arcname=arcname)
 
-                drive_name = f"config-bundle-{date_stamp}.tar.gz"
-                result = google.upload_to_drive(bundle_path, folder_id, drive_name)
-                if result:
-                    uploaded.append(drive_name)
-                    logger.info(f"Backed up config bundle as {drive_name}")
-                else:
-                    logger.error("Failed to upload config bundle")
+                upload(bundle_path, f"config-bundle-{date_stamp}.tar.gz", "config bundle")
             finally:
                 os.unlink(bundle_path)
 
@@ -2882,12 +2889,7 @@ Be practical. Only work on things that can actually be accomplished with the too
                 try:
                     with tarfile.open(ref_path, 'w:gz') as tar:
                         tar.add(str(ref_dir), arcname="reference-images")
-                    drive_name = f"reference-images-{date_stamp}.tar.gz"
-                    if google.upload_to_drive(ref_path, folder_id, drive_name):
-                        uploaded.append(drive_name)
-                        logger.info(f"Backed up reference images as {drive_name}")
-                    else:
-                        logger.error("Failed to upload reference images")
+                    upload(ref_path, f"reference-images-{date_stamp}.tar.gz", "reference images")
                 finally:
                     os.unlink(ref_path)
 
@@ -2899,6 +2901,14 @@ Be practical. Only work on things that can actually be accomplished with the too
                 self._rotate_backups(google, folder_id, "config-bundle-", 5)
             else:
                 logger.warning("Full backup: no files were uploaded")
+
+            if failed:
+                rest = " The rest uploaded." if uploaded else ""
+                local = f" Today's local copy is in data/backups/daily/{date_stamp}." if database_snapshots else ""
+                self.send_message_to_owner(
+                    f"Backup incomplete: {', '.join(failed)} did not reach Google Drive.{rest}{local}",
+                    include_audio=False, choom_name="System",
+                )
 
         except Exception as e:
             logger.error(f"Full backup failed: {e}")
