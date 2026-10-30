@@ -175,6 +175,23 @@ async function templateMissingNote(ha: HomeAssistantService, template: string, r
   }
 }
 
+/**
+ * An exact entity id that exists, asked for directly — or null. The list that
+ * resolveEntity searches is trimmed to what Home Assistant exposes to Assist
+ * (assistExposedOnly), so a real, unexposed id like Eve's occupancy sensors
+ * read as missing, and a loose match could even have picked a different
+ * entity (2026-10-29). ha_get_state already tried the id first; history,
+ * logbook and camera snapshots do now too.
+ */
+async function exactEntity(ha: HomeAssistantService, ref: string): Promise<string | null> {
+  if (!/^[a-z_]+\.[a-z0-9_]+$/i.test(ref)) return null;
+  try {
+    return (await ha.getState(ref)).entity_id;
+  } catch {
+    return null;
+  }
+}
+
 /** The "doesn't exist" answer for a loose or guessed entity: the closest
  *  entities in any domain first, then the scoped list. Keeps the wording the
  *  loop reads as recoverable ("doesn't exist", "Real … entities on THIS system"). */
@@ -931,7 +948,8 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
           const histRef = String(args.entity_id ?? args.entity ?? args.name ?? '').trim();
           if (!histRef) return this.error(toolCall, 'entity_id is required — the entity to chart, e.g. entity_id="sensor.outdoor_temperature" or a loose name like "outdoor temperature". Call ha_get_home_status to see what exists.');
           const everyEntity = await ha.listStates();
-          const histResolved = await resolveEntity(ha, histRef, undefined, tied => pickFewestExtraWords(histRef, tied, everyEntity));
+          const histExact = await exactEntity(ha, histRef);
+          const histResolved = histExact ? { entityId: histExact } : await resolveEntity(ha, histRef, undefined, tied => pickFewestExtraWords(histRef, tied, everyEntity));
           if (!('entityId' in histResolved)) {
             return this.error(toolCall, await entityMissingText(ha, histRef, histResolved, 'Call ha_get_home_status to discover them.'));
           }
@@ -970,7 +988,8 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
           const logRef = String(args.entity_id ?? args.entity ?? args.name ?? '').trim();
           if (!logRef) return this.error(toolCall, 'entity_id is required — the entity whose activity you want, e.g. entity_id="binary_sensor.front_door" or a loose name like "front door". Call ha_get_home_status to see what exists.');
           const everyEntity = await ha.listStates();
-          const logResolved = await resolveEntity(ha, logRef, undefined, tied => pickFewestExtraWords(logRef, tied, everyEntity));
+          const logExact = await exactEntity(ha, logRef);
+          const logResolved = logExact ? { entityId: logExact } : await resolveEntity(ha, logRef, undefined, tied => pickFewestExtraWords(logRef, tied, everyEntity));
           if (!('entityId' in logResolved)) {
             return this.error(toolCall, await entityMissingText(ha, logRef, logResolved, 'Call ha_get_home_status to discover them.'));
           }
@@ -1081,9 +1100,12 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
           // Resolve a loose camera reference ("garage", "front cam") against the
           // camera domain (only a handful of cameras), so she doesn't need the
           // exact id. Vague/no match → return just the camera list to pick from.
+          const camExact = glass ? null : await exactEntity(ha, camRef);
           const camResolved = glass
             ? { entityId: 'camera.glass', resolvedFrom: camRef === 'glass' ? undefined : camRef }
-            : await resolveEntity(ha, camRef, 'camera', pickCameraAmongTies);
+            : camExact && camExact.startsWith('camera.')
+              ? { entityId: camExact }
+              : await resolveEntity(ha, camRef, 'camera', pickCameraAmongTies);
           if (!('entityId' in camResolved)) {
             // "driveway" is a preset on three cameras, not a camera (2026-10-27,
             // 5 misses across all three Chooms): say where it is.

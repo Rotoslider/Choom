@@ -302,6 +302,15 @@ describe('templates that name entities that do not exist', () => {
   });
 });
 
+describe('exact ids the Assist-exposed list leaves out', () => {
+  test('a logbook read of a real, unexposed id uses that id, not a lookalike', async () => {
+    const r = await call('ha_get_logbook', { entity_id: 'binary_sensor.living_room_prox_lite_house_occupancy', hours: 2 });
+    expect(r.error).toBeUndefined();
+    expect(res(r).entity_id).toBe('binary_sensor.living_room_prox_lite_house_occupancy');
+    expect(res(r).resolved_from).toBeUndefined();
+  });
+});
+
 describe('loose names for reads prefer the name with no extra words', () => {
   test('north_door_contact reads the North Door, not the North Screen door', async () => {
     const r = await call('ha_get_state', { entity_id: 'binary_sensor.north_door_contact' });
