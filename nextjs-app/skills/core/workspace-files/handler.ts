@@ -61,6 +61,15 @@ export function findWorkspaceFilesNamed(root: string, name: string, maxResults =
   return found.sort((a, b) => b.modified.getTime() - a.modified.getTime());
 }
 
+/** One line per file: path, size and when it last changed. */
+function describeNamedFiles(files: Array<{ path: string; size: number; modified: Date }>): string {
+  const when = (d: Date) => d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  return files.map(f => `  📄 ${f.path} (${f.size < 1024 ? `${f.size}B` : `${(f.size / 1024).toFixed(1)}KB`}, changed ${when(f.modified)})`).join('\n');
+}
+
+// Names every project is expected to have its own of; a copy elsewhere is not a duplicate.
+const PER_PROJECT_NAMES = new Set(['readme.md', 'index.html', 'style.css', 'script.js', 'main.py', '__init__.py', 'package.json', 'requirements.txt']);
+
 function stripMisplacedSharedPrefix(filePath: string): string {
   if (!filePath) return filePath;
   const parts = filePath.split('/').filter(Boolean);
@@ -183,6 +192,16 @@ export default class WorkspaceFilesHandler extends BaseSkillHandler {
           toWrite = existing + (existing && !existing.endsWith('\n') && content ? '\n' : '') + content;
         } catch { /* no file yet */ }
       }
+      // A new file whose name already exists elsewhere is often a second copy
+      // of a shared file: where a file lands follows the room or project she
+      // is in, and REED_RULES.md had two copies that drifted apart within an
+      // evening (2026-10-29). It is saved either way; the result says where
+      // the others are. Looked up before the write, so this one isn't listed.
+      const baseName = sanitizedPath.split('/').pop() || '';
+      const sameNameElsewhere = appendedTo === null && !PER_PROJECT_NAMES.has(baseName.toLowerCase())
+        && !fs.existsSync(path.join(WORKSPACE_ROOT, sanitizedPath))
+        ? findWorkspaceFilesNamed(WORKSPACE_ROOT, baseName)
+        : [];
       const result = await ws.writeFile(sanitizedPath, toWrite);
 
       if (appendedTo === null) sessionFileCount.created++;
@@ -194,8 +213,11 @@ export default class WorkspaceFilesHandler extends BaseSkillHandler {
         ? ` [Note: no path was provided in the tool call — a filename was inferred from the content and the file was saved to "${sanitizedPath}". Next time, include a "path" parameter explicitly.]`
         : '';
       const appendNote = appendedTo !== null ? ` (appended ${content.length} chars after the existing ${appendedTo})` : '';
-      console.log(`   📝 Workspace write: ${sanitizedPath}${pathNote}${inferredPath ? ' (inferred)' : ''}${appendNote}`);
-      return this.success(toolCall, { success: true, message: result + appendNote + pathNote + inferredNote, path: sanitizedPath, ...(appendedTo !== null && { appended: true }) });
+      const sameNameNote = sameNameElsewhere.length > 0
+        ? `Saved as a new file. ${sameNameElsewhere.length === 1 ? 'Another file with this name already exists' : 'Other files with this name already exist, newest first'}:\n${describeNamedFiles(sameNameElsewhere)}\nIf you meant to add to ${sameNameElsewhere.length === 1 ? 'that one' : 'one of those'}, update it instead (append=true adds to the end). If this is a separate file on purpose, carry on.`
+        : '';
+      console.log(`   📝 Workspace write: ${sanitizedPath}${pathNote}${inferredPath ? ' (inferred)' : ''}${appendNote}${sameNameNote ? ` (same name also at ${sameNameElsewhere.map(f => f.path).join(', ')})` : ''}`);
+      return this.success(toolCall, { success: true, message: result + appendNote + pathNote + inferredNote, path: sanitizedPath, ...(appendedTo !== null && { appended: true }), ...(sameNameNote && { note: sameNameNote }) });
     } catch (err) {
       console.error('   ❌ Workspace write error:', err instanceof Error ? err.message : err);
       return this.error(toolCall, `Failed to write file: ${err instanceof Error ? err.message : 'Unknown error'}`);
@@ -294,12 +316,10 @@ export default class WorkspaceFilesHandler extends BaseSkillHandler {
         const baseName = filePath.split('/').pop() || '';
         const sameName = baseName.includes('.') ? findWorkspaceFilesNamed(WORKSPACE_ROOT, baseName) : [];
         if (sameName.length > 0) {
-          const when = (d: Date) => d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-          const lines = sameName.map(f => `  📄 ${f.path} (${f.size < 1024 ? `${f.size}B` : `${(f.size / 1024).toFixed(1)}KB`}, changed ${when(f.modified)})`);
           console.log(`   📁 ${filePath} not found — same name at ${sameName.map(f => f.path).join(', ')}`);
           return this.error(
             toolCall,
-            `File not found: "${filePath}". ${sameName.length === 1 ? 'A file with that name is at' : 'Files with that name, newest first'}:\n${lines.join('\n')}\n\nRead the one you meant with workspace_read_file and that exact path. If none of these is it, call workspace_list_files.`
+            `File not found: "${filePath}". ${sameName.length === 1 ? 'A file with that name is at' : 'Files with that name, newest first'}:\n${describeNamedFiles(sameName)}\n\nRead the one you meant with workspace_read_file and that exact path. If none of these is it, call workspace_list_files.`
           );
         }
 
