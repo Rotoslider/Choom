@@ -927,8 +927,15 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
               // (2026-09-12). Only models flagged replyInReasoning get salvaged
               // unconditionally; otherwise prose that reads as deliberation is
               // answered with a nudge to act, once per request.
-              const deliberation = reasoningOnly && isReasoningDeliberation(stream, llmSettings.replyInReasoning);
-              if (deliberation) {
+              // Thinking on, and it only thought: DeepSeek V4.1 Flash on OpenRouter thought for
+              // 30 s and wrote nothing, twice, so Genesis's turn fell to the local fallback with
+              // the chat trimmed (2026-10-30). That's the same nudge, not an empty response. A
+              // forced call keeps its own retry below (unforced, so she can talk).
+              const thoughtOnly = !iterationContent.trim() && !hasToolCalls && !stream.reasoningProse.trim()
+                && stream.thinkingChars > 0 && !(toolChoiceWasRequired && !relaxedToolChoice);
+              const deliberation = (reasoningOnly && isReasoningDeliberation(stream, llmSettings.replyInReasoning)) || thoughtOnly;
+              const thoughtChars = stream.reasoningProse.length || stream.thinkingChars;
+              if (deliberation && stream.reasoningProse.trim()) {
                 // Let the user SEE the thinking (own box, never spoken) — it just
                 // must not become the reply.
                 send({ type: 'thinking', content: stream.reasoningProse.trim() });
@@ -949,9 +956,9 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                   if ('settings' in llmClient && (llmClient as LLMClient).settings) {
                     (llmClient as LLMClient).settings.maxTokens = bumpedMax;
                   }
-                  console.log(`   🧠 ${choomTag} Reasoning-only turn cut off by max_tokens (${stream.reasoningProse.length} chars of thinking) — bumping max_tokens ${currentMax} → ${bumpedMax} and nudging to act`);
+                  console.log(`   🧠 ${choomTag} Reasoning-only turn cut off by max_tokens (${thoughtChars} chars of thinking) — bumping max_tokens ${currentMax} → ${bumpedMax} and nudging to act`);
                 } else {
-                  console.log(`   🧠 ${choomTag} Reasoning-only turn (${stream.reasoningProse.length} chars of deliberation, finish=${stream.finishReason}) — not a reply; nudging to act`);
+                  console.log(`   🧠 ${choomTag} Reasoning-only turn (${thoughtChars} chars of deliberation, finish=${stream.finishReason}) — not a reply; nudging to act`);
                 }
                 traceBuilder.recordNudge('reasoning_only');
                 currentMessages.push({
@@ -974,6 +981,7 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                 console.log(`   🔁 ${choomTag} Forced call returned empty — retrying this turn WITHOUT tool_choice=required (letting the Choom converse)`);
                 continue;
               } else if (!iterationContent.trim() && !hasToolCalls && fallbackAttempt < fallbackConfigs.length) {
+                console.log(`   🕳️  ${choomTag} Empty turn: finish=${stream.finishReason}, ${stream.usage.completionTokens} completion tokens, ${thoughtChars} chars of thinking${deliberationNudged ? ' (already nudged once)' : ''}`);
                 throw new Error('Empty response from model (0 characters, no tool calls)');
               }
             } catch (timeoutError) {

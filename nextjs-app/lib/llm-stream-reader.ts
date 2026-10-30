@@ -32,6 +32,9 @@ export interface StreamState {
   content: string;
   /** Reasoning-channel prose kept aside when thinking is off — the reply itself for qwen3.6. */
   reasoningProse: string;
+  /** Characters of thinking streamed with thinking on (shown or not), so a turn that only
+   *  thought isn't mistaken for an empty one. */
+  thinkingChars: number;
   /** Structured tool-call deltas, keyed by index, accumulated across chunks. */
   toolCalls: Map<number, { id: string; name: string; arguments: string }>;
   finishReason: string;
@@ -58,7 +61,7 @@ export interface StreamState {
 
 export function newStreamState(): StreamState {
   return {
-    content: '', reasoningProse: '', toolCalls: new Map(), finishReason: 'stop',
+    content: '', reasoningProse: '', thinkingChars: 0, toolCalls: new Map(), finishReason: 'stop',
     capturedXml: [], capturedJson: [], capturedGemma: [], capturedTagged: [],
     thinkTokensFiltered: false, abortedForRepetition: false,
     callStart: 0, firstChunkAt: 0,
@@ -266,28 +269,39 @@ export async function readLlmStream(st: StreamState, opts: ReadLlmStreamOptions)
       // model's chain-of-thought, so it must NOT reach the user / TTS / DB
       // directly. It is buffered in `reasoningProse` and only used as the
       // reply when the turn produced no normal content and no tool call.
-      const deltaAny = choice.delta as { reasoning_content?: string } & ChatCompletionChunk['choices'][0]['delta'];
+      const deltaAny = choice.delta as { reasoning_content?: string; reasoning?: string | null } & ChatCompletionChunk['choices'][0]['delta'];
+      // OpenRouter streams a model's thinking as delta.reasoning, not reasoning_content. Nothing
+      // read it, so when DeepSeek V4.1 Flash thought for 30 s and then neither spoke nor called a
+      // tool, the turn looked empty, the same-model retry did the same, and Genesis's reply went
+      // to the local fallback with most of the chat trimmed away (2026-10-30).
+      const openRouterThinking = !deltaAny.reasoning_content && typeof deltaAny.reasoning === 'string' ? deltaAny.reasoning : '';
+      const reasoningText = deltaAny.reasoning_content || openRouterThinking;
       let chunkIsReasoningOnly = false;
       if (
         opts.enableThinking === false &&
-        typeof deltaAny.reasoning_content === 'string' &&
-        deltaAny.reasoning_content.length > 0 &&
+        typeof reasoningText === 'string' &&
+        reasoningText.length > 0 &&
         !choice.delta.content
       ) {
         if (!reasoningRouted) {
-          console.log(`   🔄 ${choomTag} ${label}Routing delta.reasoning_content through tool-call filters (enableThinking=false; reasoning prose will be hidden)`);
+          console.log(`   🔄 ${choomTag} ${label}Routing delta.${openRouterThinking ? 'reasoning' : 'reasoning_content'} through tool-call filters (enableThinking=false; reasoning prose will be hidden)`);
           reasoningRouted = true;
         }
-        choice.delta.content = deltaAny.reasoning_content;
+        choice.delta.content = reasoningText;
         chunkIsReasoningOnly = true;
       } else if (typeof deltaAny.reasoning_content === 'string' && deltaAny.reasoning_content.length > 0) {
         // Thinking is on (or unset): reasoning_content is chain-of-thought.
         // Show it, live, in the thinking box; it is never part of the reply.
         sendThinking(deltaAny.reasoning_content);
+        st.thinkingChars += deltaAny.reasoning_content.length;
+      } else if (openRouterThinking) {
+        // Counted, not shown: OpenRouter's thinking never reached the thinking box before, and
+        // showing it would put every DeepSeek turn's thinking on screen and on the glass's feed.
+        st.thinkingChars += openRouterThinking.length;
       }
 
       const hasContent = !!(choice.delta.content || choice.delta.tool_calls ||
-        (typeof deltaAny.reasoning_content === 'string' && deltaAny.reasoning_content.length > 0));
+        (typeof reasoningText === 'string' && reasoningText.length > 0));
       resetInactivity(hasContent);
 
       if (choice.delta.content) {
