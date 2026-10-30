@@ -769,7 +769,7 @@ counts you as at the desk.
 
 **When it's skipped.**
 - At night (11 pm to 7 am). After 4 hours or more away, you are welcomed from 5 am.
-- Within two hours of the last welcome.
+- Within an hour of the last welcome.
 - While you're already talking (a conversation in the last 2 minutes).
 - While you're in bed.
 

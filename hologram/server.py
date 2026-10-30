@@ -415,7 +415,7 @@ image_cache = {}  # the last few pictures fetched for the page: id -> (content t
 # Choom starting to talk woke them then) or the monitor layout is reapplied, which kept "bringing him
 # back" while he was out at the gate, so input alone doesn't count.
 WELCOME_AFTER_S = float(os.environ.get("HOLOGRAM_WELCOME_AFTER_S", 20 * 60))  # away at least this long
-WELCOME_EVERY_S = 2 * 60 * 60    # at most one welcome back every two hours
+WELCOME_EVERY_S = 60 * 60        # at most one welcome back an hour (two hours until 2026-10-30: back from 22 min outside, 35 min after the last one, went unwelcomed)
 WELCOME_HOURS = (7, 23)          # not at night
 MORNING = (5, 4 * 60 * 60)       # but back after a night away (4 h or more) counts from 5 am: up at
                                  # 6:43 after 518 minutes away went unwelcomed as "night" (2026-10-13)
