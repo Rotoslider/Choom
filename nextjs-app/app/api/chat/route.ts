@@ -6,6 +6,7 @@ import { MemoryClient } from '@/lib/memory-client';
 import { WorkspaceService } from '@/lib/workspace-service';
 import { isLocalEndpoint } from '@/lib/stream-timeouts';
 import { ProjectService } from '@/lib/project-service';
+import { chosenProject, pinChatProject } from '@/lib/project-pin';
 import type { LLMProviderConfig, LLMModelProfile } from '@/lib/types';
 import { findLLMProfile } from '@/lib/model-profiles';
 import { getSkillRegistry } from '@/lib/skill-registry';
@@ -788,48 +789,20 @@ export async function POST(request: NextRequest) {
     } else try {
       const projectService = new ProjectService(WORKSPACE_ROOT);
       const allProjects = await projectService.listProjects();
-      const msgLowerForProject = message.toLowerCase().replace(/[_\s]+/g, ' ');
-
-      // Helper: find matching projects in text, preferring longest (most specific) match
-      const findBestMatch = (text: string): typeof detectedProject => {
-        const matches: typeof allProjects = [];
-        for (const proj of allProjects) {
-          const folderNorm = proj.folder.toLowerCase().replace(/[_\s]+/g, ' ');
-          const metaNameNorm = (proj.metadata.name || '').toLowerCase().replace(/[_\s]+/g, ' ');
-          if ((folderNorm.length >= 4 && text.includes(folderNorm)) ||
-              (metaNameNorm.length >= 4 && text.includes(metaNameNorm))) {
-            matches.push(proj);
-          }
-        }
-        if (matches.length === 0) return null;
-        // Priority: (1) assigned to current Choom, (2) longest folder name, (3) has maxIterations
-        const choomName = choom.name.toLowerCase();
-        matches.sort((a, b) => {
-          // Strongly prefer projects assigned to the current Choom
-          const aAssigned = (a.metadata.assignedChoom || '').toLowerCase() === choomName ? 1 : 0;
-          const bAssigned = (b.metadata.assignedChoom || '').toLowerCase() === choomName ? 1 : 0;
-          if (aAssigned !== bAssigned) return bAssigned - aAssigned;
-          // Then prefer longest folder name (most specific: "selfies_lissa" beats "selfies")
-          const lenDiff = b.folder.length - a.folder.length;
-          if (lenDiff !== 0) return lenDiff;
-          const aHasIter = a.metadata.maxIterations && a.metadata.maxIterations > 0 ? 1 : 0;
-          const bHasIter = b.metadata.maxIterations && b.metadata.maxIterations > 0 ? 1 : 0;
-          return bHasIter - aHasIter;
-        });
-        return matches[0];
-      };
-
-      // (b) Did the CURRENT message explicitly name a project? ("we're working in
-      // X") — if so, PIN it to this chat (persisted on the Chat row) so it sticks
-      // for every later message, on web AND on Signal. Then notify the web header
-      // so its dropdown updates (autoSetProjectInfo, emitted once `send` exists).
-      detectedProject = findBestMatch(msgLowerForProject);
+      // (b) Did Donny choose a project in this message ("we're working in project X")?
+      // Only his own words count (lib/project-pin.ts): a name that just comes up,
+      // a photo's uploads/ path, a heartbeat or a house note never moves the chat.
+      // The pin is persisted on the Chat row so it sticks for every later message,
+      // on web, tower and Signal, and the web header hears of it (autoSetProjectInfo,
+      // emitted once `send` exists).
+      const ownerTurn = userInitiated && !isNote && !isHeartbeat && !isDelegation;
+      detectedProject = ownerTurn ? chosenProject(message, allProjects, choom.name) : null;
       if (detectedProject) {
         const chatPinned = (chat as { activeProjectFolder?: string | null }).activeProjectFolder;
         if (chatPinned !== detectedProject.folder) {
-          await prisma.chat.update({ where: { id: chatId }, data: { activeProjectFolder: detectedProject.folder } }).catch(() => {});
+          await pinChatProject(chatId, detectedProject.folder).catch(() => {});
           autoSetProjectInfo = { folder: detectedProject.folder, name: detectedProject.metadata.name || detectedProject.folder };
-          console.log(`   📌 ${choom.name} — pinned project "${detectedProject.folder}" to this chat (named in message)`);
+          console.log(`   📌 ${choom.name} — pinned project "${detectedProject.folder}" to this chat (Donny chose it in his message)`);
         }
       } else {
         // No project named now → use the project pinned on this chat (set earlier

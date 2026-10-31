@@ -5,6 +5,7 @@ import type { ToolCall, ToolResult } from '@/lib/types';
 import { WorkspaceService } from '@/lib/workspace-service';
 import ImageAnalysisHandler from '@/skills/core/image-analysis/handler';
 import { ProjectService } from '@/lib/project-service';
+import { asksForNewProject, chosenProject, pinChatProject } from '@/lib/project-pin';
 // Canonical workspace write policy — do NOT shadow it with a local copy.
 // A stale private list here silently blocked .lisp writes (Genesis, 2026-08-25)
 // even though lib/config.ts allowed them.
@@ -477,11 +478,29 @@ export default class WorkspaceFilesHandler extends BaseSkillHandler {
       ctx.send({ type: 'file_created', path: `${project.folder}/.choom-project.json` });
 
       console.log(`   📂 Project created: ${project.folder} (assigned to ${assignedChoom || 'unassigned'})`);
+
+      // Donny asked for it ("create a project called X", "we're working in project X"):
+      // the chat works in it from now on, and his header shows it. A project she
+      // starts on her own doesn't move the chat; he picks the project.
+      let pinned = false;
+      if (ctx.ownerTurn && ctx.chatId && (asksForNewProject(ctx.message) || chosenProject(ctx.message, [project]))) {
+        pinned = await pinChatProject(ctx.chatId, project.folder).then(() => true, (e) => {
+          console.warn(`   ⚠️ Could not pin project "${project.folder}" to the chat:`, e instanceof Error ? e.message : e);
+          return false;
+        });
+        if (pinned) {
+          ctx.send({ type: 'project_set', chatId: ctx.chatId, folder: project.folder, name: project.metadata.name || project.folder });
+          ctx.onProjectPinned?.(project.folder);
+          console.log(`   📌 ${(ctx.choom as Record<string, unknown>).name} — pinned project "${project.folder}" to this chat (Donny asked for it)`);
+        }
+      }
+
       return this.success(toolCall, {
         success: true,
         project_folder: project.folder,
         metadata: project.metadata,
-        message: `Project "${name}" created at ${project.folder}/. All project files should use paths starting with "${project.folder}/".`,
+        message: `Project "${name}" created at ${project.folder}/. All project files should use paths starting with "${project.folder}/".`
+          + (pinned ? ` This chat now works in ${project.folder}/ (Donny's "Working in" shows it).` : ''),
       });
     } catch (err) {
       console.error('   ❌ Project create error:', err instanceof Error ? err.message : err);

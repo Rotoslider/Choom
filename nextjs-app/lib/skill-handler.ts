@@ -32,6 +32,11 @@ export interface SkillHandlerContext {
 
   // Active project context (passed to delegation so target Choom knows where to work)
   activeProjectFolder?: string;
+  // Donny's own message (web, tower or Signal), not a heartbeat, note, room or delegation:
+  // only then may a project she creates become the chat's (lib/project-pin.ts).
+  ownerTurn?: boolean;
+  // The rest of the turn works in this folder (a project pinned mid-turn).
+  onProjectPinned?: (folder: string) => void;
 
   // Request-scope flags (propagated from route.ts ToolContext)
   suppressNotifications?: boolean;

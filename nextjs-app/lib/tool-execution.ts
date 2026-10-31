@@ -77,6 +77,8 @@ export interface ToolContext {
   suppressNotifications?: boolean;
   isHeartbeat?: boolean;
   activeProjectFolder?: string;
+  // Donny's own message, not a heartbeat, note, room or delegation (chat-stream takesOver).
+  ownerTurn?: boolean;
   isDelegation?: boolean;
   // Slug of the Choom that delegated this task (e.g. "optic"). When set, the
   // worker is allowed to write into the delegator's own selfies_ folder, since
@@ -2671,6 +2673,8 @@ export async function executeToolCallViaSkills(
     send: ctx.send,
     sessionFileCount: ctx.sessionFileCount,
     activeProjectFolder: ctx.activeProjectFolder,
+    ownerTurn: ctx.ownerTurn,
+    onProjectPinned: (folder: string) => { ctx.activeProjectFolder = folder; },
     suppressNotifications: ctx.suppressNotifications,
     isHeartbeat: ctx.isHeartbeat,
     groupRoomId: ctx.groupRoomId,

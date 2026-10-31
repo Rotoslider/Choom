@@ -191,6 +191,7 @@ export async function runChatTurn(params: ChatTurnParams): Promise<void> {
           suppressNotifications: !!suppressNotifications,
           isHeartbeat: !!isHeartbeat,
           activeProjectFolder: detectedProject?.folder,
+          ownerTurn: takesOver,
           isDelegation: !!isDelegation,
           groupRoomId,
           isGroupTurn: !!isGroupTurn,
