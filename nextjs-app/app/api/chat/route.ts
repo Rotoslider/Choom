@@ -6,7 +6,7 @@ import { MemoryClient } from '@/lib/memory-client';
 import { WorkspaceService } from '@/lib/workspace-service';
 import { isLocalEndpoint } from '@/lib/stream-timeouts';
 import { ProjectService } from '@/lib/project-service';
-import { chosenProject, pinChatProject } from '@/lib/project-pin';
+import { activeProjectNote, chosenProject, pinChatProject } from '@/lib/project-pin';
 import type { LLMProviderConfig, LLMModelProfile } from '@/lib/types';
 import { findLLMProfile } from '@/lib/model-profiles';
 import { getSkillRegistry } from '@/lib/skill-registry';
@@ -836,7 +836,7 @@ export async function POST(request: NextRequest) {
           // In the system prompt, not appended to his message: Eve read the bracketed note on every
           // message as Donny saying it and opened each reply with "I hear you loud and clear,
           // journal, all lowercase" (2026-10-10).
-          currentMessages[0].content += `\n\n## ACTIVE PROJECT\nThe active project for this chat is \`${detectedProject.folder}/\`. Use this exact folder name for workspace file operations (don't create a variant with different casing or naming). This is a setting, not something Donny said; there's no need to acknowledge it.`;
+          currentMessages[0].content += activeProjectNote(detectedProject.folder, choom.name, inboxList);
         }
         // Also update system prompt with the correct iteration limit
         currentMessages[0].content += `\nYou have ${projMaxIter} thinking rounds available. Each round can include multiple parallel tool calls — calling 5 tools in one round only uses 1 round, not 5. Do not stop early thinking you are running out of rounds.`;
@@ -849,7 +849,7 @@ export async function POST(request: NextRequest) {
         const selfiesFolder = `selfies_${choom.name.toLowerCase()}`;
         const defaultRounds = resolveMaxIterations({ maxIterationsOverride, choomMaxIterations, isHeartbeat }).maxIterations;
         // Same rule as everywhere else: advertise the budget resolveMaxIterations will actually enforce (heartbeat turns: 15 by default, a directive or project held to 20).
-        currentMessages[0].content += `\n\n## YOUR WORKSPACE\nYour default workspace is \`${selfiesFolder}/\` — your own personal folder. When you save a file without a project being named, save it inside \`${selfiesFolder}/\` (e.g. \`${selfiesFolder}/notes/today.md\`). Don't spin up a new top-level folder for one-off saves — those belong in \`${selfiesFolder}/\`. But if what you're working on genuinely grows into its own body of work, use your judgment and create a dedicated project for it with \`workspace_create_project\` (the user can also name or pick one from the chat's project menu). One-off note → selfies; a real project worth keeping together → its own folder.\n\n**Shared folder — \`choom_commons/\`** (NOT inside your selfies folder): where ALL cross-Choom communication happens — letters, notes, delegation handoffs, shared drafts, research. Each sibling has an INBOX there — ${inboxList} — and it is hers: leave things FOR her with \`leave_for_sister\`, read your own with \`check_inbox\` when you wake up. Do not use an inbox as a working folder. Shared drafts go in \`choom_commons/drafts/\`. You may NEVER write into another Choom's \`selfies_*/\` folder. Your \`growth_journal.md\` lives in \`${selfiesFolder}/growth_journal.md\`.\n\nYou have ${defaultRounds} thinking rounds available. Each round can include multiple parallel tool calls — calling 5 tools in one round only uses 1 round, not 5.`;
+        currentMessages[0].content += `\n\n## YOUR WORKSPACE\nYour default workspace is \`${selfiesFolder}/\` — your own personal folder. When you save a file without a project being named, save it inside \`${selfiesFolder}/\` (e.g. \`${selfiesFolder}/notes/today.md\`). Don't spin up a new top-level folder for one-off saves — those belong in \`${selfiesFolder}/\`. If what you're working on grows into its own body of work, suggest a project to Donny. He picks projects: he tells you which one, asks you to create one (then use \`workspace_create_project\`), or picks it from the chat's menu.\n\n**Shared folder — \`choom_commons/\`** (NOT inside your selfies folder): where ALL cross-Choom communication happens — letters, notes, delegation handoffs, shared drafts, research. Each sibling has an INBOX there — ${inboxList} — and it is hers: leave things FOR her with \`leave_for_sister\`, read your own with \`check_inbox\` when you wake up. Do not use an inbox as a working folder. Shared drafts go in \`choom_commons/drafts/\`. You may NEVER write into another Choom's \`selfies_*/\` folder. Your \`growth_journal.md\` lives in \`${selfiesFolder}/growth_journal.md\`.\n\nYou have ${defaultRounds} thinking rounds available. Each round can include multiple parallel tool calls — calling 5 tools in one round only uses 1 round, not 5.`;
         console.log(`   🪪 ${choom.name} — no active project; default workspace ${selfiesFolder}/`);
       }
     } catch { /* ignore project detection errors */ }

@@ -15,7 +15,7 @@ jest.mock('@/lib/db', () => ({ __esModule: true, default: { chat: { update: (...
 jest.mock('@/lib/config', () => ({ ...jest.requireActual('@/lib/config'), get WORKSPACE_ROOT() { return root; } }));
 jest.mock('@/skills/core/image-analysis/handler', () => ({ __esModule: true, default: class {} }));
 
-import { chosenProject, asksForNewProject } from '@/lib/project-pin';
+import { chosenProject, asksForNewProject, activeProjectNote } from '@/lib/project-pin';
 import WorkspaceFilesHandler from '@/skills/core/workspace-files/handler';
 
 const project = (folder: string, name = folder, assignedChoom = '') => ({ folder, metadata: { name, assignedChoom } });
@@ -137,5 +137,25 @@ describe('workspace_create_project', () => {
   it('leaves the chat alone on a heartbeat, note or delegation', async () => {
     await create('create a project called lamp design', false).result;
     expect(mockUpdate).not.toHaveBeenCalled();
+  });
+});
+
+describe('activeProjectNote', () => {
+  // Eve's heartbeat chat sat on tower_cam/ for six weeks and her growth journal went to
+  // tower_cam/journal/, because a chat with a project was told only the project.
+  const note = activeProjectNote('tower_cam', 'Eve', '`choom_commons/for_genesis/`');
+
+  it("names the project as where this chat's work goes", () => {
+    expect(note).toContain('## ACTIVE PROJECT');
+    expect(note).toContain('The active project for this chat is `tower_cam/`');
+  });
+
+  it('keeps her own folder, journal and the commons where they always are', () => {
+    expect(note).toContain('Your own folder is `selfies_eve/`');
+    expect(note).toContain('`selfies_eve/growth_journal.md`');
+    expect(note).toContain('leave_for_sister');
+    expect(note).toContain('check_inbox');
+    expect(note).toContain('`choom_commons/for_genesis/`');
+    expect(note).not.toContain('tower_cam/growth_journal.md');
   });
 });

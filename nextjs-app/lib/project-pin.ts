@@ -77,6 +77,18 @@ export function asksForNewProject(message: string): boolean {
   return new RegExp(String.raw`\b${CREATING}\s+${LEAD_IN}project\b`).test(words) || /\bnew\s+project\b/.test(words);
 }
 
+/**
+ * The "## ACTIVE PROJECT" part of her instructions in a chat with a project. It used to name only the
+ * project, so her own folder, her journal and choom_commons dropped out: Eve's heartbeat chat sat on
+ * tower_cam/ for six weeks and her growth journal went to tower_cam/journal/, where the app (it loads
+ * selfies_<name>/growth_journal.md) never read it.
+ */
+export function activeProjectNote(folder: string, choomName: string, inboxList: string): string {
+  const own = `selfies_${choomName.toLowerCase()}`;
+  return `\n\n## ACTIVE PROJECT\nThe active project for this chat is \`${folder}/\`: this chat's work is saved there. Use this exact folder name for workspace file operations (don't create a variant with different casing or naming). This is a setting, not something Donny said; there's no need to acknowledge it.`
+    + `\n\nEverything else stays where it always is. Your own folder is \`${own}/\`, and your \`growth_journal.md\` lives there (\`${own}/growth_journal.md\`), never in a project. \`choom_commons/\` is for your sisters: letters with \`leave_for_sister\`, your own inbox with \`check_inbox\` (the inboxes are ${inboxList}), shared drafts in \`choom_commons/drafts/\`. You can read any folder in the workspace. Only Donny picks the project: he tells you, or picks it from the chat's menu.`;
+}
+
 /** Pins the project to the chat; the chat page's menu ("Working in") reads it from there. */
 export async function pinChatProject(chatId: string, folder: string): Promise<void> {
   await prisma.chat.update({ where: { id: chatId }, data: { activeProjectFolder: folder } });

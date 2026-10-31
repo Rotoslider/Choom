@@ -189,6 +189,7 @@ interface AppState {
   setCurrentChoom: (id: string | null) => void;
   setCurrentChat: (id: string | null) => void;
   setActiveProject: (chatId: string, folder: string) => void;
+  setChatProject: (chatId: string, folder: string) => void;
   setCurrentChoomData: (choom: Choom | null) => void;
   setCurrentChatData: (chat: Chat | null) => void;
 
@@ -459,6 +460,15 @@ export const useAppStore = create<AppState>()(
       setCurrentChat: (id) => set({ currentChatId: id }),
       setActiveProject: (chatId, folder) =>
         set((state) => ({ activeProjectByChat: { ...state.activeProjectByChat, [chatId]: folder } })),
+      // A project just picked for a chat (the menu, or a project_set from her turn). The chat list
+      // gets it too: opening a chat sets the menu from that list, which only refreshes every 30 s, so
+      // a pick followed by a visit to another chat and back showed the old folder again (Donny,
+      // 2026-10-31: moving Aloy to cameras and selfies_aloy "didn't work", though both were saved).
+      setChatProject: (chatId, folder) =>
+        set((state) => ({
+          activeProjectByChat: { ...state.activeProjectByChat, [chatId]: folder },
+          chats: state.chats.map((c) => (c.id === chatId ? { ...c, activeProjectFolder: folder || null } : c)),
+        })),
       setCurrentChoomData: (choom) => set({ currentChoom: choom }),
       setCurrentChatData: (chat) => set({ currentChat: chat }),
 

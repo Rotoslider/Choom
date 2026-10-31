@@ -57,7 +57,7 @@ export function ChatInterface({
   isSpeaking = false,
 }: ChatInterfaceProps) {
   const [isLoading, setIsLoading] = useState(false);
-  const { currentChoom, currentChatId, activeProjectByChat, setActiveProject, services } = useAppStore();
+  const { currentChoom, currentChatId, activeProjectByChat, setChatProject, services } = useAppStore();
 
   // Projects for the chat-header "working in" dropdown.
   const [projects, setProjects] = useState<Array<{ folder: string; name?: string }>>([]);
@@ -131,7 +131,7 @@ export function ChatInterface({
                   value={activeProject}
                   onChange={(e) => {
                     const folder = e.target.value;
-                    setActiveProject(currentChatId, folder); // immediate local view
+                    setChatProject(currentChatId, folder); // immediate local view, and the chat list's copy
                     // Persist on the chat so it survives reloads AND applies on Signal.
                     fetch(`/api/chats/${currentChatId}`, {
                       method: 'PUT', headers: { 'Content-Type': 'application/json' },

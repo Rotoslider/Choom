@@ -723,7 +723,7 @@ export default function Home() {
             // tells us here — update the header dropdown live.
             const pd = data as unknown as { type?: string; chatId?: string; folder?: string };
             if (pd.type === 'project_set' && pd.chatId) {
-              setActiveProject(pd.chatId, pd.folder || '');
+              useAppStore.getState().setChatProject(pd.chatId, pd.folder || '');
               continue;
             }
 
