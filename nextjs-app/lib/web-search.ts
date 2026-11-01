@@ -2,6 +2,42 @@ import type { SearchSettings, SearchResult, SearchResponse } from './types';
 import { ensureEndpoint } from './utils';
 import { fenceUntrusted } from './untrusted-content';
 
+// Brave's plan allows 1 query per second (x-ratelimit-policy: 1;w=1, 2000;w=2592000).
+// A turn's web_search calls run one after another with no gap, so the second
+// one went out ~0.8 s after the first, got 429 and fell back to SerpAPI: all 70
+// Brave 429s logged Sep 9 – Nov 1 came under 1 s after the search before. Each
+// Brave request now starts at least 1.2 s after the previous one, for every
+// Choom and the /api/search route alike. The gate lives on globalThis so that
+// every bundle importing this module in the one server process shares it.
+export const BRAVE_MIN_GAP_MS = 1200;
+
+interface BraveGate { lastStart: number; queue: Promise<void> }
+const gateHolder = globalThis as typeof globalThis & { __choomBraveGate?: BraveGate };
+
+function braveGate(): BraveGate {
+  return (gateHolder.__choomBraveGate ??= { lastStart: 0, queue: Promise.resolve() });
+}
+
+/** Resolves when the caller may send its Brave request; callers go in arrival order. */
+export function waitForBraveTurn(): Promise<void> {
+  const gate = braveGate();
+  const turn = gate.queue.then(async () => {
+    const wait = gate.lastStart + BRAVE_MIN_GAP_MS - Date.now();
+    if (wait > 0) {
+      console.log(`   ⏳ Brave: waiting ${wait} ms (1 query per second)`);
+      await new Promise(resolve => setTimeout(resolve, wait));
+    }
+    gate.lastStart = Date.now();
+  });
+  gate.queue = turn.catch(() => {});
+  return turn;
+}
+
+/** Tests only: forget the last Brave request. */
+export function resetBraveGate(): void {
+  gateHolder.__choomBraveGate = undefined;
+}
+
 export class WebSearchService {
   private settings: SearchSettings;
 
@@ -62,6 +98,7 @@ export class WebSearchService {
 
     const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${limit}`;
 
+    await waitForBraveTurn();
     const response = await fetch(url, {
       headers: {
         'Accept': 'application/json',
