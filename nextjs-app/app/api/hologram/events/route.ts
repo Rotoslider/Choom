@@ -3,6 +3,7 @@
  * hologram (see lib/hologram-bus.ts).
  */
 import { subscribeHologram } from '@/lib/hologram-bus';
+import { glassPowerEvent } from '@/lib/glass-power';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -22,6 +23,9 @@ export async function GET(request: Request) {
       };
       write(': connected\n\n');
       const unsubscribe = subscribeHologram((event) => write(`data: ${JSON.stringify(event)}\n\n`));
+      // The Glass button's state, on or off: a glass that was off when the app restarted, or that
+      // missed the press while its feed was down, picks it up here (after the mute, if muted).
+      write(`data: ${JSON.stringify({ ...glassPowerEvent(), time: Date.now() })}\n\n`);
       const ping = setInterval(() => write(': ping\n\n'), 15000);
       cleanup = () => {
         clearInterval(ping);

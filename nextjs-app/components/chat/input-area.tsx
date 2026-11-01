@@ -9,6 +9,7 @@ import { cn } from '@/lib/utils';
 import { useAppStore } from '@/lib/store';
 import { STTClient } from '@/lib/stt-client';
 import { hologramMic, hologramTyping, hologramTypingDone } from '@/lib/hologram-voice';
+import { GlassPowerButton } from '@/components/chat/glass-power-button';
 import { log } from '@/lib/log-store';
 import {
   Tooltip,
@@ -326,6 +327,9 @@ export function InputArea({
                   {ui.isMuted ? 'Unmute TTS' : 'Mute TTS'}
                 </TooltipContent>
               </Tooltip>
+
+              {/* Looking Glass picture on/off (saves the NUC's GPU power) */}
+              <GlassPowerButton />
 
               {/* Image attachment */}
               <Tooltip>

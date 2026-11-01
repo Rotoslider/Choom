@@ -1,6 +1,7 @@
 /**
  * /api/hologram/voice: the Looking Glass hologram's voice hand-off.
- *   POST { voice: boolean }  heartbeat from the hologram (every 10 s while it runs)
+ *   POST { voice: boolean, glassOff?: boolean }  heartbeat from the hologram (every 10 s while it
+ *                            runs); glassOff says its picture is off (the Glass button)
  *   GET  -> { voice }        true while a fresh heartbeat says the hologram is speaking and the
  *                            asking browser is at home. Browsers poll this and stay quiet while
  *                            it is true (lib/hologram-voice.ts). ?chat=ID or ?room=ID says what
@@ -17,6 +18,7 @@ import {
   atTravelGlass, forwardedFor, fromTravelGlass, hologramVoiceActive, markViewing, requestFromAway,
   setHologramVoice, setTravelGlassVoice, travelGlassActive,
 } from '@/lib/hologram-bus';
+import { setGlassReported } from '@/lib/glass-power';
 
 export const dynamic = 'force-dynamic';
 
@@ -36,11 +38,12 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const body = (await request.json().catch(() => ({}))) as { voice?: unknown };
+  const body = (await request.json().catch(() => ({}))) as { voice?: unknown; glassOff?: unknown };
   if (fromTravelGlass(request)) {
     setTravelGlassVoice(body.voice === true, forwardedFor(request));
     return NextResponse.json({ voice: travelGlassActive() });
   }
   setHologramVoice(body.voice === true);
+  if (typeof body.glassOff === 'boolean') setGlassReported(body.glassOff);
   return NextResponse.json({ voice: hologramVoiceActive() });
 }
