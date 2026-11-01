@@ -245,14 +245,44 @@ def display_watchdog():
 choom_feed = {"state": "starting", "url": CHOOM_URL}
 app_mute = {}  # the Choom app's mute as last heard: {"muted": bool}, replayed to a page that just started
 
+# The app's Glass button (Choom lib/glass-power.ts): the picture off to save power, voices still on.
+# The app sends it whenever this server connects to its feed; saved here too, so a glass relaunched
+# while the Mac is down stays off.
+GLASS_POWER_FILE = HA_CONFIG / "glass_power.json"
+
+
+def load_glass_off():
+    try:
+        return json.loads(GLASS_POWER_FILE.read_text()).get("off") is True
+    except Exception:
+        return False
+
+
+glass_power = {"off": load_glass_off()}
+
+
+def set_glass_off(off):
+    changed = off != glass_power["off"]
+    glass_power["off"] = off
+    if changed:
+        try:
+            GLASS_POWER_FILE.write_text(json.dumps({"off": off, "changedAt": time.strftime("%Y-%m-%dT%H:%M:%S")}) + "\n")
+        except Exception as e:
+            latest["glass_power_error"] = f"{type(e).__name__}: {e}"
+        log_entry({"kind": "glass_power", "off": off})
+    broadcast({"type": "glass_power", "off": off})
+
 
 def replay_state():
     """State that only reaches the page when it changes, for a page that has just (re)started: its mute
-    (every build relaunches the glass, which came back talking while the app was muted), Donny's presence,
-    whether he's looking at the glass, and the weather (sent every 2 minutes anyway)."""
+    (every build relaunches the glass, which came back talking while the app was muted), the Glass
+    button, Donny's presence, whether he's looking at the glass, and the weather (sent every 2 minutes
+    anyway)."""
     events = []
     if "muted" in app_mute:
         events.append({"type": "mute", "muted": app_mute["muted"]})
+    if glass_power["off"]:
+        events.append({"type": "glass_power", "off": True})
     if latest.get("presence"):
         events.append(latest["presence"])
     if latest.get("gaze"):
@@ -300,6 +330,10 @@ def follow_choom():
                         continue
                     if event.get("type") == "glass_shown":  # what this page was already told, for the travel glass
                         continue
+                    if event.get("type") == "glass_power":  # the Glass button (sent on connect and on a press)
+                        if isinstance(event.get("off"), bool):
+                            set_glass_off(event["off"])
+                        continue
                     if event.get("type") == "mute" and isinstance(event.get("muted"), bool):
                         app_mute["muted"] = event["muted"]
                     source = event.get("source")
@@ -339,9 +373,12 @@ def voice_heartbeat():
         status = latest.get("status") or {}
         page_alive = time.time() - received_at.get("status", 0) < 10
         voice = bool(page_alive and status.get("voiceOn"))
+        beat = {"voice": voice}
+        if page_alive and isinstance(status.get("glassOff"), bool):
+            beat["glassOff"] = status["glassOff"]  # for the app's Glass button: the picture really is off (or on)
         try:
             request = urllib.request.Request(f"{CHOOM_URL}/api/hologram/voice",
-                                             data=json.dumps({"voice": voice}).encode(),
+                                             data=json.dumps(beat).encode(),
                                              headers={"Content-Type": "application/json"})
             urllib.request.urlopen(request, timeout=10).read()
             choom_feed["voice_handoff"] = voice

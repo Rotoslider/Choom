@@ -28,6 +28,24 @@ function post(kind, data = {}) {
 window.addEventListener('error', (e) => post('error', { message: e.message, source: e.filename, line: e.lineno }));
 window.addEventListener('unhandledrejection', (e) => post('error', { message: String(e.reason) }));
 
+// The app's Glass button (Choom lib/glass-power.ts): the picture off to save power. Drawing the 48
+// views kept the GPU at full clocks, about 100 W (Donny on solar under three cloudy days, Nov 1
+// 2026). Off, the frame loop stops, the glass goes black and every clip is paused; a clip asked to
+// play meanwhile waits. Voices, ears, buttons and the rest keep going; on, she carries on from there.
+let glassOff = false;
+const videosSeen = new Set();  // every video that has played (the players, the campfire, pictures)
+const videosHeld = new Set();  // paused or kept waiting by the Glass button, to play again when it's on
+const playVideo = HTMLMediaElement.prototype.play;
+HTMLMediaElement.prototype.play = function play() {
+  if (!(this instanceof HTMLVideoElement)) return playVideo.call(this);
+  videosSeen.add(this);
+  if (glassOff) {
+    videosHeld.add(this);
+    return Promise.resolve();
+  }
+  return playVideo.call(this);
+};
+
 // One of the two video players a moving relief takes turns with.
 function makePlayer() {
   const video = document.createElement('video');
@@ -2417,6 +2435,7 @@ events.onmessage = (e) => {
   if (ev.type === 'gaze') onGaze(ev);
   if (ev.type === 'glass') onGlass(ev);
   if (ev.type === 'mute') setVoice(!ev.muted);  // the app's mute, replayed to a page that just started
+  if (ev.type === 'glass_power' && typeof ev.off === 'boolean') setGlassOff(ev.off);  // the app's Glass button
   if (ev.type === 'feed' && ev.state === 'reconnected') {
     // The server's feed from the Mac dropped and came back: whatever ended meanwhile never arrived.
     unseenTurns.clear();
@@ -3148,8 +3167,8 @@ applyPortrait(current);
 // screen's 60 kept two of the NUC's cores busy (Chrome, and GNOME compositing it) around the clock.
 const RENDER_FPS = 30;
 let lastRender = 0;
-renderer.setAnimationLoop((now) => {
-  if (now - lastRender < 1000 / RENDER_FPS - 2) return;
+function frame(now) {
+  if (glassOff || now - lastRender < 1000 / RENDER_FPS - 2) return;
   lastRender = now;
   const dt = Math.min((now - last) / 1000, 0.1);
   last = now;
@@ -3295,7 +3314,33 @@ renderer.setAnimationLoop((now) => {
         `\n← → or buttons: switch   hold L or bottom button: listen\nb body   m mute   - = depth   [ ] center   space pause   h hide`;
     }
   }
-});
+}
+renderer.setAnimationLoop(glassOff ? null : frame);
+
+function setGlassOff(off) {
+  if (off === glassOff) return;
+  glassOff = off;
+  if (off) {
+    renderer.setAnimationLoop(null);
+    for (const v of videosSeen) {
+      if (!v.paused) {
+        v.pause();
+        videosHeld.add(v);
+      }
+    }
+    // Black, once: the canvas would otherwise keep showing the last frame.
+    const color = renderer.getClearColor(new THREE.Color()), alpha = renderer.getClearAlpha();
+    renderer.setRenderTarget(null);
+    renderer.setClearColor(0x000000, 1);
+    renderer.clear();
+    renderer.setClearColor(color, alpha);
+  } else {
+    for (const v of videosHeld) playVideo.call(v).catch(() => {});
+    videosHeld.clear();
+    renderer.setAnimationLoop(frame);
+  }
+  post('glass-power', { off, choom: portraits[current]?.name || null });
+}
 
 const windowInfo = () => ({
   exact: innerWidth === lkg.cal.screenW && innerHeight === lkg.cal.screenH && devicePixelRatio === 1,
@@ -3305,7 +3350,7 @@ post('start', { page: 'living', chooms: portraits.map((p) => p.name), window: wi
 function sendStatus() {
   const cp = portraits[current], pl = cp.players?.[cp.active];
   post('status', {
-    page: 'living', fps, choom: cp.name, body: body ? body.url : null, listening: heard(), mood, voiceOn, paused,
+    page: 'living', fps: glassOff ? 0 : fps, glassOff, choom: cp.name, body: body ? body.url : null, listening: heard(), mood, voiceOn, paused,
     queued: speech.queue.length, window: windowInfo(), clip: cp.alive && pl?.clip >= 0 ? cp.alive.clips[pl.clip]?.source : null,
   });
 }
