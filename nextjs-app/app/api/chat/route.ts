@@ -17,7 +17,7 @@ import { getLiveContextWindow } from '@/lib/model-metadata';
 import { allTools, getAllToolsFromSkills, useSkillDispatch } from '@/lib/tool-definitions';
 import { buildReferenceCatalog } from '@/lib/reference-library';
 import { loadCoreSkills, loadCustomSkills } from '@/lib/skill-loader';
-import { CompactionService } from '@/lib/compaction-service';
+import { CompactionService, messageTokens } from '@/lib/compaction-service';
 import { choomHasSshPermission } from '@/lib/choom-permissions';
 
 import { buildChoomContext } from '@/lib/chat-context';
@@ -1199,13 +1199,13 @@ export async function POST(request: NextRequest) {
       console.log(`   🧊 Prefix: system ${fp(sys)} (${sys.length.toLocaleString()} chars), tools ${fp(JSON.stringify(activeTools))} (${activeTools.length})`);
     }
 
-    // Log history sent to LLM for debugging conversation continuity
+    // How much history goes to the model, in one line. It used to list a
+    // preview of every message on every turn (2026-10-31: 7,570 turns, at least
+    // 50 MB of choom-dev.log), and old replies read like new errors. The
+    // messages are in the chat; the 📐 breakdown at iteration 1 splits the size.
     const histMsgs = currentMessages.filter(m => m.role !== 'system');
-    console.log(`   📜 History for "${choom.name}": ${histMsgs.length} messages (${compactionWasPerformed ? `compacted, ${compactionStats.messagesDropped} dropped` : 'uncompacted'})`);
-    for (let i = 0; i < histMsgs.length; i++) {
-      const m = histMsgs[i];
-      console.log(`      [${i}] ${m.role}: ${(m.content || '').slice(0, 120)}${(m.content || '').length > 120 ? '...' : ''} (${(m.content || '').length} chars)`);
-    }
+    const histTokens = histMsgs.reduce((n, m) => n + messageTokens(m), 0);
+    console.log(`   📜 History for "${choom.name}": ${histMsgs.length} messages, ~${histTokens.toLocaleString()} tokens (${compactionWasPerformed ? `compacted, ${compactionStats.messagesDropped} dropped` : 'uncompacted'})`);
 
     // Create streaming response. The whole turn — SSE plumbing, planner,
     // agentic loop, and finalize (assistant-message save, token usage,
