@@ -37,13 +37,13 @@ export const tools: ToolDefinition[] = [
   {
     name: 'heartbeat_complete',
     description:
-      'Signal that your heartbeat message is finished. Call this ONCE at the end of a heartbeat, after your text response is written. This terminates the agentic loop cleanly and records your action summary for the UCB1 reward signal. Only available during heartbeats — do not call in regular chat.',
+      'Signal that your heartbeat is finished. Call this ONCE, at the very end, AFTER your message is written as reply text. Only your reply text reaches the user (the pictures you made go with it); if you wrote no reply, nothing is sent. The summary is a private note for your future wake-ups and is never shown to the user. Only available during heartbeats — do not call in regular chat.',
     parameters: {
       type: 'object',
       properties: {
         summary: {
           type: 'string',
-          description: 'One short sentence summarizing what this heartbeat did (topic, tone, anything notable). Used for anti-repetition on future heartbeats.',
+          description: 'One short sentence about what this heartbeat did (topic, tone, anything notable), kept so future heartbeats do not repeat it. Never shown to the user.',
         },
       },
       required: ['summary'],

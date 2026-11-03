@@ -277,6 +277,23 @@ export function noteSuppressedNotifications(
 export const WAKE_ROUNDS_LEFT_NOTE = '[System] This wake-up has 3 rounds left: 2 more with tools, then a last one with tools off for your message. Save now anything that has to be saved (a note, a follow-up), then write your message. (Automated note, not from the user — do not mention it.)';
 export const WAKE_LAST_ROUND_NOTE = '[System] Last round of this wake-up: tools are off now. Write your message from what you already found. If something is unfinished, say so in a sentence. (Automated note, not from the user — do not mention it.)';
 
+/**
+ * A wake-up that called heartbeat_complete without writing a word (see the
+ * heartbeat terminator in the loop). It opens with "Nothing", not "You", so
+ * a fallback model keeps it (BEHAVIOUR_NUDGE strips notes about the primary).
+ */
+export const WAKE_WROTE_NOTHING_NOTE = '[System] Nothing from this wake-up has reached the user: heartbeat_complete was called, but no message was written. The summary is never shown to them; only your reply text reaches them, and the pictures you made go only with it. Tools are off now. Write your message to them now, in your own voice, from what you found. If you meant to stay quiet this time, reply with just (quiet) and nothing else. (Automated note, not from the user — do not mention it.)';
+
+/**
+ * Her answer to WAKE_WROTE_NOTHING_NOTE without the "(quiet)" marker: empty
+ * when she chose silence ("(quiet)", "Quiet.", "*(quiet)* 🤫"), otherwise her
+ * message with any line that is only "(quiet)" removed.
+ */
+export function withoutQuietMarker(text: string): string {
+  if (/^[\W_]*quiet[\W_]*$/i.test(text.trim())) return '';
+  return text.split('\n').filter(line => !/^[\W_]*\(\s*quiet\s*\)[\W_]*$/i.test(line)).join('\n').trim();
+}
+
 /** Tools that stay exposed beside an intent-narrowed forced tool (see the iterationTools build). */
 export const INTENT_COMPANION_TOOLS: Record<string, string[]> = {
   music_play: ['music_search', 'music_players'],
@@ -734,6 +751,9 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
           let deliberationNudged = false; // Guard: one "you thought but didn't act" nudge per request
           const autoOpenedSkills = new Set<string>(); // skills-mode: each skill auto-opened at most once per request
           let duplicateFinalNudged = false; // one retry when the would-be final reply was dropped as a repeat
+          // heartbeat_complete with nothing written (2026-11-02, see the terminator below):
+          let wroteNothingNudged = false; // asked once per wake-up
+          let quietRoundActive = false; // the round answering WAKE_WROTE_NOTHING_NOTE: buffered, "(quiet)" = silence
 
           while (iteration < maxIterations) {
             iteration++;
@@ -879,7 +899,9 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
             // arrive as one chunk instead of token-streaming — same tradeoff
             // the within-turn dedup already made. Iteration 1 of a fresh turn
             // always token-streams.
-            const bufferForDedup = iterationTexts.length > 0 || (allToolCalls.length > 0 && prevAssistantTexts.length > 0);
+            // The round answering WAKE_WROTE_NOTHING_NOTE is buffered too: a "(quiet)"
+            // must never be streamed (the bridge keeps streamed text when done is empty).
+            const bufferForDedup = quietRoundActive || iterationTexts.length > 0 || (allToolCalls.length > 0 && prevAssistantTexts.length > 0);
 
             // One reader for the primary call and every fallback attempt — see
             // lib/llm-stream-reader.ts. `stream` ends up as the state of whichever
@@ -969,6 +991,11 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                     : '[System] You thought through the task but produced no reply and no tool call. Act now: make the tool calls you planned, or reply to the user. Keep the thinking short.',
                 });
                 continue;
+              } else if (!iterationContent.trim() && !hasToolCalls && quietRoundActive) {
+                // Asked for her message after an empty heartbeat_complete and still wrote
+                // nothing: she stays quiet; no fallback model takes over a wake-up for that.
+                console.log(`   🤫 ${choomTag} Wrote nothing after the reminder either — this wake-up stays quiet`);
+                break;
               } else if (!iterationContent.trim() && !hasToolCalls && toolChoiceWasRequired && !relaxedToolChoice) {
                 // A FORCED tool call came back genuinely empty (no content, no tool call,
                 // nothing in reasoning_content). The model wanted to converse, not call a
@@ -1509,6 +1536,20 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                 console.log(`   🧹 ${choomTag} Stripped ${matches.length} tool schema blocks from response (${iterationContent.length} → ${stripped.length} chars)`);
                 iterationContent = stripped;
               }
+            }
+
+            // Her answer to WAKE_WROTE_NOTHING_NOTE. It was buffered, so a "(quiet)"
+            // went nowhere; drop it and the wake-up ends silent, as she chose.
+            if (quietRoundActive) {
+              quietRoundActive = false;
+              const kept = withoutQuietMarker(iterationContent);
+              if (!kept) {
+                console.log(`   🤫 ${choomTag} Chose to stay quiet on this wake-up — nothing is sent`);
+                iterationContent = '';
+                break;
+              }
+              if (kept !== iterationContent.trim()) iterationContent = kept;
+              console.log(`   💬 ${choomTag} Wrote her message after the reminder (${iterationContent.length} chars)`);
             }
 
             // Cross-turn repeat guard — 1:1 counterpart of the group rooms'
@@ -2930,6 +2971,24 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
             // message body. The summary argument is available to the scheduler via
             // response.tool_calls for UCB1 reward scoring.
             if (isHeartbeat && iterationResults.some(r => r.name === 'heartbeat_complete' && !r.error)) {
+              // Done, but nothing written (2026-11-02): Genesis's 9:40 AM and 6:40 PM
+              // check-ins ended here with summaries saying she had "flagged that the Round
+              // Mountain trip is tomorrow" and sent "a warm evening note with kitchen
+              // selfie". Nothing reached Donny, not even the selfie: the bridge delivers a
+              // wake-up only when it has text. 23 wake-ups (Eve, Aloy, Genesis) ended
+              // empty this way since Oct 17, some on purpose ("all clear, no alert sent").
+              // She is asked once, with tools off; "(quiet)" keeps a silence she meant.
+              const wroteNothing = iterationTexts.length === 0 && !preLoopContent.trim();
+              if (wroteNothing && !wroteNothingNudged && iteration < maxIterations) {
+                wroteNothingNudged = true;
+                quietRoundActive = true;
+                activeTools = [];
+                forceToolCall = false;
+                traceBuilder.recordNudge('wrote_nothing');
+                console.log(`   💓 ${choomTag} heartbeat_complete with nothing written (${stream.thinkingChars.toLocaleString()} chars of thinking on that call) — asking for her message, tools off`);
+                currentMessages.push({ role: 'user', content: WAKE_WROTE_NOTHING_NOTE });
+                continue;
+              }
               console.log(`   💓 ${choomTag} heartbeat_complete called — ending agentic loop`);
               break;
             }
