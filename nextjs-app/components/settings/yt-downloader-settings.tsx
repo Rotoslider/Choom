@@ -5,6 +5,7 @@ import { Music, Plus, Trash2, ExternalLink, Play, RefreshCw } from 'lucide-react
 import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { saveBridgeConfig, reportSaveFailure } from '@/lib/save-bridge-config';
 
 interface Channel {
   id: string;
@@ -58,17 +59,11 @@ export function YTDownloaderSettings() {
     async (updated: BridgeConfig) => {
       setSaving(true);
       try {
-        const res = await fetch('/api/bridge-config', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(updated),
-        });
-        if (res.ok) {
-          const saved = await res.json();
-          setConfig(saved);
-        }
-      } catch (err) {
-        console.error('Failed to save config:', err);
+        // Asks before saving from a device other than the server (the 412 used to be ignored).
+        const result = await saveBridgeConfig(updated, { what: 'YouTube channels' });
+        // Nothing on screen changed before the save, so a refusal leaves it as the server has it.
+        if (result.ok) setConfig(result.config as BridgeConfig);
+        else reportSaveFailure(result, 'YouTube downloader');
       } finally {
         setSaving(false);
       }

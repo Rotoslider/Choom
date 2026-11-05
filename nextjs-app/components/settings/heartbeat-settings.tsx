@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { useLiveModels } from '@/lib/hooks/use-live-models';
+import { saveBridgeConfig, reportSaveFailure } from '@/lib/save-bridge-config';
 
 interface BridgeConfig {
   tasks: Record<string, { enabled: boolean; time?: string; interval_minutes?: number }>;
@@ -72,17 +73,15 @@ export function HeartbeatSettings() {
   const saveConfig = useCallback(async (updated: BridgeConfig) => {
     setSaving(true);
     try {
-      const res = await fetch('/api/bridge-config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updated),
-      });
-      if (res.ok) {
-        const saved = await res.json();
-        setConfig(saved);
+      // Asks before saving from a device other than the server (the 412 used to be ignored).
+      const result = await saveBridgeConfig(updated as unknown as Record<string, unknown>, { what: 'heartbeats' });
+      if (result.ok) {
+        setConfig(result.config as unknown as BridgeConfig);
+      } else {
+        reportSaveFailure(result, 'heartbeat');
+        // The screen already shows the change; put back what the server really has.
+        fetch('/api/bridge-config').then((r) => r.json()).then(setConfig).catch(console.error);
       }
-    } catch (err) {
-      console.error('Failed to save bridge config:', err);
     } finally {
       setSaving(false);
     }
