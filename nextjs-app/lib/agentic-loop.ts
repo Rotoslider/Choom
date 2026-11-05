@@ -17,6 +17,7 @@
  * usingCloudProvider) come in as initial values and go out in the outcome.
  */
 import prisma from '@/lib/db';
+import { checkSimpleTask, SIMPLE_TASK_TOOLS } from '@/lib/simple-task-routing';
 import { LLMClient, ChatMessage } from '@/lib/llm-client';
 import {
   CONFIG_ERROR, PARAM_ERROR, HA_SHAPE_ERROR, HA_DISCOVERY_ERROR, GPU_BUSY,
@@ -74,6 +75,8 @@ export interface AgenticLoopParams {
   createClientForFallback: (fb: FallbackConfig) => Promise<{ client: { streamChat: LLMClient['streamChat'] }; settings: LLMSettings }>;
   taskOverrideActive: boolean;
   taskModelOverride: unknown;
+  /** Donny typed this in a 1:1 chat (not a room, wake-up, house note or delegation). */
+  ownerTurn?: boolean;
   choom: Choom;
   chat: Chat & { messages: Message[] };
   choomId: string;
@@ -360,6 +363,7 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
     fallbackConfigs, createClientForFallback, taskOverrideActive, taskModelOverride,
     choom, chat, choomId, chatId, logChatId, message,
     isGroupTurn, isHeartbeat, isDelegation, noTools, suppressNotifications, freshContext,
+    ownerTurn,
     maxIterationsOverride, skillDispatch,
     compactionService, systemPromptWithSummary, planFullySucceeded,
     allToolResults,
@@ -601,22 +605,16 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
             });
           }
 
-          // Simple tasks model routing: if the user's intent maps to a routine tool
-          // and a lightweight model is configured, switch to it. This avoids burning
-          // expensive/slow models on simple operations like reminders, habits, weather.
-          const SIMPLE_TASK_TOOLS = new Set([
-            'create_reminder', 'get_reminders',
-            'log_habit', 'habit_stats', 'query_habits',
-            'get_calendar_events', 'create_calendar_event', 'update_calendar_event', 'delete_calendar_event',
-            'get_weather', 'get_weather_forecast',
-            'get_task_list', 'list_task_lists', 'add_to_task_list', 'remove_from_task_list',
-            'remember', 'search_memories', 'get_recent_memories',
-            'send_notification',
-            'music_play', 'music_control', 'music_search', 'music_now_playing', 'music_players',
-          ]);
+          // Simple Tasks model (Settings → LLM): a quick reminder, habit or calendar
+          // ask Donny typed 1:1 runs on the lightweight model. The whole turn runs on
+          // it, her reply too, so lib/simple-task-routing.ts admits only short asks.
           const simpleTasksEnabled = (clientLLMSettings as Record<string, unknown>)?.simpleTasksEnabled;
           const simpleTasksModel = (clientLLMSettings as Record<string, unknown>)?.simpleTasksModel as string | undefined;
-          if (simpleTasksEnabled && simpleTasksModel && intentToolHint && SIMPLE_TASK_TOOLS.has(intentToolHint) && !taskModelOverride) {
+          const simpleCheck = checkSimpleTask({ intentToolHint, ownerTurn: !!ownerTurn, message });
+          if (simpleTasksEnabled && !simpleCheck.use && SIMPLE_TASK_TOOLS.has(intentToolHint)) {
+            console.log(`   📋 ${choomTag} Simple task (${intentToolHint}) stays on her model: ${simpleCheck.why}`);
+          }
+          if (simpleTasksEnabled && simpleTasksModel && simpleCheck.use && !taskModelOverride) {
             // Apply the simple-tasks model's profile BEFORE building the client/settings, so the
             // swapped model runs with its own params (temp, topP, contextLength, topK, etc.) rather
             // than inheriting the primary model's profile that was applied earlier in this request.

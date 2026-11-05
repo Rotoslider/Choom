@@ -35,7 +35,7 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { name, description, avatarUrl, systemPrompt, voiceId, llmModel, llmEndpoint, llmProviderId, imageSettings, companionId, llmFallbackModel1, llmFallbackProvider1, llmFallbackModel2, llmFallbackProvider2, groupChatModel, groupChatProvider, permissions } = body;
+    const { name, description, avatarUrl, systemPrompt, voiceId, llmModel, llmEndpoint, llmProviderId, imageSettings, companionId, llmFallbackModel1, llmFallbackProvider1, llmFallbackModel2, llmFallbackProvider2, groupChatModel, groupChatProvider, wakeModel, wakeProvider, permissions } = body;
 
     if (!name) {
       return NextResponse.json(
@@ -60,6 +60,8 @@ export async function POST(request: NextRequest) {
         llmFallbackProvider2: llmFallbackProvider2 || null,
         groupChatModel: groupChatModel || null,
         groupChatProvider: groupChatProvider || null,
+        wakeModel: wakeModel || null,
+        wakeProvider: wakeProvider || null,
         companionId: companionId || null,
         imageSettings: imageSettings ? JSON.stringify(imageSettings) : null,
         ...(permissions !== undefined && { permissions: serializeChoomPermissions(permissions) }),

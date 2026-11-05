@@ -1,4 +1,5 @@
 import { createHash } from 'crypto';
+import { withWakeModel } from '@/lib/wake-model';
 import { NextRequest } from 'next/server';
 import prisma from '@/lib/db';
 import { LLMClient, ChatMessage } from '@/lib/llm-client';
@@ -111,7 +112,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { choomId, chatId, message, settings, isDelegation, suppressNotifications, noTools, maxIterationsOverride, isHeartbeat, taskModelOverride, delegatorName } = body;
+    const { choomId, chatId, message, settings, isDelegation, suppressNotifications, noTools, maxIterationsOverride, isHeartbeat, taskModelOverride: requestedModelOverride, delegatorName } = body;
     // True only when the OWNER actually typed this (web UI or an incoming Signal
     // message) — NOT heartbeats, self-followups, cron, briefings, group, or
     // delegation. Drives cross-surface routing: an un-addressed Signal message
@@ -335,6 +336,13 @@ export async function POST(request: NextRequest) {
         activeProviderId = choomProvider.id;
       }
     }
+    // A wake-up (her self-followup or a heartbeat task) runs on her wake-up model
+    // when she has one and the task didn't name its own (lib/wake-model.ts).
+    const taskModelOverride = withWakeModel(requestedModelOverride, choom, !!isHeartbeat);
+    if (taskModelOverride && !requestedModelOverride?.model) {
+      console.log(`   ⏰ [${choom.name}] Wake-up model: ${taskModelOverride.model}`);
+    }
+
     // Capture the Choom's resolved primary model BEFORE task override.
     // Used to fall back to the primary when a heartbeat/cron task override fails.
     const preOverrideModel = llmSettings.model;

@@ -23,6 +23,7 @@ import { useAppStore } from '@/lib/store';
 import { cn } from '@/lib/utils';
 import { useLiveModels } from '@/lib/hooks/use-live-models';
 import { requestModelList } from '@/lib/model-list-request';
+import { SIMPLE_TASK_MAX_WORDS } from '@/lib/simple-task-routing';
 import type { LLMProviderConfig, LLMModelProfile } from '@/lib/types';
 import {
   getEffectiveLLMProfiles,
@@ -580,8 +581,8 @@ export function LLMSettings() {
           <div>
             <h3 className="text-sm font-medium">Simple Tasks Model</h3>
             <p className="text-xs text-muted-foreground mt-0.5">
-              Use a fast/cheap model for routine tool calls — reminders, habits, calendar, weather, tasks, memory.
-              Complex requests (research, coding, image gen) still use the primary model.
+              A quick reminder, habit or calendar ask you type to a Choom one-on-one ({SIMPLE_TASK_MAX_WORDS} words or fewer) runs on this model, her reply included.
+              Everything else stays on her own model: conversation, memory, rooms and her wake-ups.
             </p>
           </div>
           <Switch

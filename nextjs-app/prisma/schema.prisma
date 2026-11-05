@@ -28,6 +28,8 @@ model Choom {
   llmFallbackProvider2 String? // Second fallback provider ID
   groupChatModel       String? // Model used when INVITED into a group room (not the room creator). Falls back to primary then fallbacks.
   groupChatProvider    String? // Provider ID for the group-chat model (null = local)
+  wakeModel            String? // Model for her own wake-ups (self-followups, heartbeat tasks); null = primary. A task's own model still wins. lib/wake-model.ts
+  wakeProvider         String? // Provider ID for the wake-up model (null = local)
   avatarMode           String? // 'off' | 'live' | 'desktop' (default null = off)
   avatar3dModelPath    String? // Relative path to GLB file (legacy)
   avatar3dStatus       String? // 'generating' | 'ready' | 'failed' (legacy)

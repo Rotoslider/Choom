@@ -434,6 +434,7 @@ export async function runChatTurn(params: ChatTurnParams): Promise<void> {
             fallbackConfigs, createClientForFallback, taskOverrideActive, taskModelOverride,
             choom, chat, choomId, chatId, logChatId, message,
             isGroupTurn, isHeartbeat, isDelegation, noTools, suppressNotifications, freshContext,
+            ownerTurn: takesOver,
             maxIterationsOverride, detectedProject, skillDispatch,
             compactionService, systemPromptWithSummary, planFullySucceeded,
             maxIterations, iterationCapLocked,

@@ -29,6 +29,8 @@ export interface Choom {
   llmFallbackProvider2: string | null;
   groupChatModel: string | null;
   groupChatProvider: string | null;
+  wakeModel: string | null;
+  wakeProvider: string | null;
   createdAt: Date;
   updatedAt: Date;
 }

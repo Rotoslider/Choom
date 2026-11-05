@@ -915,6 +915,8 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave, onDelete }: 
   const [llmFallbackProvider2, setLlmFallbackProvider2] = useState('');
   const [groupChatModel, setGroupChatModel] = useState('');
   const [groupChatProvider, setGroupChatProvider] = useState('');
+  const [wakeModel, setWakeModel] = useState('');
+  const [wakeProvider, setWakeProvider] = useState('');
   const [permissions, setPermissions] = useState<ChoomPermissions>({ ssh: false });
 
   // Image settings - now with two modes
@@ -966,6 +968,8 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave, onDelete }: 
       setLlmFallbackProvider2(choom.llmFallbackProvider2 || (choom.llmFallbackModel2 ? '_local' : ''));
       setGroupChatModel(choom.groupChatModel || '');
       setGroupChatProvider(choom.groupChatProvider || (choom.groupChatModel ? '_local' : ''));
+      setWakeModel(choom.wakeModel || '');
+      setWakeProvider(choom.wakeProvider || (choom.wakeModel ? '_local' : ''));
       setPermissions(normalizeChoomPermissions(choom.permissions));
 
       // Parse image settings
@@ -1009,6 +1013,13 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave, onDelete }: 
     providers: settings.providers || [],
     localEndpoint: groupLocal,
     enabled: open && !!groupChatProvider && groupChatProvider !== '_none',
+  });
+  const wakeLocal = wakeProvider === '_local' ? (llmEndpoint || settings.llm.endpoint) : undefined;
+  const wakeLive = useLiveModels({
+    providerId: wakeProvider && wakeProvider !== '_none' && wakeProvider !== '_local' ? wakeProvider : undefined,
+    providers: settings.providers || [],
+    localEndpoint: wakeLocal,
+    enabled: open && !!wakeProvider && wakeProvider !== '_none',
   });
 
   const fetchLocalModels = async (endpointOverride?: string, apiKeyOverride?: string) => {
@@ -1166,6 +1177,8 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave, onDelete }: 
         llmFallbackProvider2: (llmFallbackProvider2 && llmFallbackProvider2 !== '_local') ? llmFallbackProvider2 : null,
         groupChatModel: groupChatModel || null,
         groupChatProvider: (groupChatProvider && groupChatProvider !== '_local') ? groupChatProvider : null,
+        wakeModel: wakeModel || null,
+        wakeProvider: (wakeProvider && wakeProvider !== '_local') ? wakeProvider : null,
         permissions,
         imageSettings: (cleanedGeneral || selfPortraitWithCharacter) ? {
           general: cleanedGeneral,
@@ -1758,6 +1771,78 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave, onDelete }: 
                           >
                             <SelectTrigger className="h-8 text-xs">
                               <SelectValue placeholder={stale ? `⚠ Saved: ${groupChatModel} (not available)` : 'Select model'} />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value={defaultSentinel}>{defaultLabel}</SelectItem>
+                              {options.map((m) => (
+                                <SelectItem key={m.id} value={m.id}>
+                                  <span className="flex items-center gap-2">
+                                    {m.loaded && <span className="inline-block h-2 w-2 rounded-full bg-green-500" title="Loaded in LM Studio" />}
+                                    {m.name}
+                                  </span>
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        );
+                      })()}
+                    </div>
+                  </div>
+
+                  <Separator />
+
+                  {/* Wake-up Model — her own wake-ups (self-followups, heartbeat tasks); lib/wake-model.ts */}
+                  <div className="space-y-3">
+                    <div>
+                      <h4 className="text-sm font-medium">Wake-up Model</h4>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Model for her own wake-ups: the follow-ups she books for herself and any heartbeat tasks. Chats with you stay on her primary model. If it fails, her primary model and then her fallback models are tried, in that order. A heartbeat task&apos;s own model (Settings &rarr; Heartbeats) still wins. Leave as &ldquo;Use primary model&rdquo; to wake on her normal model.
+                      </p>
+                    </div>
+                    <div className="space-y-3 rounded-md border p-3">
+                      <Select
+                        value={wakeProvider || '_none'}
+                        onValueChange={(v) => {
+                          if (v === '_none') {
+                            setWakeProvider('');
+                            setWakeModel('');
+                          } else if (v === '_local') {
+                            setWakeProvider('_local');
+                            setWakeModel('');
+                          } else {
+                            const provider = (settings.providers || []).find((p: LLMProviderConfig) => p.id === v);
+                            setWakeProvider(v);
+                            setWakeModel(provider?.models?.[0] || '');
+                          }
+                        }}
+                      >
+                        <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="_none">Use primary model (no override)</SelectItem>
+                          <SelectItem value="_local">Local (LM Studio / Ollama)</SelectItem>
+                          {(settings.providers || []).map((p: LLMProviderConfig) => (
+                            <SelectItem key={p.id} value={p.id}>
+                              {p.name}
+                              <span className="ml-2 text-xs text-muted-foreground">({p.type})</span>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {wakeProvider && wakeProvider !== '_none' && (() => {
+                        const options = wakeLive.models;
+                        if (options.length === 0) {
+                          return <Input value={wakeModel} onChange={(e) => setWakeModel(e.target.value)} placeholder="Model name (leave empty = none)" className="h-8 text-xs" />;
+                        }
+                        const stale = !!wakeModel && !options.some((m) => m.id === wakeModel);
+                        const defaultSentinel = wakeProvider === '_local' ? '__default__' : '_default';
+                        const defaultLabel = wakeProvider === '_local' ? 'Same as primary' : `Default (${options[0].name})`;
+                        return (
+                          <Select
+                            value={stale ? '' : (wakeModel || defaultSentinel)}
+                            onValueChange={(v) => setWakeModel(v === defaultSentinel ? '' : v)}
+                          >
+                            <SelectTrigger className="h-8 text-xs">
+                              <SelectValue placeholder={stale ? `⚠ Saved: ${wakeModel} (not available)` : 'Select model'} />
                             </SelectTrigger>
                             <SelectContent>
                               <SelectItem value={defaultSentinel}>{defaultLabel}</SelectItem>

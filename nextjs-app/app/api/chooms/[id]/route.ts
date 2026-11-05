@@ -65,7 +65,7 @@ export async function PUT(
   try {
     const { id } = await params;
     const body = await request.json();
-    const { name, description, avatarUrl, systemPrompt, voiceId, llmModel, llmEndpoint, llmProviderId, llmTimeoutSec, imageSettings, companionId, llmFallbackModel1, llmFallbackProvider1, llmFallbackModel2, llmFallbackProvider2, groupChatModel, groupChatProvider, permissions } = body;
+    const { name, description, avatarUrl, systemPrompt, voiceId, llmModel, llmEndpoint, llmProviderId, llmTimeoutSec, imageSettings, companionId, llmFallbackModel1, llmFallbackProvider1, llmFallbackModel2, llmFallbackProvider2, groupChatModel, groupChatProvider, wakeModel, wakeProvider, permissions } = body;
 
     const choom = await prisma.choom.update({
       where: { id },
@@ -86,6 +86,8 @@ export async function PUT(
         ...(llmFallbackProvider2 !== undefined && { llmFallbackProvider2 }),
         ...(groupChatModel !== undefined && { groupChatModel }),
         ...(groupChatProvider !== undefined && { groupChatProvider }),
+        ...(wakeModel !== undefined && { wakeModel }),
+        ...(wakeProvider !== undefined && { wakeProvider }),
         ...(companionId !== undefined && { companionId }),
         ...(imageSettings !== undefined && { imageSettings: imageSettings ? JSON.stringify(imageSettings) : null }),
         ...(permissions !== undefined && { permissions: serializeChoomPermissions(permissions) }),
