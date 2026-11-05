@@ -34,21 +34,25 @@ export const tools: ToolDefinition[] = [
   {
     name: 'glass_wish',
     description:
-      'Ask Donny for something new on the Looking Glass: clothes you\'d like to own there, or a move you\'d like to do. It goes on his wish list in Glass Studio, where he makes new outfits and moves over time. Nothing changes on the glass now. Describe it the way you picture it: colour, fabric, cut.',
+      'Ask Donny for something new on the Looking Glass: clothes you\'d like to own there, or moves you\'d like to do. It goes on his wish list in Glass Studio, where he makes new outfits and moves over time. Nothing changes on the glass now. Describe each the way you picture it: colour, fabric, cut, or how the move goes. For several at once, put each in `wishes`: every one becomes its own wish, so name one move or one outfit per entry.',
     parameters: {
       type: 'object',
       properties: {
         wish: {
           type: 'string',
-          description: 'What you\'d like, e.g. "a midnight-blue silk slip dress with lace trim", "sit by a campfire"',
+          description: 'One thing you\'d like, e.g. "a midnight-blue silk slip dress with lace trim", "sit by a campfire"',
+        },
+        wishes: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Several things at once, each its own wish, all of the same kind, e.g. ["blow a kiss: fingertips to my lips, then sweep the hand out", "a slow twirl that flares my skirt"]',
         },
         kind: {
           type: 'string',
           enum: ['clothes', 'move'],
-          description: 'clothes (the default) or a move',
+          description: 'clothes (the default) or a move; for every wish in this call',
         },
       },
-      required: ['wish'],
     },
   },
   {

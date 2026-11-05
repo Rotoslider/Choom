@@ -22,6 +22,8 @@ can ask it for things yourself.
 - You wonder what moves and clothes you have there → `glass_closet` (it only lists; to change, use `glass_wear`)
 - You'd like something new there, an outfit to own or a move → `glass_wish` ("a midnight-blue silk
   slip dress with lace trim"). It goes on Donny's wish list; nothing changes on the glass now.
+  Several at once → `wishes`, one move or one outfit per entry; each becomes its own wish.
+  Describe each as fully as you picture it; the glass keeps up to 1,000 characters per wish.
 
 ## How it works
 - A move plays once, at your next quiet moment (never mid-sentence).

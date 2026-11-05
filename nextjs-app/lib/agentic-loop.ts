@@ -2886,11 +2886,14 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
             // model already acted on them, so re-sending the full payload every
             // iteration just burns context (and buries small local models). The
             // freshest batch (pushed below) stays full; error outputs and
-            // already-trimmed messages are left untouched.
+            // already-trimmed messages are left untouched, and so are results she
+            // works from over later steps (files, listings, ids: KEEP_WHOLE).
             if (compressToolOutputs) {
               for (const msg of currentMessages) {
                 if (msg.role === 'tool' && typeof (msg as { content?: unknown }).content === 'string') {
-                  const { content: trimmed, savedChars } = compressStaleToolResult((msg as { content: string }).content);
+                  const tool = (msg as { name?: string }).name;
+                  const { content: trimmed, savedChars } = compressStaleToolResult((msg as { content: string }).content,
+                    { tool, readOnly: !!tool && PARALLEL_SAFE.has(tool) });
                   if (savedChars > 0) {
                     (msg as { content: string }).content = trimmed;
                     liveTrimmedChars += savedChars;
