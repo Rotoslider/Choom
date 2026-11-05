@@ -717,6 +717,12 @@ def answer_camera(event):
 # glass_closet() and glass_wish("a silk slip dress") go down the feed as glass_request events. The
 # answer is worked out here from what is built on the glass (tools/closet.py), the page is told what
 # to play or wear, and the answer goes back to /api/hologram/glass/result, the way the camera's do.
+# A wish is said the way she pictures it (glass_wish asks for colour, fabric, cut), so it gets room. It
+# was cut at 200 characters without a word: Eve's red dress (345, Nov 5, 2026) lost its skirt, the bow
+# at the hip and the bracelet. Longer than this is still cut, and she is told.
+WISH_MAX = 1000
+
+
 def glass_answer(request, shown=None):
     """Her answer to a glass request; what the page is told to do is also added to `shown`."""
     def show(event):
@@ -726,7 +732,10 @@ def glass_answer(request, shown=None):
 
     choom = str(request.get("choom") or "").strip()
     cid, op = choom.lower(), request.get("op")
-    what = str(request.get("what") or "").strip()[:200]
+    said = str(request.get("what") or "").strip()
+    what = said[:WISH_MAX].rstrip()
+    left_off = (f" Only the first {WISH_MAX} characters fit, so it stops at \"…{what[-40:]}\". "
+                f"If the rest matters, add it as a second, shorter wish.") if len(said) > WISH_MAX else ""
     alive, worn = closet.load(PORTRAITS, cid)
     if not alive.get("clips"):
         return {"ok": False, "error": f"{choom or 'That Choom'} isn't on the glass yet."}
@@ -744,7 +753,7 @@ def glass_answer(request, shown=None):
         return {"ok": False, "error": "Say what: a move (\"a twirl\") or clothes (\"my red dress\")."}
     if op == "wish":  # something new she'd like, asked for as a wish: nothing changes on the glass
         closet.add_wish(PORTRAITS, cid, "move" if request.get("kind") == "move" else "wear", what)
-        return {"ok": True, "done": False, "message": f"\"{what}\" is on Donny's wish list in Glass Studio now."}
+        return {"ok": True, "done": False, "message": f"\"{what}\" is on Donny's wish list in Glass Studio now.{left_off}"}
     if op == "move" and closet.wants_circle(what):
         # The campfire circle: the whole room sits around one fire (living.js circleWanted) while they
         # talk in a room, for the next hour, if everyone in it has a seat there. Not in a room, she goes
@@ -763,13 +772,13 @@ def glass_answer(request, shown=None):
             closet.add_wish(PORTRAITS, cid, "move", what)
             return {"ok": True, "done": False,
                     "message": f"There's no seat for you by a campfire on the glass yet. \"{what}\" is on Donny's "
-                               "wish list in Glass Studio now.", "moves": names}
+                               f"wish list in Glass Studio now.{left_off}", "moves": names}
     if op == "move":
         found = closet.match_move(what, moves, spots)
         if not found:
             closet.add_wish(PORTRAITS, cid, "move", what)
             return {"ok": True, "done": False,
-                    "message": f"There's no \"{what}\" on the glass yet. It's on Donny's wish list in Glass Studio now.",
+                    "message": f"There's no \"{what}\" on the glass yet. It's on Donny's wish list in Glass Studio now.{left_off}",
                     "moves": names}
         word, phrase = found[0][0], closet.move_name(found[0][0], spots)
         sources = sorted({s for _, srcs in found for s in srcs})
@@ -789,7 +798,7 @@ def glass_answer(request, shown=None):
         if not anywhere and not wearable:
             closet.add_wish(PORTRAITS, cid, "move", what)
             return {"ok": True, "done": False,
-                    "message": f"You have a move like that only in clothes you can't wear on the glass yet. \"{what}\" is on Donny's wish list in Glass Studio now.",
+                    "message": f"You have a move like that only in clothes you can't wear on the glass yet. \"{what}\" is on Donny's wish list in Glass Studio now.{left_off}",
                     "moves": names}
         show({"type": "glass", "choom": cid, "move": sources, "name": word})
         if anywhere:
@@ -805,7 +814,7 @@ def glass_answer(request, shown=None):
         if match is None:
             closet.add_wish(PORTRAITS, cid, "wear", what)
             return {"ok": True, "done": False,
-                    "message": f"There's nothing like \"{what}\" in your closet on the glass yet. It's on Donny's wish list in Glass Studio now.",
+                    "message": f"There's nothing like \"{what}\" in your closet on the glass yet. It's on Donny's wish list in Glass Studio now.{left_off}",
                     "clothes": [o["wearing"] or ", ".join(o["tags"]) for o in outfits.values()]}
         name, outfit = match
         show({"type": "glass", "choom": cid, "wear": None if name == "usual" else name})
