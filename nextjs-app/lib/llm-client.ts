@@ -50,6 +50,8 @@ export interface TokenUsageData {
   prompt_tokens: number;
   completion_tokens: number;
   total_tokens: number;
+  /** Prompt tokens served from the provider's cache (OpenAI's shape; the Anthropic adapter fills it too). */
+  prompt_tokens_details?: { cached_tokens?: number };
 }
 
 export interface ChatCompletionChunk {

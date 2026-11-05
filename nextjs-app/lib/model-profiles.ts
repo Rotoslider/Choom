@@ -168,6 +168,16 @@ export const BUILTIN_LLM_PROFILES: LLMModelProfile[] = [
   },
   // Anthropic — Claude 5 family (2026)
   {
+    modelId: 'claude-opus-5-5',
+    label: 'Claude Opus 5.5',
+    builtIn: true,
+    // Always thinks (it can't be turned off) and the thinking counts toward
+    // maxTokens, so the limit leaves room for it. No temperature/topP: current
+    // Claude models reject them and lib/anthropic-client.ts doesn't send them.
+    maxTokens: 32000,
+    contextLength: 1000000,
+  },
+  {
     modelId: 'claude-opus-5',
     label: 'Claude Opus 5',
     builtIn: true,
