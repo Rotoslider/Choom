@@ -57,6 +57,17 @@ import type { Choom, Chat, Message } from '@prisma/client';
 // Which skill a tool belongs to (the family dropUndoneChanges works within).
 const skillOfTool = (tool: string): string | undefined => getSkillRegistry().getSkillForTool(tool)?.metadata.name;
 
+// Claude on Anthropic's API caches the whole prompt on every call (AnthropicClient.cachesWholePrompt).
+// Trimming a step-old tool result rewrites the transcript at that point, so the cache is written again
+// from there at 1.25x the input price instead of read at 0.05x (Opus) or 0.1x (Sonnet), and in long,
+// tool-heavy turns it can't find an earlier point within Anthropic's 20-block lookback and reads
+// nothing; the replayed thinking after it is dropped too. On the 33 Claude turns from Nov 4-5, 2026,
+// input cost about $19.50 as run against about $15.50 without trimming (Eve's 8:30 delegation read 0
+// cached on eight calls in a row). Their 1M context has room, so those turns aren't trimmed.
+const cachesWholePrompt = (client: unknown): boolean =>
+  typeof (client as { cachesWholePrompt?: unknown } | null)?.cachesWholePrompt === 'function' &&
+  (client as { cachesWholePrompt: () => boolean }).cachesWholePrompt();
+
 export interface AgenticLoopParams {
   send: (data: Record<string, unknown>) => void;
   /** superseded: a newer message from Donny in this chat ended this reply (lib/chat-runs.ts). */
@@ -2887,8 +2898,10 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
             // iteration just burns context (and buries small local models). The
             // freshest batch (pushed below) stays full; error outputs and
             // already-trimmed messages are left untouched, and so are results she
-            // works from over later steps (files, listings, ids: KEEP_WHOLE).
-            if (compressToolOutputs) {
+            // works from over later steps (files, listings, ids: KEEP_WHOLE). Never on Claude
+            // through Anthropic's API (cachesWholePrompt above); a fallback to another model mid-turn
+            // starts trimming from its next step.
+            if (compressToolOutputs && !cachesWholePrompt(llmClient)) {
               for (const msg of currentMessages) {
                 if (msg.role === 'tool' && typeof (msg as { content?: unknown }).content === 'string') {
                   const tool = (msg as { name?: string }).name;

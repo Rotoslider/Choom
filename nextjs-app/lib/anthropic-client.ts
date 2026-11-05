@@ -207,6 +207,11 @@ export class AnthropicClient {
     this.settings = settings;
   }
 
+  /** True on Anthropic's own API, where every request caches the whole prompt (cache_control below). */
+  cachesWholePrompt(): boolean {
+    return isAnthropicApi(this.endpoint);
+  }
+
   /**
    * Convert OpenAI-format tools to Anthropic format
    */

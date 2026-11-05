@@ -70,6 +70,16 @@ describe('stale tool results: what a Choom still sees a step later', () => {
     expect(compressStaleToolResult(once, { tool: 'search_memories', readOnly: true })).toEqual({ content: once, savedChars: 0 });
   });
 
+  test('Claude on Anthropic\'s API is never trimmed: trimming breaks its whole-prompt cache', async () => {
+    const { AnthropicClient } = await import('@/lib/anthropic-client');
+    const s = {} as never;
+    expect(new AnthropicClient(s, 'k').cachesWholePrompt()).toBe(true);
+    expect(new AnthropicClient(s, 'k', 'https://api.anthropic.com').cachesWholePrompt()).toBe(true);
+    expect(new AnthropicClient(s, 'k', 'https://proxy.example.com/anthropic').cachesWholePrompt()).toBe(false);
+    const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'agentic-loop.ts'), 'utf8');
+    expect(src).toContain('if (compressToolOutputs && !cachesWholePrompt(llmClient)) {');
+  });
+
   test('the loop tells the trimmer which tool each result came from', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'agentic-loop.ts'), 'utf8');
     expect(src).toMatch(/compressStaleToolResult\(\(msg as \{ content: string \}\)\.content,\s*\{ tool, readOnly: !!tool && PARALLEL_SAFE\.has\(tool\) \}\)/);
