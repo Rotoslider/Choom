@@ -32,6 +32,7 @@ import { Separator } from '@/components/ui/separator';
 import type { Choom, ChoomPermissions, LoraConfig, ImageModeSettings, ImageSize, ImageAspect, LLMProviderConfig, CheckpointType, ReferenceImage } from '@/lib/types';
 import { IMAGE_SIZES, IMAGE_ASPECTS, computeImageDimensions, HIRES_FIX_DEFAULTS } from '@/lib/types';
 import { useLiveModels } from '@/lib/hooks/use-live-models';
+import { requestModelList } from '@/lib/model-list-request';
 import { Switch } from '@/components/ui/switch';
 import { useAppStore } from '@/lib/store';
 import { cn } from '@/lib/utils';
@@ -1015,9 +1016,7 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave, onDelete }: 
     if (!ep) return;
     activeModelsEndpoint.current = ep;
     try {
-      const params = new URLSearchParams({ endpoint: ep });
-      if (apiKeyOverride) params.set('apiKey', apiKeyOverride);
-      const res = await fetch(`/api/services/models?${params}`);
+      const res = await requestModelList(ep, apiKeyOverride);
       if (res.ok) {
         // If the user switched endpoints while this fetch was in flight, drop the result.
         if (activeModelsEndpoint.current !== ep) return;

@@ -34,12 +34,22 @@ async function fetchLmStudioLoadedSet(endpoint: string, headers: Record<string, 
   }
 }
 
-// GET /api/services/models - Fetch available LLM models
+// GET /api/services/models?endpoint=… - model list for an endpoint that needs no key.
+// Keys never go in the URL: next dev writes every request URL to data/logs/choom-dev.log.
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
-  const endpoint = searchParams.get('endpoint') || DEFAULT_LLM_ENDPOINT;
-  const apiKey = searchParams.get('apiKey') || null;
+  return listModels(searchParams.get('endpoint') || DEFAULT_LLM_ENDPOINT, null);
+}
 
+// POST /api/services/models {endpoint, apiKey?} - the settings model menus (lib/model-list-request.ts).
+export async function POST(request: NextRequest) {
+  const body = await request.json().catch(() => ({}));
+  const endpoint = typeof body.endpoint === 'string' && body.endpoint ? body.endpoint : DEFAULT_LLM_ENDPOINT;
+  const apiKey = typeof body.apiKey === 'string' && body.apiKey ? body.apiKey : null;
+  return listModels(endpoint, apiKey);
+}
+
+async function listModels(endpoint: string, apiKey: string | null) {
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10000);

@@ -13,6 +13,7 @@ import {
 } from '@/components/ui/select';
 import { useAppStore } from '@/lib/store';
 import type { LLMProviderConfig } from '@/lib/types';
+import { requestModelList } from '@/lib/model-list-request';
 
 const PRESETS: Record<string, Partial<LLMProviderConfig>> = {
   anthropic: {
@@ -76,11 +77,11 @@ export function ProvidersSettings() {
   const [visibleKeys, setVisibleKeys] = useState<Set<string>>(new Set());
   const [loadingModels, setLoadingModels] = useState<Set<string>>(new Set());
 
-  const fetchProviderModels = async (providerId: string, endpoint: string) => {
+  const fetchProviderModels = async (providerId: string, endpoint: string, apiKey?: string) => {
     if (!endpoint) return;
     setLoadingModels(prev => new Set(prev).add(providerId));
     try {
-      const res = await fetch(`/api/services/models?endpoint=${encodeURIComponent(endpoint)}`);
+      const res = await requestModelList(endpoint, apiKey);
       if (res.ok) {
         const data = await res.json();
         const modelIds = (data.models || []).map((m: { id: string }) => m.id);
@@ -267,7 +268,7 @@ export function ProvidersSettings() {
                   size="sm"
                   className="h-6 px-2 text-xs"
                   disabled={loadingModels.has(provider.id)}
-                  onClick={() => fetchProviderModels(provider.id, provider.endpoint)}
+                  onClick={() => fetchProviderModels(provider.id, provider.endpoint, provider.apiKey)}
                 >
                   <RefreshCw className={`h-3 w-3 mr-1 ${loadingModels.has(provider.id) ? 'animate-spin' : ''}`} />
                   Fetch Models

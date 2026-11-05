@@ -45,7 +45,12 @@ export function WeatherSettings() {
         params.set('longitude', settings.weather.longitude.toString());
       }
 
-      const response = await fetch(`/api/weather?${params}`);
+      // POST so the key stays out of the URL (next dev logs every request URL)
+      const response = await fetch('/api/weather', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'test', ...Object.fromEntries(params) }),
+      });
       const data = await response.json();
 
       if (data.success) {

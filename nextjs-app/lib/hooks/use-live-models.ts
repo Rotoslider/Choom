@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { requestModelList } from '@/lib/model-list-request';
 
 export interface LiveModel {
   id: string;
@@ -52,9 +53,7 @@ export function useLiveModels({ providerId, providers, localEndpoint, enabled = 
     activeEndpoint.current = target.endpoint;
     setLoading(true);
     try {
-      const params = new URLSearchParams({ endpoint: target.endpoint });
-      if (target.apiKey) params.set('apiKey', target.apiKey);
-      const res = await fetch(`/api/services/models?${params}`);
+      const res = await requestModelList(target.endpoint, target.apiKey);
       if (!res.ok) {
         if (activeEndpoint.current === target.endpoint) {
           setModels(target.fallbackList.map((id) => ({ id, name: id })));

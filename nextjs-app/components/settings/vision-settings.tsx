@@ -17,6 +17,7 @@ import {
 import { useAppStore } from '@/lib/store';
 import type { LLMProviderConfig, VisionModelProfile } from '@/lib/types';
 import { getEffectiveVisionProfiles } from '@/lib/model-profiles';
+import { requestModelList } from '@/lib/model-list-request';
 
 export function VisionSettings() {
   const { settings, updateVisionSettings, updateVisionProfiles } = useAppStore();
@@ -62,10 +63,7 @@ export function VisionSettings() {
     setLoadingModels(true);
     try {
       const activeEndpoint = getActiveVisionEndpoint();
-      const params = new URLSearchParams({ endpoint: activeEndpoint + '/v1' });
-      const apiKey = getVisionApiKey();
-      if (apiKey) params.set('apiKey', apiKey);
-      const response = await fetch(`/api/services/models?${params}`);
+      const response = await requestModelList(activeEndpoint + '/v1', getVisionApiKey());
       const data = await response.json();
       if (data.models) {
         const ids: string[] = data.models.map((m: { id: string }) => m.id);
@@ -89,10 +87,7 @@ export function VisionSettings() {
     try {
       // Proxy through our API to handle auth headers for cloud providers
       const activeEndpoint = getActiveVisionEndpoint();
-      const params = new URLSearchParams({ endpoint: activeEndpoint + '/v1' });
-      const apiKey = getVisionApiKey();
-      if (apiKey) params.set('apiKey', apiKey);
-      const response = await fetch(`/api/services/models?${params}`);
+      const response = await requestModelList(activeEndpoint + '/v1', getVisionApiKey());
       if (response.ok) {
         const data = await response.json();
         const modelCount = data.models?.length || 0;

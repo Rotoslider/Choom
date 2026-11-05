@@ -14,24 +14,30 @@ const defaultWeatherSettings: WeatherSettings = {
   cacheMinutes: 30,
 };
 
+// GET /api/weather?location=…&forecast=true (the bridge, the Chooms' tools).
+// It reads no key from the URL: next dev writes every request URL to
+// data/logs/choom-dev.log, so the settings Test button POSTs (action 'test').
 export async function GET(request: NextRequest) {
-  try {
-    const searchParams = request.nextUrl.searchParams;
+  const searchParams = request.nextUrl.searchParams;
+  return weatherReply((name) => searchParams.get(name), null);
+}
 
-    // Build settings from query params or use defaults
-    const latParam = searchParams.get('latitude');
-    const lonParam = searchParams.get('longitude');
-    const useCoords = searchParams.get('useCoordinates') === 'true';
+async function weatherReply(param: (name: string) => string | null, apiKey: string | null) {
+  try {
+    // Build settings from the request or use defaults
+    const latParam = param('latitude');
+    const lonParam = param('longitude');
+    const useCoords = param('useCoordinates') === 'true';
 
     const settings: WeatherSettings = {
-      apiKey: searchParams.get('apiKey') || defaultWeatherSettings.apiKey,
-      provider: (searchParams.get('provider') as 'openweathermap' | 'weatherapi') || defaultWeatherSettings.provider,
-      location: searchParams.get('location') || defaultWeatherSettings.location,
+      apiKey: apiKey || defaultWeatherSettings.apiKey,
+      provider: (param('provider') as 'openweathermap' | 'weatherapi') || defaultWeatherSettings.provider,
+      location: param('location') || defaultWeatherSettings.location,
       latitude: latParam ? parseFloat(latParam) : defaultWeatherSettings.latitude,
       longitude: lonParam ? parseFloat(lonParam) : defaultWeatherSettings.longitude,
       useCoordinates: useCoords || defaultWeatherSettings.useCoordinates,
-      units: (searchParams.get('units') as 'metric' | 'imperial') || defaultWeatherSettings.units,
-      cacheMinutes: parseInt(searchParams.get('cacheMinutes') || '30') || defaultWeatherSettings.cacheMinutes,
+      units: (param('units') as 'metric' | 'imperial') || defaultWeatherSettings.units,
+      cacheMinutes: parseInt(param('cacheMinutes') || '30') || defaultWeatherSettings.cacheMinutes,
     };
 
     if (!settings.apiKey) {
@@ -51,8 +57,8 @@ export async function GET(request: NextRequest) {
     // forecast failure must NOT drop the current weather, so it's caught separately.
     let forecast: Awaited<ReturnType<WeatherService['getForecast']>> | undefined;
     let forecastFormatted: string | undefined;
-    if (searchParams.get('forecast') === 'true') {
-      const days = parseInt(searchParams.get('days') || '2') || 2;
+    if (param('forecast') === 'true') {
+      const days = parseInt(param('days') || '2') || 2;
       try {
         forecast = await weatherService.getForecast(undefined, days);
         forecastFormatted = weatherService.formatForecastForPrompt(forecast);
@@ -83,6 +89,15 @@ export async function POST(request: NextRequest) {
     if (body.action === 'clear_cache') {
       clearWeatherCache();
       return NextResponse.json({ success: true, message: 'Weather cache cleared' });
+    }
+
+    if (body.action === 'test') {
+      // Settings → Weather "Test": the key comes in the body, not the URL.
+      const { apiKey, ...rest } = body as Record<string, unknown>;
+      return weatherReply(
+        (name) => (rest[name] == null ? null : String(rest[name])),
+        typeof apiKey === 'string' && apiKey ? apiKey : null,
+      );
     }
 
     return NextResponse.json(

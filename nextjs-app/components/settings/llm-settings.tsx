@@ -22,6 +22,7 @@ import {
 import { useAppStore } from '@/lib/store';
 import { cn } from '@/lib/utils';
 import { useLiveModels } from '@/lib/hooks/use-live-models';
+import { requestModelList } from '@/lib/model-list-request';
 import type { LLMProviderConfig, LLMModelProfile } from '@/lib/types';
 import {
   getEffectiveLLMProfiles,
@@ -64,12 +65,10 @@ export function LLMSettings() {
     setIsLoadingModels(true);
     try {
       const activeEndpoint = getActiveEndpoint();
-      const params = new URLSearchParams({ endpoint: activeEndpoint });
-      if (llm.llmProviderId) {
-        const provider = providers.find((p: LLMProviderConfig) => p.id === llm.llmProviderId);
-        if (provider?.apiKey) params.set('apiKey', provider.apiKey);
-      }
-      const res = await fetch(`/api/services/models?${params}`);
+      const provider = llm.llmProviderId
+        ? providers.find((p: LLMProviderConfig) => p.id === llm.llmProviderId)
+        : undefined;
+      const res = await requestModelList(activeEndpoint, provider?.apiKey);
       if (res.ok) {
         const data = await res.json();
         const seen = new Set<string>();
