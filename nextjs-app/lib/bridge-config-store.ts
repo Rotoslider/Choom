@@ -47,6 +47,40 @@ export async function loadConfig(): Promise<Record<string, unknown>> {
   }
 }
 
+// Two writers share SNAPSHOT_DIR, with two name forms:
+//   this file:          bridge-config_2026-11-05T14-43-30[_label].json  (UTC, from toISOString)
+//   the Python bridge:  bridge-config_20261101_205003.json             (the Mac's local time; task_config.py)
+// Both used to prune by plain name order, where "20261101" sorts above "2026-11-05", so once the
+// bridge had 10 snapshots every one written here was deleted the moment it was made (none kept
+// from Nov 1 to Nov 5, 2026). Order by the time a name stands for instead.
+const UTC_NAME = /^bridge-config_(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})(?:_(.+))?\.json$/;
+const LOCAL_NAME = /^bridge-config_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})(?:_(.+))?\.json$/;
+
+/** When a snapshot was taken (epoch ms) and its label, from its file name; null for other files. */
+export function snapshotNameTime(name: string): { ms: number; label: string } | null {
+  const u = name.match(UTC_NAME);
+  if (u) return { ms: Date.UTC(+u[1], +u[2] - 1, +u[3], +u[4], +u[5], +u[6]), label: u[7] || '' };
+  const l = name.match(LOCAL_NAME);
+  if (l) return { ms: new Date(+l[1], +l[2] - 1, +l[3], +l[4], +l[5], +l[6]).getTime(), label: l[7] || '' };
+  return null;
+}
+
+/** Snapshot names, newest first by the time they stand for; names that aren't snapshots are left out. */
+export function snapshotsNewestFirst(names: string[]): string[] {
+  return names
+    .map((n) => ({ n, t: snapshotNameTime(n) }))
+    .filter((x): x is { n: string; t: { ms: number; label: string } } => x.t !== null)
+    .sort((a, b) => b.t.ms - a.t.ms || b.n.localeCompare(a.n))
+    .map((x) => x.n);
+}
+
+// "2026-11-05T07:43:30" in the server's local time: what the Restore panel shows.
+function localStamp(ms: number): string {
+  const d = new Date(ms);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
 // Snapshot bridge-config.json to data/backups/bridge-config/ BEFORE every write,
 // keeping the newest MAX_SNAPSHOTS. This is the recovery trail the Restore panel
 // exposes. `label` distinguishes a pre-restore snapshot in the filename.
@@ -57,11 +91,7 @@ export async function snapshotConfig(label = ''): Promise<void> {
     const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
     const suffix = label ? `_${label}` : '';
     await copyFile(CONFIG_PATH, path.join(SNAPSHOT_DIR, `bridge-config_${ts}${suffix}.json`));
-    const files = (await readdir(SNAPSHOT_DIR))
-      .filter((f) => f.startsWith('bridge-config_'))
-      .sort()
-      .reverse();
-    for (const old of files.slice(MAX_SNAPSHOTS)) {
+    for (const old of snapshotsNewestFirst(await readdir(SNAPSHOT_DIR)).slice(MAX_SNAPSHOTS)) {
       await unlink(path.join(SNAPSHOT_DIR, old)).catch(() => {});
     }
   } catch (e) {
@@ -91,12 +121,10 @@ export async function listSnapshots(): Promise<SnapshotInfo[]> {
   if (existsSync(SNAPSHOT_DIR)) {
     const files = (await readdir(SNAPSHOT_DIR)).filter((f) => f.startsWith('bridge-config_') && f.endsWith('.json'));
     for (const f of files) {
-      let takenAt = '';
-      let label = '';
-      const m = f.match(/^bridge-config_(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})(?:_(.+))?\.json$/);
-      const o = f.match(/^bridge-config_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})\.json$/);
-      if (m) { takenAt = `${m[1]}T${m[2]}:${m[3]}:${m[4]}`; label = m[5] || ''; }
-      else if (o) { takenAt = `${o[1]}-${o[2]}-${o[3]}T${o[4]}:${o[5]}:${o[6]}`; }
+      // The UTC names used to be shown as if they were local time (7 hours off in Mountain time).
+      const t = snapshotNameTime(f);
+      const takenAt = t ? localStamp(t.ms) : '';
+      const label = t?.label || '';
       let sizeBytes = 0;
       try { sizeBytes = (await stat(path.join(SNAPSHOT_DIR, f))).size; } catch { /* ignore */ }
       infos.push({ id: f, takenAt, label, source: 'snapshot', sizeBytes });

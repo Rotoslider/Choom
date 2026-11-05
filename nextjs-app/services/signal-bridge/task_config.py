@@ -5,9 +5,10 @@ Manages bridge-config.json for scheduled tasks, heartbeat settings, etc.
 import json
 import logging
 import os
+import re
 import shutil
-from datetime import datetime
-from typing import Any, Dict, Optional
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,34 @@ SNAPSHOT_DIR = os.path.join(APP_ROOT, "data", "backups", "bridge-config")
 MAX_SNAPSHOTS = 10
 
 
+# The app (lib/bridge-config-store.ts) writes snapshots here too, named in UTC
+# ("bridge-config_2026-11-05T14-43-30[_label].json"); this file names them in local time
+# ("bridge-config_20261101_205003.json"). Pruning by plain name order kept only these, because
+# "20261101" sorts above "2026-11-05", and deleted every app snapshot (Nov 1-5, 2026). Order by
+# the time a name stands for instead.
+_UTC_NAME = re.compile(r"^bridge-config_(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})(?:_.+)?\.json$")
+_LOCAL_NAME = re.compile(r"^bridge-config_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})(?:_.+)?\.json$")
+
+
+def _snapshot_time(name: str) -> Optional[float]:
+    """Epoch seconds a snapshot name stands for, or None if it isn't a snapshot name."""
+    m = _UTC_NAME.match(name)
+    if m:
+        return datetime(*map(int, m.groups()), tzinfo=timezone.utc).timestamp()
+    m = _LOCAL_NAME.match(name)
+    if m:
+        try:
+            return datetime(*map(int, m.groups())).timestamp()  # naive = this machine's local time
+        except ValueError:
+            return None
+    return None
+
+
+def _snapshots_newest_first(names: List[str]) -> List[str]:
+    timed = [(t, n) for n in names if (t := _snapshot_time(n)) is not None]
+    return [n for _, n in sorted(timed, reverse=True)]
+
+
 def _snapshot_config():
     """Copy current bridge-config.json to timestamped snapshot before overwrite"""
     if not os.path.exists(CONFIG_FILE):
@@ -67,11 +96,7 @@ def _snapshot_config():
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         dest = os.path.join(SNAPSHOT_DIR, f"bridge-config_{timestamp}.json")
         shutil.copy2(CONFIG_FILE, dest)
-        snapshots = sorted(
-            [f for f in os.listdir(SNAPSHOT_DIR) if f.startswith("bridge-config_")],
-            reverse=True,
-        )
-        for old in snapshots[MAX_SNAPSHOTS:]:
+        for old in _snapshots_newest_first(os.listdir(SNAPSHOT_DIR))[MAX_SNAPSHOTS:]:
             os.remove(os.path.join(SNAPSHOT_DIR, old))
     except Exception as e:
         logger.warning(f"Failed to snapshot bridge config: {e}")
