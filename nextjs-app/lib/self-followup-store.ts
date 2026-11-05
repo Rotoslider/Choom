@@ -50,6 +50,11 @@ export interface QueueEntry {
   };
   series_id?: string;
   requeued_as?: string;
+  // When she wrote the words (a routine's copies keep the first copy's; an edit sets it anew).
+  written_at?: string;
+  // edit_self_followup (2026-11-05): when it was reworded and what it said before.
+  edited_at?: string;
+  previous_prompt?: string;
 }
 
 export function safeChoomId(choomId: string): string {

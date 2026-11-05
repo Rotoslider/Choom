@@ -526,6 +526,7 @@ export async function POST(request: NextRequest) {
         stripTools.add('schedule_room_followup');
         stripTools.add('list_self_followups');
         stripTools.add('cancel_self_followup');
+        stripTools.add('edit_self_followup');
       }
       const before = activeTools.length;
       activeTools = activeTools.filter(t => !stripTools.has(t.name));

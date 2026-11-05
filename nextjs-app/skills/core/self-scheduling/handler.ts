@@ -23,7 +23,10 @@ const TOOL_NAMES = new Set([
   'schedule_room_followup',
   'list_self_followups',
   'cancel_self_followup',
+  'edit_self_followup',
 ]);
+
+const PREVIEW_CHARS = 90; // list_self_followups shows this much of each prompt unless asked for the whole
 
 const MIN_DELAY_MIN = 15; // minimum lead time before a followup may fire
 const MAX_DELAY_MIN = 30 * 24 * 60; // 30 days
@@ -37,6 +40,23 @@ function fmtLocal(d: Date): string {
     weekday: 'short', month: 'short', day: 'numeric',
     hour: 'numeric', minute: '2-digit', timeZoneName: 'short', timeZone: USER_TZ,
   });
+}
+
+// The ids asked for: `id` as one id or several ("sf_a, sf_b"), or an `ids` array.
+function idsFromArgs(a: Record<string, unknown>): string[] {
+  const raw: unknown[] = Array.isArray(a.ids) ? a.ids : [a.id ?? a.followup_id ?? a.followupId ?? ''];
+  return raw.flatMap(v => String(v ?? '').split(/[\s,]+/)).map(s => s.trim()).filter(s => /^sf_/i.test(s));
+}
+
+// "sf_x ↻ every day at 2:40 PM (next Thu, Nov 5, 2:40 PM) | signal" or "sf_x | Thu, Nov 5, 2:40 PM | room abc".
+function followupHead(e: QueueEntry): string {
+  const when = new Date(e.trigger_at).toLocaleString('en-US', {
+    weekday: 'short', month: 'short', day: 'numeric',
+    hour: 'numeric', minute: '2-digit', timeZone: USER_TZ,
+  });
+  const where = e.target === 'room' ? `room${e.room_id ? ' ' + e.room_id : ''}` : 'signal';
+  const rep = e.repeat ? ` ↻ ${describeRepeat(e.repeat)} (next ${when})` : ` | ${when}`;
+  return `${e.id}${rep} | ${where}`;
 }
 
 export default class SelfSchedulingHandler extends BaseSkillHandler {
@@ -55,6 +75,8 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
         return this.listFollowups(toolCall, ctx);
       case 'cancel_self_followup':
         return this.cancelFollowup(toolCall, ctx);
+      case 'edit_self_followup':
+        return this.editFollowup(toolCall, ctx);
       default:
         return this.error(toolCall, `Unknown self-scheduling tool: ${toolCall.name}`);
     }
@@ -224,7 +246,7 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
           room: resolved.title,
           routine: describeRepeat(roomRepeat),
           next_fire_local: fmtLocal(new Date(existing.trigger_at)),
-          message: `You already return to "${resolved.title}" ${describeRepeat(roomRepeat)} (${existing.id}, next ${fmtLocal(new Date(existing.trigger_at))}). Nothing to add — it re-queues itself after every fire.`,
+          message: `You already return to "${resolved.title}" ${describeRepeat(roomRepeat)} (${existing.id}, next ${fmtLocal(new Date(existing.trigger_at))}). Nothing to add — it re-queues itself after every fire. To change what it says, use edit_self_followup with id ${existing.id}.`,
         });
       }
     }
@@ -237,7 +259,7 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
           already_scheduled: true,
           id: covering.id,
           room: resolved.title,
-          message: `Not added: ${covering.id} already returns you to "${resolved.title}" at ${fmtLocal(new Date(covering.trigger_at))}${covering.repeat ? ` (routine ${describeRepeat(covering.repeat)})` : ''}. Cancel it first if you want to replace it.`,
+          message: `Not added: ${covering.id} already returns you to "${resolved.title}" at ${fmtLocal(new Date(covering.trigger_at))}${covering.repeat ? ` (routine ${describeRepeat(covering.repeat)})` : ''}. To change what it says, use edit_self_followup with id ${covering.id}; cancel it first only if you want a different time.`,
         });
       }
     }
@@ -381,7 +403,7 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
           id: existing.id,
           routine: describeRepeat(repeat),
           next_fire_local: fmtLocal(new Date(existing.trigger_at)),
-          message: `You already have a routine ${describeRepeat(repeat)} (${existing.id}, next ${fmtLocal(new Date(existing.trigger_at))}). Nothing to add — it re-queues itself after every fire. Cancel it first if you want to change its prompt.`,
+          message: `You already have a routine ${describeRepeat(repeat)} (${existing.id}, next ${fmtLocal(new Date(existing.trigger_at))}). Nothing to add — it re-queues itself after every fire. To change what it says, use edit_self_followup with id ${existing.id} (same time, same routine, new words).`,
         });
       }
     }
@@ -398,8 +420,8 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
           id: covering.id,
           covered_by: covering.repeat ? `routine ${describeRepeat(covering.repeat)}` : `one-shot at ${when}`,
           message: covering.repeat
-            ? `Not added: your routine "${describeRepeat(covering.repeat)}" (${covering.id}) already wakes you then. If this wake-up needs something specific, put it in a memory or the routine's prompt instead.`
-            : `Not added: ${covering.id} already wakes you at ${when} (within ${SLOT_WINDOW_MIN} min): "${covering.prompt.slice(0, 80)}". Cancel it first if you want to replace it.`,
+            ? `Not added: your routine "${describeRepeat(covering.repeat)}" (${covering.id}) already wakes you then. If this wake-up needs something specific, put it in a memory or add it to the routine's prompt with edit_self_followup.`
+            : `Not added: ${covering.id} already wakes you at ${when} (within ${SLOT_WINDOW_MIN} min): "${covering.prompt.slice(0, 80)}". To change what it says, use edit_self_followup with id ${covering.id}; cancel it first only if you want a different time.`,
         });
       }
     }
@@ -460,7 +482,12 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
     if (pending.length === 0) {
       return this.success(toolCall, { success: true, followups: [], message: 'No pending self-followups.' });
     }
-    const userTz = 'America/Denver';
+    // Whole notes on request (2026-11-05): the list cut every prompt at 90 characters and nothing
+    // showed the rest. Genesis, tidying her 14 hourly check-ins, could judge none of them, and her
+    // 2:40 and 3:40 notes looked identical when cut. `id` (one or several) or `full` shows them whole.
+    const a = toolCall.arguments || {};
+    const wanted = idsFromArgs(a);
+    const full = a.full === true || /^(true|yes|1)$/i.test(String(a.full ?? ''));
     // Compact (Phase 1, 2026-09-12): one line per pending entry, soonest first.
     // The object-per-entry form cost ~400 chars each — 31 pending entries was a
     // 12k-char result on every grounding turn. A line carries what she needs to
@@ -468,23 +495,119 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
     // Routines (2026-09-12) come first, marked ↻ with their rule, so she sees
     // at a glance which wake-ups already repeat and never re-adds them.
     const sorted = [...pending].sort((a, b) => (b.repeat ? 1 : 0) - (a.repeat ? 1 : 0) || a.trigger_at.localeCompare(b.trigger_at));
-    const lines = sorted.map(e => {
-      const when = new Date(e.trigger_at).toLocaleString('en-US', {
-        weekday: 'short', month: 'short', day: 'numeric',
-        hour: 'numeric', minute: '2-digit', timeZone: userTz,
-      });
-      const where = e.target === 'room' ? `room${e.room_id ? ' ' + e.room_id : ''}` : 'signal';
+    const shown = wanted.length ? sorted.filter(e => wanted.includes(e.id)) : sorted;
+    let cut = 0;
+    const lines = shown.map(e => {
       const what = e.prompt.replace(/\s+/g, ' ').trim();
-      const rep = e.repeat ? ` ↻ ${describeRepeat(e.repeat)} (next ${when})` : ` | ${when}`;
-      return `${e.id}${rep} | ${where} | ${what.length > 90 ? what.slice(0, 89) + '…' : what}`;
+      const whole = full || wanted.length > 0 || what.length <= PREVIEW_CHARS;
+      if (!whole) cut++;
+      return `${followupHead(e)} | ${whole ? what : what.slice(0, PREVIEW_CHARS - 1) + '…'}`;
     });
     const routineCount = pending.filter(e => e.repeat).length;
-    return this.success(toolCall, {
+    const result: Record<string, unknown> = {
       success: true,
       pending_count: pending.length,
       routine_count: routineCount,
       format: 'id | when (Mountain time) | where | prompt — entries marked ↻ are routines that re-queue themselves; do not schedule their next occurrence by hand',
       followups: lines,
+    };
+    if (cut) {
+      result.cut_short = `${cut} of these prompts are longer than ${PREVIEW_CHARS} characters and end in "…" here. To read one whole, call list_self_followups with its id (several: id="sf_a, sf_b"); full=true shows every one whole.`;
+    }
+    if (wanted.length) {
+      const missing = wanted.filter(id => !shown.some(e => e.id === id));
+      if (missing.length) {
+        result.not_pending = missing.map(id => {
+          const bucket = (['fired', 'cancelled', 'error'] as Bucket[]).find(b => fs.existsSync(entryPath(ctx.choomId, b, id)));
+          return `${id}: ${bucket === 'fired' ? 'already fired' : bucket ? bucket : 'no such followup — copy ids from the list, never type one from memory'}`;
+        });
+      }
+    }
+    return this.success(toolCall, result);
+  }
+
+  // Reword a pending followup in place (2026-11-05): same id, same time, and a routine keeps its
+  // series, so every later copy carries the new words. Changing a note used to mean cancel and
+  // schedule again; Genesis did that for her 8:40 and 10:40 check-ins, and in the same batch
+  // cancelled her 2:40 and 3:40 ones by mistake.
+  private async editFollowup(toolCall: ToolCall, ctx: SkillHandlerContext): Promise<ToolResult> {
+    const a = toolCall.arguments || {};
+    const id = String(a.id ?? a.followup_id ?? a.followupId ?? '').trim();
+    const prompt = String(a.prompt ?? a.new_prompt ?? a.text ?? '').trim();
+    const reason = typeof a.reason === 'string' ? a.reason.trim() : undefined;
+    const choomName = ((ctx.choom as Record<string, unknown>)?.name as string) || 'unknown';
+
+    if (!id) return this.error(toolCall, 'id is required — copy it from list_self_followups (it looks like "sf_1a2b3c4d").');
+    if (!prompt) {
+      return this.error(toolCall, `prompt is required: the whole new wording. It replaces the old prompt entirely, so include everything you want to keep (list_self_followups with id="${id}" shows the current one in full).`);
+    }
+    if (prompt.length > MAX_PROMPT_CHARS) {
+      return this.error(toolCall, `prompt is too long (${prompt.length} chars). Keep it under ${MAX_PROMPT_CHARS}.`);
+    }
+
+    const src = entryPath(ctx.choomId, 'pending', id);
+    const gone = () => {
+      const bucket = (['fired', 'cancelled', 'error'] as Bucket[]).find(b => fs.existsSync(entryPath(ctx.choomId, b, id)));
+      if (bucket === 'fired') return `${id} already fired, so there is nothing to reword. If it is a routine, its next copy has a new id: call list_self_followups and edit that one.`;
+      if (bucket) return `${id} is ${bucket}, not pending, so there is nothing to reword.`;
+      return `No pending followup has the id ${id}. Call list_self_followups and copy the id from it; never type one from memory.`;
+    };
+    if (!fs.existsSync(src)) return this.error(toolCall, gone());
+
+    // Claim it first, the way the scheduler does: a rename out of pending/ means it can't fire
+    // half-edited, and if it fired a moment ago the rename fails and nothing comes back to life.
+    const claim = `${src}.editing.${process.pid}.${Date.now()}`;
+    try {
+      fs.renameSync(src, claim);
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return this.error(toolCall, gone());
+      throw err;
+    }
+    let entry: QueueEntry;
+    try {
+      entry = JSON.parse(fs.readFileSync(claim, 'utf-8')) as QueueEntry;
+    } catch (err) {
+      fs.renameSync(claim, src);
+      return this.error(toolCall, `Couldn't read ${id}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    const before = entry.prompt;
+    if (before === prompt && (reason === undefined || reason === entry.reason)) {
+      fs.renameSync(claim, src);
+      return this.success(toolCall, { success: true, id, unchanged: true, message: `${id} already says exactly that. Nothing changed.` });
+    }
+
+    const now = new Date().toISOString();
+    const edited: QueueEntry = {
+      ...entry,
+      prompt,
+      ...(reason !== undefined ? { reason } : {}),
+      // The wake line says how old the note is so she can weigh what it assumes; these words are new.
+      written_at: now,
+      edited_at: now,
+      previous_prompt: before,
+    };
+    try {
+      atomicWriteJson(src, edited);
+    } catch (err) {
+      fs.renameSync(claim, src);
+      return this.error(toolCall, `Couldn't save the new wording for ${id}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    try { fs.unlinkSync(claim); } catch { /* a leftover .editing file is ignored by the scheduler */ }
+
+    const when = fmtLocal(new Date(entry.trigger_at));
+    const routine = entry.repeat ? describeRepeat(entry.repeat) : undefined;
+    console.log(`   ✏️  Self-followup reworded for ${choomName}: ${id}${routine ? ` ↻ ${routine}` : ` at ${when}`} — "${before.replace(/\s+/g, ' ').slice(0, 60)}" → "${prompt.replace(/\s+/g, ' ').slice(0, 60)}"`);
+    return this.success(toolCall, {
+      success: true,
+      id,
+      edited: true,
+      ...(routine ? { routine } : {}),
+      next_fire_local: when,
+      prompt,
+      message: routine
+        ? `Reworded ${id} (${routine}, next ${when}). Same id and time; every later copy of this routine uses the new words.`
+        : `Reworded ${id} (fires ${when}). Same id and time.`,
     });
   }
 
@@ -540,12 +663,18 @@ export default class SelfSchedulingHandler extends BaseSkillHandler {
       });
     }
 
+    // Name what was cancelled, so a wrong id shows at once (Nov 5: Genesis cancelled her 2:40
+    // and 3:40 check-ins meaning others, and only found out by probing every hour).
+    const target = listEntries(ctx.choomId, 'pending').find(e => e.id === id);
     if (this.cancelOne(ctx.choomId, id)) {
       const remaining = listEntries(ctx.choomId, 'pending').length;
-      console.log(`   🗑️  Self-followup cancelled: ${id}`);
+      const was = target ? followupHead(target).slice(id.length).replace(/^ \| /, ' ').trim() : '';
+      const what = target ? target.prompt.replace(/\s+/g, ' ').trim() : '';
+      console.log(`   🗑️  Self-followup cancelled: ${id}${was ? ` (${was})` : ''}`);
       return this.success(toolCall, {
         success: true, cancelled: true, id, remaining,
-        message: `Cancelled ${id}.${remaining ? ` ${remaining} still pending.` : ''}`,
+        ...(target ? { was, prompt: what } : {}),
+        message: `Cancelled ${id}${was ? ` (${was})` : ''}.${remaining ? ` ${remaining} still pending.` : ''}${target ? ' If that is not the one you meant, schedule it again now with the prompt above, which is what it said.' : ''}`,
       });
     }
 

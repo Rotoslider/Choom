@@ -6,6 +6,7 @@ author: system
 tools:
   - schedule_self_followup
   - list_self_followups
+  - edit_self_followup
   - cancel_self_followup
 dependencies: []
 ---
@@ -26,7 +27,8 @@ dependencies: []
 - Pass `repeat: "daily" | "weekdays" | "weekly" | "monthly"` and the wall-clock time in `at`. Weekly needs `day` ("fri"); monthly needs `day` as 1-28.
 - **Schedule a routine ONCE.** It re-queues itself after every fire. Never schedule next week's copy by hand, never cancel-and-re-add it each time it fires, and never keep a ladder of one-shots for the same ritual. `list_self_followups` marks routines with ↻.
 - If you call with the same rule/time/day again, you get the existing routine back (`already_scheduled: true`) — nothing is duplicated.
-- To change a routine's prompt: cancel it, then schedule the new one.
+- To change what a routine (or any pending followup) says: `edit_self_followup` with its id and the whole new prompt. It keeps the id, the time and the routine. Cancel only to stop it or move it to another time.
+- `list_self_followups` shows the first 90 characters of each prompt. To read one whole before you change it, pass its `id` (several: `id: "sf_a, sf_b"`), or `full: true` for all of them. Copy ids from the list; never type one from memory.
 - Room re-entries can be routines too: `schedule_room_followup` takes the same `repeat`/`day`.
 
 ## Parameters

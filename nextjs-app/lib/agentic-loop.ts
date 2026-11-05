@@ -49,10 +49,13 @@ import {
   type FallbackConfig, type DetectedProject,
 } from '@/lib/chat-shared';
 import { type ToolContext, executeToolCall, executeToolCallViaSkills } from '@/lib/tool-execution';
-import { dropStaleReads } from '@/lib/tool-dedup';
+import { dropStaleReads, dropUndoneChanges } from '@/lib/tool-dedup';
 import { emptyArgsError } from '@/lib/tool-arg-repair';
 import type { LLMSettings, ToolCall, ToolResult, ToolDefinition, LLMProviderConfig, LLMModelProfile } from '@/lib/types';
 import type { Choom, Chat, Message } from '@prisma/client';
+
+// Which skill a tool belongs to (the family dropUndoneChanges works within).
+const skillOfTool = (tool: string): string | undefined => getSkillRegistry().getSkillForTool(tool)?.metadata.name;
 
 export interface AgenticLoopParams {
   send: (data: Record<string, unknown>) => void;
@@ -2400,6 +2403,9 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                 // After a change her earlier reads are stale: re-checking with them served the old
                 // answer (lib/tool-dedup.ts).
                 dropStaleReads(PARALLEL_SAFE, tc.name, executedToolCache, dedupHitCounts);
+                // And after a cancel/delete/edit, the same skill's earlier changes are stale too:
+                // schedule → cancel → the same schedule must really schedule again.
+                dropUndoneChanges(PARALLEL_SAFE, tc.name, dedupKey, skillOfTool, executedToolCache, dedupHitCounts);
                 consecutiveFailures = 0;
                 consecutiveNoToolIters = 0;
               } else {

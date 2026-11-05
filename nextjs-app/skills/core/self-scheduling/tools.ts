@@ -79,15 +79,46 @@ export const tools: ToolDefinition[] = [
   },
   {
     name: 'list_self_followups',
-    description: 'List your currently pending self-followups (not yet fired), routines first (marked ↻ with their rule). Shows id, trigger time, and the prompt preview. A routine appears ONCE — its next fire re-queues itself.',
+    description: 'List your currently pending self-followups (not yet fired), routines first (marked ↻ with their rule). Shows id, trigger time, and the first 90 characters of each prompt. Pass `id` to read one note (or several, comma-separated) in full, or full=true to see every prompt whole. A routine appears ONCE — its next fire re-queues itself.',
     parameters: {
       type: 'object',
-      properties: {},
+      properties: {
+        id: {
+          type: 'string',
+          description: 'Optional: a followup id from the list (e.g. "sf_1a2b3c4d"), or several separated by commas, to see those notes in full.',
+        },
+        full: {
+          type: 'boolean',
+          description: 'Optional: true shows every prompt whole instead of its first 90 characters.',
+        },
+      },
+    },
+  },
+  {
+    name: 'edit_self_followup',
+    description: 'Reword a pending self-followup or room re-entry in place: same id, same time, and a routine keeps its schedule, with every later copy using the new words. Use this, not cancel and schedule again, when only the wording should change. Copy the id from list_self_followups, and read the note whole first (list_self_followups with that id): the new prompt replaces the old one entirely.',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: {
+          type: 'string',
+          description: 'The followup id, copied from list_self_followups (e.g. "sf_1a2b3c4d").',
+        },
+        prompt: {
+          type: 'string',
+          description: 'The whole new wording. Same advice as when scheduling: write what to CHECK, not what is true.',
+        },
+        reason: {
+          type: 'string',
+          description: 'Optional: a new one-line reason (for the Doctor report). Omit to keep the old one.',
+        },
+      },
+      required: ['id', 'prompt'],
     },
   },
   {
     name: 'cancel_self_followup',
-    description: 'Cancel a pending self-followup by id. Use when you no longer need the followup or want to free a slot. ALWAYS call list_self_followups first to get the real ids (they look like "sf_1a2b3c4d") — do NOT guess ids like "1"/"2". To clear ALL your pending followups at once, pass id="all".',
+    description: 'Cancel a pending self-followup by id. Use when you no longer need the followup or want to free a slot; to change only what it says, use edit_self_followup instead. ALWAYS call list_self_followups first to get the real ids (they look like "sf_1a2b3c4d") — do NOT guess ids like "1"/"2". To clear ALL your pending followups at once, pass id="all".',
     parameters: {
       type: 'object',
       properties: {
