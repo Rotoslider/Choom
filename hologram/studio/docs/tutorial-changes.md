@@ -55,8 +55,17 @@ uses the same pages and only spells out what's new.
   up from below the frame, already in her hands. Without this the video model makes it melt or
   vanish.
 - **By hand or by magic.** Clothes moved by hand often need a few re-rolls. A change by magic renders
-  more reliably: Genesis's motes swirl and the dress becomes the nightgown. Genesis's natural-skin
-  looks (her night looks, her plain look) have no motes, so there it's by hand.
+  more reliably: Genesis's motes swirl and the dress becomes the nightgown. Her natural-skin looks
+  (her night looks, her plain look) have no motes, but "a soft shimmer of violet sparks" works there
+  too: her plain look's dark top lightens into the pink silk nightie.
+- **Colour first.** Most reliable of all is one garment turning into the next where it is, because the
+  picture barely has to move. Eve's slip darkens to black lace "like ink spreading through water", and
+  Genesis's rose top turns to pink silk.
+- **A new layer made of light.** A wrap or shawl that is only "put on" gets dropped in from above the
+  frame as a wide band of fabric. Eve's knit wrap came right as threads of white light that swirl
+  around her and settle on her shoulders as the wrap.
+- **Over the head fills the frame.** In Genesis's chest-up framing, a sweater pulled on or off over
+  her head covers the whole frame for a second. Use magic there, or accept it.
 - **Keep the words the clips already avoid.** No breathing words (they bring fog), no "leans in" (the
   camera pushes in). The Studio warns you when you plan. The full list is in the [new-Choom
   tutorial](tutorial-new-choom.md#your-own-moves-a-dance-turning-her-back-to-you-anything).
@@ -67,6 +76,13 @@ Every clip's prompt starts with the look's Subject. If it names clothes the pict
 (briefs in a chest-up picture), the video model pulls the camera back to show them, and the clip
 fails as a push-out. Keep a waist-up look's Subject to what's in its frame; its full body says the
 rest.
+
+The same goes for what a change says: in a waist-up change, don't give the new garment a length.
+"Becoming a short silk camisole nightie" pulled the camera back to Genesis's waist, and the same
+change without "short" stayed framed. A start look whose Subject gives a length can't be fixed in the
+change's words. Genesis's "long burgundy dress" back to her usual clothes cut to her whole figure in
+three tries of different wording. That way back is a full-body change instead (a twirl, from
+`full@eveningdress` to `full`).
 
 ### Reviewing a change
 
