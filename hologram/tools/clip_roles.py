@@ -96,9 +96,11 @@ ROLES = {
     "relaxedconcerned": (["concerned"], "relaxed", "relaxed"),
     # Sleep: dozing off, sleeping, waking (Aloy sleeps with her hand down), and Genesis's wind.
     "fallasleep": (["sleep"], "main", "asleep"),
+    "fallasleep2": (["sleep"], "main", "asleep"),  # a second way of dozing off; the glass picks one at random
     "sleep": (["sleep"], "asleep", "asleep"),
     "sleep2": (["sleep"], "asleep", "asleep"),
     "wake": (["wake"], "asleep", "main"),
+    "wake2": (["wake"], "asleep", "main"),  # a second way of waking (Genesis's "waking up next to you")
     "windy": (["windy"], "main", "main"),
     "windy2": (["windy"], "main", "main"),
 }
@@ -212,7 +214,7 @@ def clip_role(cid, src, home=None):
         return (["idle", "talk", "think", "listen"] if action == stem or re.fullmatch(stem + r"\d+", action)
                 else ["idle"]), place, place
     moods, start, end = ROLES.get(action) or KINDS.get(kind) or ROLES["base"]
-    if action in ("fallasleep", "wake") and home != "main":
+    if action in ("fallasleep", "fallasleep2", "wake", "wake2") and home != "main":
         start, end = [home if pose == "main" else pose for pose in (start, end)]
     if outfit:
         start, end = [f"{pose}@{outfit}" if pose in ("main", "relaxed", "full", "asleep") else pose for pose in (start, end)]
