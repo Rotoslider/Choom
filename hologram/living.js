@@ -1173,20 +1173,27 @@ function mayWear(p, o) {
   if (now - (w.rested[o] || 0) < VISIT_REST_MS) return false;                     // just took it off
   return ALT_LOOKS.has(o) || (w.worn[o] || 0) < lookClips(p, o) * OUTFIT_DAY_MS_PER_CLIP;
 }
-// Called with each clip she finishes (at the hand-over, once per clip): counts time worn, starts and
-// ends visits. The end of an outfit's visit starts her rest in her usual clothes (restedAny).
-function noteWorn(p, pose, ms) {
+// Starts and ends visits for the clothes she's in at `pose`. The end of an outfit's visit starts her
+// rest in her usual clothes (restedAny).
+function syncVisit(p, pose) {
   const w = wardrobe(p), o = outfitOf(pose), now = Date.now();
   if (w.visit && w.visit.o !== o) {
     w.rested[w.visit.o] = now;
     if (!ALT_LOOKS.has(w.visit.o) && !/^night/.test(w.visit.o)) w.restedAny = now;
     w.visit = null;
   }
-  if (o) {
-    if (!w.visit) w.visit = { o, start: now };
-    w.worn[o] = (w.worn[o] || 0) + ms;
-  }
+  if (o && !w.visit) w.visit = { o, start: now };
   saveWardrobe(p);
+  return w;
+}
+// Called with each clip she finishes (at the hand-over, once per clip): counts time worn. nextClip
+// has already synced her visit to where that clip ends (it picks the clip after while this one plays).
+function noteWorn(p, pose, ms) {
+  const w = syncVisit(p, pose), o = outfitOf(pose);
+  if (o) {
+    w.worn[o] = (w.worn[o] || 0) + ms;
+    saveWardrobe(p);
+  }
 }
 // Clothes she chose herself (glass_wear): kept until she goes to sleep or chooses again, at most
 // until midnight (the wardrobe starts fresh each day). Day clothes chosen before night-clothes time
@@ -1407,6 +1414,11 @@ function nextClip(p, after) {
     if (k >= 0) return k;
   }
   if (isSeat(pose)) pose = p.alive.home || 'main';
+  // Her visit as of the clothes this clip starts in. The clip before it is still playing and noteWorn
+  // counts it only at the hand-over, so a change clip's new clothes weren't counted yet: after a
+  // relaunch mid-visit (8:44 pm, 2026-11-07) Genesis pulled her sweater on, then off, then on again
+  // every seven seconds, each pick seeing the clothes from a clip ago.
+  syncVisit(p, pose);
   const want = wantedMood(p);
   // Time to change clothes (or back into her usual ones before sleep): a cut to her base loop in the
   // other outfit, at a quiet moment. Her places are in her usual clothes: asked to go to one, she
