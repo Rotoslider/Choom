@@ -209,6 +209,7 @@ button:focus-visible, select:focus-visible, textarea:focus-visible, input:focus-
 .jobs-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
 .job { border-top: 1px solid var(--line); padding: 10px 0; display: grid; gap: 6px; }
 .job .row { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+.job-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .job .kind { font-weight: 600; text-transform: capitalize; }
 .job .state { font-size: 12px; color: var(--muted); }
 .job.failed .state { color: var(--bad); }

@@ -287,6 +287,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"job": jobs.add("review", {"choom": data["choom"], "clips": data.get("clips", [])})})
             if parts[:2] == ["api", "jobs"] and len(parts) == 4 and parts[3] == "cancel":
                 return self.send_json({"cancelled": jobs.cancel(int(parts[2]))})
+            if parts[:2] == ["api", "jobs"] and len(parts) == 4 and parts[3] == "next":
+                if not jobs.run_next(int(parts[2])):
+                    return self.fail("only a waiting render, build or picture can run next")
+                return self.send_json({"worklist": jobs.state()})
             if parts == ["api", "jobs", "pause"]:
                 return self.send_json({"worklist": jobs.pause()})
             if parts == ["api", "jobs", "resume"]:

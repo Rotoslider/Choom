@@ -1281,11 +1281,14 @@ async function pollJobs() {
     const b = running.find((j) => j.kind === 'build' && j.progress?.total);
     const lastFailed = state.jobs.length && state.jobs[state.jobs.length - 1].status === 'failed';
     const wl = state.worklist;
-    pill.className = `jobs-pill${wl.paused ? ' paused' : running.length ? ' busy' : lastFailed ? ' failed' : ''}`;
-    $('#jobsText').textContent = wl.paused ? `Paused${waiting.length ? ` · ${waiting.length} waiting` : ''}`
-      : r ? `${wl.pausing ? 'Pausing · ' : 'Rendering '}${r.progress?.done ?? 0}/${r.progress?.total || r.args.clips}`
-        : b ? `${wl.pausing ? 'Pausing · ' : 'Building '}${b.progress.done}/${b.progress.total}`
-        : running.length ? `${wl.pausing ? 'Pausing · ' : ''}${{ build: 'Building', picture: 'Klein', still: 'Still relief', relaunch: 'Reloading the glass', review: 'Checking' }[running[0].kind] || 'Working'}…`
+    // Paused, unless a job picked with Run next is on the GPU (then the pill shows that job).
+    const held = wl.paused && !running.some((j) => GPU.includes(j.kind));
+    const holding = wl.stepAside ? 'Stepping aside · ' : 'Pausing · ';
+    pill.className = `jobs-pill${held ? ' paused' : running.length ? ' busy' : lastFailed ? ' failed' : ''}`;
+    $('#jobsText').textContent = held ? `Paused${waiting.length ? ` · ${waiting.length} waiting` : ''}`
+      : r ? `${wl.pausing ? holding : 'Rendering '}${r.progress?.done ?? 0}/${r.progress?.total || r.args.clips}`
+        : b ? `${wl.pausing ? holding : 'Building '}${b.progress.done}/${b.progress.total}`
+        : running.length ? `${wl.pausing ? holding : ''}${{ build: 'Building', picture: 'Klein', still: 'Still relief', relaunch: 'Reloading the glass', review: 'Checking' }[running[0].kind] || 'Working'}…`
           : waiting.length ? `${waiting.length} waiting` : lastFailed ? 'Last job failed' : 'Idle';
     renderPaused();
     renderJobs();
@@ -1297,15 +1300,19 @@ async function pollJobs() {
 setInterval(pollJobs, 8000);
 
 function renderJobs() {
-  $('#pauseButton').textContent = state.worklist?.paused || state.worklist?.pausing ? 'Resume' : 'Pause';
+  const wl = state.worklist || {};
+  $('#pauseButton').textContent = (wl.paused || wl.pausing) && !wl.stepAside ? 'Resume' : 'Pause';
   const newest = [...state.jobs].reverse();
   const live = newest.filter((j) => LIVE.includes(j.status));  // a long render stays on top of its reviews
   $('#jobsList').replaceChildren(...[...live, ...newest.filter((j) => !live.includes(j))].slice(0, 15).map((j) => {
     const p = j.progress || {};
     const pct = p.total ? Math.round(100 * p.done / p.total) : 0;
     const what = j.kind === 'render' ? `${j.args.clips} clips (${j.args.queue})` : j.args.choom || '';
-    const when = j.status !== 'waiting' ? '' : j.after ? ' until the render has finished'
+    const when = j.status !== 'waiting' ? '' : j.next ? ', runs next' : j.after ? ' until the render has finished'
       : j.not_before > Date.now() / 1000 ? ` until ${clock(j.not_before)}` : '';
+    // Run next: a waiting GPU job jumps the line; a render running now steps aside after the clip it's on.
+    const canJump = j.status === 'waiting' && GPU.includes(j.kind) && !j.after && !j.next;
+    const renderOn = state.jobs.some((k) => k.kind === 'render' && k.status === 'running' && k.id !== j.id);
     return el('div', { className: `job ${j.status}` },
       el('div', { className: 'row' }, el('span', {}, el('span', { className: 'kind' }, j.kind), ` ${what}`),
         el('span', { className: 'state' }, `${STATE_WORDS[j.status]}${when}${j.status === 'running' && p.total ? ` · ${p.done}/${p.total} ${p.step || ''}` : ''}`)),
@@ -1315,10 +1322,22 @@ function renderJobs() {
       ['render', 'build'].includes(j.kind) && j.status === 'running' && p.total ? el('div', { className: 'bar' }, el('i', { style: `width:${pct}%` })) : null,
       j.error ? el('div', { className: 'state' }, j.error) : null,
       j.log?.length && j.status !== 'done' ? el('pre', {}, j.log.slice(-8).join('\n')) : null,
-      ['waiting', 'running', 'paused'].includes(j.status) ? el('div', {}, el('button', {
-        className: 'ghost', type: 'button', onclick: attempt(async () => { await api(`/api/jobs/${j.id}/cancel`, {}); pollJobs(); }),
-        tip: j.kind === 'render' ? 'Stop Wan2GP; clips not rendered yet go back to planned' : 'Cancel this job',
-      }, 'Cancel')) : null);
+      ['waiting', 'running', 'paused'].includes(j.status) ? el('div', { className: 'job-actions' },
+        canJump ? el('button', {
+          className: 'ghost', type: 'button',
+          onclick: attempt(async () => {
+            state.worklist = (await api(`/api/jobs/${j.id}/next`, {})).worklist;
+            toast(state.worklist.stepAside ? 'Runs next: the render steps aside once the clip it\'s on has landed, and carries on by itself after'
+              : state.worklist.paused || state.worklist.pausing ? 'Runs next, while the rest of the work list stays paused' : 'Runs next');
+            pollJobs();
+          }),
+          tip: renderOn ? 'Run this next: the render steps aside once the clip it\'s on has landed (up to a few minutes), then carries on by itself when this is done'
+            : 'Run this next, ahead of the rest of the work list',
+        }, 'Run next') : null,
+        el('button', {
+          className: 'ghost', type: 'button', onclick: attempt(async () => { await api(`/api/jobs/${j.id}/cancel`, {}); pollJobs(); }),
+          tip: j.kind === 'render' ? 'Stop Wan2GP; clips not rendered yet go back to planned' : 'Cancel this job',
+        }, 'Cancel')) : null);
   }));
   if (!state.jobs.length) $('#jobsList').replaceChildren(el('p', { className: 'muted' }, 'No work yet.'));
 }
@@ -1330,7 +1349,16 @@ $('#jobsClose').addEventListener('click', () => { $('#jobsPanel').hidden = true;
 function renderPaused() {
   const wl = state.worklist || {};
   $('#pausedBanner').hidden = !(wl.paused || wl.pausing);
+  $('#resumeButton').hidden = !!wl.stepAside;  // stepping aside ends by itself
   if (!(wl.paused || wl.pausing)) return;
+  if (wl.stepAside) {
+    const picked = state.jobs.find((j) => j.next && j.status === 'waiting') || state.jobs.find((j) => GPU.includes(j.kind) && j.status === 'running' && j.kind !== 'render');
+    const what = picked ? ({ build: 'the build', picture: 'Klein\'s pictures', still: 'the still relief', render: 'the other render' }[picked.kind] || 'the job you picked') : 'the job you picked';
+    $('#pausedText').textContent = wl.pausing
+      ? `The render steps aside once the clip it's on has landed, so ${what} can run next. It carries on by itself after.`
+      : `The render has stepped aside while ${what} runs. It carries on by itself when that's done.`;
+    return;
+  }
   const r = state.jobs.find((j) => j.kind === 'render' && j.status === 'running');
   const other = state.jobs.find((j) => GPU.includes(j.kind) && j.status === 'running');
   const held = state.jobs.filter((j) => GPU.includes(j.kind) && ['waiting', 'paused'].includes(j.status)).length;
@@ -1346,7 +1374,7 @@ async function resumeWork() {
 }
 $('#resumeButton').addEventListener('click', attempt(resumeWork));
 $('#pauseButton').addEventListener('click', attempt(async () => {
-  if (state.worklist?.paused || state.worklist?.pausing) return resumeWork();
+  if ((state.worklist?.paused || state.worklist?.pausing) && !state.worklist?.stepAside) return resumeWork();
   await pollJobs();  // what's running right now, not as of the last poll
   const r = state.jobs.find((j) => j.kind === 'render' && j.status === 'running');
   const other = state.jobs.find((j) => GPU.includes(j.kind) && j.status === 'running');

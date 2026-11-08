@@ -211,9 +211,13 @@ def state():
 
 def pause():
     """Pause the work list: what's running on the GPU finishes (a render, the clip it's on), then
-    nothing more starts there until resume()."""
+    nothing more starts there until resume(). Pausing while a render steps aside (run_next) makes it
+    a real pause: the job picked still runs, then the rest holds."""
     with lock:
-        if not worklist["paused"]:
+        if worklist.get("stepAside"):
+            worklist["stepAside"] = False
+            save()
+        elif not worklist["paused"]:
             worklist["pausing"] = gpu_busy()
             worklist["paused"] = not worklist["pausing"]
             worklist["since"] = time.time()
@@ -226,10 +230,11 @@ def resume():
     what was queued while it was paused (paused to test something: the test goes first)."""
     with lock:
         since = worklist.get("since", 0)
-        worklist.update(paused=False, pausing=False)
+        worklist.update(paused=False, pausing=False, stepAside=False)
         held = [j for j in jobs if j["status"] == "paused"]
-        # The work list runs in list order: what waited from before the pause moves behind what was queued during it.
-        jobs.sort(key=lambda j: j["status"] in ("waiting", "paused") and j.get("created", 0) < since)
+        # The work list runs in list order: what waited from before the pause moves behind what was queued
+        # during it, and behind a job picked to run next.
+        jobs.sort(key=lambda j: j["status"] in ("waiting", "paused") and j.get("created", 0) < since and not j.get("next"))
         save()
     for j in held:
         old = j["args"]["queue"]
@@ -245,6 +250,34 @@ def resume():
                 j.update(status="done", ended=time.time())
             save()
     return state()
+
+
+def run_next(job_id):
+    """Run a waiting GPU job next (a picture to show someone while a long render runs): it moves to the
+    front of the work list, and a render running now steps aside once the clip it's on has landed, as a
+    pause would, then carries on by itself when the job is done (step_back). In a pause he made, only
+    the job picked runs; the rest still waits for Resume."""
+    with lock:
+        job = find(job_id)
+        if not job or job["status"] != "waiting" or LANES[job["kind"]] != "gpu" or job.get("after"):
+            return False
+        jobs.remove(job)
+        jobs.insert(0, job)
+        job.update(next=True, not_before=0)
+        render_on = any(j["kind"] == "render" and j["status"] == "running" for j in jobs)
+        if render_on and not (worklist["paused"] or worklist["pausing"]):
+            worklist.update(pausing=True, paused=False, since=time.time(), stepAside=True)
+        save()
+    return True
+
+
+def step_back():
+    """The render that stepped aside carries on once the job picked to run next is done."""
+    with lock:
+        go = (worklist.get("stepAside") and worklist["paused"] and not gpu_busy()
+              and not any(j.get("next") and j["status"] == "waiting" for j in jobs))
+    if go:
+        resume()
 
 
 def settle_pause():
@@ -515,15 +548,19 @@ def worker(lane):
         with lock:
             busy = any(j["status"] in BUSY and LANES[j["kind"]] == lane for j in jobs)
             held = lane == "gpu" and (worklist["paused"] or worklist["pausing"])
-            if not busy and not held:
-                job = next((j for j in jobs if LANES[j["kind"]] == lane and ready(j, time.time())), None)
+            if not busy:  # while the work list holds, only a job picked to run next starts
+                job = next((j for j in jobs if LANES[j["kind"]] == lane and ready(j, time.time())
+                            and (not held or j.get("next"))), None)
             if job:
+                job.pop("next", None)
                 job["status"] = "running"
                 job.setdefault("started", time.time())
                 job["started"] = job["started"] or time.time()
                 save()
         if lane == "gpu":
             settle_pause()
+            if not job:
+                step_back()
         if not job:
             time.sleep(3)
             continue
