@@ -19,7 +19,7 @@ moves in them, then the changes between them.
 | Genesis's nightie slips off and pools at her feet (her wish; worked through below) | her warm-night look and its full body (she has them); a new outfit she wears only when she chooses it, waist-up and full body | full body to full body, and one back |
 | Eve takes off her flannel and keeps the tank top on | her cold-day look (the flannel over a tank top); a new outfit, the tank top alone | waist-up, each way |
 | A warm coat when it's cold | a new cold-day outfit, the coat | from her usual clothes and back |
-| Swimwear at the beach | a swimsuit outfit | from her usual clothes and back; the beach itself isn't possible yet (see the end) |
+| Swimwear at the beach | a swimsuit outfit and its full body; the beach as a place with a setting, started from that full body ([activities tutorial](tutorial-activities.md)) | from her usual clothes and back |
 
 You need a Choom already on the glass, and the [outfit tutorial](tutorial-outfit.md) helps: this one
 uses the same pages and only spells out what's new.
@@ -289,8 +289,10 @@ changes play often. A Choom who already has cold-day clothes takes turns between
    Part 2, step 2), for a sundress dropping to her feet.
 3. And one back.
 
-At the beach is a different matter: a beach would be a place (somewhere she goes and stays a while,
-like Genesis's campfire), and a place is in her usual clothes for now. See the end.
+At the beach is a different matter: a beach is a place (somewhere she goes and stays a while, like
+Genesis's campfire). Since November 9 a place can start from an outfit's full body, the swimsuit's,
+and have a setting around her that fades into black; the glass puts the swimsuit on before she goes.
+See the [activities tutorial](tutorial-activities.md).
 
 ---
 
@@ -362,9 +364,9 @@ body and clothes she sleeps in.
 
 ## Not possible yet
 
-- **Changing at a place.** A place is in her usual clothes: asked to go there in an outfit, she
-  changes first. A swimsuit at the beach, or her coat by the campfire, needs places in other
-  clothes (`campfire@evening`), which the glass doesn't read yet.
+- **Changing at a place.** A place is in the clothes of the full body it was made from: asked to go
+  there, she changes into them first, and stays in them there. Her coat by her usual campfire would
+  need a second campfire made from the coat's full body.
 - **A change that isn't clothes, between looks the glass doesn't know.** Genesis's motes fading
   (her plain look) and Optic's heart dissolving work because the glass knows those looks
   (`ALT_LOOKS` in `living.js`); a new look of that kind needs an entry there.

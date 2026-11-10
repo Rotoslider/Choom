@@ -20,6 +20,10 @@ field explains itself when you hover over it.
 - [Changes of clothes, new moves and new looks](docs/tutorial-changes.md): a nightie slipping to the
   floor, a flannel coming off, a coat for cold days, a move of her own, and clothes she wears only
   when she chooses them.
+- [Activities and places with a setting](docs/tutorial-activities.md): Genesis on a stone patio under
+  the stars and Eve working out with dumbbells, from the ready-made ideas; an idea of your own; and the
+  other tools from November 9 (her own moves in every look, re-roll from the glass, the full-body
+  slider, asking her for ideas).
 
 ## How a Choom is made
 
@@ -212,7 +216,9 @@ them from there.
 **Write your own clip** takes any move that ends where it began: a dance, turning her back to you and
 turning around again, a kiss. Choose what the glass uses it for (quiet moment, look-at-me move,
 talking loop, oops face, or **Windy day**, which plays only when it's windy) and a length of 5 to 15
-seconds.
+seconds. A line under Length says when the wording looks like a lot for the length chosen and may look
+rushed (a full turn in five seconds did); it never changes the length, because a guess from the wording
+matched only 6 of 14 hand-written moves.
 
 ![Writing your own clip: a ten-second dance](docs/images/custom-clip.jpg)
 
@@ -431,7 +437,11 @@ it, the page asks before deleting them with it. Both ask in the page before doin
   of the picture. A lit edge shows on the glass as a hard line, and Klein, even when asked, can let the
   paving run off the bottom, so the picture you pick gets its edges faded to black (the bottom only a
   little, so her feet keep their light). Its subject says she is "in a pool of soft warm light that
-  fades into pure black all around" instead of on a plain black background. Genesis's patio took two
+  fades into pure black all around" instead of on a plain black background. On the glass, the glass's
+  own particles (the motes swirling around Genesis, Aloy's embers, Eve's falling code) fade out while
+  she's there, or they'd hide the setting (they covered the stars over Genesis's patio); the Studio lists
+  her places with a setting in `portraits/<id>/prefs.json` (`scenes`). Her own light, motes included,
+  stays. Genesis's patio took two
   rounds: the first had a house wall and a lit window running off the left edge; a second pass from the
   best of them ("take away the wall and the window … only black touches the left, right and bottom
   edges") gave a lit island of flagstones under the stars.
@@ -569,8 +579,10 @@ The glass answers from what's built:
 
 Something she asks for and hasn't got becomes a **wish**, and so does whatever she asks for with
 `glass_wish`. Her wishes show at the top of Plan & render, with when and how often she asked. Each
-has a button to start making it: **Write it** opens Write your own clip, and **New outfit** opens New
-look with her words filled in. **Made it** moves a wish to her list of wishes that came true, folded
+has a button to start making it: **Write it** opens Write your own clip with her words in it, turned
+from "I" to "she" (what she says in quotes stays hers; read it over, since only the verbs a move is
+made of are turned), its short name from her title, and Plan & render switched to a place she names
+("PATIO SCENE ..."); **New outfit** opens New look with her words filled in. **Made it** moves a wish to her list of wishes that came true, folded
 away under the open ones (`portraits/<id>/wishes_done.json`, with the day it was made); **Let go**
 takes one off the list if it won't be made.
 

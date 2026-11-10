@@ -658,12 +658,80 @@ function renderWishes() {
       ...[...done].reverse().map((w) => el('div', { className: 'wish' },
         el('span', {}, el('b', {}, `“${w.what}”`), ` ${w.kind === 'wear' ? 'to wear' : 'a move'} · asked ${day(w.first || w.last)}, made ${day(w.made)}`)))) : null));
 }
+// Her wish in the words a clip's wording needs: she writes "I stand on the patio ... I close my eyes,
+// bring both hands together", a clip says "She stands ... she closes her eyes, brings both hands
+// together". Only the verbs a move is made of are turned (a noun like "a smile" stays), so read it over.
+const MOVE_VERBS = 'look turn bring hold close open lift raise lower point smile laugh give tilt rest wrap sway stand step sit glance follow reach put let drop nod wave blow touch rub cross uncross spin twirl walk kneel lean press pull push gasp whisper wink move shift settle return end finish stretch tuck run brush cup curl catch bite hug sigh blink shake keep hum sing dance play kick pedal read flip toss trace slide clasp fold lace cover peek tip duck bounce squeeze kiss rise drift gaze watch find pause hug'.split(' ');
+const third = (v) => (v === 'have' ? 'has' : v === 'do' ? 'does' : v === 'go' ? 'goes' : /(s|sh|ch|x|z|o)$/.test(v) ? `${v}es` : /[^aeiou]y$/.test(v) ? `${v.slice(0, -1)}ies` : `${v}s`);
+function asHer(text) {
+  // What she says inside quotes stays hers ("as if to say 'I can't tell you'").
+  const QUOTE = /((?:^|\s)['"“‘])(.*?)(['"”’])(?=[\s.,!?;:]|$)/g;
+  const kept = [];
+  let t = ` ${text.trim().replace(QUOTE, (m, open, inner, close) => { kept.push(m); return ` \u0000${kept.length - 1}\u0000`; })} `;
+  t = t.replace(/\bI'm\b/g, "she's").replace(/\bI've\b/g, "she's").replace(/\bI'll\b/g, "she'll").replace(/\bmyself\b/gi, 'herself')
+    .replace(/\bmy\b/g, 'her').replace(/\bMy\b/g, 'Her').replace(/\bmine\b/g, 'hers').replace(/\bme\b/g, 'her');
+  const verbs = MOVE_VERBS.join('|');
+  // "I close" -> "she closes"; then the bare verbs that carry on her sentence (", bring", "and give", "then turn").
+  t = t.replace(new RegExp(`\\bI (${verbs})\\b`, 'g'), (m, v) => `she ${third(v)}`);
+  t = t.replace(new RegExp(`(,\\s+|\\band\\s+|\\bthen\\s+)(${verbs})\\b(?!s)`, 'g'), (m, pre, v) => `${pre}${third(v)}`);
+  t = t.replace(/\bI\b/g, 'she');
+  t = t.replace(/ ?\u0000(\d+)\u0000/g, (m, i) => kept[Number(i)]);
+  return t.trim().replace(/(^|[.!?]['"”’]?\s+)she\b/g, (m, pre) => `${pre}She`);
+}
+// "PATIO SCENE, FULL BODY — Making a wish: I stand on the patio ..." -> its title, her words, and the look
+// she names, if she has it.
+function wishWords(what) {
+  let text = what.trim(), title = '';
+  const head = text.match(/^[A-Z0-9][A-Z0-9 ,'&/-]{2,}\s*[—–-]\s*/);
+  const named = head ? head[0] : '';
+  if (head) text = text.slice(head[0].length);
+  const t = text.match(/^([^:.!?]{3,60}):\s+/);
+  if (t) { title = t[1]; text = text.slice(t[0].length); }
+  const words = (title || text).toLowerCase().replace(/[^a-z ]/g, ' ').split(/\s+/)
+    .filter((x) => x && !['a', 'an', 'the', 'my', 'some', 'out', 'up', 'of', 'to', 'for', 'at', 'on', 'in', 'against', 'with'].includes(x));
+  const key = (title ? words.slice(-2) : words.slice(0, 2)).join('').slice(0, 16);
+  const looks = Object.keys(state.choom.looks);
+  const look = looks.find((l) => !l.includes('@') && !['main', 'relaxed', 'full', 'asleep', 'gone'].includes(l) && new RegExp(`\\b${l}\\b`, 'i').test(named + title));
+  return { title, text: asHer(text), key, look };
+}
 function wishMove(w) {
+  const { text, key, look } = wishWords(w.what);
+  if (look && look !== state.planLook) {
+    state.planLooks[state.cid] = look;
+    remember();
+    renderPlan();
+    toast(`Her wish is for ${look}: Plan & render switched to it`);
+  }
   $('#customClip').open = true;
-  $('#customKey').value = w.what.toLowerCase().replace(/^(a|an|the|some|my)\s+/, '').replace(/[^a-z0-9]/g, '').slice(0, 16);
+  $('#customKey').value = key;
+  $('#customText').value = text;
+  $('#customText').dispatchEvent(new Event('input'));
   $('#customClip').scrollIntoView({ block: 'center' });
   $('#customText').focus();
 }
+// Too much for its length looks rushed (a full turn in five seconds came out hurried): a hint, never a
+// change. Guessing the length from the wording matched only 6 of 14 hand-written moves, both ways, so
+// it only says when the wording seems like a lot for the length chosen.
+function lengthHint(text, seconds) {
+  const t = (text || '').toLowerCase();
+  let want = 5;
+  if (/\bdanc|\bkneel|\bsits? (?:down|on)|\blies? down|\bwalks?\b|\bspins?\b|\bcurtsy/.test(t)) want = 12;
+  else if (/\bturns? (?:slowly )?(?:away|around)|back to the viewer/.test(t)) want = 10;
+  else {
+    const beats = t.split(/\.\s+|;\s*|,\s*(?:and\s+)?then\s+|\s+then\s+|,\s+and\s+/).filter((c) => c.trim()).length
+      + (t.match(/\bholds?\b|for a (?:moment|beat|few seconds)|\bpause[sd]?\b|\btwice\b|a few times/g) || []).length
+      + 0.5 * (t.match(/\bslow(?:ly)?\b/g) || []).length;
+    want = beats <= 3 ? 5 : 7;
+  }
+  return want > seconds ? `That's a lot for ${seconds} s and may look rushed: ${want} s would give it room.` : '';
+}
+function updateCustomLengthHint() {
+  const hint = lengthHint($('#customText').value, Number($('#customSeconds').value));
+  $('#customLengthHint').textContent = hint;
+  $('#customLengthHint').hidden = !hint;
+}
+$('#customText').addEventListener('input', updateCustomLengthHint);
+$('#customSeconds').addEventListener('input', updateCustomLengthHint);
 function wishOutfit(w) {
   state.tab = 'looks'; remember(); render();
   $('#newOutfit').open = true;
@@ -926,7 +994,12 @@ function plannedItem(name) {
   // A re-roll can be longer too (a full turn that came out rushed in five seconds).
   const length = el('select', { tip: 'How long the clip is; longer clips take longer to render' },
     ...[5, 6, 7, 10, 12, 15].map((s) => el('option', { value: s, selected: s === secondsOf(c) }, `${s} s`)));
-  const editing = el('div', { hidden: true }, text,
+  const hint = el('p', { className: 'hint', hidden: true });
+  const updateHint = () => { hint.textContent = lengthHint(text.value, Number(length.value)); hint.hidden = !hint.textContent; };
+  text.addEventListener('input', updateHint);
+  length.addEventListener('input', updateHint);
+  updateHint();
+  const editing = el('div', { hidden: true }, text, hint,
     el('div', { className: 'row' }, length,
       el('button', {
         className: 'ghost', type: 'button', onclick: attempt(async () => {

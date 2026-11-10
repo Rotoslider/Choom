@@ -976,6 +976,7 @@ const CUT_IN_S = 0.35;         // and the new framing fades in over this
 let cutFade = null;            // { t, shown } while a cut is under way
 let sleepAmt = 0;              // 1 while she sleeps: the glass dims and slows
 let fullAmt = 0;               // 1 during a full-body move: her atom and band step aside
+let sceneAmt = 0;              // 1 at a place with a setting around her: the glass's own particles fade out
 let bandT = 0;                 // the scan/compile band's own clock (it races during tool moments)
 let lastActivity = performance.now(); // the last conversation, listening or button press
 let lastVoiceNearby = 0;  // someone talking near the tower (tower_ears): no quiet turn now, but it never
@@ -3324,10 +3325,17 @@ function frame(now) {
   const wideNow = (pz) => isFull(pz) || isPlace(pz) || pz === 'gone';
   const fullNow = curClip && (wideNow(poseFrom(curClip)) || wideNow(poseTo(curClip))) ? 1 : 0;
   fullAmt += (fullNow - fullAmt) * Math.min(dt * 5, 1);
+  // At a place with a setting around her (Genesis's stone patio under the stars; prefs.json scenes, from
+  // the Studio) the glass's own particles fade out: swirling around her they hid the stars (2026-11-09).
+  // They go as the setting fades in on her way there and come back once she's back on black.
+  const scenes = cur.prefs?.scenes || [];
+  const sceneNow = curClip && (scenes.includes(poseFrom(curClip)) || scenes.includes(poseTo(curClip))) ? 1 : 0;
+  sceneAmt += (sceneNow - sceneAmt) * Math.min(dt * 2, 1);
   if (orbGroup.visible) updateOrbs(presence * (1 - 0.6 * sleepAmt) * (1 - fullAmt));
   particleMaterial.uniforms.time.value = simTime;
   updateWeather(paused ? 0 : dt, simTime, presence * (1 - 0.7 * sleepAmt));
-  particleMaterial.uniforms.opacity.value = presence * (0.85 + 0.4 * listenAmt + 0.5 * level) * (1 - (circle.shown || 0));  // the fire's sparks instead
+  particleMaterial.uniforms.opacity.value = presence * (0.85 + 0.4 * listenAmt + 0.5 * level) * (1 - (circle.shown || 0))  // the fire's sparks instead
+    * (1 - sceneAmt);
 
   if (band.visible) {
     const cycle = style === 'scan' ? (bandT % 5) / 5 : 0.5 + 0.5 * Math.sin(bandT * tau / 9);

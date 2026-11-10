@@ -356,13 +356,16 @@ class Project:
             os.replace(part, f)
 
     def write_prefs(self):
-        """portraits/<id>/prefs.json, her settings the glass reads again every minute (living.js): for now
-        how much of her quiet time it shows each full body (fullShare, {"full@evening": 0.3}); a full body
-        not listed keeps the glass's own (about one quiet clip in fourteen, and straight back)."""
+        """portraits/<id>/prefs.json, her settings the glass reads again every minute (living.js): how much
+        of her quiet time it shows each full body (fullShare, {"full@evening": 0.3}; a full body not listed
+        keeps the glass's own, about one quiet clip in fourteen and straight back), and her places with a
+        setting around her (scenes: ["patio"]), where the glass's own particles fade out so they don't
+        hide it (Genesis's swirling particles covered the stars over her patio, 2026-11-09)."""
         f = PORTRAITS / self.id / "prefs.json"
         if not f.parent.is_dir():
             return
-        text = json.dumps({"fullShare": self.data.get("fullShare", {})}, indent=1) + "\n"
+        text = json.dumps({"fullShare": self.data.get("fullShare", {}),
+                           "scenes": sorted(l for l, look in self.looks.items() if look.get("scene"))}, indent=1) + "\n"
         if not f.exists() or f.read_text() != text:
             part = f.with_suffix(".prefs-part")
             part.write_text(text)
