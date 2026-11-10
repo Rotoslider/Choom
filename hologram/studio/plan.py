@@ -11,7 +11,7 @@ from pathlib import Path
 
 import prompts
 from config import CFG
-from project import Project, base_of, editing, next_seeds, outfit_of, roles
+from project import Project, base_of, closet, editing, next_seeds, outfit_of, roles
 
 PACKS_FILE = Path(__file__).resolve().parent / "packs.json"
 ACTIVITIES_FILE = Path(__file__).resolve().parent / "activities.json"  # New look > An activity or place: ready-made ideas
@@ -469,6 +469,97 @@ def add_change(proj, start, end, key, text, seconds=5):
                   seed=next_seeds(1)[0], start=proj.looks[start]["picture"], end=proj.looks[end]["picture"], queue=None)
     warnings = prompts.lint(prompt, loop=False)
     return name, "; ".join(f"{w}: {why}" for w, why in warnings) or "ok"
+
+
+# A first wording for a change of clothes, filled into Change of clothes to edit (Donny, 2026-11-09: the
+# example "is only a suggestion"). Each Choom's changes go her own way, in the words of her kept change
+# clips: Genesis's motes, Eve's threads of light, Aloy's golden glow, Optic's cyan ripple.
+CHANGE_MAGIC = {
+    "genesis": "Glowing violet motes swirl up around her, and as they settle",
+    "eve": "Glowing white threads of light drift around her and weave together, and as they settle",
+    "aloy": "A soft golden glow sweeps slowly down over her, and as it passes",
+    "optic": "A gentle ripple of soft cyan light washes down over her, and as it passes",
+}
+STYLE_MAGIC = {"motes": "Glowing motes swirl up around her, and as they settle",
+               "embers": "Warm embers swirl up around her, and as they settle",
+               "scan": "A band of soft light sweeps slowly down over her, and as it passes",
+               "code": "Glowing threads of code drift around her, and as they settle"}
+# The garments a look's clothes are named by in a change ("a charcoal-gray wool cardigan, a cream thermal
+# henley, dark-wash jeans ..."): a change is one motion in a few seconds, and the look's own line already
+# says the rest. Not parts of a garment (its collar, pockets, sleeves) or what she holds.
+GARMENTS = (set(closet.GARMENT_OF) | set("henley boots boot scarf sandals sandal blanket shawl socks slippers shoes heels "
+                                         "sneakers wrap hat cap beanie gloves mittens vest apron belt poncho".split())) - {"knit"}
+GARMENT_PARTS = {"collar", "sleeves", "sleeve", "pockets", "pocket", "buttons", "button", "neckline", "hem", "straps", "strap",
+                 "cuffs", "trim", "lace"}
+CLAUSE_BREAK = re.compile(r"[,;.:]|\blike an? [a-z-]+|\b(?:and|with|that|which|who|in|into|over|under|underneath|inside|around|"
+                          r"to|at|on|of|off|for|worn|held|pulled|turned|wrapped|drawn|tucked|hanging|falls|falling|peeking|made)\b")
+
+
+def _garments(text):
+    """[(phrase, plural)] of the garments in a description of her clothes, in order, each once."""
+    out, seen = [], set()
+    for clause in CLAUSE_BREAK.split((text or "").lower()):
+        words = re.findall(r"[a-z][a-z-]*", clause)
+        while words and words[0] in ("a", "an", "the", "it", "her", "some", "his", "big", "small"):
+            words.pop(0)
+        if not words:
+            continue
+        key = words[-1].split("-")[-1]
+        if key in ("top", "tank", "flannel", "wrap") and len(words) < 2:
+            continue  # "peeking out at the top" isn't a top: these need a word of their own ("a tank top")
+        if key in GARMENTS and key not in GARMENT_PARTS and key not in seen:
+            seen.add(key)
+            out.append((" ".join(words[-4:]), key.endswith("s") and not key.endswith("ss")))
+    return out
+
+
+def _worn(proj, look, articles=True):
+    """What she wears in a look, said briefly for a change: its garments ("a long flowing strappy sundress and
+    sandals"), or the first part of what she wears when none is named."""
+    worn = look.get("wearing") or closet.wearing(look.get("subject", ""), proj.looks.get("main", {}).get("subject", ""))
+    items = _garments(worn)
+    if not items:
+        return re.split(r"[.;]", worn or "")[0].strip()
+    said = [p if plural or not articles else f"{'an' if p[0] in 'aeiou' else 'a'} {p}" for p, plural in items]
+    text = said[0] if len(said) == 1 else f"{', '.join(said[:-1])} and {said[-1]}"
+    return text, len(items) > 1 or items[0][1]
+
+
+def change_wording(proj, start, end):
+    """A first wording for a change of clothes from one look to another: her own way of changing, what she
+    wears before and after, and at a place that the place stays as it is and she ends in her pose there."""
+    a, b = proj.looks.get(start, {}), proj.looks.get(end, {})
+    magic = CHANGE_MAGIC.get(proj.id) or STYLE_MAGIC.get(proj.data.get("style", "motes"), STYLE_MAGIC["motes"])
+    said = lambda look, articles: (lambda w: w if isinstance(w, tuple) else (w, False))(_worn(proj, look, articles))  # noqa: E731
+    (was, plural), (now, _) = said(a, False), said(b, True)
+    was = re.sub(r"^(a|an|the)\s+", "", was)
+    if was and now:
+        text = f"{magic} her {was} {'turn' if plural else 'turns'} into {now}"
+    elif now:
+        text = f"{magic} she is wearing {now}"
+    elif was:
+        text = f"{magic} her {was} {'turn' if plural else 'turns'} back into her usual look"
+    else:
+        text = f"{magic} her clothes change"
+    place = base_of(start) not in POSES and base_of(start) not in SEATS
+    if place:
+        p = proj.looks.get(base_of(start), {})
+        stars = "star" in " ".join(str(p.get(k) or "") for k in ("klein", "subject", "does")).lower()
+        if p.get("scene"):
+            around = ", ".join([f"the {base_of(start)}", "its warm light"] + (["the stars"] if stars else []))
+            text += f", while {re.sub(r', (?=[^,]*$)', ' and ', around)} stay exactly as they are"
+        else:
+            text += ", while everything around her stays exactly as it is"
+        does = (b.get("does") or a.get("does") or "").strip().rstrip(".")
+        does = re.sub(r"^(standing|sitting)\s+(on|in|at)\s+[^,]+,\s*", "", does)  # where she is goes without saying
+        return f"{text}; she ends {does}." if does else f"{text}; she ends as she began, facing the viewer."
+    subject = b.get("subject") or a.get("subject") or ""
+    held = re.search(r"\bholding (?:a |the )?([^,]+?)(?: in front of her| in (?:both )?her hands?)?(?:,|$)", subject)
+    if re.search(r"\barms crossed\b", subject):
+        return f"{text}; her arms stay crossed and she smiles at the viewer."
+    if held:
+        return f"{text}; she keeps holding the {held.group(1)} and smiles at the viewer."
+    return f"{text}; then she smiles at the viewer."
 
 
 def refresh_prompts(proj, look_id):

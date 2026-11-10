@@ -889,11 +889,26 @@ function renderChangeTo() {
   const looks = lookOrder(state.choom.looks).filter((l) => l !== from && l.split('@')[0] === base && state.choom.looks[l].picture);
   const was = $('#changeTo').value;
   $('#changeTo').replaceChildren(...looks.map((l) => el('option', { value: l, selected: l === was }, l)));
-  $('#changeText').placeholder = isPlaceLook(from)
-    ? 'Sparkles swirl around her and her clothes become a long charcoal cardigan over a cream henley, while the patio, its warm light and the stars stay exactly as they are; she ends facing the viewer as she began.'
-    : 'Glowing violet motes swirl up around her and the burgundy dress melts into a long ivory silk nightgown as the motes fade from her skin, then she smiles at the viewer.';
+  suggestChange();
+}
+// A first wording for the change, from the two looks (plan.change_wording: her own way of changing, the
+// garments before and after, at a place that the place stays still): put in the box to edit, unless he
+// has written his own there. Donny, Nov 9: the example was "only a suggestion".
+let changeSuggested = '';
+async function suggestChange() {
+  const from = $('#changeFrom').value, to = $('#changeTo').value, box = $('#changeText');
+  if (!from || !to) return;
+  const mine = box.value.trim() && box.value !== changeSuggested;
+  try {
+    const { text } = await api(`/api/changewords/${state.cid}/${encodeURIComponent(from)}/${encodeURIComponent(to)}`);
+    if ($('#changeFrom').value !== from || $('#changeTo').value !== to) return;  // changed meanwhile
+    if (!mine && (box.value === '' || box.value === changeSuggested)) box.value = text;
+    changeSuggested = text;
+    box.placeholder = text;
+  } catch { /* the placeholder stays */ }
 }
 $('#changeFrom').addEventListener('input', renderChangeTo);
+$('#changeTo').addEventListener('input', suggestChange);
 $('#changeAdd').addEventListener('click', attempt(async () => {
   const text = $('#changeText').value.trim();
   if (!text) return toast('Say what happens as she changes', true);
@@ -904,7 +919,7 @@ $('#changeAdd').addEventListener('click', attempt(async () => {
   state.choom = choom;
   const [name, message] = results[0];
   toast(`${short(state.cid, name)} planned${message !== 'ok' ? ` (check: ${message})` : ''}`);
-  $('#changeKey').value = ''; $('#changeText').value = '';
+  $('#changeKey').value = ''; $('#changeText').value = ''; changeSuggested = '';
   render();
 }));
 

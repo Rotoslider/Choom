@@ -263,6 +263,12 @@ At one of her places, a change goes between the place and clothes she wears only
 the place, its light and anything around her stay exactly as they are while her clothes change. **To**
 lists only the looks a change from **From** can go to.
 
+**What happens** fills in a first wording from the two looks, to edit: her own way of changing, in the
+words her changes on the glass use (Genesis's violet motes, Eve's threads of light, Aloy's golden glow,
+Optic's cyan ripple), the garments before and after named briefly (the looks' own lines say the rest),
+and at a place that the place stays as it is and she ends in her pose there. It follows **From** and
+**To** until you write your own.
+
 ![A change of clothes from the burgundy dress to the cold-night look](docs/images/change-clip.jpg)
 
 Each prompt is built from the look's subject line, its keep line, the action, the camera line and the

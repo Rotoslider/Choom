@@ -291,13 +291,17 @@ again.* (Write your own clip, 7 s.)
 
 **Ask Genesis for ideas for patio@coolstargaze** gets her own ideas for them.
 
-Then **Change of clothes**, From `patio` To `patio@coolstargaze`, named `motes`, 7 s:
+Then **Change of clothes**, From `patio` To `patio@coolstargaze`, named `motes`, 7 s. **What happens**
+fills in a first wording from the two looks, in her own way of changing, to edit:
 
-*Glowing violet motes swirl up around her and her sundress becomes the long charcoal cardigan, the
-cream henley and dark jeans, the scarf settling around her neck, while the patio, its warm light and
-the stars stay exactly as they are; she ends facing the viewer, her hands clasped in front of her.*
+*Glowing violet motes swirl up around her, and as they settle her long flowing strappy sundress and
+sandals turn into an oversized charcoal-gray wool cardigan, a soft cream thermal henley, fitted
+dark-wash jeans, sheepskin-lined suede ankle boots and a chunky knit oatmeal-colored scarf, while the
+patio, its warm light and the stars stay exactly as they are; she ends facing the viewer with a soft
+smile, her hands loosely clasped in front of her.*
 
-Then the same back, From `patio@coolstargaze` To `patio`.
+Shorter is fine: the cardigan look's own line already describes every garment. Then the same back,
+From `patio@coolstargaze` To `patio`.
 
 **Render the change in first.** It's the new thing: do the patio and the stars hold still while her
 clothes change? Then render the rest, review, keep, **Put all on the glass** and **Build**.

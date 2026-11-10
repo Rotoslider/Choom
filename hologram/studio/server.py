@@ -258,6 +258,13 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"packs": [plan.OWN_PACKS["own"], plan.SAME_PACK, *packs, plan.OWN_PACKS["sisters"]],
                                    "actions": [{"pack": a["pack"], "key": a["key"], "text": a["text"],
                                                 "seconds": a.get("seconds", 5)} for a in lib["actions"]]})
+        if parts[:2] == ["api", "changewords"] and len(parts) == 5:  # a first wording for Change of clothes
+            if not choom_ok(parts[2]):
+                return self.fail("no such Choom", 404)
+            proj = Project.load(parts[2])
+            if parts[3] not in proj.looks or parts[4] not in proj.looks:
+                return self.fail("no such look", 404)
+            return self.send_json({"text": plan.change_wording(proj, parts[3], parts[4])})
         if parts[:2] == ["api", "activities"]:
             return self.send_json({"presets": plan.activities()})
         if parts[:2] == ["api", "own-moves"]:
