@@ -29,6 +29,10 @@ DEFAULTS = {
     "picture_model": "flux2_klein_9b",
     "minutes_per_clip": 2.2,  # a five-second clip on an RTX PRO 6000 Blackwell, Wan2GP v18.84 (5.5 on v12.72); longer clips by their frames
     "port": 8767,
+    # A build drops the depth cache of every clip it has built (about 300 MB a clip; her main clip's
+    # stays). true keeps them, which only saves Depth Anything's 20 s a clip when a build has to make
+    # every clip again (a new build version, her main clip changed).
+    "keep_depth": False,
     "hologram_url": "http://127.0.0.1:8765",
     # A short Signal message through the Choom app when a scheduled render or build finishes or fails
     # (notify.py). Off until "url" (the Choom app) and "choom" (whose thread it comes in) are set;

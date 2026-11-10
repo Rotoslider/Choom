@@ -1,0 +1,302 @@
+{
+  "about": "Ready-made activities and places for New look > An activity or place (Donny, 2026-11-09: a semi-automated way to make clips like Eve working out in her spandex). Each fills in the form: the place's name, where she is and how ({does} in its clips), Klein's instruction (Show her <does>, <frame>. <setting> Keep <what her look keeps> exactly as in the picture; studio/pictures.place_prompt), and which full body it starts from (start: her usual full body, or one of her outfits' full bodies, the first whose name has one of the hint words). A scene has a setting around her that fades into black before the edges of the picture (a hard edge shows on the glass); without one she's on black with only what she uses. Its clips are offered in Plan & render for the place, next to the usual place pack: base (the loop she talks over), to (getting there from her full body), from (getting up again) and her quiet moments there. The wording follows what the clips have taught: no breathing words (they bring fog), nothing that pushes the camera in, every loop ends where it began, and what she holds is in the picture from start to end.",
+  "presets": [
+    {
+      "id": "patio",
+      "title": "On the patio at night, under the stars",
+      "name": "patio",
+      "start": "full",
+      "scene": true,
+      "does": "standing on a small round stone patio at night, facing the viewer with a soft smile, her hands loosely clasped in front of her",
+      "clips": [
+        {
+          "key": "base",
+          "text": "She stays where she is, {does}, looking at the viewer calmly, blinking naturally, her head moving only very slightly, the stars still above her."
+        },
+        {
+          "key": "stars",
+          "seconds": 7,
+          "text": "She stays where she is, {does}, tips her head back to look up at the stars with a soft, amazed smile, then lowers her eyes back to the viewer."
+        },
+        {
+          "key": "shootingstar",
+          "seconds": 7,
+          "hands": true,
+          "text": "She stays where she is, {does}, her eyes follow something streaking across the sky above her, she points up at it and laughs softly, then lowers her hand and looks back at the viewer."
+        },
+        {
+          "key": "chill",
+          "hands": true,
+          "text": "She stays where she is, {does}, rubs her arms against the cool night air with a small shiver and a smile, then clasps her hands in front of her again."
+        },
+        {
+          "key": "sway",
+          "seconds": 7,
+          "text": "She stays where she is, {does}, sways slowly from side to side as if to faint music from inside the house, then settles."
+        },
+        {
+          "key": "to",
+          "seconds": 7,
+          "text": "Starting from standing on black, she looks around as warm light rises around her and a small round stone patio and a black sky with small stars fade in around her, and she ends {does}."
+        },
+        {
+          "key": "from",
+          "seconds": 7,
+          "text": "The patio and the stars fade away into black around her as she lets her hands fall to her sides."
+        }
+      ],
+      "frame": "her whole figure in frame",
+      "setting": "Warm light falls softly on her from the left, from somewhere off the picture. The patio is a small island of flagstones lit around her feet, and everything beyond it fades smoothly into pure black, so that only black touches the left, right and bottom edges of the picture. Above her, the black night sky with small scattered stars."
+    },
+    {
+      "id": "porchswing",
+      "title": "On a porch swing",
+      "name": "porchswing",
+      "start": "full",
+      "scene": true,
+      "does": "sitting on a wooden porch swing hung from two chains, facing the viewer with a warm smile, her hands resting in her lap",
+      "clips": [
+        {
+          "key": "base",
+          "seconds": 7,
+          "text": "She stays where she is, {does}, the swing rocking very gently forward and back under her, blinking naturally, and it comes to rest where it began."
+        },
+        {
+          "key": "swing",
+          "seconds": 10,
+          "text": "She stays where she is, {does}, pushes off gently with her feet and the swing rocks forward and back a few times, her hair moving with it, then it slows and comes to rest where it began."
+        },
+        {
+          "key": "tuck",
+          "seconds": 7,
+          "hands": true,
+          "text": "She stays where she is, {does}, draws one foot up onto the seat and hugs her knee for a moment with a content smile, then sets her foot back down and rests her hands in her lap."
+        },
+        {
+          "key": "lookout",
+          "text": "She stays where she is, {does}, looks out to one side as if watching the evening, then turns back to the viewer with a smile."
+        },
+        {
+          "key": "armsback",
+          "hands": true,
+          "text": "She stays where she is, {does}, stretches her arms out along the back of the swing with a happy, lazy smile, then brings her hands back to her lap."
+        },
+        {
+          "key": "to",
+          "seconds": 7,
+          "text": "Starting from standing on black, she sits down onto a wooden porch swing that fades in beneath her with a warm porch light from above, and she ends {does}."
+        },
+        {
+          "key": "from",
+          "seconds": 7,
+          "text": "She gets up from the swing, and the swing and the warm light fade away into black around her."
+        }
+      ],
+      "frame": "her whole figure and the whole swing in frame",
+      "setting": "A warm porch light from above falls softly on her and the swing and fades smoothly into pure black all around, so that only black touches the edges of the picture: no walls, posts or floor beyond the swing itself."
+    },
+    {
+      "id": "dumbbells",
+      "title": "Working out with dumbbells",
+      "name": "dumbbells",
+      "start": "outfit",
+      "startHint": [
+        "spandex",
+        "gym",
+        "sport",
+        "active",
+        "workout",
+        "work"
+      ],
+      "scene": false,
+      "does": "standing with her feet a little apart, holding a light dumbbell in each hand at her sides, facing the viewer with a confident smile",
+      "clips": [
+        {
+          "key": "base",
+          "text": "She stays where she is, {does}, looking at the viewer calmly, blinking naturally, the dumbbells still at her sides."
+        },
+        {
+          "key": "curls",
+          "seconds": 7,
+          "hands": true,
+          "text": "She stays where she is, {does}, and does slow curls, raising both dumbbells to her shoulders and lowering them again, twice, then holds them at her sides."
+        },
+        {
+          "key": "press",
+          "seconds": 7,
+          "hands": true,
+          "text": "She stays where she is, {does}, raises both dumbbells to her shoulders and presses them up overhead, lowers them back to her shoulders, then brings them down to her sides."
+        },
+        {
+          "key": "raise",
+          "seconds": 7,
+          "hands": true,
+          "text": "She stays where she is, {does}, lifts both dumbbells out to her sides to shoulder height with straight arms, holds them a beat, then lowers them to her sides."
+        },
+        {
+          "key": "flex",
+          "hands": true,
+          "text": "She stays where she is, {does}, raises one dumbbell to flex her arm at the viewer with a proud, teasing grin, then lowers it to her side."
+        },
+        {
+          "key": "shakeout",
+          "text": "She stays where she is, {does}, rolls her shoulders and gives her arms a playful little shake, the dumbbells still in her hands, then settles with a grin."
+        },
+        {
+          "key": "to",
+          "seconds": 7,
+          "text": "Starting from standing, she bends down to pick up a light dumbbell in each hand from the floor beside her feet, straightens up, and ends {does}."
+        },
+        {
+          "key": "from",
+          "seconds": 7,
+          "text": "She bends down to set the dumbbells on the floor beside her feet, and they fade away as she straightens up."
+        }
+      ],
+      "frame": "her whole figure in frame"
+    },
+    {
+      "id": "bike",
+      "title": "On an exercise bike",
+      "name": "bike",
+      "start": "outfit",
+      "startHint": [
+        "spandex",
+        "gym",
+        "sport",
+        "active",
+        "workout",
+        "work"
+      ],
+      "scene": false,
+      "does": "sitting on a sleek white exercise bike turned a little to the side so her face and body are toward the viewer, her hands on the handlebars and her feet on the pedals, looking at the viewer with a smile",
+      "clips": [
+        {
+          "key": "base",
+          "text": "She stays where she is, {does}, pedaling at an easy, steady pace, blinking naturally, and her feet come back around to where they began."
+        },
+        {
+          "key": "sprint",
+          "seconds": 7,
+          "text": "She stays where she is, {does}, pedals faster for a few strokes with a determined grin, then eases back to her easy pace, her feet coming back around to where they began."
+        },
+        {
+          "key": "standup",
+          "seconds": 7,
+          "text": "She stays where she is, {does}, rises up off the seat and pedals standing for a few strokes, then sits back down and pedals easily."
+        },
+        {
+          "key": "wipe",
+          "hands": true,
+          "text": "She stays where she is, {does}, wipes her forehead with the back of her hand and laughs, then puts her hand back on the handlebar."
+        },
+        {
+          "key": "to",
+          "seconds": 7,
+          "text": "Starting from standing, she climbs onto a sleek white exercise bike that fades in beside her, settles on the seat, and ends {does}."
+        },
+        {
+          "key": "from",
+          "seconds": 7,
+          "text": "She stops pedaling and climbs off the bike, which fades away behind her."
+        }
+      ],
+      "frame": "her whole figure and the whole bike in frame"
+    },
+    {
+      "id": "yoga",
+      "title": "Yoga on a mat",
+      "name": "yoga",
+      "start": "outfit",
+      "startHint": [
+        "spandex",
+        "gym",
+        "sport",
+        "active",
+        "workout"
+      ],
+      "scene": false,
+      "does": "sitting cross-legged on a yoga mat, her hands resting on her knees, looking at the viewer with a calm smile",
+      "clips": [
+        {
+          "key": "base",
+          "text": "She stays where she is, {does}, blinking slowly, her shoulders soft and still."
+        },
+        {
+          "key": "reach",
+          "seconds": 7,
+          "hands": true,
+          "text": "She stays where she is, {does}, raises both arms slowly overhead with her palms together, holds a moment, then lowers her hands back to her knees."
+        },
+        {
+          "key": "twist",
+          "seconds": 7,
+          "hands": true,
+          "text": "She stays where she is, {does}, twists gently to one side with a hand on the opposite knee, holds it, then turns back to the viewer."
+        },
+        {
+          "key": "side",
+          "seconds": 7,
+          "hands": true,
+          "text": "She stays where she is, {does}, reaches one arm up and over her head in a slow side stretch, then the other, and settles."
+        },
+        {
+          "key": "stillness",
+          "seconds": 7,
+          "text": "She stays where she is, {does}, closes her eyes for a quiet moment, her face peaceful, then opens them and smiles at the viewer."
+        },
+        {
+          "key": "to",
+          "seconds": 7,
+          "text": "Starting from standing, she lowers herself onto a yoga mat that fades in beneath her, and ends {does}."
+        },
+        {
+          "key": "from",
+          "seconds": 7,
+          "text": "She gets up from the yoga mat, which fades away beneath her."
+        }
+      ],
+      "frame": "her whole figure and the mat in frame"
+    },
+    {
+      "id": "reading",
+      "title": "Reading in an armchair",
+      "name": "reading",
+      "start": "full",
+      "scene": true,
+      "does": "sitting in a cozy upholstered armchair with an open book in her lap, looking up from it at the viewer with a soft smile",
+      "clips": [
+        {
+          "key": "base",
+          "text": "She stays where she is, {does}, looking at the viewer calmly, blinking naturally, the book still open in her lap."
+        },
+        {
+          "key": "read",
+          "seconds": 7,
+          "text": "She stays where she is, {does}, looks down and reads for a moment with a small smile, then looks back up at the viewer."
+        },
+        {
+          "key": "page",
+          "hands": true,
+          "text": "She stays where she is, {does}, turns a page of the book, then looks back up at the viewer."
+        },
+        {
+          "key": "laugh",
+          "text": "She stays where she is, {does}, reads something that makes her laugh softly, then looks back up at the viewer, still smiling."
+        },
+        {
+          "key": "to",
+          "seconds": 7,
+          "text": "Starting from standing on black, she sits down into a cozy armchair that fades in behind her with a warm lamp's light, an open book in her lap, and ends {does}."
+        },
+        {
+          "key": "from",
+          "seconds": 7,
+          "text": "She closes the book and gets up, and the chair and the lamp's light fade away into black around her."
+        }
+      ],
+      "frame": "her whole figure and the whole chair in frame",
+      "setting": "A warm reading lamp from above and to one side lights her and the chair and fades smoothly into pure black all around, so that only black touches the edges of the picture."
+    }
+  ]
+}

@@ -6,6 +6,7 @@ seed no other clip has used.
 """
 import json
 import re
+import time
 from pathlib import Path
 
 import prompts
@@ -13,6 +14,7 @@ from config import CFG
 from project import Project, base_of, editing, next_seeds, outfit_of, roles
 
 PACKS_FILE = Path(__file__).resolve().parent / "packs.json"
+ACTIVITIES_FILE = Path(__file__).resolve().parent / "activities.json"  # New look > An activity or place: ready-made ideas
 KIND_PREFIX = {
     "moment": {"main": "idle_", "relaxed": "relaxed_", "full": "full_", "place": "{place}_", "seat": "{place}_"},
     "talk": {"main": "talk_", "relaxed": "relaxedtalk_"},
@@ -26,6 +28,33 @@ TRANSITION_ENDING = "She stays in the same place, facing the viewer."
 
 def library():
     return json.loads(PACKS_FILE.read_text())
+
+
+def activities():
+    """The ready-made activities and places (activities.json): Eve's dumbbells, Genesis on the patio."""
+    return json.loads(ACTIVITIES_FILE.read_text())["presets"]
+
+
+ACTIVITY_PACK = {"id": "activity", "title": "This activity's own clips",
+                 "about": "Made for this activity when it was started from one of the ready-made ideas: its loop, how she gets "
+                          "there and back, and what she does there. They take the place of the place pack's clips by the same name."}
+
+
+def look_actions(look):
+    """The library's actions, plus the clips of the activity a place look was made from (its own loop,
+    getting there and back, what she does there), which stand in for the place pack's by the same key."""
+    actions = library()["actions"]
+    preset = next((a for a in activities() if a["id"] == look.get("activity")), None) if look.get("activity") else None
+    if not preset:
+        return actions
+    places = {a["key"]: a for a in actions if a["pack"] == "places"}
+    own = []
+    for c in preset["clips"]:
+        like = places.get(c["key"], {})
+        own.append({"pack": "activity", **({"names": like["names"]} if "names" in like else {"kind": "moment"}),
+                    **({"ending": like["ending"]} if like.get("ending") else {}), **c})
+    keys = {c["key"] for c in own}
+    return own + [a for a in actions if not (a["pack"] == "places" and a["key"] in keys)]
 
 
 POSES = ("main", "relaxed", "full", "asleep", "gone")  # clip_roles.POSES; any other look is a place
@@ -79,15 +108,140 @@ def unique_name(proj, name, numbered):
     return f"{name}{n}"
 
 
+# Moves written by hand (Write your own clip, or planned through the API: Genesis's whisper, Eve's goodnight
+# kiss) are clips, not library actions, so Plan & render never offered them again: not in another of her
+# looks, not even in the look they were made in (Donny, 2026-11-09). These packs list them in every look
+# they fit: hers as "Her own moves", her sisters' as "Her sisters' moves".
+OWN_PACKS = {
+    "own": {"id": "own", "title": "Her own moves",
+            "about": "Moves written for her by hand (Write your own clip), offered in every look they fit. The wording "
+                     "is the one from her usual clothes; this look's own lines go in front of it, as for any clip."},
+    "sisters": {"id": "sisters", "title": "Her sisters' moves",
+                "about": "Moves written by hand for the other Chooms, to borrow. Words about something only that sister "
+                         "has (glasses, a heart, crossed arms) are marked: change them with Edit once it's planned."},
+}
+OWN_KINDS = ("moment", "pose", "talk", "oops", "windy", "listen")  # what a clip of your own can be
+HANDS = re.compile(r"\b(hands?|fingers?|palms?|arms?|wrists?)\b", re.I)
+STOP = set("a an and the of her his she he with in on to at as is it its from into over for by or up down out "
+           "made skin body long against plain pure black background young woman wearing whole time stay stays "
+           "softly glows glowing soft light eyes hair face head shoulder shoulders lips cheeks neck chin arms "
+           "hands thigh legs knees feet open side sides".split())
+
+
+def _prefixes():
+    """(prefix, kind, family) of the clip names a clip of her own gets, longest first (relaxedpose_ before
+    relaxed_), family "full" for her full bodies and "waist" for her waist-up looks."""
+    out = [(prefix, kind, "full" if pose == "full" else "waist")
+           for kind, poses in KIND_PREFIX.items() for pose, prefix in poses.items() if "{" not in prefix]
+    return sorted(out, key=lambda t: -len(t[0]))
+
+
+def _library_parts():
+    """Every name part the library makes in her usual looks ({"waist": {idle_glance, listen, ...}, "full": ...})."""
+    parts = {"waist": set(), "full": set()}
+    for a in library()["actions"]:
+        for pose in ("main", "relaxed", "full"):
+            name = action_name(a, pose)
+            if name:
+                parts["full" if pose == "full" else "waist"].add(name)
+    return parts
+
+
+def own_moves(proj):
+    """The moves written for her by hand: her loops in a waist-up look or a full body (started and ended on
+    the same picture) whose name the library doesn't make. One per move, with its wording from the best
+    take: her usual clothes before an outfit, kept before rendered before planned, the newest.
+    [{key, kind, family, text, seconds, ending, refs, look (the take's), looks, when, choom, hands}]"""
+    lib, rank, found = _library_parts(), {"kept": 0, "rendered": 1, "queued": 2, "planned": 3}, {}
+    for name, c in proj.clips.items():
+        look = c.get("from")
+        if c.get("status") not in rank or look != c.get("to") or not c.get("action") or not look:
+            continue
+        base, outfit = base_of(look), outfit_of(look)
+        if base not in ("main", "relaxed", "full"):
+            continue
+        part = name.removeprefix(f"{proj.id}_")
+        if outfit:
+            if not part.startswith(f"{outfit}-"):
+                continue
+            part = part[len(outfit) + 1:]
+        family = "full" if base == "full" else "waist"
+        if part in lib[family] or re.sub(r"\d+$", "", part) in lib[family]:
+            continue
+        hit = next(((kind, part[len(prefix):]) for prefix, kind, fam in _prefixes()
+                    if fam == family and kind in OWN_KINDS and part.startswith(prefix) and len(part) > len(prefix)), None)
+        if not hit:
+            continue
+        kind, key = hit
+        entry = found.setdefault((family, kind, key), {"key": key, "kind": kind, "family": family, "looks": [],
+                                                       "choom": proj.id, "score": None})
+        entry["looks"].append(look)
+        when = c.get("rendered") or c.get("changed") or ""  # when the take was made (a keep later changes "changed")
+        best = (1 if outfit else 0, rank[c["status"]], -(time.mktime(time.strptime(when[:19], "%Y-%m-%dT%H:%M:%S")) if when else 0))
+        if entry["score"] is None or best < entry["score"]:
+            entry.update(score=best, text=c["action"], seconds=int(c.get("seconds", 5)), ending=c.get("ending"),
+                         refs=list(c.get("refs") or []), hands=bool(HANDS.search(c["action"])), look=look)
+        entry["when"] = max(entry.get("when", ""), when[:10])
+    out = sorted(found.values(), key=lambda m: (m["family"], m["kind"], m["key"]))
+    for m in out:
+        del m["score"]
+        m["looks"] = sorted(set(m["looks"]), key=lambda l: (outfit_of(l) is not None, l))
+    return out
+
+
+def _look_words(proj, look_id):
+    """The words of a look's lines: who she is there and what she wears (Genesis: glasses, motes, violet;
+    Optic: heart, headphones; Aloy's cold look: coat, collar)."""
+    m = proj.looks.get(look_id) or proj.looks.get("main", {})
+    text = " ".join(str(m.get(k) or "") for k in ("subject", "keep", "kleinKeep", "wearing"))
+    return {w for w in re.findall(r"[a-z]+", text.lower()) if len(w) > 3 and w not in STOP}
+
+
+def borrowed_words(src, src_look, proj, look_id, text):
+    """Words in a move about something the look it goes to doesn't have: in the lines of the look it was
+    made in (a sister's glasses, an outfit's coat) but not in this look's."""
+    only_there = _look_words(src, src_look) - _look_words(proj, look_id)
+    words = re.findall(r"[a-z]+", text.lower())
+    return sorted({w for w in words if w in only_there or w.rstrip("s") in only_there})
+
+
+def own_options(proj, look_id):
+    """Her own moves and her sisters' for a look, as options() lists them; a sister's move she has one of
+    her own by that name is left out."""
+    kind = look_kind(look_id)
+    if kind not in ("main", "relaxed", "outfit", "full"):
+        return []
+    family, out, mine = "full" if kind == "full" else "waist", [], set()
+    for cid in [proj.id] + [c for c in Project.ids() if c != proj.id]:
+        src = proj if cid == proj.id else Project.load(cid)
+        for m in own_moves(src):
+            part = m["family"] == family and action_name(m, look_id)
+            if not part:
+                continue
+            name = f"{proj.id}_{part}"
+            if cid != proj.id and name in mine:
+                continue  # one of her own by that name (two sisters' kisses are both listed: their wording differs)
+            if cid == proj.id:
+                mine.add(name)
+            have = [n for n in proj.clips if n == name and proj.clips[n]["status"] != "dropped"]
+            out.append({"pack": "own" if cid == proj.id else "sisters", "key": m["key"], "from": cid,
+                        "pick": ["own", f"{cid}:{m['key']}"], "kind": m["kind"], "text": m["text"],
+                        "seconds": m["seconds"], "ending": m["ending"], "refs": m["refs"], "hands": m["hands"],
+                        "name": name, "have": have, "numbered": False, "looks": m["looks"], "when": m["when"],
+                        "check": [] if have or m["look"] == look_id else borrowed_words(src, m["look"], proj, look_id, m["text"])})
+    out.sort(key=lambda o: o["when"], reverse=True)  # the newest first, hers before her sisters'
+    return sorted(out, key=lambda o: (o["pack"] != "own", o["from"]))
+
+
 def options(proj, look_id):
     """The library's actions for a look: [{pack, key, text, seconds, hands, name, have}], `have`
     naming the clip she already has for it (any status but dropped). A night or chosen outfit (she
     can sleep in it) also gets the Sleep pack. A pack that "needs" looks (Pose changes: her relaxed pose) is left
     out for a Choom without them: the Studio can't make a second pose, and Genesis's main look showed
     Aloy's hand-lowering clips."""
-    lib, kind = library(), look_kind(look_id)
+    lib, kind = {**library(), "actions": look_actions(proj.looks[look_id])}, look_kind(look_id)
     kinds = {kind} | ({"night"} if kind == "outfit" and outfit_of(look_id).startswith(("night", "chosen")) else set())
-    packs = {p["id"]: p for p in lib["packs"]}
+    packs = {p["id"]: p for p in lib["packs"]} | {"activity": {**ACTIVITY_PACK, "for": ["place"]}}
     out = []
     for a in lib["actions"]:
         pack = packs[a["pack"]]
@@ -102,10 +256,11 @@ def options(proj, look_id):
         name = f"{proj.id}_{part}"
         have = [n for n in proj.clips if (n == name or re.fullmatch(re.escape(name) + r"\d+", n))
                 and proj.clips[n]["status"] != "dropped"]
-        out.append({"pack": a["pack"], "key": a["key"], "text": for_look(a["text"], proj.looks[look_id]), "seconds": a.get("seconds", 5),
+        out.append({"pack": a["pack"], "key": a["key"], "pick": [a["pack"], a["key"]],
+                    "text": for_look(a["text"], proj.looks[look_id]), "seconds": a.get("seconds", 5),
                     "hands": a.get("hands", False), "name": name, "have": have,
                     "numbered": "names" not in a, "ending": a.get("ending")})
-    return out
+    return own_options(proj, look_id) + out
 
 
 def many(targets, picks, preview=True):
@@ -115,7 +270,7 @@ def many(targets, picks, preview=True):
     planned and how long it takes to render; otherwise plan it, one look at a time so every clip gets
     a seed of its own. Returns {"looks": [{choom, look, plan, have, blocked}], "clips", "minutes",
     "results"}."""
-    picks = {(p, k) for p, k in picks}
+    picks = {(p, k) for p, k in picks}  # a move written by hand: ("own", "<choom>:<key>"), whoever's look it goes to
     by_key = {(a["pack"], a["key"]): a for a in library()["actions"]}
     out, clips, minutes = [], 0, 0.0
     for cid, look_id in targets:
@@ -124,7 +279,7 @@ def many(targets, picks, preview=True):
             raise ValueError(f"{cid} has no look {look_id}")
         fresh, have, blocked = [], [], []
         for o in options(proj, look_id):
-            if (o["pack"], o["key"]) not in picks:
+            if tuple(o["pick"]) not in picks:
                 continue
             if o["have"]:
                 have.append(o["name"])
@@ -139,14 +294,16 @@ def many(targets, picks, preview=True):
         clips += len(fresh)
         minutes += sum(CFG["minutes_per_clip"] * f / 124 for f in frames)
         out.append({"choom": cid, "look": look_id, "plan": [o["name"] for o in fresh], "have": have,
-                    "blocked": blocked, "items": [(o["pack"], o["key"]) for o in fresh]})
+                    "blocked": blocked, "items": [o if o["pack"] in OWN_PACKS else
+                                                  {(a["pack"], a["key"]): a for a in look_actions(proj.looks[look_id])}[(o["pack"], o["key"])]
+                                                  for o in fresh]})
     results = []
     if not preview:
         for entry in out:
             if entry["items"]:
                 with editing(entry["choom"]) as proj:
                     results += [(entry["choom"], name, message)
-                                for name, message in add(proj, entry["look"], [by_key[i] for i in entry["items"]])]
+                                for name, message in add(proj, entry["look"], entry["items"])]
     for entry in out:
         del entry["items"]
     return {"looks": out, "clips": clips, "minutes": round(minutes), "results": results}
@@ -176,7 +333,7 @@ def add(proj, look_id, items):
         if not part:
             results.append((None, f"{item['key']}: doesn't come in the {look_id} look"))
             continue
-        name = unique_name(proj, f"{proj.id}_{part}", "names" not in item)
+        name = unique_name(proj, f"{proj.id}_{part}", item.get("numbered", "names" not in item))
         if not name:
             results.append((None, f"{item['key']}: she already has {proj.id}_{part} (re-roll it instead)"))
             continue

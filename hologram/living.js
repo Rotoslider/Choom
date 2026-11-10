@@ -94,6 +94,9 @@ const asData = (t) => {
   t.magFilter = THREE.LinearFilter;
   return t;
 };
+// Her settings from Glass Studio (portraits/<id>/prefs.json), read again every minute so a change there
+// shows without a relaunch: for now how much of her quiet time each full body gets (fullShare).
+const loadPrefs = (dir) => fetch(`${dir}/prefs.json`, { cache: 'no-store' }).then((r) => (r.ok ? r.json() : {})).catch(() => ({}));
 const portraits = await Promise.all(manifest.map(async (m) => {
   const dir = `/portraits/${m.id}`;
   const [color, depth, mask, plate, plateDepth] = await Promise.all(
@@ -110,6 +113,7 @@ const portraits = await Promise.all(manifest.map(async (m) => {
     dir,
     mouth,
     alive,
+    prefs: await loadPrefs(dir),
     players: alive ? [makePlayer(), makePlayer()] : null,
     active: 0,
     aliveFrame: 0,
@@ -1100,6 +1104,20 @@ const PLACE_STAY_MS = setting('placeMinutes', 10) * 60000;
 const goes = (c) => clipMoods(c).includes('go');  // on the way to a place or the empty glass, and back
 const LOOKS_AWAY = /glance|look|sidelook|shoulder|daydream|horizon|lookup|lookdown|hunter|skycheck|scan|turn|dreamy|thinkdown|picture/;  // the framings she lives in (not asleep, not full-body)
 const FULL_IDLE_CHANCE = 0.07;
+// How often she goes to her whole figure while quiet, and how long she stays, from the share of her quiet
+// time the Studio's slider gives that full body (prefs.json fullShare, 0 to 0.8). Without one: a cut to it
+// on one quiet clip in fourteen, and straight back after one clip (as before, 2026-11-09). The bigger the
+// share, the longer she stays (about two clips running at 30%, four from 50%), so it reads as the camera
+// settling on her, not cutting back and forth. Per pick: go = share of the waist-up picks that cut to it,
+// stay = the chance she plays another quiet full-body clip; in the long run the share of quiet clips in
+// her full body is go / (go + 1 - stay).
+function fullOdds(p, pose) {
+  const share = p.prefs?.fullShare?.[fullOf(pose)];
+  if (typeof share !== 'number') return { go: FULL_IDLE_CHANCE, stay: 0 };
+  const s = Math.min(Math.max(share, 0), 0.8);
+  const stay = Math.min(Math.max((s - 0.07) * 2.2, 0), 0.75);
+  return { go: Math.min(1, (s * (1 - stay)) / (1 - s)), stay };
+}
 // Her clothes. Clips in other outfits live in poses of their own (relaxed@evening), and an outfit's
 // name says when she wears it: night… from 10 pm until she wakes, cold… under 45°F, hot… over 85°F,
 // evening… from 6 to 11 pm, and day… outfits take turns with her usual clothes, a different one each
@@ -1421,11 +1439,13 @@ function nextClip(p, after) {
   syncVisit(p, pose);
   const want = wantedMood(p);
   // Time to change clothes (or back into her usual ones before sleep): a cut to her base loop in the
-  // other outfit, at a quiet moment. Her places are in her usual clothes: asked to go to one, she
-  // changes into them first, and there she stays in them.
+  // other outfit, at a quiet moment. Her places are in the clothes of the full body she gets there from:
+  // asked to go to one, she changes into them first (her usual clothes for the campfire; Eve's spandex
+  // for her dumbbells, made from that outfit's full body), and there she stays in them.
   const asleep = basePose(pose) === 'asleep';  // asleep, or asleep in her night outfit (asleep@night)
-  const goingTo = p.moveWanted && clips.some((c) => p.moveWanted.sources.has(c.source) && isPlace(poseTo(c)));
-  const dressed = outfitOf(pose), dress = asleep || isPlace(pose) ? dressed : goingTo ? null : wantedOutfit(p, want);
+  const goingClip = p.moveWanted && clips.find((c) => p.moveWanted.sources.has(c.source) && isPlace(poseTo(c)) && !isPlace(poseFrom(c)));
+  const goingTo = !!goingClip;
+  const dressed = outfitOf(pose), dress = asleep || isPlace(pose) ? dressed : goingTo ? outfitOf(poseFrom(goingClip)) : wantedOutfit(p, want);
   const quiet = want === 'idle' || want === 'sleep' || want === 'listen' || (want === 'think' && chosenOutfit(p) !== undefined);
   if (dress !== dressed && !asleep && quiet) {
     const to = dress ? `${basePose(pose)}@${dress}` : basePose(pose);
@@ -1602,12 +1622,27 @@ function nextClip(p, after) {
   // Now and then while she's quiet, the glass cuts to her whole figure for a few seconds and back,
   // like a camera changing shots (her full-body quiet clips). Only the Choom on the glass, never on
   // the stage, and not twice running. In an outfit, only to that outfit's own full body.
+  // How often, and how long she stays there, is set per full body in the Studio (fullOdds): after one of
+  // these quiet full-body clips she may play another, never after a full-body move she was asked for.
   const cameFromWide = after >= 0 && clips[after] && isFull(poseFrom(clips[after]));
-  if (want === 'idle' && !stage.on && p === portraits[current] && !cameFromWide && !isPlace(pose) && Math.random() < FULL_IDLE_CHANCE) {
-    const wide = clips.map((c, k) => k).filter((k) => poseFrom(clips[k]) === fullOf(pose) && clipMoods(clips[k]).includes('idle'));
-    if (wide.length) {
+  const quietWide = cameFromWide && poseFrom(clips[after]) === fullOf(pose) && poseTo(clips[after]) === fullOf(pose) &&
+                    clipMoods(clips[after]).includes('idle');
+  const odds = fullOdds(p, pose);
+  if (want === 'idle' && !stage.on && p === portraits[current] && !isPlace(pose) &&
+      (cameFromWide ? quietWide && Math.random() < odds.stay : Math.random() < odds.go)) {
+    const wide = clips.map((c, k) => k).filter((k) => k !== after && poseFrom(clips[k]) === fullOf(pose) &&
+                                                       poseTo(clips[k]) === fullOf(pose) && clipMoods(clips[k]).includes('idle'));
+    // A shuffled deck of its own, as for her other quiet clips: one that played lately waits until most
+    // of the others have had their turn (staying longer would otherwise bring the same few back).
+    const recentWide = (p.recentWide ||= []);
+    const fresh = wide.filter((k) => !recentWide.includes(k));
+    const deck = fresh.length ? fresh : wide;
+    if (deck.length) {
       p.cutFrom = pose;
-      return wide[Math.floor(Math.random() * wide.length)];
+      const pick = deck[Math.floor(Math.random() * deck.length)];
+      recentWide.push(pick);
+      while (recentWide.length > Math.max(1, Math.floor(wide.length * 0.7))) recentWide.shift();
+      return pick;
     }
   }
   const breezy = want === 'idle' && windy();
@@ -3367,6 +3402,7 @@ function sendStatus() {
   });
 }
 setInterval(sendStatus, 2000);
+setInterval(() => { for (const p of portraits) loadPrefs(p.dir).then((prefs) => { p.prefs = prefs; }); }, 60000); // the Studio's settings (fullShare)
 
 // A turn whose end never arrived (the Mac feed dropped mid-turn) left her thinking for good: no sleep,
 // no screensaver, the stage never folding. After 15 minutes without a word of it, or when the feed

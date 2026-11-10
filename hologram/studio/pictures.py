@@ -75,10 +75,37 @@ def full_prompt(keep, wearing=""):
             f"exactly as in the picture, with the same light on the same pure black background.{clothes}")
 
 
-def place_prompt(does, keep):
+def fade_edges(path, side=0.12, bottom=0.07, top=0.03):
+    """A setting's picture (a stone patio under the stars) with its edges faded smoothly into black: on the
+    glass a lit edge of the frame shows as a hard line, and Klein, asked to fade them, still let the paving
+    run off the bottom (Genesis's patio, 2026-11-09). Every clip starts and ends on this picture, so its
+    clips keep the soft edge. The bottom fade is narrow, so her feet keep their light (a 14% fade dimmed
+    Genesis's sandals by half)."""
+    ramp = lambda d, f: f"clip({d}/(W*{f}),0,1)" if "X" in d else f"clip({d}/(H*{f}),0,1)"
+    def expr(c):
+        return (f"st(0,{ramp('min(X,W-1-X)', side)});st(1,{ramp('(H-1-Y)', bottom)});st(2,{ramp('Y', top)});"
+                f"st(3,ld(0)*ld(0)*(3-2*ld(0))*ld(1)*ld(1)*(3-2*ld(1))*ld(2)*ld(2)*(3-2*ld(2)));{c}(X,Y)*ld(3)")
+    tmp = Path(path).with_name(Path(path).stem + ".fading.png")
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(path), "-vf", f"format=rgb24,geq=r='{expr('r')}':g='{expr('g')}':b='{expr('b')}'",
+                    str(tmp)], check=True)
+    os.replace(tmp, path)
+
+
+SCENE_SETTING = ("Warm light falls softly on her and fades smoothly into pure black all around, so that only black "
+                 "touches the edges of the picture.")
+
+
+def place_prompt(does, keep, scene=False, frame="", setting=""):
     """Klein's instruction for one of her places, from her full body: where she is and how ("sitting
-    on the ground beside a small campfire, her knees drawn up and her hands held toward the flames")."""
-    return (f"Show her {does.strip().rstrip('.')}, her whole figure in frame with a little black space around her. "
+    on the ground beside a small campfire, her knees drawn up and her hands held toward the flames").
+    A scene has a setting around her (a stone patio under the stars) that fades into black before the
+    edges of the picture: on the glass a lit edge is a hard line. frame and setting come from a
+    ready-made activity (activities.json)."""
+    frame = (frame or "her whole figure in frame").rstrip(". ")
+    if scene:
+        return (f"Show her {does.strip().rstrip('.')}, {frame}. {(setting or SCENE_SETTING).strip()} "
+                f"Keep {with_clothes(full_keep(keep))} exactly as in the picture.")
+    return (f"Show her {does.strip().rstrip('.')}, {frame} with a little black space around her. "
             f"Keep {with_clothes(full_keep(keep))} exactly as in the picture, with the same light on the same pure "
             "black background.")
 
@@ -211,7 +238,7 @@ def new_file(proj, look_id):
     return PICTURES / f"{proj.id}_{slug}_{n}.png"
 
 
-def adopt(proj, look_id, draft, wearing=None, prompt=None, base_look=None, replace=False):
+def adopt(proj, look_id, draft, wearing=None, prompt=None, base_look=None, replace=False, scene=False, activity=None):
     """Make a draft picture a look: copied into clean/ as <choom>_<outfit>_1.png, with its subject line
     in the new clothes and the base look's keep line and ending. base_look is the look the picture
     started from (an outfit can start from another outfit, Genesis's night look from her plain one);
@@ -240,18 +267,31 @@ def adopt(proj, look_id, draft, wearing=None, prompt=None, base_look=None, repla
     target = new_file(proj, look_id)
     shutil.copy2(PICTURES / draft, target)
     if kind not in ("main", "relaxed", "full", "asleep"):
-        # A place: her full body's description, sitting by her campfire instead of standing. She gets
-        # there from her full body (to_campfire), in her usual clothes.
-        full = proj.looks.get("full", {})
-        subject = re.sub(r",?\s*standing with her whole body in view", "", full.get("subject") or proj.looks["main"]["subject"])
+        # A place: the description of the full body it was made from, sitting by her campfire instead of
+        # standing. She gets there from that full body (to_campfire): her usual one, or an outfit's (Eve's
+        # dumbbells from her spandex: the glass puts the outfit on first). A scene (a stone patio under the
+        # stars) has a setting around her that fades into black, so its subject doesn't say black background.
+        if scene:
+            fade_edges(target)
+        start = base_look if base_look and base_of(base_look) == "full" and base_look in proj.looks else "full"
+        full = proj.looks.get(start, {})
+        subject = re.sub(r",?\s*standing[^,]*with her whole body in view", "", full.get("subject") or proj.looks["main"]["subject"])  # Aloy's "standing relaxed with ..."
+        # Her pose there is the place's own: Eve's "arms crossed" (from her full body's lines) fought her
+        # holding a dumbbell in each hand, so clauses about her arms and hands stay out (as in full_keep).
+        subject = ", ".join(c for c in re.split(r",\s*", subject)
+                            if not (POSE.search(c) and not re.match(r"\s*(wearing|against|in a pool)\b", c)))
+        if scene:
+            subject = re.sub(r"against a plain pure black background", "in a pool of soft warm light that fades into pure black all around", subject)
         proj.looks[look_id] = {
             "picture": target.name,
             "subject": f"{subject.rstrip('. ')}, {wearing.strip().rstrip('.')}",
             "does": wearing.strip().rstrip("."),
-            "from": "full",
+            "from": start,
             "ending": "She stays in the same place and pose and ends exactly as she began.",
             **({"keep": full["keep"]} if full.get("keep") else {}),
             **({"klein": prompt} if prompt else {}),
+            **({"scene": True} if scene else {}),
+            **({"activity": activity} if activity else {}),
         }
     elif kind in ("full", "asleep"):
         base = proj.looks.get(base_look or f"main@{outfit}", {}) if outfit else proj.looks.get("main", {})

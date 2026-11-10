@@ -418,12 +418,51 @@ function renderGlass() {
         el('h3', {}, look),
         el('span', { className: 'stat' }, `${s.onGlass} on the glass · ${s.quiet} quiet moments · ${s.minutes} min before one repeats`),
         readinessLine(look),
-        allOn),
+        allOn,
+        fullShareControl(look, s)),
       el('div', { className: 'lane-label' }, 'On the glass'),
       lane(look, on, true),
       el('div', { className: 'lane-label' }, `Kept, not on the glass (${off.length})`),
       lane(look, off, false));
   }));
+}
+
+// How much of her quiet time the glass shows her in this full body, and how long she stays (Donny, Nov 9:
+// "it only plays one clip then returns to closeup"). Saved in her project and her prefs.json, which the
+// glass reads again every minute, so it needs no build. living.js fullOdds turns it into the odds.
+const FULL_SHARE_DEFAULT = 0.07;
+function fullStay(share) {
+  const stay = Math.min(Math.max((share - 0.07) * 2.2, 0), 0.75);
+  return 1 / (1 - stay);
+}
+function fullShareControl(look, s) {
+  if (!look.startsWith('full') || !s.quiet) return null;
+  const c = state.choom;
+  const outfit = look.split('@')[1];
+  const waist = Object.keys(c.looks).filter((l) => ['main', 'relaxed'].includes(l.split('@')[0]) && l.split('@')[1] === outfit);
+  const set = c.fullShare?.[look];
+  const range = el('input', { type: 'range', min: 0, max: 80, step: 1, value: Math.round((set ?? FULL_SHARE_DEFAULT) * 100),
+                              'aria-label': 'Full body while she is quiet' });
+  const words = el('span', { className: 'muted' });
+  const describe = () => {
+    const share = Number(range.value) / 100;
+    if (!share) { words.textContent = 'never while she\'s quiet: only the full-body moves she asks for'; return; }
+    const run = fullStay(share);
+    const round = Math.max(1, Math.round(s.minutes / share));
+    words.textContent = `about ${Math.round(share * 100)}% of her quiet time, ${run < 1.2 ? 'one clip and straight back' : `about ${run.toFixed(run < 2.5 ? 1 : 0)} clips at a time`} · her ${s.quiet} quiet clips here come round again after about ${round} min of quiet`
+      + (s.quiet < 10 && share >= 0.25 ? ' (few clips: the Full body pack has more)' : '');
+  };
+  describe();
+  range.addEventListener('input', describe);
+  const save = (share) => attempt(async () => {
+    state.choom = (await api(`/api/choom/${state.cid}/fullshare`, { look, share })).choom;
+    toast(share === null ? `${look}: back to the glass's own (one clip in fourteen, straight back)` : `${look}: about ${Math.round(share * 100)}% of her quiet time; the glass picks it up within a minute`);
+    renderGlass();
+  })();
+  range.addEventListener('change', () => save(Number(range.value) / 100));
+  return el('div', { className: 'full-share', tip: `How much of her quiet time the glass shows her whole figure in this full body, while she's in ${waist.join(' or ') || 'these clothes'}, and how long she stays before it cuts back. Takes effect within a minute, no build. Talking or listening always cuts back to waist-up.` },
+    el('span', {}, 'Full body while she\'s quiet'), range, words,
+    set !== undefined && set !== null ? el('button', { className: 'ghost small', type: 'button', onclick: () => save(null), tip: 'Back to the glass\'s own: about one quiet clip in fourteen, and straight back' }, 'As before') : null);
 }
 
 // How far a look and its outfit are from the glass (project.readiness): kept clips never put on the
@@ -530,6 +569,23 @@ function tile(name, on) {
         renderGlass();
       }),
     }));
+    // Re-roll straight from the glass (Donny, Nov 9: finding it again in Review took a while): the same as
+    // R in Review, then Plan & render with its wording open to change.
+    t.append(el('button', {
+      className: 'flip reroll', type: 'button', 'aria-label': 'Re-roll it',
+      tip: `Re-roll: plan it again with a new seed, and open it in Plan & render to change its wording or length first.${on ? ' It comes off the glass at the next build, and goes back on when you keep the new take.' : ''} The old take is kept (Keep the old take undoes it).`,
+      textContent: '↻',
+      onclick: attempt(async (e) => {
+        e.stopPropagation();
+        state.choom = (await api(`/api/choom/${state.cid}/reroll`, { names: [name] })).choom;
+        toast(`${short(state.cid, name)} re-rolled: change its wording here if you like, then render it`);
+        state.planLooks[state.cid] = c.from;
+        state.openPlanned = name;
+        state.tab = 'plan';
+        remember();
+        render();
+      }),
+    }));
   }
   return t;
 }
@@ -555,10 +611,32 @@ async function renderPlan() {
 
 // Her wishes: what she asked the glass for (glass_move, glass_wear, glass_wish) and hasn't got yet, and
 // folded away below, the ones that came true.
+// Ask her for ideas for the look chosen above (Donny, Nov 9: "You and the girls are a lot more creative"):
+// the Choom app queues a request for her; within a minute or two she sends them with glass_wish (they show
+// up in this list, each with Write it) and tells him on Signal. Not for the empty glass, her seats at the
+// campfire circle, or the clothes that are Donny's alone.
+function askIdeasButton() {
+  const c = state.choom, look = state.planLook;
+  if (!look || look === 'gone' || /^circle/.test(look) || /@chosenbare/.test(look)) return null;
+  return el('button', {
+    type: 'button', className: 'ghost', tip: `Ask ${c.name} what she'd love to do on the glass in ${look}: she sends her ideas to this list (each with Write it) and tells you on Signal, usually within a couple of minutes`,
+    onclick: attempt(async () => {
+      const r = await api(`/api/choom/${state.cid}/ideas`, { look });
+      toast(r.already ? `${c.name} has your request for ${look} already; her ideas come here when she's answered`
+        : `Asked ${c.name} for ideas for ${look}; they show up here in a minute or two, and she'll tell you on Signal`);
+      setTimeout(refresh, 120000);
+    }),
+  }, `Ask ${c.name} for ideas for ${look}`);
+}
+
 function renderWishes() {
   const c = state.choom;
   const done = c.wishesDone || [];
-  if (!c.wishes?.length && !done.length) return $('#wishes').replaceChildren();
+  if (!c.wishes?.length && !done.length) {
+    const ask = askIdeasButton();
+    return $('#wishes').replaceChildren(...(ask ? [el('div', { className: 'wishes' },
+      el('div', { className: 'row' }, el('span', { className: 'muted' }, `No wishes from ${c.name} right now.`), ask))] : []));
+  }
   const day = (t) => new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   const settle = (w, made) => attempt(async () => {
     state.choom = (await api(`/api/choom/${state.cid}/wish`, { kind: w.kind, what: w.what, made })).choom;
@@ -566,7 +644,7 @@ function renderWishes() {
     renderWishes();
   });
   $('#wishes').replaceChildren(el('div', { className: 'wishes' },
-    el('h3', {}, `${c.name}'s wishes`),
+    el('div', { className: 'row wishes-head' }, el('h3', {}, `${c.name}'s wishes`), askIdeasButton()),
     el('p', { className: 'hint' }, 'What she asked the glass for and hasn\'t got yet. Once it\'s made she can ask for it by name. Mark a wish made when it\'s on the glass, or let it go if it won\'t be.'),
     ...(c.wishes || []).map((w) => el('div', { className: 'wish' },
       el('span', {}, el('b', {}, `“${w.what}”`), ` ${w.kind === 'wear' ? 'to wear' : 'a move'} · asked ${w.times > 1 ? `${w.times} times, last ` : ''}${day(w.last)}`),
@@ -596,31 +674,70 @@ function wishOutfit(w) {
   $('#newOutfit').scrollIntoView({ block: 'start' });
 }
 
+// An action's id in the page: a library action by its pack and key; a move written by hand also by whose
+// it is (two sisters can each have a kiss).
+const optId = (o) => `${o.key}|${o.pack}|${o.from || ''}`;
+const nameOf = (cid) => state.chooms.find((c) => c.id === cid)?.name || cid[0].toUpperCase() + cid.slice(1);
+const dayWords = (d) => (d ? new Date(`${d}T12:00:00`).toLocaleDateString([], { month: 'short', day: 'numeric' }) : '');
+// Folded or open, the moves written by hand stay as he left them while he works (a re-render after each tick).
+const libraryFolds = {};
+
 function renderLibrary(packs) {
   const byPack = {};
   for (const o of state.options) (byPack[o.pack] ||= []).push(o);
   const lib = $('#library');
-  const blocks = packs.filter((p) => byPack[p.id]).map((p) => {
-    const acts = byPack[p.id];
+  const act = (o) => {
+    const id = optId(o);
+    const box = el('input', { type: 'checkbox', checked: state.picked.has(id), disabled: !!o.have.length && !o.numbered });
+    box.addEventListener('change', () => { box.checked ? state.picked.add(id) : state.picked.delete(id); updatePlanButton(); });
+    const made = o.from ? [o.when && dayWords(o.when), o.looks?.length && `made in ${o.looks.join(', ')}`].filter(Boolean).join(', ') : '';
+    return el('label', { className: `act${o.have.length ? ' have' : ''}` }, box,
+      el('span', { className: 'k' }, short(state.cid, o.name),
+        el('small', {}, `${o.seconds} s${o.have.length ? ` · has ${o.have.map((n) => short(state.cid, n)).join(', ')}` : made ? ` · ${made}` : ''}`),
+        o.hands ? el('span', { className: 'hands', tip: 'Uses a hand: if her pose holds something (a heart, crossed arms), edit the planned wording to say how she frees it and puts it back' }, 'uses a hand') : null,
+        o.refs?.length ? el('span', { className: 'hands', tip: 'It brings its own pictures (what she holds); they come along' }, `${o.refs.length} picture${o.refs.length > 1 ? 's' : ''}`) : null,
+        o.check?.length ? el('span', {
+          className: 'hands', tip: `These words are about ${o.pack === 'sisters' ? `${nameOf(o.from)} or the clothes she made it in` : `the clothes it was made in (${o.looks.join(', ')})`}, not this look. Once it's planned, Edit it in the planned list to say what fits here.`,
+        }, `check: ${o.check.join(', ')}`) : null),
+      el('span', { className: 't' }, o.text));
+  };
+  const pickButton = (acts) => {
     const fresh = acts.filter((o) => !o.have.length);
-    const pick = el('button', { className: 'ghost', type: 'button', tip: 'Tick every action in this pack she has no clip for yet' }, `Pick the ${fresh.length} she doesn't have`);
-    pick.addEventListener('click', () => { fresh.forEach((o) => state.picked.add(o.key + '|' + o.pack)); renderLibrary(packs); });
+    if (!fresh.length) return el('span', { className: 'muted' }, 'she has them all');
+    const b = el('button', { className: 'ghost', type: 'button', tip: 'Tick every action here she has no clip for yet' }, `Pick the ${fresh.length} she doesn't have`);
+    b.addEventListener('click', () => { fresh.forEach((o) => state.picked.add(optId(o))); renderLibrary(packs); });
+    return b;
+  };
+  // Her own moves and her sisters' fold away (Genesis has 53 for a waist-up look), open the first time
+  // only for her own.
+  const fold = (key, summary, open, ...kids) => {
+    const d = el('details', { className: 'pack-fold', open: libraryFolds[key] ?? open }, el('summary', {}, ...summary), ...kids);
+    d.addEventListener('toggle', () => { libraryFolds[key] = d.open; });
+    return d;
+  };
+  const own = (p) => {
+    const acts = byPack[p.id];
+    if (p.id === 'own') {
+      return el('section', { className: 'pack' }, fold(`own|${state.cid}`, [el('h3', {}, `${p.title} `, el('small', { className: 'muted' }, `${acts.length}, newest first`))], true,
+        el('header', {}, el('p', {}, p.about), pickButton(acts)), el('div', { className: 'acts' }, ...acts.map(act))));
+    }
+    const bySister = {};
+    for (const o of acts) (bySister[o.from] ||= []).push(o);
+    return el('section', { className: 'pack' }, fold(`sisters|${state.cid}`, [el('h3', {}, `${p.title} `, el('small', { className: 'muted' }, `${acts.length}`))], false,
+      el('header', {}, el('p', {}, p.about)),
+      ...Object.entries(bySister).map(([cid, list]) => fold(`sister|${state.cid}|${cid}`, [el('b', {}, nameOf(cid)), el('small', { className: 'muted' }, ` ${list.length}, newest first`)], false,
+        el('div', { className: 'acts' }, ...list.map(act))))));
+  };
+  const blocks = packs.filter((p) => byPack[p.id]).map((p) => {
+    if (p.id === 'own' || p.id === 'sisters') return own(p);
+    const acts = byPack[p.id];
     return el('section', { className: 'pack' },
-      el('header', {}, el('h3', {}, p.title), el('p', {}, p.about), fresh.length ? pick : el('span', { className: 'muted' }, 'she has them all')),
-      el('div', { className: 'acts' }, ...acts.map((o) => {
-        const id = o.key + '|' + o.pack;
-        const box = el('input', { type: 'checkbox', checked: state.picked.has(id), disabled: !!o.have.length && !o.numbered });
-        box.addEventListener('change', () => { box.checked ? state.picked.add(id) : state.picked.delete(id); updatePlanButton(); });
-        return el('label', { className: `act${o.have.length ? ' have' : ''}` }, box,
-          el('span', { className: 'k' }, short(state.cid, o.name),
-            el('small', {}, `${o.seconds} s${o.have.length ? ` · has ${o.have.map((n) => short(state.cid, n)).join(', ')}` : ''}`),
-            o.hands ? el('span', { className: 'hands', tip: 'Uses a hand: if her pose holds something (a heart, crossed arms), edit the planned wording to say how she frees it and puts it back' }, 'uses a hand') : null),
-          el('span', { className: 't' }, o.text));
-      })));
+      el('header', {}, el('h3', {}, p.title), el('p', {}, p.about), pickButton(acts)),
+      el('div', { className: 'acts' }, ...acts.map(act)));
   });
   const add = el('button', { className: 'primary', type: 'button', id: 'planAdd', tip: 'Add the ticked actions to her plan: each gets its name, prompt and seed' });
   add.addEventListener('click', attempt(async () => {
-    const items = state.options.filter((o) => state.picked.has(o.key + '|' + o.pack)).map((o) => ({ pack: o.pack, key: o.key }));
+    const items = state.options.filter((o) => state.picked.has(optId(o))).map((o) => ({ pack: o.pack, key: o.key, ...(o.from ? { from: o.from } : {}) }));
     const { results, choom } = await api(`/api/choom/${state.cid}/plan`, { look: state.planLook, items });
     state.choom = choom;
     state.picked.clear();
@@ -636,7 +753,7 @@ function renderLibrary(packs) {
 function updatePlanButton() {
   const b = $('#planAdd');
   if (!b) return;
-  const n = state.options.filter((o) => state.picked.has(o.key + '|' + o.pack)).length;
+  const n = state.options.filter((o) => state.picked.has(optId(o))).length;
   b.disabled = !n;
   b.textContent = n ? `Plan ${n} clip${n > 1 ? 's' : ''} in ${state.planLook}` : 'Pick actions to plan';
 }
@@ -694,9 +811,17 @@ const outfitLook = (l) => l.includes('@') && waistUp(l);
 $('#manyPlan').addEventListener('toggle', attempt(async () => { if ($('#manyPlan').open) await renderMany(true); }));
 async function renderMany(reload = false) {
   if (!many.packs || reload) {
-    const lib = await api('/api/packs');
-    many.packs = lib.packs;
-    many.actions = lib.actions || [];
+    const [lib, own] = await Promise.all([api('/api/packs'), api('/api/own-moves')]);
+    // The library's packs, then each Choom's moves written by hand ("whisper in all her outfits"); one of
+    // them ticked for a sister's look plans it there with its wording.
+    many.packs = lib.packs.filter((p) => p.id !== 'own' && p.id !== 'sisters');
+    many.actions = (lib.actions || []).map((a) => ({ ...a, pid: `${a.pack}|${a.key}`, label: a.key }));
+    for (const cid of [...new Set(own.moves.map((m) => m.choom))].sort((x, y) => (x === state.cid ? -1 : y === state.cid ? 1 : x.localeCompare(y)))) {
+      many.packs.push({ id: `own:${cid}`, title: `${nameOf(cid)}'s own moves` });
+      const moves = own.moves.filter((m) => m.choom === cid).sort((x, y) => (y.when || '').localeCompare(x.when || ''));
+      many.actions.push(...moves.map((m) => ({ pack: `own:${cid}`, key: m.key, text: `${m.text}\n(made in ${m.looks.join(', ')})`, seconds: m.seconds,
+                                               pid: `own|${cid}:${m.key}`, label: m.family === 'full' ? `${m.key} (full body)` : m.key })));
+    }
     const chooms = await Promise.all(state.chooms.map((c) => api(`/api/choom/${c.id}`)));
     many.looks = Object.fromEntries(chooms.map((d) => [d.id, lookOrder(d.looks)]));
     many.names = Object.fromEntries(chooms.map((d) => [d.id, d.name]));
@@ -705,17 +830,17 @@ async function renderMany(reload = false) {
   // Actions, pack by pack: the pack's box ticks all of it.
   $('#manyPacks').replaceChildren(...many.packs.map((p) => {
     const acts = many.actions.filter((a) => a.pack === p.id);
-    const ids = acts.map((a) => `${a.pack}|${a.key}`);
+    const ids = acts.map((a) => a.pid);
     const all = el('input', { type: 'checkbox', checked: ids.length && ids.every((i) => many.picked.has(i)) });
     all.indeterminate = !all.checked && ids.some((i) => many.picked.has(i));
     all.addEventListener('change', () => { ids.forEach((i) => (all.checked ? many.picked.add(i) : many.picked.delete(i))); changed(); });
     return el('details', { className: 'many-pack', open: ids.some((i) => many.picked.has(i)) },
       el('summary', {}, el('label', { onclick: (e) => e.stopPropagation() }, all, ` ${p.title}`), el('small', { className: 'muted' }, ` ${acts.length}`)),
       ...acts.map((a) => {
-        const id = `${a.pack}|${a.key}`;
+        const id = a.pid;
         const box = el('input', { type: 'checkbox', checked: many.picked.has(id) });
         box.addEventListener('change', () => { box.checked ? many.picked.add(id) : many.picked.delete(id); changed(); });
-        return el('label', { className: 'many-act', tip: a.text }, box, ` ${a.key}`, el('small', { className: 'muted' }, ` ${a.seconds} s`));
+        return el('label', { className: 'many-act', tip: a.text }, box, ` ${a.label}`, el('small', { className: 'muted' }, ` ${a.seconds} s`));
       }));
   }));
   // Looks, Choom by Choom, with quick picks for outfits.
@@ -766,7 +891,7 @@ function renderPlanned() {
   const list = $('#planned');
   list.replaceChildren(
     ...(planned.length ? planned.map(plannedItem) : [el('p', { className: 'muted' }, 'Nothing planned. Pick actions on the left.')]),
-    queued.length ? el('p', { className: 'muted' }, queuedSummary(c)) : null);
+    ...(queued.length ? [el('p', { className: 'muted' }, queuedSummary(c))] : []));
   const minutes = Math.round(planned.reduce((a, n) => a + state.minutesPerClip * (c.clips[n].frames || 124) / 124, 0));
   const box = $('#renderBox');
   if (!planned.length) { box.replaceChildren(); return; }
@@ -809,7 +934,13 @@ function plannedItem(name) {
           renderPlanned();
         }),
       }, 'Save')));
-  return el('div', { className: 'planned-item' },
+  // Just re-rolled from On the glass: open, in view.
+  const opened = state.openPlanned === name;
+  if (opened) {
+    state.openPlanned = null;
+    editing.hidden = false;
+  }
+  const item = el('div', { className: `planned-item${opened ? ' opened' : ''}` },
     el('div', { className: 'row' }, el('code', {}, short(state.cid, name)), el('span', { className: 'tag' }, c.from), `${secondsOf(c)} s`,
       c.history?.length ? el('span', { className: 'tag' }, `take ${c.history.length + 1}`) : null),
     el('div', { className: 'muted' }, c.action || ''),
@@ -825,6 +956,8 @@ function plannedItem(name) {
         }),
         tip: c.history?.length ? 'Forget this re-roll and go back to the take she had' : 'Take it out of the plan',
       }, c.history?.length ? 'Keep the old take' : 'Remove')));
+  if (opened) requestAnimationFrame(() => { item.scrollIntoView({ block: 'center' }); text.focus(); });
+  return item;
 }
 
 // A clip's own pictures (Write your own clip), numbered as its wording says them: picture 1 is her.
@@ -855,7 +988,7 @@ function lintOf(prompt, loop) {
   if (!prompt) return [];
   const body = prompt.split('\noverall_soundscape')[0].replace(CAMERA, '');
   const out = LESSONS.filter(([re]) => re.test(body)).map(([re, why]) => `“${body.match(re)[0]}”: ${why}`);
-  if (!body.includes('plain pure black background')) out.push('say “a plain pure black background” in the look’s subject line');
+  if (!body.includes('plain pure black background') && !body.includes('fades into pure black all around')) out.push('say “a plain pure black background” in the look’s subject line');
   if (loop && !body.includes('ends exactly as she began')) out.push('a loop should end “exactly as she began”');
   return out;
 }
@@ -1020,8 +1153,13 @@ function kleinPrompt() {
   if (outfitKind() === 'redo') return TRUE_COLOR;
   if (outfitKind() === 'place') {  // pictures.place_prompt: from her full body, keeping what her main look keeps
     const own = (base.kleinKeep || state.choom.looks.main?.kleinKeep || '').replace(/[,. ]+$/, '');
-    return `Show her ${wearing || '…'}, her whole figure in frame with a little black space around her. `
-      + `Keep ${withClothes(own ? fullKeep(own) : '')} exactly as in the picture, with the same light on the same pure black background.`;
+    const idea = chosenIdea(), frame = (idea?.frame || 'her whole figure in frame').replace(/[. ]+$/, '');
+    const keepIt = withClothes(own ? fullKeep(own) : '');
+    if ($('#outfitScene').checked) {
+      return `Show her ${wearing || '…'}, ${frame}. ${idea?.setting || SCENE_SETTING} Keep ${keepIt} exactly as in the picture.`;
+    }
+    return `Show her ${wearing || '…'}, ${frame} with a little black space around her. `
+      + `Keep ${keepIt} exactly as in the picture, with the same light on the same pure black background.`;
   }
   if (outfitKind() === 'asleep') {
     return 'She has dozed off peacefully: her eyes are gently closed, her face is soft and relaxed, and her head tips slightly down and to one side. '
@@ -1029,6 +1167,42 @@ function kleinPrompt() {
   }
   return `Change her clothes: she now wears ${wearing || '…'}. Keep everything else exactly the same: ${keep}, the lighting, the framing, and the pure black background.`;
 }
+// Ready-made activities and places (activities.json): picking one fills in the form.
+const SCENE_SETTING = 'Warm light falls softly on her and fades smoothly into pure black all around, so that only black touches the edges of the picture.';
+let ideas = [];
+const chosenIdea = () => ideas.find((i) => i.id === $('#outfitIdea').value) || null;
+async function loadIdeas() {
+  if (ideas.length) return;
+  ideas = (await api('/api/activities')).presets;
+  $('#outfitIdea').replaceChildren(el('option', { value: '' }, 'My own (write it below)'),
+    ...ideas.map((i) => el('option', { value: i.id }, `${i.title}${i.start === 'outfit' ? ' (from an outfit\'s full body)' : ''}`)));
+}
+// The full body an idea starts from: her usual one, or for a workout an outfit's full body named by its
+// hint words, tried in order (Eve's full@dayspandex before anything "tank"), never one she wears only when
+// she chooses it (the glass would put it on for the workout), else her usual one.
+function ideaBase(idea, bases) {
+  const usual = bases.includes('full') ? 'full' : bases[0];
+  if (idea.start !== 'outfit') return usual;
+  const outfits = bases.filter((l) => l.startsWith('full@') && !l.startsWith('full@chosen'));
+  for (const w of idea.startHint || []) {
+    const hit = outfits.find((l) => l.includes(w));
+    if (hit) return hit;
+  }
+  return usual;
+}
+$('#outfitIdea').addEventListener('input', () => {
+  const idea = chosenIdea();
+  promptEdited = false;
+  if (idea) {
+    $('#outfitName').value = idea.name;
+    $('#outfitWearing').value = idea.does;
+    $('#outfitScene').checked = !!idea.scene;
+    const bases = [...$('#outfitBase').options].map((o) => o.value);
+    $('#outfitBase').value = ideaBase(idea, bases);
+  }
+  updateOutfitForm();
+});
+$('#outfitScene').addEventListener('input', () => { promptEdited = false; updateOutfitForm(); });
 // pictures.full_keep: her keep line without her pose, for a full body.
 const POSE_WORDS = /\b(arms?|hands?|fingers?|pose|posture|crossed|clasped|raised|at her sides?)\b/i;
 function fullKeep(keep) {
@@ -1051,9 +1225,11 @@ function updateOutfitForm() {
   $$('#newOutfit .when').forEach((e) => { e.hidden = kind !== 'outfit'; });
   $$('#newOutfit .named').forEach((e) => { e.hidden = kind !== 'outfit' && kind !== 'place'; });
   $$('#newOutfit .redo').forEach((e) => { e.hidden = kind !== 'redo'; });
+  $$('#newOutfit .place').forEach((e) => { e.hidden = kind !== 'place'; });
+  if (kind === 'place') loadIdeas().catch(() => {});
   $$('#newOutfit .klein').forEach((e) => { e.hidden = kind === 'gone'; });
   $('#newOutfit .wearing').hidden = kind === 'asleep' || kind === 'redo' || kind === 'gone';
-  $('#outfitNameLabel').textContent = kind === 'place' ? 'Name of the place' : 'Name (optional)';
+  $('#outfitNameLabel').textContent = kind === 'place' ? 'Name (dumbbells, patio)' : 'Name (optional)';
   $('#outfitName').placeholder = kind === 'place' ? 'campfire' : 'dress';
   $('#outfitWearingLabel').textContent = kind === 'full' ? 'What she wears below the waist (optional; her top is kept)'
     : kind === 'place' ? 'Where she is and how' : 'She now wears';
@@ -1076,14 +1252,14 @@ function renderOutfitForm() {
   const withPicture = lookOrder(looks).filter((l) => looks[l].picture);
   // A place starts from her full body (or a waist-up look): it's framed wide like the full body.
   // An outfit can start from a full body too (its clothes changed on her whole figure, for a full-body change).
-  const bases = withPicture.filter((l) => kind === 'redo' || (kind === 'place' && l === 'full') ||
+  const bases = withPicture.filter((l) => kind === 'redo' || (kind === 'place' && l.split('@')[0] === 'full') ||
                                           (kind === 'outfit' && l.split('@')[0] === 'full') ||
                                           (waistUp(l) && (kind !== 'asleep' || !l.includes('@') || /^(night|chosen)/.test(l.split('@')[1]))));
   const wasTarget = $('#outfitTarget').value;
   $('#outfitTarget').replaceChildren(...withPicture.map((l) => el('option', { value: l, selected: l === (wasTarget || state.planLook) }, l)));
   const home = state.choom.sequence.length ? state.choom.clips[state.choom.sequence[0]].from : bases[0];
   const wardrobeBase = bases.find((l) => state.choom.looks[l].wardrobe) || home;
-  const was = kind === 'place' && bases.includes('full') ? 'full' : $('#outfitBase').value;
+  const was = kind === 'place' ? (chosenIdea() ? ideaBase(chosenIdea(), bases) : bases.includes($('#outfitBase').value) ? $('#outfitBase').value : 'full') : $('#outfitBase').value;
   $('#outfitBase').replaceChildren(...bases.map((l) => el('option', { value: l, selected: l === (was || wardrobeBase) }, l)));
   if (!$('#outfitWhen').options.length) $('#outfitWhen').replaceChildren(...Object.entries(WHEN).map(([k, v]) => el('option', { value: k }, v)));
   updateOutfitForm();
@@ -1143,11 +1319,12 @@ $('#outfitMake').addEventListener('click', attempt(async () => {
     kind: outfitKind(), base: $('#outfitBase').value, when: $('#outfitWhen').value, name: $('#outfitName').value,
     wearing: $('#outfitWearing').value, prompt: $('#outfitPrompt').value, count: Number($('#outfitCount').value),
     look: $('#outfitTarget').value, upload: file ? await readFile(file) : undefined,
+    ...(outfitKind() === 'place' ? { scene: $('#outfitScene').checked, activity: chosenIdea()?.id || undefined } : {}),
     refs: refs.length ? await Promise.all(refs.map(readFile)) : undefined,
   })).choom;
   $('#outfitUpload').value = ''; $('#outfitRefs').value = ''; $('#outfitRefsHint').hidden = true;
   promptEdited = false;
-  $('#outfitWearing').value = ''; $('#outfitName').value = '';
+  $('#outfitWearing').value = ''; $('#outfitName').value = ''; $('#outfitIdea').value = ''; $('#outfitScene').checked = false;
   toast('Klein is making the pictures; they show up here when done (after any render ahead of it)');
   renderLooks();
   pollJobs();
@@ -1194,6 +1371,11 @@ function refillOutfitForm(look, d) {
     const when = d.when || Object.keys(WHEN).find((w) => part.startsWith(w)) || $('#outfitWhen').value;
     $('#outfitWhen').value = when;
     $('#outfitName').value = d.name ?? part.slice(when.length);
+  }
+  if (d.kind === 'place') {  // the place's name, its setting and the idea it came from
+    $('#outfitName').value = d.name || look;
+    $('#outfitScene').checked = !!d.scene;
+    loadIdeas().then(() => { $('#outfitIdea').value = d.activity || ''; }).catch(() => {});
   }
   $('#outfitWearing').value = d.wearing || '';
   if (d.count) $('#outfitCount').value = String(d.count);
@@ -1395,8 +1577,21 @@ $('#pauseConfirm').addEventListener('click', attempt(async () => {
 
 // Clean-up: what nothing uses any more, and disk use.
 const CLEAN_WORDS = { dropped: 'Videos of dropped clips', takes: 'Old takes (re-rolls replaced them)', drafts: 'Klein versions no look is waiting on',
-  queues: 'Finished render queues', caches: 'Cut-out and depth caches of clips she no longer has' };
+  queues: 'Finished render queues', caches: 'Cut-out and depth caches of clips she no longer has',
+  depth: 'Depth maps of clips already on the glass' };
 const gb = (b) => (b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.max(0, Math.round(b / 1e6))} MB`);
+const cleanDay = (t) => new Date(t * 1000).toLocaleDateString([], { month: 'short', day: 'numeric' });
+const cleanSpan = (v) => (v.oldest ? (cleanDay(v.oldest) === cleanDay(v.newest) ? cleanDay(v.oldest) : `${cleanDay(v.oldest)} to ${cleanDay(v.newest)}`) : '');
+const cleanBy = (by, fmt) => Object.entries(by || {}).filter(([, n]) => n).map(([cid, n]) => `${cid[0].toUpperCase() + cid.slice(1)} ${fmt(n)}`).join(', ');
+// What each one is, and what deleting it costs (Donny, Nov 9: "give more detail").
+const CLEAN_WHY = {
+  dropped: () => 'Clips you dropped in Review. Once deleted, a dropped clip can\'t be watched or brought back.',
+  takes: () => 'Takes a re-roll replaced, older than the days below. Once deleted, they\'re gone from Earlier takes.',
+  drafts: (v) => `${v.count - (v.folders || 0)} pictures Klein made that weren't picked (${cleanBy(v.by, String)}), and ${v.folders || 0} small folders of Klein's settings and logs, ${cleanSpan(v)}. The picture picked for a look is a copy of its own and stays. Once deleted, you can't go back and pick another version from an old batch.`,
+  queues: (v) => `What each render handed Wan2GP, ${cleanSpan(v)}: its list of clips and a copy of every start and end picture. Nothing reads them after the render: every clip keeps its prompt, seed and pictures in her project, and a re-roll makes a new queue. Each render's log and clip list stay.`,
+  caches: () => 'Left by clips that are dropped or no longer in her project. They\'re made again only if such a clip comes back.',
+  depth: (v) => `Depth Anything's depth for every frame of each clip built onto the glass, about 300 MB a clip (${cleanBy(v.by, gb)}). The glass never reads them: it plays the built videos. A build that has to make a clip again makes its depth again, about 20 s a clip. Each Choom's main clip keeps hers, and builds now drop these by themselves.`,
+};
 async function surveyCleanup() {
   $('#cleanupGo').disabled = true;
   $('#cleanupGo').textContent = 'Delete the ticked';
@@ -1408,7 +1603,8 @@ async function surveyCleanup() {
       const ticked = $$('#cleanupList input:checked');
       $('#cleanupGo').disabled = !ticked.length;
     } }),
-    ` ${CLEAN_WORDS[k]}: ${r[k].count ? `${r[k].count} · ${gb(r[k].bytes)}` : 'nothing'}`)));
+    el('span', {}, ` ${CLEAN_WORDS[k]}: ${r[k].count ? `${r[k].count} · ${gb(r[k].bytes)}` : 'nothing'}`,
+       r[k].count ? el('small', { className: 'why' }, CLEAN_WHY[k](r[k])) : null))));
   state.cleanup = r;
 }
 $('#cleanupButton').addEventListener('click', attempt(async () => { $('#cleanupDialog').showModal(); await surveyCleanup(); }));

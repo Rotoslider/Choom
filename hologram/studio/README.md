@@ -92,7 +92,7 @@ About one clip in six fails, so watch them all.
   cards. The note field records why a clip was dropped or what to fix.
 - **Re-roll** puts the clip back in the plan under the same name with a new seed. You can change its
   wording or length there before rendering it again. The old take is kept in the clip's history and
-  its file in `clips/takes/`.
+  its file in `clips/takes/`. If it was on the glass, keeping the new take puts it back on.
 - **Earlier takes** shows on a re-rolled clip's card once the new take has landed: **▶** watches an
   old one, **Use it** brings it back. The old take becomes the clip again, with its seed, status
   (kept, dropped or to review) and note, and goes back on the glass if it was on the glass when it
@@ -116,6 +116,9 @@ quiet moments she has in it before one repeats.
   stays first.
 - Or tap the **+** on a clip to put it on the glass, **−** to take it off (it shows on hover, and
   always on a phone or tablet, where there's no drag and drop).
+- **↻** (top right of a clip, on hover) re-rolls it, as **R** does in Review, and opens it in Plan &
+  render with its wording ready to change. A clip on the glass comes off at the next build and goes
+  back on by itself when you keep its new take; **Keep the old take** there undoes the re-roll.
 - **Put all on the glass** adds a look's kept clips at once.
 - Hover over a clip to play it; double-click to watch it large.
 - The bar at the top says what changed since the last build, and anything that has to be fixed
@@ -128,6 +131,14 @@ quiet moments she has in it before one repeats.
   finished. A build reads her sequence when it starts, so there is never more than one waiting build
   per Choom: clicking again while one waits adds nothing (a new time replaces the old one), and changes
   made while a build runs go into the next one.
+- **Full body while she's quiet** (on each full-body look with quiet clips on the glass): how much of her
+  quiet time the glass shows her whole figure in it, and so how long she stays there. Left alone, the
+  glass cuts to it on about one quiet clip in fourteen and straight back after one clip. At 30% she stays
+  about two clips at a time, from 50% about four; the line under it says how soon her quiet clips there
+  come round again (an outfit's full body with only a few clips repeats fast at a high setting).
+  Talking or listening always cuts back to waist-up, and the stage in a group room never cuts to it.
+  It's saved in her project and in `portraits/<id>/prefs.json`, which the glass reads again every
+  minute, so it needs no build. **As before** goes back to the glass's own.
 - **Home pose** (for a Choom with a relaxed look): the pose she falls asleep from, wakes into and
   changes clothes in. Aloy's is relaxed, hand down. It's kept in her project (`"home"`); clips planned
   from then on take it, and the next build puts it on the glass.
@@ -170,8 +181,22 @@ holds something (Optic's heart, crossed arms).
 | Picture looks | turning to a picture beside her (usual looks and outfits; an outfit without them glances its way with a quiet clip) |
 | Pose changes | moving between her two waist-up poses; shown only for a Choom with a second pose (Aloy's `relaxed`), which the Studio can't make yet |
 | A place | in a place look: her loop there (she can talk in it), listening, quiet moments, and the clips to sit down from her full body (`to_`) and get up (`from_`); edit those two to say what appears and goes (the fire flickering up as she sits) |
+| This activity's own clips | in a place started from a ready-made idea: its own loop, getting there and back (picking up the dumbbells, the patio fading in around her) and what she does there; they stand in for the place pack's clips by the same name |
 | Walking on and off | in her full body (walk off, walk on) and main look (vanish, appear), once she has the empty glass; her usual clothes only |
 | Campfire circle | in a seat look (`circleside`, `circle`): her loop to talk over, listening (toward the middle; a facing seat each way), and quiet moments by the fire (warming her hands palms down, a sip from her mug). Everyone in a group room needs at least the loop for the room to sit around the fire |
+
+**Her own moves** (at the top of the library) are the moves written for her by hand, with Write your
+own clip or by Claude through the Studio (Genesis's whisper and beckon, Eve's goodnight kiss), offered in
+every look they fit: a waist-up move in her waist-up looks and outfits, a full-body one in her full
+bodies. They're listed newest first; each says when it was made and in which looks, or which clip she
+has for it here. The wording is the one from her usual clothes when there is one, so it fits most
+outfits; a move made for one outfit's clothes says so (`check: sweater`, `check: collar, jacket`) where
+the words name something this look doesn't have. Plan it, then **Edit** it in the planned list to make it
+fit. Its length and pictures come along.
+
+**Her sisters' moves** (at the bottom, folded away, one fold per sister) are the other Chooms' moves
+written by hand, to borrow. Words about something only that sister has are marked the same way (Optic's
+kiss: `check: heart, agate`). If she has a move of her own by the same name, the sister's isn't listed.
 
 **Plan for many looks at once** plans the same library actions in many looks in one step, for
 instance Expressions and Oops in every outfit. Tick actions (a pack's box ticks all of it) and looks
@@ -179,7 +204,9 @@ instance Expressions and Oops in every outfit. Tick actions (a pack's box ticks 
 look shows how many clips it would get, how many of those actions it already has, and any it can't
 have yet for want of a picture, with the total and its render time. Nothing is planned until you
 click **Plan N clips**. A look never gets an action it already has (no numbered copies), so planning
-the same set again plans only what's new. The clips then sit in each Choom's Planned list; render
+the same set again plans only what's new. Each Choom's own moves are listed there too
+(*Genesis's own moves*): tick whisper and her outfits to give her the whisper in all of them, or tick
+another Choom's looks to give it to her, with Genesis's wording. The clips then sit in each Choom's Planned list; render
 them from there.
 
 **Write your own clip** takes any move that ends where it began: a dance, turning her back to you and
@@ -311,10 +338,20 @@ fails and names the files instead of quietly planning the clips again.
 - old takes older than a number of days
 - Klein versions no look is waiting on
 - finished render queues
-- cut-out and depth caches of clips she no longer has (about 230 MB a clip)
+- cut-out and depth caches of clips she no longer has (about 300 MB a clip)
+- depth maps of clips already on the glass
 
-Tick what to delete; a second click confirms. Never deleted: anything a kept, planned, queued or
-rendered clip uses, a look's picture, versions a look is waiting on, or a queue a job still uses.
+Each line says what it is and what deleting it costs. Tick what to delete; a second click confirms.
+Never deleted: anything a kept, planned, queued or rendered clip uses, a look's picture, versions a
+look is waiting on, a queue a job still uses, or the depth of a Choom being built.
+
+**Depth maps.** A build runs Depth Anything on every frame of a new clip and keeps the result beside
+it (`alive_depth_<clip>.npy`, about 300 MB for a seven-second clip; the built video is 5 to 9 MB). The
+glass never reads them. They only save the 20 seconds a clip takes to make its depth when a build has
+to make a clip again unchanged (a new build version, or her main clip changed), so a build now deletes
+them once the clips are on the glass, except her main clip's, which every build reads. Set
+`"keep_depth": true` in `studio.json` to keep them. A re-rolled clip, or an earlier take brought
+back, has a new video, so its depth is made again either way.
 
 **A morning summary on Signal** (optional): when a scheduled render or build, or a run of them, has
 finished or failed, the Studio sends one short message through the Choom app, in one Choom's Signal
@@ -374,11 +411,30 @@ it, the page asks before deleting them with it. Both ask in the page before doin
 | An outfit | her in new clothes, in the pose of the look it starts from (`main@eveningdress`); started from one of her full bodies, that outfit's full body in the same pose and framing (`full@chosenunder` from `full@nightwarm`), for a change of clothes in her whole figure |
 | Full body | her head to toe: `full` from her usual look, `full@<outfit>` from an outfit |
 | Asleep | her with her eyes closed, for the sleep clips: `asleep` from her usual clothes, `asleep@<outfit>` from a night outfit or a chosen one |
-| A place | somewhere she goes and stays a while, from her full body: name it (`campfire`) and say where she is and how ("sitting on the ground beside a small campfire, her knees drawn up and her hands held out over the flames, palms down, looking up at the viewer"). By a fire, hands warm palms down and move a little; palms up looks like holding something out (Genesis's first campfire). A pass on a picture keeps her hands as they are (Genesis's stayed palms up through three, even with a palms-down picture as the reference); what turned them was a clip from the picture alone, no end picture, in which she turns them over, and its last frame sent from the computer as a new picture for the look ("keep this picture exactly as it is, only sharper") |
+| An activity or place | somewhere she goes and stays a while, from her full body or one of her outfits' full bodies: working out with dumbbells in her spandex, a porch swing, a stone patio under the stars. **Start from an idea** (below) fills it in, or name it (`campfire`) and say where she is and how ("sitting on the ground beside a small campfire, her knees drawn up and her hands held out over the flames, palms down, looking up at the viewer"). By a fire, hands warm palms down and move a little; palms up looks like holding something out (Genesis's first campfire). A pass on a picture keeps her hands as they are (Genesis's stayed palms up through three, even with a palms-down picture as the reference); what turned them was a clip from the picture alone, no end picture, in which she turns them over, and its last frame sent from the computer as a new picture for the look ("keep this picture exactly as it is, only sharper") |
 | The empty glass | a black picture for walking on and off (`gone`); made at once, no Klein |
 | A seat at the campfire circle | made as A place named `circleside` (sitting, turned three-quarters toward the left of the picture: an end seat) or `circle` (facing the viewer: a middle seat), from her full body. Say "warm orange light falls on her from the lower left" but leave the word campfire out of the Klein prompt, or Klein draws a fire in (the glass has its own); a fire that slips in comes out with a second pass on that draft ("Remove the flames and the glowing ground ...", started from the draft). Clothes can come from a picture added as a reference (her camping clothes from the trip photo). Around the fire the Chooms are realistic: every seat has natural skin (Genesis's from a pass on the draft with her plain picture as the reference; Optic's without her cyan outline or her heart), and the glass adds no motes there. A face that drifts (Klein starts from her small full-body face) comes back with a pass on the draft that has her main picture's face, cropped close, as the reference (Eve's). A side seat made from her facing one turns her head more than her body; that's enough for the glass. After picking the picture, check the look's subject: it's made from her full body's, so rewrite it for the seat's clothes and skin, and keep the word campfire out of it too. Something in her hands (a mug, as in the photo, or Genesis's notebook) gives her hands a place while she talks; the pack's warm-hands clip has her let go with a hand and hold it palms down toward the warmth, so say how in its wording before rendering |
 | A new picture for a look she has | replaces a look's picture, for a truer colour or a better likeness |
 
+- **Start from an idea** (An activity or place): a ready-made one from `activities.json` fills in
+  the form: its name, where she is and how, which full body it starts from, whether it has a setting,
+  and Klein's instruction. It also brings its own clips to Plan & render (**This activity's own
+  clips**): the loop she talks over, how she gets there and back, and what she does there (curls and a
+  shoulder press with the dumbbells, looking up at the stars on the patio). The ideas: on the patio at
+  night, a porch swing, dumbbells, an exercise bike, yoga on a mat, reading in an armchair. A workout
+  starts from an outfit's full body whose name sounds like one (`full@dayspandex`); before she goes
+  there, the glass puts that outfit on (with its change clip if it has one), and she comes back in it.
+  Everything in the form can still be changed, and new ideas can be added to `activities.json`
+  (`does`, `frame`, `setting`, `clips`).
+- **A setting around her** (An activity or place): something around her besides black, a stone
+  patio, a porch swing, a reading lamp's pool of light, that fades into pure black before the edges
+  of the picture. A lit edge shows on the glass as a hard line, and Klein, even when asked, can let the
+  paving run off the bottom, so the picture you pick gets its edges faded to black (the bottom only a
+  little, so her feet keep their light). Its subject says she is "in a pool of soft warm light that
+  fades into pure black all around" instead of on a plain black background. Genesis's patio took two
+  rounds: the first had a house wall and a lit window running off the left edge; a second pass from the
+  best of them ("take away the wall and the window … only black touches the left, right and bottom
+  edges") gave a lit island of flagstones under the stars.
 - **Starts from:** the picture Klein edits. Any of her waist-up looks works, an outfit too (Genesis's
   night looks start from her plain look, without her motes). Its look also gives the new look its
   subject, keep line and ending. An outfit can also start from one of her full bodies: Klein changes
@@ -517,6 +573,17 @@ has a button to start making it: **Write it** opens Write your own clip, and **N
 look with her words filled in. **Made it** moves a wish to her list of wishes that came true, folded
 away under the open ones (`portraits/<id>/wishes_done.json`, with the day it was made); **Let go**
 takes one off the list if it won't be made.
+
+**Ask her for ideas for <look>** (beside her wishes, for the look chosen in Plan & render) asks her what
+she'd love to do on the glass in that look. The Choom app (`/api/hologram/ideas`, Choom
+`lib/glass-ideas.ts`) puts a request in her follow-up queue, due at once, so the Signal bridge wakes her
+within a minute, telling her Donny sent it from Glass Studio (not a note of hers). She is told the look
+in his words (*the look where you wear a soft heather-grey knit sweater with a loose crew neck, waist
+up*; a place by where she is there), that each clip starts and ends on the same picture of her, and to
+send three to six ideas with `glass_wish`. They land on this list, each with **Write it**, and she
+tells him what she sent on Signal. A second click while one is waiting adds nothing. It names a look in
+her closet, never what she has on now, and isn't offered for the empty glass, her seats at the campfire
+circle or the clothes that are Donny's alone. It needs `notify.url` in `studio.json` (the Choom app).
 
 ![Her wishes on the Plan page](docs/images/wishes.jpg)
 

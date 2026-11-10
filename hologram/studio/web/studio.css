@@ -123,7 +123,7 @@ button:focus-visible, select:focus-visible, textarea:focus-visible, input:focus-
 .build-bar .changes { flex: 1; min-width: 220px; }
 .build-bar .problem { color: var(--warn); }
 .look-block { margin-bottom: 22px; }
-.look-head { display: flex; gap: 12px; align-items: center; margin-bottom: 8px; }
+.look-head { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-bottom: 8px; }
 .look-head img { width: 36px; height: 48px; object-fit: cover; border-radius: 4px; background: #000; }
 .look-head h3 { font-size: 15px; font-family: var(--mono); font-weight: 500; }
 .look-head .stat { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
@@ -163,6 +163,14 @@ button:focus-visible, select:focus-visible, textarea:focus-visible, input:focus-
 .act .t { grid-column: 2; color: var(--muted); font-size: 12.5px; }
 .act.have .k { color: var(--muted); }
 .act .hands { color: var(--warn); font-size: 11px; margin-left: 6px; font-family: var(--sans); }
+.pack-fold > summary { cursor: pointer; padding: 10px 14px; list-style-position: inside; }
+.pack-fold > summary h3 { display: inline; font-size: 15px; }
+.pack-fold > summary small { font-weight: normal; font-size: 12.5px; }
+.pack-fold[open] > summary { border-bottom: 1px solid var(--line); }
+.pack-fold > header { display: flex; gap: 12px; align-items: baseline; padding: 10px 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.pack-fold > header p { margin: 0; color: var(--muted); font-size: 13px; flex: 1; min-width: 200px; }
+.pack-fold > header button { padding: 3px 10px; font-size: 12px; }
+.pack-fold .pack-fold > summary { padding: 8px 14px; font-size: 13.5px; }
 .plan-actions {
   position: sticky; bottom: 0; display: flex; justify-content: end; gap: 10px; margin-top: 8px; padding: 12px 0;
   background: linear-gradient(transparent, var(--bg) 35%);
@@ -325,7 +333,9 @@ button.small { padding: 3px 10px; font-size: 12px; }
 .small-dialog h2 { font-size: 18px; margin: 0 0 10px; }
 .small-dialog p { margin: 0 0 12px; }
 .cleanup-list { display: grid; gap: 8px; margin: 12px 0; }
-.cleanup-list .check { display: flex; gap: 8px; align-items: center; font-size: 14px; }
+.cleanup-list .check { display: flex; gap: 8px; align-items: flex-start; font-size: 14px; }
+.cleanup-list .check input { margin-top: 3px; }
+.cleanup-list .why { display: block; color: var(--muted); font-size: 12.5px; line-height: 1.4; margin-top: 2px; }
 .cleanup-days { display: flex; gap: 8px; align-items: center; color: var(--muted); font-size: 13px; margin-bottom: 8px; }
 .cleanup-days input { width: 5em; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; }
 .build-actions { display: grid; gap: 8px; justify-items: end; }
@@ -338,5 +348,15 @@ button.primary.danger { background: var(--warn); }
 .look-card .row { flex-wrap: wrap; }
 /* On the glass: a tap puts a clip on or takes it off (no drag and drop on a phone) */
 .tile .flip { position: absolute; left: 3px; top: 3px; z-index: 2; width: 22px; height: 22px; padding: 0; border-radius: 50%; border: 1px solid var(--line-2); background: #000b; color: var(--fg); font: 600 14px/1 var(--sans); cursor: pointer; opacity: 0; transition: opacity .15s; }
+.tile .flip.reroll { left: auto; right: 3px; font-size: 13px; }
 .tile:hover .flip, .tile .flip:focus-visible { opacity: 1; }
+.planned-item.opened { outline: 2px solid var(--tint); outline-offset: 2px; }
 @media (hover: none) { .tile .flip { opacity: 1; } }
+
+/* On the glass: how much of her quiet time a full body gets */
+.full-share { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; flex-basis: 100%; font-size: 13px; margin-top: 4px; }
+.full-share input[type=range] { width: 200px; accent-color: var(--tint); }
+.full-share .muted { font-size: 12.5px; }
+
+/* Plan & render: her wishes' heading with Ask her for ideas */
+.wishes-head { justify-content: space-between; align-items: center; }

@@ -11,7 +11,8 @@ a page still running on the old alive.json never plays a new video with an old m
 page has reloaded, `make_alive.py aloy --prune [--keep-file KEEP]` deletes the videos alive.json no
 longer lists and, with a keep file (one clip name per line), the cut-out and depth caches of clips not
 in it. `--home relaxed` names her home pose (tools/clip_roles.py); HOLOGRAM_PORTRAITS moves the
-portraits folder (a test Studio's).
+portraits folder (a test Studio's). `--drop-depth` deletes the depth cache of every clip it has built
+once alive.json is written, except her main clip's (the Studio's default; see stamp()).
 """
 import json
 import math
@@ -267,6 +268,9 @@ def main():
         i = sources.index("--home")
         home = sources[i + 1]
         del sources[i:i + 2]
+    drop_depth = "--drop-depth" in sources
+    if drop_depth:
+        sources.remove("--drop-depth")
     if sources[:1] == ["--prune"]:
         return prune(cid, sources[2] if sources[1:2] == ["--keep-file"] else None)
     folder = PORTRAITS / cid
@@ -282,9 +286,21 @@ def main():
         return folder / f"alive_masks_{stem}.npz", folder / f"alive_depth_{stem}.npy"
 
     def stamp(src):
+        """What a clip was built from: the times of its video, its depth cache and its cut-out. A depth
+        cache is about 300 MB a clip (3,538 of them took 826 GB on 2026-11-09) and only saves Depth
+        Anything's 20 s when a clip is built again unchanged, so a build can drop it (--drop-depth)
+        and Clean up can delete it. A clip whose cache is gone counts with the time its cache had when
+        it was built, so it isn't "changed" (before this, a missing cache made every clip rebuild). A
+        clip that really changed has a new video time, and its depth is made again. Her main clip's
+        cache always stays: it's read on every build, and a new one would change her depth range and
+        rebuild every clip."""
         cut_file, depth_file = files(src)
-        return [round(Path(src).stat().st_mtime), round(depth_file.stat().st_mtime) if depth_file.exists() else 0,
-                round(cut_file.stat().st_mtime) if cut_file.exists() else 0]
+        if depth_file.exists():
+            depth = round(depth_file.stat().st_mtime)
+        else:
+            was = (built_before.get(Path(src).name) or {}).get("built") or []
+            depth = was[4][1] if len(was) > 4 and isinstance(was[4], list) and len(was[4]) == 3 else 0
+        return [round(Path(src).stat().st_mtime), depth, round(cut_file.stat().st_mtime) if cut_file.exists() else 0]
 
     def prepare(src):
         """Her cut-out (bit-packed) and raw depth (read from disk as needed) for one clip; Depth
@@ -466,6 +482,14 @@ def main():
     part.write_text(json.dumps(meta))
     part.replace(meta_file)
     print(f"wrote alive.json: {len(meta_clips)} clips ({encoded} encoded), focus {focus:.3f}")
+    if drop_depth:  # only now: a build stopped before alive.json is written finds them all again
+        dropped = 0
+        for src in sources[1:]:
+            depth_file = files(src)[1]
+            if depth_file.exists():
+                dropped += depth_file.stat().st_size
+                depth_file.unlink()
+        print(f"dropped the depth caches of the clips built ({dropped / 1e9:.1f} GB); her main clip's stays")
 
 
 if __name__ == "__main__":

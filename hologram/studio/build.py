@@ -3,7 +3,9 @@ when she's quiet, then the old videos are cleared away.
 
     1. tools/make_alive_masks.py   U2-Net cut-outs (Wan2GP's Python), new clips only
     2. tools/make_alive.py         depth, mouth tracking, the relief videos and alive.json (Forge
-                                   Neo's Python); only new or changed clips are encoded
+                                   Neo's Python); only new or changed clips are encoded, and then
+                                   their depth caches are dropped (about 300 MB a clip; studio.json
+                                   "keep_depth": true keeps them)
     3. her closet                  closet.json, what she can ask the glass for
     4. a relaunch job (jobs.py)    tools/relaunch_when_quiet.sh once no Choom is talking, tried again
                                    until the glass is quiet; then make_alive.py --prune deletes videos
@@ -18,7 +20,7 @@ import re
 import subprocess
 import time
 
-from config import CLIPS, FORGE_PYTHON, HOLOGRAM, PICTURES, PORTRAITS, PROJECTS, RUN_TOOLS as TOOLS, WAN2GP, WAN2GP_PYTHON
+from config import CFG, CLIPS, FORGE_PYTHON, HOLOGRAM, PICTURES, PORTRAITS, PROJECTS, RUN_TOOLS as TOOLS, WAN2GP, WAN2GP_PYTHON
 from project import Project, base_of, editing
 
 LOGS = PROJECTS / "logs"
@@ -72,8 +74,8 @@ def steps(proj):
     """The build's tool runs, in order: (name, command, what its process's command line contains)."""
     sources = [str(CLIPS / f"{n}.mp4") for n in proj.sequence]
     return [("masks", [str(WAN2GP_PYTHON), str(TOOLS / "make_alive_masks.py"), proj.id, *sources], "make_alive_masks.py"),
-            ("reliefs", [str(FORGE_PYTHON), str(TOOLS / "make_alive.py"), proj.id, "--home", home_of(proj), *sources],
-             "make_alive.py")]
+            ("reliefs", [str(FORGE_PYTHON), str(TOOLS / "make_alive.py"), proj.id, "--home", home_of(proj),
+                         *([] if CFG.get("keep_depth") else ["--drop-depth"]), *sources], "make_alive.py")]
 
 
 def masks_todo(proj):
@@ -109,6 +111,7 @@ def finish(cid, clips, started):
     build count), and the build recorded."""
     with editing(cid) as p:
         p.write_closet()
+        p.write_prefs()
         p.data["built"] = {"time": time.strftime("%Y-%m-%dT%H:%M:%S"), "clips": clips,
                            "minutes": round((time.time() - started) / 60, 1)}
 

@@ -6,9 +6,14 @@
     queues    render queues in queue/ that no clip or job uses any more (the zips; logs and plans stay)
     caches    cut-out and depth caches (portraits/<id>/alive_masks_*.npz, alive_depth_*.npy) of clips
               she no longer has, or has dropped
+    depth     depth caches of clips already built onto the glass from the video they have now, except
+              her main clip's: about 300 MB a clip, 826 GB in all on 2026-11-09. The glass never reads
+              them; a build that has to make a clip again (a new build version, her main clip changed)
+              makes its depth again in about 20 s. Builds drop them themselves from 2026-11-09 on
+              (make_alive.py --drop-depth), so this is for the ones made before.
 
 Never touched: anything a kept, planned, queued or rendered clip uses, a look's picture, a draft a
-look is waiting on, a queue a waiting, running or paused job uses.
+look is waiting on, a queue a waiting, running or paused job uses, the depth of a Choom being built.
 """
 import json
 import shutil
@@ -18,7 +23,7 @@ from pathlib import Path
 from config import CLIPS, PICTURES, PORTRAITS, QUEUES, WORKSPACE
 from project import Project
 
-CATEGORIES = ("dropped", "takes", "drafts", "queues", "caches")
+CATEGORIES = ("dropped", "takes", "drafts", "queues", "caches", "depth")
 LIVE = ("planned", "queued", "rendered", "kept")
 
 
@@ -35,8 +40,28 @@ def du(path):
         return 0
 
 
-def survey(takes_days=30, active_queues=(), active_runs=()):
-    """{category: {"files": [paths], "bytes": n}} of what could go, and disk use."""
+def built_depth(folder):
+    """Her depth caches the glass's build no longer needs: clips in alive.json built from the video they
+    have now (so a build counts them unchanged, see make_alive.stamp), except her main clip's."""
+    try:
+        meta = json.loads((folder / "alive.json").read_text())
+    except (OSError, ValueError):
+        return []
+    main = Path((meta.get("rangeFrom") or [""])[0]).stem
+    out = []
+    for c in meta.get("clips", []):
+        stem, built = Path(c.get("source", "")).stem, c.get("built") or []
+        f, src = folder / f"alive_depth_{stem}.npy", CLIPS / c.get("source", "")
+        if not stem or stem == main or not f.exists() or not src.exists():
+            continue
+        if len(built) > 4 and isinstance(built[4], list) and built[4][:1] == [round(src.stat().st_mtime)]:
+            out.append(f)
+    return out
+
+
+def survey(takes_days=30, active_queues=(), active_runs=(), building=()):
+    """{category: {"files": [paths], "bytes": n, "oldest", "newest"}} of what could go, and disk use.
+    building: Chooms whose build is running (their depth caches stay)."""
     projects = [Project.load(cid) for cid in Project.ids()]
     clips = {n: c for p in projects for n, c in p.clips.items()}
     live = {n for n, c in clips.items() if c["status"] in LIVE}
@@ -80,15 +105,24 @@ def survey(takes_days=30, active_queues=(), active_runs=()):
             for f in folder.glob(pattern):
                 if f.stem.removeprefix(prefix) not in mine:
                     out["caches"].append(f)
-    report = {k: {"files": sorted(str(f) for f in v), "count": len(v), "bytes": sum(du(f) for f in v)} for k, v in out.items()}
+        if p.id not in building:
+            out["depth"] += [f for f in built_depth(folder) if f not in out["caches"]]
+    report = {}
+    for k, v in out.items():
+        times = [f.stat().st_mtime for f in v if f.exists()]
+        report[k] = {"files": sorted(str(f) for f in v), "count": len(v), "bytes": sum(du(f) for f in v),
+                     "oldest": min(times, default=None), "newest": max(times, default=None)}
+    report["drafts"]["folders"] = sum(1 for f in out["drafts"] if f.is_dir())
+    report["drafts"]["by"] = {cid: sum(1 for f in out["drafts"] if f.is_file() and f.name.startswith(cid + "_")) for cid in Project.ids()}
+    report["depth"]["by"] = {cid: sum(du(f) for f in out["depth"] if f.parent.name == cid) for cid in Project.ids()}
     free = shutil.disk_usage(WORKSPACE)
     report["disk"] = {"workspace": du(WORKSPACE), "portraits": du(PORTRAITS), "free": free.free, "total": free.total}
     return report
 
 
-def clean(categories, takes_days=30, active_queues=(), active_runs=()):
+def clean(categories, takes_days=30, active_queues=(), active_runs=(), building=()):
     """Delete what survey() lists for these categories; returns {category: bytes freed}."""
-    report = survey(takes_days, active_queues, active_runs)
+    report = survey(takes_days, active_queues, active_runs, building)
     freed = {}
     for k in categories:
         if k not in CATEGORIES:

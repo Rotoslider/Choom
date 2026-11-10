@@ -9,7 +9,9 @@ import re
 import threading
 import time
 import traceback
+import urllib.error
 import urllib.parse
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -22,8 +24,10 @@ import prompts
 import render
 from config import CFG, CLIPS, PICTURES, PORTRAITS, SHEETS, WORKSPACE, ensure_workspace
 from project import STATUSES, LookHasDropped, Project, base_of, editing, next_seeds, outfit_of
+from project import closet as closet_mod  # tools/closet.py (wearing: what she wears in a look)
 
 WEB = Path(__file__).resolve().parent / "web"
+FULL_SHARE_MAX = 0.8  # living.js fullOdds: at 80% she stays four clips at a time and goes at nearly every chance
 NAME = re.compile(r"^[a-z0-9][a-z0-9_@\-]*$")
 FILE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_@\-.]*$")
 
@@ -54,6 +58,26 @@ def details(proj):
             "takes": {n: t for n, c in proj.clips.items() if c.get("history") and (t := proj.takes(n))},
             "color": colors().get(proj.id) or proj.data.get("color"),
             "plannedMinutes": round(sum(render.minutes(c.get("frames") or 124) for c in planned))}
+
+
+def ideas_about(proj, look_id):
+    """The look, in his words, for asking her for ideas (Choom app lib/glass-ideas.ts): her outfit by its
+    closet words and what she wears in it, her whole figure, or where she is at a place. Her closet is
+    hers to know (glass_closet); this names a look of hers, never what she has on now. None for the empty
+    glass, her seats at the campfire circle and the clothes that are Donny's alone (chosenbare)."""
+    look = proj.looks.get(look_id)
+    if not look or look_id == "gone" or base_of(look_id) in plan.SEATS or (outfit_of(look_id) or "").startswith("chosenbare"):
+        return None
+    yours = lambda text: re.sub(r"\bherself\b", "yourself", re.sub(r"\bher\b", "your", text.strip().rstrip(".")))  # she reads it
+    if look.get("does"):
+        return f"a place of yours on the glass, where you are {yours(look['does'])}"
+    base, outfit = base_of(look_id), outfit_of(look_id)
+    frame = {"full": "your whole figure, head to toe", "asleep": "asleep, your eyes closed",
+             "relaxed": "waist up, your hand down"}.get(base, "waist up")
+    if not outfit:
+        return f"your usual look on the glass, {frame}"
+    worn = look.get("wearing") or closet_mod.wearing(look.get("subject", ""), proj.looks.get("main", {}).get("subject", ""))
+    return f"the look where you wear {yours(worn)}, {frame}" if worn else f"your {outfit} look, {frame}"
 
 
 def wishes(cid):
@@ -135,6 +159,12 @@ def finite(obj):
 def active_runs():
     with jobs.lock:
         return [j["out"] for j in jobs.jobs if j["kind"] == "picture" and j["status"] in jobs.ACTIVE and j.get("out")]
+
+
+def building():
+    """Chooms whose build is running: Clean up leaves their depth caches alone meanwhile."""
+    with jobs.lock:
+        return [j["args"]["choom"] for j in jobs.jobs if j["kind"] == "build" and j["status"] == "running"]
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -221,14 +251,23 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"options": plan.options(Project.load(parts[2]), parts[3])})
         if parts[:2] == ["api", "packs"]:
             lib = plan.library()
-            return self.send_json({"packs": lib["packs"], "actions": [{"pack": a["pack"], "key": a["key"], "text": a["text"],
-                                                                        "seconds": a.get("seconds", 5)} for a in lib["actions"]]})
+            # Her own moves first, her sisters' last (plan.own_options lists them per look); the many-looks
+            # form lists the moves written by hand from /api/own-moves.
+            packs = [p for q in lib["packs"] for p in ([{**plan.ACTIVITY_PACK, "for": ["place"]}, q] if q["id"] == "places" else [q])]
+            return self.send_json({"packs": [plan.OWN_PACKS["own"], *packs, plan.OWN_PACKS["sisters"]],
+                                   "actions": [{"pack": a["pack"], "key": a["key"], "text": a["text"],
+                                                "seconds": a.get("seconds", 5)} for a in lib["actions"]]})
+        if parts[:2] == ["api", "activities"]:
+            return self.send_json({"presets": plan.activities()})
+        if parts[:2] == ["api", "own-moves"]:
+            return self.send_json({"moves": [{k: m[k] for k in ("choom", "key", "kind", "family", "text", "seconds", "looks", "when")}
+                                             for cid in Project.ids() for m in plan.own_moves(Project.load(cid))]})
         if parts[:2] == ["api", "jobs"]:
             with jobs.lock:
                 return self.send_json({"jobs": jobs.recent(40), "worklist": jobs.state()})
         if parts[:2] == ["api", "housekeeping"]:
             days = int(urllib.parse.parse_qs(url.query).get("takes_days", ["30"])[0])
-            report = housekeeping.survey(days, active_queues(), active_runs())
+            report = housekeeping.survey(days, active_queues(), active_runs(), building())
             return self.send_json({k: ({kk: vv for kk, vv in v.items() if kk != "files"} if k in housekeeping.CATEGORIES else v)
                                    for k, v in report.items()})
         return self.send_error(404)
@@ -259,6 +298,8 @@ class Handler(BaseHTTPRequestHandler):
             for key in ("choom",):  # every route that names a Choom names one it has
                 if key in data and not choom_ok(data[key]):
                     return self.fail(f"no Choom {data[key]}", 404)
+            if parts[:2] == ["api", "choom"] and len(parts) == 4 and NAME.match(parts[2]) and parts[3] == "ideas":
+                return self.ask_ideas(parts[2], data)
             if parts[:2] == ["api", "choom"] and len(parts) == 4 and NAME.match(parts[2]):
                 return self.choom_action(parts[2], parts[3], data)
             if parts == ["api", "render"]:
@@ -297,7 +338,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"worklist": jobs.resume()})
             if parts == ["api", "housekeeping"]:
                 cats = [str(c) for c in data.get("categories", [])]
-                freed = housekeeping.clean(cats, int(data.get("takesDays", 30)), active_queues(), active_runs())
+                freed = housekeeping.clean(cats, int(data.get("takesDays", 30)), active_queues(), active_runs(), building())
                 return self.send_json({"freed": freed})
         except (KeyError, ValueError) as e:
             return self.fail(str(e))
@@ -305,6 +346,31 @@ class Handler(BaseHTTPRequestHandler):
             traceback.print_exc()
             return self.fail(f"{type(e).__name__}: {e}", 500)
         return self.send_error(404)
+
+    def ask_ideas(self, cid, data):
+        """Ask her for ideas for one of her looks (Donny, Nov 9: "the girls are a lot more creative"): the
+        Choom app's /api/hologram/ideas queues a request for her that fires within a minute; she sends her
+        ideas with glass_wish (they show on the Plan page's wish list) and tells him on Signal."""
+        if not choom_ok(cid):
+            return self.fail("no such Choom", 404)
+        proj = Project.load(cid)
+        look = str(data.get("look", ""))
+        about = ideas_about(proj, look)
+        if not about:
+            return self.fail(f"no ideas to ask for in {look or 'that look'}")
+        url = (CFG.get("notify") or {}).get("url") or ""
+        if not url:
+            return self.fail("the Choom app's address isn't set (studio.json notify.url)")
+        body = json.dumps({"choom": proj.data.get("name") or cid.title(), "look": look, "about": about}).encode()
+        request = urllib.request.Request(url.rstrip("/") + "/api/hologram/ideas", data=body, headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(request, timeout=15) as response:
+                answer = json.loads(response.read() or b"{}")
+        except urllib.error.HTTPError as e:
+            return self.fail(f"the Choom app said {e.code}: {e.read()[:200].decode(errors='replace')}", 502)
+        except (urllib.error.URLError, OSError) as e:
+            return self.fail(f"couldn't reach the Choom app: {e}", 502)
+        return self.send_json({"ok": True, "already": bool(answer.get("already")), "about": about})
 
     def choom_action(self, cid, action, data):
         names = data.get("names", [])
@@ -347,11 +413,24 @@ class Handler(BaseHTTPRequestHandler):
                 proj.write_closet()
                 return self.send_json({"renamed": names, "choom": details(proj)})
             elif action == "plan":
-                library = {(a["pack"], a["key"]): a for a in plan.library()["actions"]}
-                items = [library[(i["pack"], i["key"])] if "pack" in i else dict(i) for i in data["items"]]
+                library = {(a["pack"], a["key"]): a for a in plan.look_actions(proj.looks.get(data["look"], {}))}
+                # Moves written by hand (hers, or a sister's), as this look offers them: their wording,
+                # length and pictures come from the clip they were made as.
+                mine = {tuple(o["pick"]): o for o in plan.own_options(proj, data["look"])}
+                items = []
+                for i in data["items"]:
+                    if i.get("pack") in plan.OWN_PACKS:
+                        o = mine.get(("own", f"{i.get('from')}:{i.get('key')}"))
+                        if not o:
+                            return self.fail(f"{i.get('key')}: not a move that comes in the {data['look']} look")
+                        items.append(dict(o))
+                    else:
+                        items.append(library[(i["pack"], i["key"])] if "pack" in i else dict(i))
                 # Your own clip can bring pictures from his computer (a mug she sips from): saved in clean/,
                 # picture 2, 3 ... in its wording, and rendered with the reference model.
                 for item in items:
+                    if item.get("pack") in plan.OWN_PACKS:
+                        continue  # its pictures are in clean/ already, the clip it was made as uses them
                     if item.get("refs") and "pack" not in item:
                         if len(item["refs"]) > prompts.MAX_REFS:
                             return self.fail(f"up to {prompts.MAX_REFS} pictures for a clip")
@@ -361,7 +440,8 @@ class Handler(BaseHTTPRequestHandler):
                         item.pop("refs", None)
                 results = plan.add(proj, data["look"], items)
                 used = {f for c in proj.clips.values() for f in c.get("refs", [])}
-                for f in {f for item in items for f in item.get("refs", [])} - used:  # not planned (the name's taken)
+                sent = {f for item in items if item.get("pack") not in plan.OWN_PACKS for f in item.get("refs", [])}
+                for f in sent - used:  # not planned (the name's taken)
                     (PICTURES / f).unlink(missing_ok=True)
                 return self.send_json({"results": results, "choom": details(proj)})
             elif action == "change":  # a change of clothes on screen, from one look to another
@@ -438,7 +518,7 @@ class Handler(BaseHTTPRequestHandler):
                     own = proj.looks.get(f"main@{outfit_of(base)}" if outfit_of(base) else "main", {}).get("kleinKeep", "")
                     keep = f"{pictures.full_keep(own)}, and her pose" if own else ""
                 default = {"outfit": lambda: pictures.outfit_prompt(wearing, keep), "full": lambda: pictures.full_prompt(keep, wearing),
-                           "asleep": lambda: pictures.asleep_prompt(keep), "place": lambda: pictures.place_prompt(wearing, keep),
+                           "asleep": lambda: pictures.asleep_prompt(keep), "place": lambda: pictures.place_prompt(wearing, keep, bool(data.get("scene"))),
                            "redo": lambda: pictures.TRUE_COLOR_PROMPT}[kind]
                 prompt = (data.get("prompt") or "").strip() or default()
                 # The form as he filled it in (when, name, versions too): a discard puts it back to try again.
@@ -446,6 +526,9 @@ class Handler(BaseHTTPRequestHandler):
                                                                "pictures": [], "status": "making", "count": int(data.get("count", 3)),
                                                                **({"when": data["when"], "name": data.get("name", "")} if kind == "outfit" else {}),
                                                                **({"name": look_id} if kind == "place" else {}),
+                                                               # A place with a setting around her, and the ready-made idea it came from.
+                                                               **({"scene": True} if kind == "place" and data.get("scene") else {}),
+                                                               **({"activity": str(data["activity"])} if kind == "place" and data.get("activity") else {}),
                                                                **({"upload": True} if data.get("upload") else {}),
                                                                **({"replace": True} if kind == "redo" else {}),
                                                                **({"refs": refs} if refs else {})}
@@ -456,7 +539,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not draft or data["picture"] not in draft["pictures"]:
                     return self.fail("no such draft picture")
                 pictures.adopt(proj, data["look"], data["picture"], draft.get("wearing"), draft.get("prompt"), draft.get("base"),
-                               bool(draft.get("replace")))
+                               bool(draft.get("replace")), bool(draft.get("scene")), draft.get("activity"))
                 if draft.get("replace"):  # its clips are planned again from the new picture
                     redo, left = plan.repicture(proj, data["look"])
                     return self.send_json({"replanned": redo, "left": left, "choom": details(proj)})
@@ -516,6 +599,22 @@ class Handler(BaseHTTPRequestHandler):
                 if pose not in ("main", "relaxed") or (pose != "main" and pose not in proj.looks):
                     return self.fail("her home pose is main, or relaxed if she has that look")
                 proj.data["home"] = pose
+            elif action == "fullshare":
+                # How much of her quiet time the glass shows her in a full body (Donny, Nov 9: she cut to it
+                # for one clip and straight back). Saved in her project and in portraits/<id>/prefs.json,
+                # which the glass reads again every minute: no build.
+                look, share = str(data.get("look", "")), data.get("share")
+                if look not in proj.looks or base_of(look) != "full":
+                    return self.fail("pick one of her full-body looks")
+                shares = proj.data.setdefault("fullShare", {})
+                if share is None:
+                    shares.pop(look, None)
+                else:
+                    share = float(share)
+                    if not 0 <= share <= FULL_SHARE_MAX:
+                        return self.fail(f"between 0 and {round(FULL_SHARE_MAX * 100)}%")
+                    shares[look] = round(share, 2)
+                proj.write_prefs()
             else:
                 return self.fail("unknown action", 404)
         return self.send_json({"choom": details(Project.load(cid))})

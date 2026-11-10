@@ -127,11 +127,17 @@ class Project:
     def set_status(self, name, status, note=None):
         assert status in STATUSES, status
         clip = self.clips[name]
+        # A new take kept after a re-roll of a clip that was on the glass goes back on (re-rolled from On
+        # the glass, it came off only until there was a better take).
+        back = (status == "kept" and clip["status"] == "rendered" and (clip.get("history") or [{}])[-1].get("onGlass")
+                and name not in self.sequence)
         clip["status"] = status
         if note is not None:
             clip["note"] = note
         if status != "kept" and name in self.sequence and name != self.sequence[0]:
             self.sequence.remove(name)
+        if back:
+            self.sequence.append(name)
         clip["changed"] = time.strftime("%Y-%m-%dT%H:%M:%S")
 
     def reroll(self, name, seed):
@@ -346,6 +352,19 @@ class Project:
         text = json.dumps(data, indent=1) + "\n"
         if not f.exists() or f.read_text() != text:
             part = f.with_suffix(".part")  # swapped in whole: the glass's server reads it any moment
+            part.write_text(text)
+            os.replace(part, f)
+
+    def write_prefs(self):
+        """portraits/<id>/prefs.json, her settings the glass reads again every minute (living.js): for now
+        how much of her quiet time it shows each full body (fullShare, {"full@evening": 0.3}); a full body
+        not listed keeps the glass's own (about one quiet clip in fourteen, and straight back)."""
+        f = PORTRAITS / self.id / "prefs.json"
+        if not f.parent.is_dir():
+            return
+        text = json.dumps({"fullShare": self.data.get("fullShare", {})}, indent=1) + "\n"
+        if not f.exists() or f.read_text() != text:
+            part = f.with_suffix(".prefs-part")
             part.write_text(text)
             os.replace(part, f)
 

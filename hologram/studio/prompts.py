@@ -131,7 +131,8 @@ def lint(prompt, loop=True, leaves=False):
         m = re.search(pattern, camera_free, re.I)
         if m:
             out.append((m.group(0), advice))
-    if "plain pure black background" not in body:
+    # A setting around her (Genesis on a stone patio under the stars) says it fades into black instead.
+    if "plain pure black background" not in body and "fades into pure black all around" not in body:
         out.append(("background", 'Say "a plain pure black background" in her subject line.'))
     if CAMERA not in body:
         out.append(("camera", f'End the action with the camera line: "{CAMERA}"'))
