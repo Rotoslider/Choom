@@ -65,7 +65,7 @@ STOP = {"a", "an", "the", "my", "your", "her", "some", "on", "in", "into", "with
         "do", "of", "and", "again", "now", "bit", "quick", "just", "go", "get", "dressed"}
 # An outfit's name says when she wears it (living.js OUTFIT_RULES); the rest is its own name. A chosen…
 # outfit is worn only when she asks for it.
-WHEN = ("evening", "cold", "hot", "day", "night", "chosen")
+WHEN = ("evening", "cold", "cool", "hot", "day", "night", "chosen")
 # Asking for something to sleep in finds her night clothes (their name starts with night).
 NIGHT_WORDS = {"night", "nighttime", "bed", "bedtime", "sleep", "sleeping"}
 
@@ -154,7 +154,7 @@ def wearing(subject, main_subject=""):
     # Up to where the scene starts (", against a plain pure black background", ", glows softly"), not the
     # first comma: "a long, soft ivory cotton nightgown" came back as "a long". A new Choom's subject goes
     # on with ", glowing softly against".
-    m = re.search(r"\bwearing (.+?)(?:, (?:glows|glowing|softly|against|in clean|in soft|her |standing|holding)|$)", subject or "")
+    m = re.search(r"\bwearing (.+?)(?:, (?:glows|glowing|softly|against|in clean|in soft|in a pool|her |standing|holding)|$)", subject or "")
     return m.group(1).strip().rstrip(",. ") if m else changes(subject, main_subject)
 
 
@@ -223,13 +223,34 @@ def load(portraits, cid):
     return read("alive.json"), read("closet.json")
 
 
+# The looks every Choom may have (clip_roles.POSES); clothes in any other look are worn only at that place.
+FRAMES = ("main", "relaxed", "full", "asleep")
+
+
 def outfits(alive, closet):
-    """The outfits she can wear on the glass: those with a loop she can talk over. {name: {tags, wearing}}"""
+    """The outfits she can wear on the glass: those with a loop she can talk over. {name: {tags, wearing}}
+    Not the clothes she wears only at one of her places (place_clothes)."""
     names = sorted({c["from"].split("@")[1] for c in alive.get("clips", [])
-                    if "@" in c.get("from", "") and "talk" in c.get("moods", [])})
+                    if "@" in c.get("from", "") and c["from"].split("@")[0] in FRAMES and "talk" in c.get("moods", [])})
     looks = closet.get("looks", {})
     return {o: {"tags": looks.get(o, {}).get("tags") or name_words(o), "wearing": looks.get(o, {}).get("wearing", "")}
             for o in names}
+
+
+def place_clothes(alive, closet):
+    """Clothes she wears only at one of her places (Genesis's long cardigan on her stone patio, Eve's tee
+    for her dumbbells and her bike), those with a loop there she can talk over (patio@coolstargaze):
+    {name: {tags, wearing, places}}. She changes into them there, and back before she gets up."""
+    found = {}
+    for c in alive.get("clips", []):
+        look = c.get("from", "")
+        if "@" in look and look == c.get("to") and "talk" in c.get("moods", []):
+            place, o = look.split("@", 1)
+            if place not in FRAMES and place not in SEATS and place != "gone":
+                found.setdefault(o, set()).add(place)
+    looks = closet.get("placeClothes", {})
+    return {o: {"tags": looks.get(o, {}).get("tags") or name_words(o), "wearing": looks.get(o, {}).get("wearing", ""),
+                "places": sorted(at)} for o, at in sorted(found.items())}
 
 
 def move_word(cid, source):

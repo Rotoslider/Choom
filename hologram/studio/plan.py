@@ -85,6 +85,8 @@ def action_name(action, look_id):
         name = prefix + action["key"] if prefix else None
     if not name:
         return None
+    if outfit and pose == "place" and re.match(r"(to|from)_", name):
+        return None  # clothes she wears only at a place: she changes into them there (add_change), not on the way
     name = name.replace("{place}", base)
     return f"{outfit}-{name}" if outfit else name
 
@@ -233,6 +235,59 @@ def own_options(proj, look_id):
     return sorted(out, key=lambda o: (o["pack"] != "own", o["from"]))
 
 
+# The clips she has in her other looks in the same frame, to make again in a new one (Donny, 2026-11-09:
+# a change of clothes "would also need to be able to select moves for the new outfits"): Genesis's patio
+# in her cardigan gets what her patio has (the stars, her wish, the night chill), a new outfit what her
+# usual waist-up look has, an outfit's full body what her full body has.
+SAME_PACK = {"id": "same", "title": "Same clips as her other looks",
+             "about": "The clips she has in her other looks in this frame, to make again in this one with their wording as it "
+                      "was and where she is here put in. At a place: everything she has there in her other clothes. For an "
+                      "outfit or a full body: the ones the packs below don't offer (her first clips, re-worded ones). Words "
+                      "about the clothes they were made in are marked: change them with Edit once they're planned."}
+MADE_PACKS = (*OWN_PACKS, "same")  # clips made before, offered again: their wording and pictures come from the clip
+
+
+def siblings(proj, look_id):
+    """Her other looks in the same frame as this one, with a picture: the place and its other clothes for
+    clothes at a place, her other waist-up looks in this pose for an outfit, her other full bodies for a
+    full body. None for asleep (its clips go in and out of it), the empty glass, or a seat at the circle."""
+    base = base_of(look_id)
+    if base in ("asleep", "gone") or base in SEATS:
+        return []
+    return [l for l in proj.looks if l != look_id and base_of(l) == base and proj.looks[l].get("picture")
+            and not (outfit_of(l) or "").startswith("chosenbare")]  # Donny's own: never offered to her other looks
+
+
+def same_options(proj, look_id):
+    """The clips of her other looks in this frame (siblings) as options for this look: each loop she has
+    there (kept, or rendered and waiting for review), named for this look, its wording with where she is
+    here in place of where she was (a new pose at a place: the blanket held at her chest)."""
+    out, own, look = [], outfit_of(look_id), proj.looks.get(look_id, {})
+    now = (look.get("does") or "").strip().rstrip(".")
+    for sib in sorted(siblings(proj, look_id), key=lambda l: (outfit_of(l) is not None, l)):
+        theirs, was = outfit_of(sib), (proj.looks[sib].get("does") or "").strip().rstrip(".")
+        for name, c in sorted(proj.clips.items()):
+            if c.get("from") != sib or c.get("to") != sib or c.get("status") not in ("kept", "rendered") or not c.get("action"):
+                continue
+            part = name.removeprefix(f"{proj.id}_")
+            if theirs:
+                if not part.startswith(f"{theirs}-"):
+                    continue
+                part = part[len(theirs) + 1:]
+            mine = f"{own}-{part}" if own else part
+            new = f"{proj.id}_{mine}"
+            if roles(proj.id, new)[1:] != (look_id, look_id):
+                continue  # the glass would read the name as another look's
+            text = c["action"].replace(was, now) if was and now and was != now else c["action"]
+            have = [n for n in proj.clips if n == new and proj.clips[n]["status"] != "dropped"]
+            out.append({"pack": "same", "key": part, "from": sib, "pick": ["same", f"{sib}:{part}"], "part": mine,
+                        "kind": "moment", "text": text, "seconds": int(c.get("seconds", 5)), "ending": c.get("ending"),
+                        "refs": list(c.get("refs") or []), "hands": bool(HANDS.search(text)), "name": new, "have": have,
+                        "numbered": False, "looks": [sib], "when": (c.get("rendered") or c.get("changed") or "")[:10],
+                        "check": [] if have else borrowed_words(proj, sib, proj, look_id, text)})
+    return out
+
+
 def options(proj, look_id):
     """The library's actions for a look: [{pack, key, text, seconds, hands, name, have}], `have`
     naming the clip she already has for it (any status but dropped). A night or chosen outfit (she
@@ -260,7 +315,14 @@ def options(proj, look_id):
                     "text": for_look(a["text"], proj.looks[look_id]), "seconds": a.get("seconds", 5),
                     "hands": a.get("hands", False), "name": name, "have": have,
                     "numbered": "names" not in a, "ending": a.get("ending")})
-    return own_options(proj, look_id) + out
+    own, same = own_options(proj, look_id), same_options(proj, look_id)
+    if look_kind(look_id) != "place":
+        # An outfit or a full body: only what the packs here don't offer (her first clips, re-worded ones);
+        # the rest of her usual look's hundreds are the packs' own. At a place, all of them: a few, and
+        # "Pick the ones she doesn't have" makes the place in new clothes in one step.
+        offered = {o["name"] for o in own + out}
+        same = [o for o in same if o["name"] not in offered and re.sub(r"\d+$", "", o["name"]) not in offered]
+    return own + same + out
 
 
 def many(targets, picks, preview=True):
@@ -327,12 +389,16 @@ def prompt_for(proj, start, end, text, seconds, ending=None, refs=()):
 def add(proj, look_id, items):
     """Plan clips in a look. items: [{key, text, seconds, kind or names, ending}] (library actions
     or your own; your own can have `refs`, its own pictures in clean/). Returns [(name or None, message)]."""
-    results, wanted = [], []
+    results, wanted, seen = [], [], set()
     for item in items:
-        part = action_name(item, look_id)
+        part = item.get("part") or action_name(item, look_id)  # a clip made again from another look: its own name
         if not part:
             results.append((None, f"{item['key']}: doesn't come in the {look_id} look"))
             continue
+        if part in seen:  # ticked twice (Same clips as her other looks, and the pack it came from): planned once
+            results.append((None, f"{item['key']}: ticked twice, planned once"))
+            continue
+        seen.add(part)
         name = unique_name(proj, f"{proj.id}_{part}", item.get("numbered", "names" not in item))
         if not name:
             results.append((None, f"{item['key']}: she already has {proj.id}_{part} (re-roll it instead)"))
@@ -381,11 +447,15 @@ def add_change(proj, start, end, key, text, seconds=5):
     body to another (a nightie slipping to the floor needs her feet in the frame). It's rendered from
     the first look's picture to the second's, and the glass plays it instead of a camera cut (a full-body
     one with a cut to her whole figure and back). Returns (name or None, message)."""
-    if start == end or base_of(start) != base_of(end) or base_of(start) not in ("main", "relaxed", "full"):
-        return None, "a change goes between two of her waist-up looks in the same pose, or two of her full bodies"
+    # At one of her places, into clothes she wears only there and back (her sundress to her long cardigan
+    # on the patio): <place>change_, the place and its setting staying as they are.
+    place = base_of(start) not in POSES and base_of(start) not in SEATS
+    if start == end or base_of(start) != base_of(end) or (base_of(start) not in ("main", "relaxed", "full") and not place):
+        return None, ("a change goes between two of her waist-up looks in the same pose, two of her full bodies, "
+                      "or her clothes at one of her places")
     key = re.sub(r"[^a-z0-9]", "", (key or "").lower()) or "swap"
-    part = ((f"{outfit_of(start)}-" if outfit_of(start) else "") + ("full" if base_of(start) == "full" else "")
-            + f"change_{outfit_of(end) or 'usual'}_{key}")
+    frame = "full" if base_of(start) == "full" else base_of(start) if place else ""
+    part = (f"{outfit_of(start)}-" if outfit_of(start) else "") + f"{frame}change_{outfit_of(end) or 'usual'}_{key}"
     name = unique_name(proj, f"{proj.id}_{part}", True)
     _, frm, to = roles(proj.id, name)
     if (frm, to) != (start, end):  # Aloy's outfits are all hand-down: a change from her finger-up look can't be named

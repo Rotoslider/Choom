@@ -70,7 +70,8 @@ def ideas_about(proj, look_id):
         return None
     yours = lambda text: re.sub(r"\bherself\b", "yourself", re.sub(r"\bher\b", "your", text.strip().rstrip(".")))  # she reads it
     if look.get("does"):
-        return f"a place of yours on the glass, where you are {yours(look['does'])}"
+        clothes = f", wearing {yours(look['wearing'])} (clothes you wear only there)" if outfit_of(look_id) and look.get("wearing") else ""
+        return f"a place of yours on the glass, where you are {yours(look['does'])}{clothes}"
     base, outfit = base_of(look_id), outfit_of(look_id)
     frame = {"full": "your whole figure, head to toe", "asleep": "asleep, your eyes closed",
              "relaxed": "waist up, your hand down"}.get(base, "waist up")
@@ -254,7 +255,7 @@ class Handler(BaseHTTPRequestHandler):
             # Her own moves first, her sisters' last (plan.own_options lists them per look); the many-looks
             # form lists the moves written by hand from /api/own-moves.
             packs = [p for q in lib["packs"] for p in ([{**plan.ACTIVITY_PACK, "for": ["place"]}, q] if q["id"] == "places" else [q])]
-            return self.send_json({"packs": [plan.OWN_PACKS["own"], *packs, plan.OWN_PACKS["sisters"]],
+            return self.send_json({"packs": [plan.OWN_PACKS["own"], plan.SAME_PACK, *packs, plan.OWN_PACKS["sisters"]],
                                    "actions": [{"pack": a["pack"], "key": a["key"], "text": a["text"],
                                                 "seconds": a.get("seconds", 5)} for a in lib["actions"]]})
         if parts[:2] == ["api", "activities"]:
@@ -416,11 +417,11 @@ class Handler(BaseHTTPRequestHandler):
                 library = {(a["pack"], a["key"]): a for a in plan.look_actions(proj.looks.get(data["look"], {}))}
                 # Moves written by hand (hers, or a sister's), as this look offers them: their wording,
                 # length and pictures come from the clip they were made as.
-                mine = {tuple(o["pick"]): o for o in plan.own_options(proj, data["look"])}
+                mine = {tuple(o["pick"]): o for o in plan.own_options(proj, data["look"]) + plan.same_options(proj, data["look"])}
                 items = []
                 for i in data["items"]:
-                    if i.get("pack") in plan.OWN_PACKS:
-                        o = mine.get(("own", f"{i.get('from')}:{i.get('key')}"))
+                    if i.get("pack") in plan.MADE_PACKS:
+                        o = mine.get(("own" if i["pack"] != "same" else "same", f"{i.get('from')}:{i.get('key')}"))
                         if not o:
                             return self.fail(f"{i.get('key')}: not a move that comes in the {data['look']} look")
                         items.append(dict(o))
@@ -429,7 +430,7 @@ class Handler(BaseHTTPRequestHandler):
                 # Your own clip can bring pictures from his computer (a mug she sips from): saved in clean/,
                 # picture 2, 3 ... in its wording, and rendered with the reference model.
                 for item in items:
-                    if item.get("pack") in plan.OWN_PACKS:
+                    if item.get("pack") in plan.MADE_PACKS:
                         continue  # its pictures are in clean/ already, the clip it was made as uses them
                     if item.get("refs") and "pack" not in item:
                         if len(item["refs"]) > prompts.MAX_REFS:
@@ -440,7 +441,7 @@ class Handler(BaseHTTPRequestHandler):
                         item.pop("refs", None)
                 results = plan.add(proj, data["look"], items)
                 used = {f for c in proj.clips.values() for f in c.get("refs", [])}
-                sent = {f for item in items if item.get("pack") not in plan.OWN_PACKS for f in item.get("refs", [])}
+                sent = {f for item in items if item.get("pack") not in plan.MADE_PACKS for f in item.get("refs", [])}
                 for f in sent - used:  # not planned (the name's taken)
                     (PICTURES / f).unlink(missing_ok=True)
                 return self.send_json({"results": results, "choom": details(proj)})
@@ -471,7 +472,8 @@ class Handler(BaseHTTPRequestHandler):
                 if not proj.looks.get(base, {}).get("picture"):
                     return self.fail(f"no {base} picture to start from")
                 if kind not in pictures.KINDS:
-                    return self.fail("a new look is an outfit, full body, asleep, a place, the empty glass, or a new picture for a look she has")
+                    return self.fail("a new look is an outfit, full body, asleep, a place, clothes for a place, the empty glass, "
+                                     "or a new picture for a look she has")
                 # An outfit can start from a full body too: Klein changes the clothes on her whole figure
                 # and keeps her pose, so the two full bodies match for a change between them (a nightie
                 # slipping to the floor).
@@ -488,6 +490,21 @@ class Handler(BaseHTTPRequestHandler):
                     if outfit_of(base) and not outfit_of(base).startswith(("night", "chosen")):
                         return self.fail("she sleeps in her usual clothes, a night outfit or one she chooses")
                     look_id = f"asleep@{outfit_of(base)}" if outfit_of(base) else "asleep"
+                elif kind == "placeoutfit":
+                    # Clothes she wears only at one of her places (Genesis's long cardigan on her patio, 2026-11-09),
+                    # from the place's picture (or the place in other clothes she has there), named by when she
+                    # wears them there like her outfits: patio@coolstargaze. The glass changes her into them there.
+                    place = base_of(base)
+                    if place in pictures.NOT_PLACES or place in plan.SEATS or not proj.looks.get(place, {}).get("does"):
+                        return self.fail("clothes for a place start from one of her places (her patio, her campfire)")
+                    if data.get("when") not in pictures.WHEN:
+                        return self.fail("say when she wears them there: cold, cool, hot, evening, day or night, or chosen by her")
+                    o = f"{data['when']}{re.sub(r'[^a-z0-9]', '', data.get('name', '').lower())}"
+                    if any(outfit_of(l) == o and base_of(l) in plan.POSES for l in proj.looks):
+                        return self.fail(f"{o} is one of her outfits already: give the clothes for {place} a name of their own")
+                    if not data.get("wearing", "").strip():
+                        return self.fail("say what she wears there")
+                    look_id = f"{place}@{o}"
                 elif kind == "place":
                     # A place she goes to and stays a while (sitting by her campfire), named by him.
                     look_id = re.sub(r"[^a-z0-9]", "", data.get("name", "").lower())
@@ -511,7 +528,11 @@ class Handler(BaseHTTPRequestHandler):
                 source = saved.pop("start", proj.looks[base]["picture"])
                 refs = list(saved.values())
                 wearing = data.get("wearing", "").strip()
-                keep = proj.looks[base].get("kleinKeep", "") or (proj.looks["main"].get("kleinKeep", "") if kind == "place" else "")
+                keep = proj.looks[base].get("kleinKeep", "") or (proj.looks["main"].get("kleinKeep", "") if kind in ("place", "placeoutfit") else "")
+                # Clothes for a place: her pose there, only if he gave her a new one (the blanket held at her chest).
+                does = data.get("does", "").strip().rstrip(".") if kind == "placeoutfit" else ""
+                if does and does == proj.looks.get(base_of(base), {}).get("does", "").strip().rstrip("."):
+                    does = ""
                 if not keep and kind == "outfit" and base_of(base) == "full":
                     # A full body has no keep line of its own: the one of the clothes she's in there, waist-up,
                     # without her arms (she stands relaxed), and her pose, so the two full bodies match.
@@ -519,12 +540,14 @@ class Handler(BaseHTTPRequestHandler):
                     keep = f"{pictures.full_keep(own)}, and her pose" if own else ""
                 default = {"outfit": lambda: pictures.outfit_prompt(wearing, keep), "full": lambda: pictures.full_prompt(keep, wearing),
                            "asleep": lambda: pictures.asleep_prompt(keep), "place": lambda: pictures.place_prompt(wearing, keep, bool(data.get("scene"))),
+                           "placeoutfit": lambda: pictures.place_outfit_prompt(wearing, keep, does, bool(proj.looks[base_of(base)].get("scene"))),
                            "redo": lambda: pictures.TRUE_COLOR_PROMPT}[kind]
                 prompt = (data.get("prompt") or "").strip() or default()
                 # The form as he filled it in (when, name, versions too): a discard puts it back to try again.
                 proj.data.setdefault("drafts", {})[look_id] = {"base": base, "kind": kind, "wearing": wearing, "prompt": prompt,
                                                                "pictures": [], "status": "making", "count": int(data.get("count", 3)),
-                                                               **({"when": data["when"], "name": data.get("name", "")} if kind == "outfit" else {}),
+                                                               **({"when": data["when"], "name": data.get("name", "")} if kind in ("outfit", "placeoutfit") else {}),
+                                                               **({"does": does} if does else {}),
                                                                **({"name": look_id} if kind == "place" else {}),
                                                                # A place with a setting around her, and the ready-made idea it came from.
                                                                **({"scene": True} if kind == "place" and data.get("scene") else {}),
@@ -539,7 +562,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not draft or data["picture"] not in draft["pictures"]:
                     return self.fail("no such draft picture")
                 pictures.adopt(proj, data["look"], data["picture"], draft.get("wearing"), draft.get("prompt"), draft.get("base"),
-                               bool(draft.get("replace")), bool(draft.get("scene")), draft.get("activity"))
+                               bool(draft.get("replace")), bool(draft.get("scene")), draft.get("activity"), draft.get("does"))
                 if draft.get("replace"):  # its clips are planned again from the new picture
                     redo, left = plan.repicture(proj, data["look"])
                     return self.send_json({"replanned": redo, "left": left, "choom": details(proj)})

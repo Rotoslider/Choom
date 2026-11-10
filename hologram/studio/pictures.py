@@ -20,7 +20,8 @@ from config import CFG, PICTURES, WAN2GP, WAN2GP_PYTHON
 from project import base_of, outfit_of
 
 DRAFTS = PICTURES / "drafts"
-WHEN = {"cold": "cold days (under 45°F)", "hot": "hot days (over 85°F)", "evening": "evenings, 6 to 11 pm",
+WHEN = {"cold": "cold days (under 45°F)", "cool": "cool days and nights (under 60°F)", "hot": "hot days (over 85°F)",
+        "evening": "evenings, 6 to 11 pm",
         "day": "daytime, taking turns with her usual clothes",
         "night": "nights, from 10 pm until she wakes (she sleeps in it)",
         "chosen": "only when she chooses it herself (glass_wear); she sleeps in it if it has an asleep look"}
@@ -110,6 +111,19 @@ def place_prompt(does, keep, scene=False, frame="", setting=""):
             "black background.")
 
 
+def place_outfit_prompt(wearing, keep, does="", scene=False):
+    """Klein's instruction for clothes she wears only at one of her places (Genesis's long cardigan on her
+    stone patio), from the place's picture: only her clothes change, and her pose if `does` gives a new one
+    (a blanket held closed at her chest with both hands); the place, its setting and its light stay, so
+    a change of clothes there can start and end on the two pictures."""
+    keep = re.sub(r",\s+and\s+(?=[^,]*$)", ", ", keep.strip().rstrip(",. ")) or "her face, expression and hair"
+    pose = f" She is {does.strip().rstrip('.')}." if does.strip() else ""
+    kept = [keep] + ([] if pose else ["her pose"]) + ["anything she holds"]
+    kept += ["the setting around her and its light", "the black all around it"] if scene else ["the lighting", "the pure black background"]
+    return (f"Change her clothes: she now wears {wearing.strip().rstrip('.')}.{pose} Keep everything else exactly the "
+            f"same: {', '.join(kept)}, and the framing.")
+
+
 def asleep_prompt(keep):
     """Klein's instruction for her asleep, for the sleep clips."""
     return ("She has dozed off peacefully: her eyes are gently closed, her face is soft and relaxed, and her head tips "
@@ -131,7 +145,7 @@ def kept_in(prompt):
 
 
 KINDS = {"outfit": "an outfit", "full": "full body", "asleep": "asleep", "place": "a place",
-         "redo": "a new picture for a look she has"}
+         "placeoutfit": "clothes for one of her places", "redo": "a new picture for a look she has"}
 # Names a place can't have: the poses every Choom may have (clip_roles.POSES), and the words her clip
 # names are made of, which would read as something else (idle_, to_, walkoff).
 NOT_PLACES = {"main", "relaxed", "full", "asleep", "gone", "idle", "listen", "talk", "pose", "oops", "windy", "to",
@@ -238,7 +252,8 @@ def new_file(proj, look_id):
     return PICTURES / f"{proj.id}_{slug}_{n}.png"
 
 
-def adopt(proj, look_id, draft, wearing=None, prompt=None, base_look=None, replace=False, scene=False, activity=None):
+def adopt(proj, look_id, draft, wearing=None, prompt=None, base_look=None, replace=False, scene=False, activity=None,
+          does=None):
     """Make a draft picture a look: copied into clean/ as <choom>_<outfit>_1.png, with its subject line
     in the new clothes and the base look's keep line and ending. base_look is the look the picture
     started from (an outfit can start from another outfit, Genesis's night look from her plain one);
@@ -266,7 +281,29 @@ def adopt(proj, look_id, draft, wearing=None, prompt=None, base_look=None, repla
     kind, outfit = base_of(look_id), outfit_of(look_id)
     target = new_file(proj, look_id)
     shutil.copy2(PICTURES / draft, target)
-    if kind not in ("main", "relaxed", "full", "asleep"):
+    if outfit and kind not in ("main", "relaxed", "full", "asleep"):
+        # Clothes she wears only at one of her places (patio@coolstargaze): the place's look with the new
+        # clothes in its subject line, and her new pose there if one was given (`does`: the blanket held
+        # closed at her chest). Its setting, the idea it came from and its ending come with it, so its
+        # clips are planned like the place's; the glass changes her into it there (living.js placeWear).
+        place = proj.looks[kind]
+        if place.get("scene"):
+            fade_edges(target)
+        was = (place.get("does") or "").strip().rstrip(".")
+        now = (does or "").strip().rstrip(".") or was
+        subject = subject_for(place, wearing) if wearing else place.get("subject", "")
+        if now != was:
+            subject = subject.replace(was, now) if was and was in subject else f"{subject.rstrip('. ')}, {now}"
+        proj.looks[look_id] = {
+            "picture": target.name,
+            "subject": subject.rstrip(". "),
+            "does": now,
+            "wearing": (wearing or "").strip().rstrip("."),
+            "ending": place.get("ending", "She stays in the same place and pose and ends exactly as she began."),
+            **{k: place[k] for k in ("keep", "kleinKeep", "scene", "activity") if place.get(k)},
+            **({"klein": prompt} if prompt else {}),
+        }
+    elif kind not in ("main", "relaxed", "full", "asleep"):
         # A place: the description of the full body it was made from, sitting by her campfire instead of
         # standing. She gets there from that full body (to_campfire): her usual one, or an outfit's (Eve's
         # dumbbells from her spandex: the glass puts the outfit on first). A scene (a stone patio under the

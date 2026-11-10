@@ -21,9 +21,10 @@ field explains itself when you hover over it.
   floor, a flannel coming off, a coat for cold days, a move of her own, and clothes she wears only
   when she chooses them.
 - [Activities and places with a setting](docs/tutorial-activities.md): Genesis on a stone patio under
-  the stars and Eve working out with dumbbells, from the ready-made ideas; an idea of your own; and the
+  the stars and Eve working out with dumbbells, from the ready-made ideas; an idea of your own; the
   other tools from November 9 (her own moves in every look, re-roll from the glass, the full-body
-  slider, asking her for ideas).
+  slider, asking her for ideas); and clothes she wears only at a place (Genesis's cardigan and blanket
+  on the patio, Eve's tee at her workouts).
 
 ## How a Choom is made
 
@@ -186,6 +187,7 @@ holds something (Optic's heart, crossed arms).
 | Pose changes | moving between her two waist-up poses; shown only for a Choom with a second pose (Aloy's `relaxed`), which the Studio can't make yet |
 | A place | in a place look: her loop there (she can talk in it), listening, quiet moments, and the clips to sit down from her full body (`to_`) and get up (`from_`); edit those two to say what appears and goes (the fire flickering up as she sits) |
 | This activity's own clips | in a place started from a ready-made idea: its own loop, getting there and back (picking up the dumbbells, the patio fading in around her) and what she does there; they stand in for the place pack's clips by the same name |
+| Same clips as her other looks | the clips she has in her other looks in the same frame, to make again here with their wording as it was, one fold for each look. In clothes for a place: everything she has at that place in her other clothes (**Pick the ones she doesn't have** makes the patio in her cardigan in one step), her own moves there too. In an outfit or a full body: only the ones the packs don't offer (her first clips, re-worded ones). Words about the clothes they were made in are marked `check:`; a clip ticked here and in a pack is planned once |
 | Walking on and off | in her full body (walk off, walk on) and main look (vanish, appear), once she has the empty glass; her usual clothes only |
 | Campfire circle | in a seat look (`circleside`, `circle`): her loop to talk over, listening (toward the middle; a facing seat each way), and quiet moments by the fire (warming her hands palms down, a sip from her mug). Everyone in a group room needs at least the loop for the room to sit around the fire |
 
@@ -255,6 +257,11 @@ waist-up look in the new clothes. It plays only while she's on the glass by hers
 room); otherwise she changes waist-up or with a cut. Both full bodies should be in the same pose and
 framing, so make the second as an outfit started from the first (see [New look](#new-look)). The
 [changes tutorial](docs/tutorial-changes.md) walks through one.
+
+At one of her places, a change goes between the place and clothes she wears only there, and back
+(`genesis_patiochange_coolstargaze_motes`, `genesis_coolstargaze-patiochange_usual_motes`): say that
+the place, its light and anything around her stay exactly as they are while her clothes change. **To**
+lists only the looks a change from **From** can go to.
 
 ![A change of clothes from the burgundy dress to the cold-night look](docs/images/change-clip.jpg)
 
@@ -418,6 +425,7 @@ it, the page asks before deleting them with it. Both ask in the page before doin
 | Full body | her head to toe: `full` from her usual look, `full@<outfit>` from an outfit |
 | Asleep | her with her eyes closed, for the sleep clips: `asleep` from her usual clothes, `asleep@<outfit>` from a night outfit or a chosen one |
 | An activity or place | somewhere she goes and stays a while, from her full body or one of her outfits' full bodies: working out with dumbbells in her spandex, a porch swing, a stone patio under the stars. **Start from an idea** (below) fills it in, or name it (`campfire`) and say where she is and how ("sitting on the ground beside a small campfire, her knees drawn up and her hands held out over the flames, palms down, looking up at the viewer"). By a fire, hands warm palms down and move a little; palms up looks like holding something out (Genesis's first campfire). A pass on a picture keeps her hands as they are (Genesis's stayed palms up through three, even with a palms-down picture as the reference); what turned them was a clip from the picture alone, no end picture, in which she turns them over, and its last frame sent from the computer as a new picture for the look ("keep this picture exactly as it is, only sharper") |
+| Clothes for one of her places | clothes she wears only at one of her places (`patio@coolstargaze`: Genesis's long cardigan on her patio), from the place's picture: Klein changes only her clothes and keeps the place, its setting and its light. Named like an outfit, by when she wears them there (`cool` + `stargaze`); the same name at two places is the same clothes (Eve's `dumbbells@daytee` and `bike@daytee`). **How she is there** gives her a new pose these clothes need (the blanket held closed at her chest), else she keeps the place's. A wish to wear something that names one of her places has **Clothes for patio** instead of New outfit. See [When she wears what](#when-she-wears-what) |
 | The empty glass | a black picture for walking on and off (`gone`); made at once, no Klein |
 | A seat at the campfire circle | made as A place named `circleside` (sitting, turned three-quarters toward the left of the picture: an end seat) or `circle` (facing the viewer: a middle seat), from her full body. Say "warm orange light falls on her from the lower left" but leave the word campfire out of the Klein prompt, or Klein draws a fire in (the glass has its own); a fire that slips in comes out with a second pass on that draft ("Remove the flames and the glowing ground ...", started from the draft). Clothes can come from a picture added as a reference (her camping clothes from the trip photo). Around the fire the Chooms are realistic: every seat has natural skin (Genesis's from a pass on the draft with her plain picture as the reference; Optic's without her cyan outline or her heart), and the glass adds no motes there. A face that drifts (Klein starts from her small full-body face) comes back with a pass on the draft that has her main picture's face, cropped close, as the reference (Eve's). A side seat made from her facing one turns her head more than her body; that's enough for the glass. After picking the picture, check the look's subject: it's made from her full body's, so rewrite it for the seat's clothes and skin, and keep the word campfire out of it too. Something in her hands (a mug, as in the photo, or Genesis's notebook) gives her hands a place while she talks; the pack's warm-hands clip has her let go with a hand and hold it palms down toward the warmth, so say how in its wording before rendering |
 | A new picture for a look she has | replaces a look's picture, for a truer colour or a better likeness |
@@ -507,6 +515,7 @@ An outfit's name tells the glass when she wears it (`OUTFIT_RULES` in `living.js
 |---|---|
 | `night…` | from 10 pm until she wakes; she sleeps in it if it has its own asleep look. `nightwarm…` when it's 70°F or warmer, `nightcold…` below, chosen when she puts them on and kept until morning |
 | `cold…` | under 45°F |
+| `cool…` | under 60°F (a cool evening; checked after `cold…`) |
 | `hot…` | over 85°F |
 | `evening…` | 6 to 11 pm |
 | `day…` | a different day outfit each day, taking turns with her usual clothes |
@@ -530,6 +539,15 @@ Assistant has one (see the [reference](../docs/reference.md)).
   she changes into her night clothes to sleep. A `chosen…` outfit with its own asleep look
   (`asleep@chosenunder`, with sleep and wake clips) is bedtime clothes she chose: it stays on past
   10 pm, she falls asleep in it, and it stays on until morning, also if she wakes in the night.
+- **Clothes for a place** (`patio@coolstargaze`) are worn only there, never in her usual looks, and
+  have no visits or daily totals. She arrives at the place in its own clothes; about 20 seconds later,
+  at a quiet moment, she changes into the ones their name calls for (the same words: `night…` after
+  10 pm first, then `cold…`, `cool…`, `hot…`, `evening…`; `day…` takes turns with the place's own
+  clothes from visit to visit; `chosen…` only when she asks), picked once a visit. Asked for with
+  `glass_wear`, she goes there and changes into them, and they're hers there for three hours; her usual
+  clothes asked for while she's there are the place's own. Before she gets up she changes back, so her
+  usual getting-back clip plays. A change clip made for it plays (`patiochange_`); without one, a cut.
+  A place with a setting keeps the glass's particles out in its clothes too.
 - **Windy days:** wind clips play only when it's windy (a 10-minute average of 12 mph or gusts of 20,
   held for 20 minutes after the last such reading), in the look she has on.
 
@@ -541,8 +559,8 @@ looking-glass skill):
 | Tool | What it does |
 |---|---|
 | `glass_move("a little dance")` | plays a move once, in the clothes she has on, at her next quiet moment on the glass within half an hour |
-| `glass_wear("my red dress")` | changes her clothes at her next quiet moment; she keeps them on until bedtime, or until she changes again (day clothes chosen by day: until 10 pm) |
-| `glass_closet()` | lists her moves and the clothes in her closet, never what she has on (a `chosen…` outfit says it's "worn only when you choose it"); it only lists, and its answer points her to `glass_wear` |
+| `glass_wear("my red dress")` | changes her clothes at her next quiet moment; she keeps them on until bedtime, or until she changes again (day clothes chosen by day: until 10 pm). Clothes she wears only at a place ("my long cardigan"): she goes there and changes into them, and back before she leaves |
+| `glass_closet()` | lists her moves and the clothes in her closet, never what she has on (a `chosen…` outfit says it's "worn only when you choose it", clothes for a place "worn only at your patio: you change into it there"); it only lists, and its answer points her to `glass_wear` |
 | `glass_wish("a midnight-blue silk slip dress")` | puts clothes or a move she'd like on her wish list; nothing changes on the glass |
 
 The glass answers from what's built:

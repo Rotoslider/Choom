@@ -177,7 +177,10 @@ KINDS = {
 # plays it instead of the camera cut when she changes from one to the other. fullchange_ is the same in
 # her whole figure, for a change that needs her feet in the frame (a nightie slipping to the floor):
 # full@nightwarm to full@<the other outfit>, cut to and back from like her other full-body clips.
-CHANGE = re.compile(r"(full)?change_([a-z0-9]+)(?:_[a-z0-9]+)?")
+# <place>change_ is the same at one of her places, into clothes she wears only there and back
+# (genesis_patiochange_coolstargaze_motes: her sundress to her long cardigan on the patio;
+# genesis_coolstargaze-patiochange_usual_motes: back into the patio's own clothes before she gets up).
+CHANGE = re.compile(r"([a-z0-9]*?)change_([a-z0-9]+)(?:_[a-z0-9]+)?")
 
 
 def clip_role(cid, src, home=None):
@@ -190,9 +193,10 @@ def clip_role(cid, src, home=None):
     outfit = None
     if "-" in action:
         outfit, action = action.split("-", 1)
+    spots = places(cid)
     change = CHANGE.fullmatch(action)
-    if change:
-        frame, to = "full" if change.group(1) else home, change.group(2)
+    if change and change.group(1) in ("", "full", *spots):
+        frame, to = {"": home}.get(change.group(1), change.group(1)), change.group(2)
         return ["change"], f"{frame}@{outfit}" if outfit else frame, frame if to == "usual" else f"{frame}@{to}"
     kind = action.split("_")[0] if "_" in action else None
     gone = GONE.get(re.sub(r"\d+$", "", action.split("_")[0]))
@@ -200,19 +204,20 @@ def clip_role(cid, src, home=None):
         frame = home if gone[0] == "main" else gone[0]  # Aloy vanishes and appears with her hand down
         start, end = (frame, "gone") if gone[1] else ("gone", frame)
         return ["go"], start, end
-    spots = places(cid)
     place = action.split("_")[1] if kind in ("to", "from") and len(action.split("_")) > 1 else None
     if place in spots and not outfit:
         # Getting there and back: to_campfire sits her down from her full body, from_campfire gets her up.
         return ["go"], spots[place] if kind == "to" else place, place if kind == "to" else spots[place]
     stem = re.sub(r"\d+$", "", action.split("_")[0])
-    if not outfit and (stem in spots or stem.removesuffix("listen") in spots):
-        # Her loop there (campfire: she can talk in it), listening there, and quiet moments there.
+    if stem in spots or stem.removesuffix("listen") in spots:
+        # Her loop there (campfire: she can talk in it), listening there, and quiet moments there; in
+        # clothes she wears only there, in a look of their own (coolstargaze-patio_stars: patio@coolstargaze).
         place = stem if stem in spots else stem.removesuffix("listen")
+        pose = f"{place}@{outfit}" if outfit else place
         if stem != place:
-            return ["listen", "talk"], place, place
+            return ["listen", "talk"], pose, pose
         return (["idle", "talk", "think", "listen"] if action == stem or re.fullmatch(stem + r"\d+", action)
-                else ["idle"]), place, place
+                else ["idle"]), pose, pose
     moods, start, end = ROLES.get(action) or KINDS.get(kind) or ROLES["base"]
     if action in ("fallasleep", "fallasleep2", "wake", "wake2") and home != "main":
         start, end = [home if pose == "main" else pose for pose in (start, end)]

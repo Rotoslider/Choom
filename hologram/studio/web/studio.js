@@ -498,7 +498,9 @@ function readinessLine(look) {
   if (n.unbuilt) bits.push(`${n.unbuilt} not built yet`);
   if (outfit && waistUp(look)) bits.push(outfit.talk ? 'has a talk loop' : 'no talk loop placed: she can’t wear it yet');
   if (outfit && waistUp(look) && outfit.unbuilt) bits.push(`about ${outfit.buildMinutes} min to build its ${outfit.unbuilt} new clips`);
-  return el('span', { className: `stat ready${outfit && waistUp(look) && !outfit.talk ? ' warn' : ''}`, tip: o
+  return el('span', { className: `stat ready${outfit && waistUp(look) && !outfit.talk ? ' warn' : ''}`, tip: o && isPlaceLook(look)
+    ? `Clothes she wears only at her ${look.split('@')[0]}: the glass changes her into them there (a change clip, or a cut) once a loop she can talk over in ${look} is built, and back before she gets up`
+    : o
     ? `The outfit ${o}: the glass puts her in it only once a loop she can talk over (Essentials) of ${look} is built, and plays its full body and asleep look only while she wears it`
     : 'Kept clips of this look, how many are placed on the glass, and how many a build still has to make' }, bits.join(' · '));
 }
@@ -649,7 +651,8 @@ function renderWishes() {
     ...(c.wishes || []).map((w) => el('div', { className: 'wish' },
       el('span', {}, el('b', {}, `“${w.what}”`), ` ${w.kind === 'wear' ? 'to wear' : 'a move'} · asked ${w.times > 1 ? `${w.times} times, last ` : ''}${day(w.last)}`),
       w.kind === 'wear'
-        ? el('button', { type: 'button', className: 'ghost', onclick: () => wishOutfit(w), tip: 'Start a new outfit with this as what she wears' }, 'New outfit')
+        ? el('button', { type: 'button', className: 'ghost', onclick: () => wishOutfit(w), tip: wishPlace(w) ? `Start clothes for her ${wishPlace(w)} (worn only there) with this as what she wears` : 'Start a new outfit with this as what she wears' },
+          wishPlace(w) ? `Clothes for ${wishPlace(w)}` : 'New outfit')
         : el('button', { type: 'button', className: 'ghost', onclick: () => wishMove(w), tip: 'Write it as your own clip: a move that ends where it began (sitting down or leaving need new poses, not yet)' }, 'Write it'),
       el('button', { type: 'button', className: 'ghost', onclick: settle(w, true), tip: 'It\'s made: off her list, onto the list of wishes that came true' }, 'Made it'),
       el('button', { type: 'button', className: 'ghost', onclick: settle(w, false), tip: 'It won\'t be made: take it off her list' }, 'Let go'))),
@@ -732,12 +735,25 @@ function updateCustomLengthHint() {
 }
 $('#customText').addEventListener('input', updateCustomLengthHint);
 $('#customSeconds').addEventListener('input', updateCustomLengthHint);
+// A wish to wear something that names one of her places ("Stargazing patio outfit for cold desert nights: a
+// long ... cardigan", Genesis, 2026-11-09) is clothes for that place; its title before a colon isn't clothes.
+function wishPlace(w) {
+  const looks = state.choom.looks;
+  return Object.keys(looks).find((l) => isPlaceLook(l) && !l.includes('@') && looks[l].does && looks[l].picture &&
+                                         new RegExp(`\\b${l}s?\\b`, 'i').test(w.what)) || null;
+}
 function wishOutfit(w) {
   state.tab = 'looks'; remember(); render();
   $('#newOutfit').open = true;
-  $('#outfitKind').value = 'outfit';
+  const place = wishPlace(w);
+  $('#outfitKind').value = place ? 'placeoutfit' : 'outfit';
   $('#outfitKind').dispatchEvent(new Event('input'));
-  $('#outfitWearing').value = w.what.replace(/^(my|a|an|the|some)\s+/i, '');
+  if (place) { $('#outfitBase').value = place; $('#outfitDoes').value = ''; fillDoes(); }
+  const titled = w.what.match(/^([^:]{3,90}):\s*([\s\S]+)$/);
+  const what = titled && /\b(outfit|look|clothes|set)\b/i.test(titled[1]) ? titled[2] : w.what;
+  // In her words, said of her: "around my neck, pockets I can tuck my hands into" (Klein reads it as is).
+  $('#outfitWearing').value = what.replace(/^my\s+/i, '').replace(/\bmy\b/gi, 'her').replace(/\bmyself\b/gi, 'herself')
+    .replace(/\bme\b/gi, 'her').replace(/\bI\b/g, 'she').replace(/\bI'm\b/g, 'she\'s').trim();
   updateOutfitForm();
   $('#newOutfit').scrollIntoView({ block: 'start' });
 }
@@ -796,8 +812,20 @@ function renderLibrary(packs) {
       ...Object.entries(bySister).map(([cid, list]) => fold(`sister|${state.cid}|${cid}`, [el('b', {}, nameOf(cid)), el('small', { className: 'muted' }, ` ${list.length}, newest first`)], false,
         el('div', { className: 'acts' }, ...list.map(act))))));
   };
+  // Same clips as her other looks: one fold for each of them, open for a look with next to nothing yet.
+  const same = (p) => {
+    const acts = byPack[p.id], bySib = {};
+    for (const o of acts) (bySib[o.from] ||= []).push(o);
+    const fresh = Object.values(state.choom.clips).filter((c) => c.from === state.planLook && c.status !== 'dropped').length < 3;
+    return el('section', { className: 'pack' }, fold(`same|${state.cid}|${state.planLook}`, [el('h3', {}, `${p.title} `, el('small', { className: 'muted' }, `${acts.length}`))], fresh,
+      el('header', {}, el('p', {}, p.about)),
+      ...Object.entries(bySib).map(([look, list], i) => fold(`same|${state.cid}|${state.planLook}|${look}`,
+        [el('b', {}, `As in ${look}`), el('small', { className: 'muted' }, ` ${list.length}`)], fresh && i === 0,
+        el('header', {}, pickButton(list)), el('div', { className: 'acts' }, ...list.map(act))))));
+  };
   const blocks = packs.filter((p) => byPack[p.id]).map((p) => {
     if (p.id === 'own' || p.id === 'sisters') return own(p);
+    if (p.id === 'same') return same(p);
     const acts = byPack[p.id];
     return el('section', { className: 'pack' },
       el('header', {}, el('h3', {}, p.title), el('p', {}, p.about), pickButton(acts)),
@@ -847,14 +875,25 @@ $('#customAdd').addEventListener('click', attempt(async () => {
 }));
 
 // A change of clothes on screen: from one of her waist-up looks to another, or one full body to another.
+// At one of her places too: between the place and clothes she wears only there (patio to patio@coolstargaze).
+// To lists the looks in the same frame as From, the only ones a change can go to.
 function renderChangeForm() {
-  const framed = (l) => waistUp(l) || l.split('@')[0] === 'full';
+  const framed = (l) => waistUp(l) || l.split('@')[0] === 'full' || (isPlaceLook(l) && !!state.choom.looks[l].does);
   const looks = lookOrder(state.choom.looks).filter((l) => framed(l) && state.choom.looks[l].picture);
-  for (const [id, pick] of [['changeFrom', framed(state.planLook) ? state.planLook : looks[0]], ['changeTo', looks[1]]]) {
-    const was = $(`#${id}`).value;
-    $(`#${id}`).replaceChildren(...looks.map((l) => el('option', { value: l, selected: l === (looks.includes(was) ? was : pick) }, l)));
-  }
+  const was = $('#changeFrom').value, pick = framed(state.planLook) && looks.includes(state.planLook) ? state.planLook : looks[0];
+  $('#changeFrom').replaceChildren(...looks.map((l) => el('option', { value: l, selected: l === (looks.includes(was) ? was : pick) }, l)));
+  renderChangeTo();
 }
+function renderChangeTo() {
+  const from = $('#changeFrom').value, base = from.split('@')[0];
+  const looks = lookOrder(state.choom.looks).filter((l) => l !== from && l.split('@')[0] === base && state.choom.looks[l].picture);
+  const was = $('#changeTo').value;
+  $('#changeTo').replaceChildren(...looks.map((l) => el('option', { value: l, selected: l === was }, l)));
+  $('#changeText').placeholder = isPlaceLook(from)
+    ? 'Sparkles swirl around her and her clothes become a long charcoal cardigan over a cream henley, while the patio, its warm light and the stars stay exactly as they are; she ends facing the viewer as she began.'
+    : 'Glowing violet motes swirl up around her and the burgundy dress melts into a long ivory silk nightgown as the motes fade from her skin, then she smiles at the viewer.';
+}
+$('#changeFrom').addEventListener('input', renderChangeTo);
 $('#changeAdd').addEventListener('click', attempt(async () => {
   const text = $('#changeText').value.trim();
   if (!text) return toast('Say what happens as she changes', true);
@@ -1197,12 +1236,14 @@ function firstPicture(look, l) {
 
 // --- New looks: outfits, full body, asleep, places (Klein), the empty glass -----------------------
 const draftUrl = (f) => `/media/draft/${encodeURIComponent(f.replace(/^drafts\//, ''))}`;
-const WHEN = { evening: 'evenings, 6 to 11 pm', cold: 'cold days (under 45°F)', hot: 'hot days (over 85°F)', day: 'daytime, taking turns with her usual clothes',
+const WHEN = { evening: 'evenings, 6 to 11 pm', cold: 'cold days (under 45°F)', cool: 'cool days and nights (under 60°F)', hot: 'hot days (over 85°F)', day: 'daytime, taking turns with her usual clothes',
   night: 'nights, from 10 pm until she wakes (she sleeps in it)', chosen: 'only when she chooses it herself (glass_wear); she sleeps in it if it has an asleep look' };
 // A new picture for a look she has, when it's the colour that's wrong (pictures.TRUE_COLOR_PROMPT).
 const TRUE_COLOR = 'Make this picture look natural and true to life: clean neutral white light with accurate, realistic skin tones and colours and no colour cast. '
   + 'Keep everything else exactly the same: her face, expression, hair, clothes and pose, the framing, and the pure black background.';
 const waistUp = (l) => ['main', 'relaxed'].includes(l.split('@')[0]);
+// One of her places (the patio, the campfire), or clothes she wears only there (patio@coolstargaze).
+const isPlaceLook = (l) => !['main', 'relaxed', 'full', 'asleep', 'gone', 'circle', 'circleside'].includes(l.split('@')[0]);
 let promptEdited = false;
 const outfitKind = () => $('#outfitKind').value;
 // The same instructions as studio/pictures.py, shown so they can be edited before Klein runs.
@@ -1233,6 +1274,15 @@ function kleinPrompt() {
     }
     return `Show her ${wearing || '…'}, ${frame} with a little black space around her. `
       + `Keep ${keepIt} exactly as in the picture, with the same light on the same pure black background.`;
+  }
+  if (outfitKind() === 'placeoutfit') {  // pictures.place_outfit_prompt: only her clothes change (her pose too, if given)
+    const place = state.choom.looks[baseId.split('@')[0]] || {};
+    const own = (base.kleinKeep || state.choom.looks.main?.kleinKeep || 'her face, expression and hair').replace(/[,. ]+$/, '').replace(/,\s+and\s+(?=[^,]*$)/, ', ');
+    const does = $('#outfitDoes').value.trim().replace(/\.$/, '');
+    const newPose = does && does !== (place.does || '').trim().replace(/\.$/, '');
+    const kept = [own, ...(newPose ? [] : ['her pose']), 'anything she holds',
+      ...(place.scene ? ['the setting around her and its light', 'the black all around it'] : ['the lighting', 'the pure black background'])];
+    return `Change her clothes: she now wears ${wearing || '…'}.${newPose ? ` She is ${does}.` : ''} Keep everything else exactly the same: ${kept.join(', ')}, and the framing.`;
   }
   if (outfitKind() === 'asleep') {
     return 'She has dozed off peacefully: her eyes are gently closed, her face is soft and relaxed, and her head tips slightly down and to one side. '
@@ -1291,21 +1341,24 @@ function outfitLookId() {
   const name = $('#outfitName').value.toLowerCase().replace(/[^a-z0-9]/g, '');
   if (kind === 'gone') return 'gone';
   if (kind === 'place') return name || '…';
+  if (kind === 'placeoutfit') return `${b.split('@')[0]}@${$('#outfitWhen').value}${name}`;  // clothes she wears only there
   return `${b.split('@')[0]}@${$('#outfitWhen').value}${name}`;  // from another outfit too, in its pose
 }
 function updateOutfitForm() {
   const kind = outfitKind();
-  $$('#newOutfit .when').forEach((e) => { e.hidden = kind !== 'outfit'; });
-  $$('#newOutfit .named').forEach((e) => { e.hidden = kind !== 'outfit' && kind !== 'place'; });
+  $$('#newOutfit .when').forEach((e) => { e.hidden = kind !== 'outfit' && kind !== 'placeoutfit'; });
+  $$('#newOutfit .named').forEach((e) => { e.hidden = !['outfit', 'place', 'placeoutfit'].includes(kind); });
+  $$('#newOutfit .placeoutfit').forEach((e) => { e.hidden = kind !== 'placeoutfit'; });
+  $('#outfitWhenLabel').textContent = kind === 'placeoutfit' ? 'She wears them there on' : 'She wears it on';
   $$('#newOutfit .redo').forEach((e) => { e.hidden = kind !== 'redo'; });
   $$('#newOutfit .place').forEach((e) => { e.hidden = kind !== 'place'; });
   if (kind === 'place') loadIdeas().catch(() => {});
   $$('#newOutfit .klein').forEach((e) => { e.hidden = kind === 'gone'; });
   $('#newOutfit .wearing').hidden = kind === 'asleep' || kind === 'redo' || kind === 'gone';
-  $('#outfitNameLabel').textContent = kind === 'place' ? 'Name (dumbbells, patio)' : 'Name (optional)';
-  $('#outfitName').placeholder = kind === 'place' ? 'campfire' : 'dress';
+  $('#outfitNameLabel').textContent = kind === 'place' ? 'Name (dumbbells, patio)' : kind === 'placeoutfit' ? 'Name (stargaze, blanket)' : 'Name (optional)';
+  $('#outfitName').placeholder = kind === 'place' ? 'campfire' : kind === 'placeoutfit' ? 'stargaze' : 'dress';
   $('#outfitWearingLabel').textContent = kind === 'full' ? 'What she wears below the waist (optional; her top is kept)'
-    : kind === 'place' ? 'Where she is and how' : 'She now wears';
+    : kind === 'place' ? 'Where she is and how' : kind === 'placeoutfit' ? 'She wears there' : 'She now wears';
   $('#outfitWearing').placeholder = kind === 'place' ? 'sitting on the ground beside a small campfire, her knees drawn up and her hands held toward the flames, looking up at the viewer'
     : 'a long burgundy dress with thin straps';
   $('#outfitMake').textContent = kind === 'gone' ? 'Make it' : 'Make pictures';
@@ -1326,18 +1379,31 @@ function renderOutfitForm() {
   // A place starts from her full body (or a waist-up look): it's framed wide like the full body.
   // An outfit can start from a full body too (its clothes changed on her whole figure, for a full-body change).
   const bases = withPicture.filter((l) => kind === 'redo' || (kind === 'place' && l.split('@')[0] === 'full') ||
+                                          (kind === 'placeoutfit' && isPlaceLook(l) && !!looks[l].does) ||
                                           (kind === 'outfit' && l.split('@')[0] === 'full') ||
-                                          (waistUp(l) && (kind !== 'asleep' || !l.includes('@') || /^(night|chosen)/.test(l.split('@')[1]))));
+                                          (kind !== 'placeoutfit' && waistUp(l) && (kind !== 'asleep' || !l.includes('@') || /^(night|chosen)/.test(l.split('@')[1]))));
   const wasTarget = $('#outfitTarget').value;
   $('#outfitTarget').replaceChildren(...withPicture.map((l) => el('option', { value: l, selected: l === (wasTarget || state.planLook) }, l)));
   const home = state.choom.sequence.length ? state.choom.clips[state.choom.sequence[0]].from : bases[0];
   const wardrobeBase = bases.find((l) => state.choom.looks[l].wardrobe) || home;
-  const was = kind === 'place' ? (chosenIdea() ? ideaBase(chosenIdea(), bases) : bases.includes($('#outfitBase').value) ? $('#outfitBase').value : 'full') : $('#outfitBase').value;
+  const was = kind === 'place' ? (chosenIdea() ? ideaBase(chosenIdea(), bases) : bases.includes($('#outfitBase').value) ? $('#outfitBase').value : 'full')
+    : kind === 'placeoutfit' ? (bases.includes($('#outfitBase').value) ? $('#outfitBase').value : bases[0]) : $('#outfitBase').value;
   $('#outfitBase').replaceChildren(...bases.map((l) => el('option', { value: l, selected: l === (was || wardrobeBase) }, l)));
   if (!$('#outfitWhen').options.length) $('#outfitWhen').replaceChildren(...Object.entries(WHEN).map(([k, v]) => el('option', { value: k }, v)));
+  fillDoes();
   updateOutfitForm();
 }
-['outfitBase', 'outfitWhen', 'outfitName', 'outfitWearing'].forEach((id) => $(`#${id}`).addEventListener('input', updateOutfitForm));
+// Clothes for a place: her pose there starts as the place's (or the look's she starts from), and follows a
+// change of the starting look unless he wrote a new one.
+let doesFrom = null;
+function fillDoes() {
+  if (outfitKind() !== 'placeoutfit') return;
+  const b = $('#outfitBase').value, now = $('#outfitDoes').value.trim();
+  if (!now || now === (state.choom.looks[doesFrom]?.does || '').trim()) $('#outfitDoes').value = state.choom.looks[b]?.does || '';
+  doesFrom = b;
+}
+$('#outfitBase').addEventListener('input', fillDoes);
+['outfitBase', 'outfitWhen', 'outfitName', 'outfitWearing', 'outfitDoes'].forEach((id) => $(`#${id}`).addEventListener('input', updateOutfitForm));
 // A prompt changed by hand still takes what she wears: typing in "She now wears" puts it in place of the
 // clothes the prompt names (after "wears", to the end of that sentence). It used to stop following once
 // the prompt was touched anywhere ("Change her clothes and hair"), and Discard brings such a prompt back:
@@ -1374,6 +1440,8 @@ $('#outfitMake').addEventListener('click', attempt(async () => {
   if (outfitKind() === 'place' && !/^[a-z][a-z0-9]*$/.test($('#outfitName').value.trim().toLowerCase())) return toast('Name the place (letters and digits: campfire)', true);
   if (outfitKind() === 'place' && !$('#outfitWearing').value.trim() && !promptEdited) return toast('Say where she is and how', true);
   if (outfitKind() === 'outfit' && !$('#outfitWearing').value.trim() && !promptEdited) return toast('Say what she wears', true);
+  if (outfitKind() === 'placeoutfit' && !$('#outfitWearing').value.trim()) return toast('Say what she wears there', true);
+  if (outfitKind() === 'placeoutfit' && !/^[a-z][a-z0-9]*$/.test($('#outfitName').value.trim().toLowerCase())) return toast('Name the clothes (letters and digits: stargaze)', true);
   // A prompt changed before "She now wears" was filled in stops following it and keeps the "…" where her
   // clothes go: Genesis's shop shirt and ponytail never reached Klein that way (2026-10-16).
   if ($('#outfitPrompt').value.includes('wears …')) {
@@ -1384,7 +1452,7 @@ $('#outfitMake').addEventListener('click', attempt(async () => {
   // Klein reads only the prompt, and the look's Subject line is written from "She now wears": they have
   // to name the same clothes, or the picture and its clips go two ways (a new shirt said to be worn).
   const wears = $('#outfitWearing').value.trim().replace(/\.$/, '');
-  if (wears && ['outfit', 'full'].includes(outfitKind()) && !$('#outfitPrompt').value.includes(wears)) {
+  if (wears && ['outfit', 'full', 'placeoutfit'].includes(outfitKind()) && !$('#outfitPrompt').value.includes(wears)) {
     return toast('The prompt names different clothes from “She now wears”, and Klein only reads the prompt: make them the same', true);
   }
   const file = $('#outfitUpload').files[0], refs = [...$('#outfitRefs').files];
@@ -1393,11 +1461,12 @@ $('#outfitMake').addEventListener('click', attempt(async () => {
     wearing: $('#outfitWearing').value, prompt: $('#outfitPrompt').value, count: Number($('#outfitCount').value),
     look: $('#outfitTarget').value, upload: file ? await readFile(file) : undefined,
     ...(outfitKind() === 'place' ? { scene: $('#outfitScene').checked, activity: chosenIdea()?.id || undefined } : {}),
+    ...(outfitKind() === 'placeoutfit' ? { does: $('#outfitDoes').value } : {}),
     refs: refs.length ? await Promise.all(refs.map(readFile)) : undefined,
   })).choom;
   $('#outfitUpload').value = ''; $('#outfitRefs').value = ''; $('#outfitRefsHint').hidden = true;
   promptEdited = false;
-  $('#outfitWearing').value = ''; $('#outfitName').value = ''; $('#outfitIdea').value = ''; $('#outfitScene').checked = false;
+  $('#outfitWearing').value = ''; $('#outfitName').value = ''; $('#outfitIdea').value = ''; $('#outfitScene').checked = false; $('#outfitDoes').value = '';
   toast('Klein is making the pictures; they show up here when done (after any render ahead of it)');
   renderLooks();
   pollJobs();
@@ -1439,7 +1508,7 @@ function refillOutfitForm(look, d) {
   renderOutfitForm();
   if (d.base) $('#outfitBase').value = d.base;
   if (d.kind === 'redo') $('#outfitTarget').value = look;
-  if (d.kind === 'outfit') {
+  if (d.kind === 'outfit' || d.kind === 'placeoutfit') {
     const part = look.split('@')[1] || '';  // versions made before the form was kept: from the look's name
     const when = d.when || Object.keys(WHEN).find((w) => part.startsWith(w)) || $('#outfitWhen').value;
     $('#outfitWhen').value = when;
@@ -1451,6 +1520,7 @@ function refillOutfitForm(look, d) {
     loadIdeas().then(() => { $('#outfitIdea').value = d.activity || ''; }).catch(() => {});
   }
   $('#outfitWearing').value = d.wearing || '';
+  if (d.kind === 'placeoutfit') { $('#outfitDoes').value = d.does || state.choom.looks[d.base]?.does || ''; doesFrom = d.base; }
   if (d.count) $('#outfitCount').value = String(d.count);
   updateOutfitForm();
   if (d.prompt && d.prompt !== $('#outfitPrompt').value) { $('#outfitPrompt').value = d.prompt; promptEdited = true; }

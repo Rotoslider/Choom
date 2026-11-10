@@ -36,7 +36,7 @@ STATUSES = ("planned", "queued", "rendered", "kept", "dropped")
 NOT_CHOOMS = {"jobs", "worklist", "notify", "schedule"}  # json files in studio/ that aren't Choom projects
 BUILD_MINUTES_PER_CLIP = 2.5  # masks, depth and relief of one new clip in a build (October 2026 builds)
 TAKES = CLIPS / "takes"  # earlier takes of re-rolled clips (render.collect)
-WHEN_WORDS = ("cold", "hot", "evening", "day", "night", "chosen")  # an outfit's name starts with when she wears it
+WHEN_WORDS = ("cold", "cool", "hot", "evening", "day", "night", "chosen")  # an outfit's name starts with when she wears it
 
 
 class LookHasDropped(ValueError):
@@ -272,11 +272,11 @@ class Project:
         if new == old or any(outfit_of(lid) == new for lid in self.looks):
             raise ValueError(f"she already has an outfit called {new}")
         relook = lambda lid: f"{base_of(lid)}@{new}" if outfit_of(lid) == old else lid  # noqa: E731
-        into = re.compile(rf"(?<=[-_])(full)?change_{re.escape(old)}(?=_|$)")
+        into = re.compile(rf"(?<=[-_])([a-z0-9]*?)change_{re.escape(old)}(?=_|$)")  # fullchange_, patiochange_ too
         names = {}
         for n in self.clips:
             m = f"{self.id}_{new}-" + n[len(f"{self.id}_{old}-"):] if n.startswith(f"{self.id}_{old}-") else n
-            m = into.sub(lambda x: f"{x.group(1) or ''}change_{new}", m)
+            m = into.sub(lambda x: f"{x.group(1)}change_{new}", m)
             if m != n:
                 names[n] = m
         built = set(built)
@@ -340,15 +340,25 @@ class Project:
         usual = closet.wearing(main)
         for lid in sorted(self.looks, key=lambda l: (base_of(l) != "main", l)):  # main@evening before relaxed@evening
             o, subject = outfit_of(lid), self.looks[lid].get("subject", "")
-            if o and o not in looks and base_of(lid) != "full":  # the outfit, not its full body
+            if o and o not in looks and base_of(lid) in ("main", "relaxed", "asleep"):  # the outfit, not its full body
                 worn = closet.wearing(subject, main)
                 looks[o] = {"tags": self.closet_words(lid),  # her usual clothes, changed some other way: say how
                             "wearing": closet.same_clothes(subject, main) if worn == usual else worn}
+        # Clothes she wears only at one of her places (her long cardigan on the patio): what she wears, and where.
+        there = {}
+        for lid, look in sorted(self.looks.items()):
+            o, place = outfit_of(lid), base_of(lid)
+            if o and look.get("does") and place not in closet.SEATS:
+                worn = look.get("wearing") or closet.wearing(look.get("subject", ""), main)
+                entry = there.setdefault(o, {"tags": look.get("tags") or closet.default_tags(lid, f"wearing {worn}", main),
+                                             "wearing": worn, "places": []})
+                entry["places"].append(place)
         data = {"usual": usual, "looks": looks,
                 "moves": {n: c["tags"] for n, c in sorted(self.clips.items()) if c.get("tags")},
                 # Her places (sitting by her campfire): where she is and how, for her request and the answer.
                 "places": {lid: look["does"] for lid, look in sorted(self.looks.items())
-                           if look.get("does") and lid not in closet.SEATS}}
+                           if look.get("does") and lid not in closet.SEATS and "@" not in lid},
+                **({"placeClothes": there} if there else {})}
         text = json.dumps(data, indent=1) + "\n"
         if not f.exists() or f.read_text() != text:
             part = f.with_suffix(".part")  # swapped in whole: the glass's server reads it any moment
@@ -393,7 +403,7 @@ class Project:
         warnings = [f"{lid}: {n['kept']} kept clip{'s' if n['kept'] > 1 else ''}, none on the glass yet"
                     for lid, n in looks.items() if n["kept"] and not n["placed"]]
         outfits = {}
-        for o in sorted({outfit_of(lid) for lid in self.looks if outfit_of(lid)}):
+        for o in sorted({outfit_of(lid) for lid in self.looks if outfit_of(lid) and base_of(lid) in ("main", "relaxed", "full", "asleep")}):
             waist = [lid for lid in (f"main@{o}", f"relaxed@{o}") if lid in self.looks]
             extra = [lid for lid in (f"full@{o}", f"asleep@{o}") if lid in self.looks]
             mine = [looks[lid] for lid in waist + extra]
@@ -412,7 +422,11 @@ class Project:
         # campfire circle need no way there: the glass cuts to them.
         into = {self.clips[n]["to"] for n in seq if n in self.clips and self.clips[n]["from"] != self.clips[n]["to"]}
         for lid in self.looks:
-            if self.looks[lid].get("does") and looks[lid]["placed"] and lid not in into and lid not in closet.SEATS:
+            if "@" in lid and self.looks[lid].get("does") and looks[lid]["placed"] and not looks[lid]["talk"]:
+                # Clothes she wears only at a place: the glass changes her into them there only with a loop to be in.
+                warnings.append(f"{lid} has clips on the glass, but no loop there she can talk over ({base_of(lid)} pack: "
+                                f"her loop), so she never changes into it")
+            elif "@" not in lid and self.looks[lid].get("does") and looks[lid]["placed"] and lid not in into and lid not in closet.SEATS:
                 warnings.append(f"{lid} is on the glass, but nothing takes her there: put to_{lid} on the glass too "
                                 f"(A place), or she never goes")
         return {"looks": looks, "outfits": outfits, "warnings": warnings}

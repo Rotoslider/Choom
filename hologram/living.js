@@ -1149,10 +1149,11 @@ function nightOutfit(p, outfits) {
   p.nightPick = { o, until: performance.now() + msUntilHour(nightNow() ? SLEEP_UNTIL : NIGHT_FROM) };
   return o;
 }
-const COLD_BELOW_F = setting('coldBelowF', 45), HOT_ABOVE_F = setting('hotAboveF', 85);
+const COLD_BELOW_F = setting('coldBelowF', 45), COOL_BELOW_F = setting('coolBelowF', 60), HOT_ABOVE_F = setting('hotAboveF', 85);
 const EVENING_FROM = setting('eveningFrom', 18), EVENING_UNTIL = setting('eveningUntil', 23);
 const OUTFIT_RULES = [
   [/^cold/, () => typeof weather.temperature === 'number' && weather.temperature < COLD_BELOW_F],  // °F
+  [/^cool/, () => typeof weather.temperature === 'number' && weather.temperature < COOL_BELOW_F],  // a cool evening (2026-11-09)
   [/^hot/, () => typeof weather.temperature === 'number' && weather.temperature > HOT_ABOVE_F],
   [/^evening/, () => { const h = hourNow(); return h >= EVENING_FROM && h < EVENING_UNTIL; }],
   [/^chosen/, () => false],  // never by the clock: only when she chooses it (chosenOutfit), and no visit after
@@ -1180,7 +1181,9 @@ function wardrobe(p) {
 function saveWardrobe(p) {
   try { localStorage.setItem(`wardrobe-${p.id}`, JSON.stringify(p.wardrobe)); } catch { /* the page works without it */ }
 }
-const lookClips = (p, o) => p.alive.clips.filter((c) => outfitOf(poseFrom(c)) === o).length;
+// Clothes she wears only at one of her places (patio@coolstargaze) are no outfit of hers anywhere else:
+// no visits, no daily total, never put on in her usual looks (placeWear below).
+const lookClips = (p, o) => p.alive.clips.filter((c) => outfitOf(poseFrom(c)) === o && !isPlace(poseFrom(c))).length;
 const visitLength = (p, o) => Math.min(VISIT_MAX_MS, Math.max(VISIT_MIN_MS, lookClips(p, o) * VISIT_S_PER_CLIP * 1000));
 function mayWear(p, o) {
   // All night long, and only at night: a night outfit she's in by day (woken from a nap, or still in
@@ -1195,7 +1198,7 @@ function mayWear(p, o) {
 // Starts and ends visits for the clothes she's in at `pose`. The end of an outfit's visit starts her
 // rest in her usual clothes (restedAny).
 function syncVisit(p, pose) {
-  const w = wardrobe(p), o = outfitOf(pose), now = Date.now();
+  const w = wardrobe(p), o = isPlace(pose) ? null : outfitOf(pose), now = Date.now();
   if (w.visit && w.visit.o !== o) {
     w.rested[w.visit.o] = now;
     if (!ALT_LOOKS.has(w.visit.o) && !/^night/.test(w.visit.o)) w.restedAny = now;
@@ -1208,7 +1211,7 @@ function syncVisit(p, pose) {
 // Called with each clip she finishes (at the hand-over, once per clip): counts time worn. nextClip
 // has already synced her visit to where that clip ends (it picks the clip after while this one plays).
 function noteWorn(p, pose, ms) {
-  const w = syncVisit(p, pose), o = outfitOf(pose);
+  const w = syncVisit(p, pose), o = isPlace(pose) ? null : outfitOf(pose);
   if (o) {
     w.worn[o] = (w.worn[o] || 0) + ms;
     saveWardrobe(p);
@@ -1232,16 +1235,52 @@ function chosenOutfit(p) {
     saveWardrobe(p);
     return undefined;
   }
-  if (c.o && !p.alive.clips.some((x) => outfitOf(poseFrom(x)) === c.o && clipMoods(x).includes('talk'))) return undefined;
+  if (c.o && !p.alive.clips.some((x) => outfitOf(poseFrom(x)) === c.o && !isPlace(poseFrom(x)) && clipMoods(x).includes('talk'))) return undefined;
   return c.o;
 }
 // The outfits she can wear: those with a loop she can talk over.
-const wearable = (p) => [...new Set(p.alive.clips.filter((c) => clipMoods(c).includes('talk')).map((c) => outfitOf(poseFrom(c))).filter(Boolean))];
+const wearable = (p) => [...new Set(p.alive.clips.filter((c) => clipMoods(c).includes('talk') && !isPlace(poseFrom(c))).map((c) => outfitOf(poseFrom(c))).filter(Boolean))];
 // Clothes she can sleep in: their own asleep look (asleep@nightcold, asleep@chosenunder) to sleep and wake in.
 const canSleepIn = (p, o) => ['sleep', 'wake'].every((mood) => p.alive.clips.some((c) => clipMoods(c).includes(mood) && poseFrom(c) === `asleep@${o}`));
 function bedOutfit(p) {
   const o = nightOutfit(p, wearable(p));
   return o && canSleepIn(p, o) ? o : null;
+}
+// Clothes she wears only at one of her places (Studio: Clothes for a place; Genesis wished for a long
+// cardigan and a blanket for her stone patio, 2026-11-09): a look of their own there (patio@coolstargaze),
+// worn nowhere else. She arrives in the place's own clothes and, a little while later at a quiet moment,
+// changes into the ones its names call for, by the same words as her outfits: night… from 10 pm, cold…
+// under 45°F, cool… under 60°F, hot… over 85°F, evening… 6 to 11 pm, chosen… only when she asks, day…
+// taking turns with the place's own clothes from visit to visit. Or into the ones she asked for (glass_wear:
+// placeChosen, for three hours; her usual clothes asked for are the place's own there). Picked once a
+// visit. Before she gets up she changes back, so getting back is the place's own clip. A change clip made
+// for it plays (genesis_patiochange_coolstargaze_motes), else a cut.
+const PLACE_CHANGE_AFTER_MS = setting('placeChangeAfterSeconds', 20) * 1000;
+const PLACE_CHOICE_MS = setting('placeChoiceHours', 3) * 3600000;
+const placeClothes = (p, place) => [...new Set(p.alive.clips.filter((c) => poseFrom(c) === poseTo(c) && basePose(poseFrom(c)) === place &&
+  outfitOf(poseFrom(c)) && clipMoods(c).includes('talk')).map((c) => outfitOf(poseFrom(c))))];
+function placeWear(p, place) {
+  const there = placeClothes(p, place);
+  if (!there.length || !p.stay) return null;
+  const asked = wardrobe(p).placeChosen;
+  if (asked && Date.now() - asked.at < PLACE_CHOICE_MS && (asked.o === null || there.includes(asked.o))) return asked.o;
+  if (p.stay.wear !== undefined) return p.stay.wear;
+  let pick = null;
+  if (nightNow()) {
+    const nights = there.filter((o) => /^night/.test(o)), t = weather.temperature;
+    const warm = typeof t === 'number' ? t >= NIGHT_WARM_F : null;
+    pick = (warm !== null && nights.find((x) => (warm ? /warm/ : /cold/).test(x))) || nights.find((x) => !/warm|cold/.test(x)) || nights[0] || null;
+  }
+  for (const [rule, when] of OUTFIT_RULES) {
+    const fit = there.filter((x) => rule.test(x));
+    if (!pick && fit.length && when()) pick = fit[Math.floor(Math.random() * fit.length)];
+  }
+  if (!pick) {
+    const days = [null, ...there.filter((x) => /^day/.test(x))];
+    pick = days[Math.floor(Math.random() * days.length)];
+  }
+  p.stay.wear = pick;
+  return pick;
 }
 function wantedOutfit(p, want) {
   if (want === 'sleep') {
@@ -1475,17 +1514,33 @@ function nextClip(p, after) {
   // her full body, and the glass cuts back), or without such a clip the glass just cuts back. Bedtime,
   // the group stage or her turn on the glass ending cut the stay short.
   if (isPlace(pose)) {
-    const now = performance.now();
+    const now = performance.now(), place = basePose(pose);
     // `back`: the look she came from, cut back to once she's up (a full-body move from here cuts back here).
-    if (!p.stay || p.stay.pose !== pose) {
-      p.stay = { pose, until: now + PLACE_STAY_MS, back: p.cutFrom && !isPlace(p.cutFrom) ? p.cutFrom : p.alive.home || 'main' };
+    // One stay per place, whatever she changes into there.
+    if (!p.stay || p.stay.place !== place) {
+      p.stay = { place, since: now, until: now + PLACE_STAY_MS, back: p.cutFrom && !isPlace(p.cutFrom) ? p.cutFrom : p.alive.home || 'main' };
     }
-    if (now > p.stay.until || want === 'sleep' || stage.on || p.leaving != null) {
+    const done = now > p.stay.until || want === 'sleep', up = done || stage.on || p.leaving != null;
+    // Clothes she wears only here (placeWear): into them after a little while, at a quiet moment, and
+    // back out before she gets up (not for the campfire circle or her turn ending: those don't wait).
+    const wear = up ? null : placeWear(p, place);
+    if (outfitOf(pose) !== wear && (done || (!up && quiet && now - p.stay.since > PLACE_CHANGE_AFTER_MS))) {
+      const to = wear ? `${place}@${wear}` : place;
+      const change = clips.map((c, k) => k).filter((k) => poseFrom(clips[k]) === pose && poseTo(clips[k]) === to);
+      if (change.length) {
+        const k = change[Math.floor(Math.random() * change.length)];
+        (p.moments ||= new Set()).add(k);
+        return k;
+      }
+      const loop = up ? -1 : clips.findIndex((c) => poseFrom(c) === to && poseTo(c) === to && clipMoods(c).includes('talk'));
+      if (loop >= 0) return loop;  // no clip for it: a cut
+    }
+    if (up) {
       p.cutFrom = p.stay.back;
       p.stay = null;
-      const up = clips.map((c, k) => k).filter((k) => poseFrom(clips[k]) === pose && goes(clips[k]));
-      if (up.length) {
-        const k = up[Math.floor(Math.random() * up.length)];
+      const ways = clips.map((c, k) => k).filter((k) => poseFrom(clips[k]) === pose && goes(clips[k]));
+      if (ways.length) {
+        const k = ways[Math.floor(Math.random() * ways.length)];
         (p.moments ||= new Set()).add(k);
         return k;
       }
@@ -1552,7 +1607,7 @@ function nextClip(p, after) {
   // side of a pose change in these clothes. A move she has only in other clothes doesn't play (it was
   // a cut into another outfit; server.py tells her it's a wish).
   if (p.moveWanted && performance.now() > p.moveWanted.until) p.moveWanted = null;
-  if (p.moveWanted && free && isPlace(pose) && clips.some((c) => p.moveWanted.sources.has(c.source) && poseTo(c) === pose)) {
+  if (p.moveWanted && free && isPlace(pose) && clips.some((c) => p.moveWanted.sources.has(c.source) && basePose(poseTo(c)) === basePose(pose))) {
     p.moveWanted = null;  // asked for the place she's at: she stays longer
     if (p.stay) p.stay.until = performance.now() + PLACE_STAY_MS;
   }
@@ -2574,10 +2629,18 @@ function onGlass(ev) {
   if ('wear' in ev) {
     const w = wardrobe(p);
     w.chosen = { o: ev.wear || null, at: Date.now() };
+    if (!ev.wear) w.placeChosen = { o: null, at: Date.now() };  // her usual clothes: at a place, its own
+    saveWardrobe(p);
+  }
+  // Clothes she wears only at one of her places (her cardigan on the patio): put on there (placeWear).
+  if ('placeWear' in ev) {
+    const w = wardrobe(p);
+    w.placeChosen = { o: ev.placeWear || null, at: Date.now() };
     saveWardrobe(p);
   }
   swapWaiting(p);
-  post('glass', { choom: p.id, move: ev.name || null, wear: 'wear' in ev ? ev.wear || 'usual' : undefined });
+  post('glass', { choom: p.id, move: ev.name || null, wear: 'wear' in ev ? ev.wear || 'usual' : undefined,
+                  placeWear: 'placeWear' in ev ? ev.placeWear : undefined });
 }
 
 // ---- Choom app link: show whoever is talking and speak her reply in her own voice ----------
@@ -3329,7 +3392,8 @@ function frame(now) {
   // the Studio) the glass's own particles fade out: swirling around her they hid the stars (2026-11-09).
   // They go as the setting fades in on her way there and come back once she's back on black.
   const scenes = cur.prefs?.scenes || [];
-  const sceneNow = curClip && (scenes.includes(poseFrom(curClip)) || scenes.includes(poseTo(curClip))) ? 1 : 0;
+  const inScene = (pz) => scenes.includes(pz) || scenes.includes(basePose(pz));  // in clothes for it too (patio@coolstargaze)
+  const sceneNow = curClip && (inScene(poseFrom(curClip)) || inScene(poseTo(curClip))) ? 1 : 0;
   sceneAmt += (sceneNow - sceneAmt) * Math.min(dt * 2, 1);
   if (orbGroup.visible) updateOrbs(presence * (1 - 0.6 * sleepAmt) * (1 - fullAmt));
   particleMaterial.uniforms.time.value = simTime;

@@ -740,13 +740,17 @@ def glass_answer(request, shown=None):
     if not alive.get("clips"):
         return {"ok": False, "error": f"{choom or 'That Choom'} isn't on the glass yet."}
     moves, outfits, spots = closet.moves(cid, alive, worn), closet.outfits(alive, worn), closet.places(alive, worn)
+    there = {o: c for o, c in closet.place_clothes(alive, worn).items() if o not in outfits}  # worn only at a place
+    at = lambda o: " or ".join(f"your {p}" for p in there[o]["places"])  # noqa: E731
     names = sorted({closet.move_name(w, spots) for w in moves})
     if op == "closet":
         # What she has, never what she's wearing at the moment.
         return {"ok": True, "moves": names,
                 "clothes": [f"your usual clothes{': ' + worn['usual'] if worn.get('usual') else ''}"] +
-                           [(o["wearing"] or ", ".join(o["tags"])) + (" (worn only when you choose it)" if name.startswith("chosen") else "")
-                            for name, o in outfits.items()],
+                           [closet.as_you(o["wearing"] or ", ".join(o["tags"])) + (" (worn only when you choose it)" if name.startswith("chosen") else "")
+                            for name, o in outfits.items()] +
+                           [closet.as_you(o["wearing"] or ", ".join(o["tags"])) + f" (worn only at {at(name)}: you change into it there)"
+                            for name, o in there.items()],
                 "note": "This only lists your closet; nothing has changed. To change clothes, use glass_wear. "
                         "Ask for something you don't have and it goes on Donny's wish list for Glass Studio."}
     if not what:
@@ -809,7 +813,7 @@ def glass_answer(request, shown=None):
                            f"glass_wear can put it on first."}
     if op == "wear":
         t = (latest.get("weather") or {}).get("temperature")
-        match = closet.match_outfit(what, outfits, warm=t >= 70 if isinstance(t, (int, float)) else None,
+        match = closet.match_outfit(what, {**outfits, **there}, warm=t >= 70 if isinstance(t, (int, float)) else None,
                                     usual=closet.usual_clothes(worn, studio_main_subject(cid)))
         if match is None:
             closet.add_wish(PORTRAITS, cid, "wear", what)
@@ -817,11 +821,26 @@ def glass_answer(request, shown=None):
                     "message": f"There's nothing like \"{what}\" in your closet on the glass yet. It's on Donny's wish list in Glass Studio now.{left_off}",
                     "clothes": [o["wearing"] or ", ".join(o["tags"]) for o in outfits.values()]}
         name, outfit = match
+        if name in there:
+            # Clothes she wears only at one of her places (her cardigan on the patio): she goes there (if it's
+            # just the one, or the one she named) and changes into them there (living.js placeWear).
+            asked = set(closet.words(what))
+            named = [p for p in outfit["places"] if p in asked or p.rstrip("s") in asked]
+            place = (named or outfit["places"])[0] if len(named or outfit["places"]) == 1 else None
+            go = sorted(moves.get(place, [])) if place in spots else []
+            show({"type": "glass", "choom": cid, "placeWear": name, "places": outfit["places"],
+                  **({"move": go, "name": place} if go else {})})
+            where = f"your {place}" if go else at(name)
+            return {"ok": True, "done": True,
+                    "message": (f"On the glass you go to {where} at your next quiet moment and change into "
+                                f"{closet.as_you(outfit['wearing'] or name)} there" if go else
+                                f"On the glass you change into {closet.as_you(outfit['wearing'] or name)} the next time you're at {where}") +
+                               ", and change back before you leave."}
         show({"type": "glass", "choom": cid, "wear": None if name == "usual" else name})
         if name == "usual":
             return {"ok": True, "done": True, "message": "On the glass you change back into your usual clothes at your next quiet moment."}
         return {"ok": True, "done": True,
-                "message": f"On the glass you change into {outfit['wearing'] or name} at your next quiet moment, and keep it on until bedtime unless you change again."}
+                "message": f"On the glass you change into {closet.as_you(outfit['wearing'] or name)} at your next quiet moment, and keep it on until bedtime unless you change again."}
     return {"ok": False, "error": f"unknown op {op}"}
 
 

@@ -26,7 +26,8 @@ Two things are new since November 9:
   pool of light: anything that fades into black before the edges of the picture.
 
 You need a Choom on the glass with her full body. Part 1 walks through Genesis's patio as it was made;
-Part 2 is Eve working out in her spandex; Part 3 is an idea of your own; Part 4 is the other new tools.
+Part 2 is Eve working out in her spandex; Part 3 is an idea of your own; Part 4 is the other new tools;
+Part 5 is clothes she wears only at a place (Genesis's cardigan and blanket on the patio).
 
 ---
 
@@ -220,3 +221,94 @@ sent.
 **Clean up explains itself.** Each line says what it is, its dates, and what deleting it costs. Depth
 maps of clips on the glass (about 300 MB a clip) are no longer kept: a build drops them once its clips
 are on the glass, and makes one again if it ever needs it.
+
+---
+
+## Part 5: clothes for a place
+
+Once she'd been out on the patio, Genesis wished for two outfits for it: a long charcoal cardigan
+with a henley, jeans, boots and a scarf, *"made for standing on the stone patio under the stars at 50
+degrees"*, and a striped wool blanket over a flannel nightgown, *"the look of someone who stepped
+outside at night just to see the stars and grabbed the blanket off the couch on the way out"*. They're
+**clothes for the patio**: she wears them only there, so they need only the patio's clips, not a
+waist-up set and a full body.
+
+### How the glass does it
+
+- She goes to the patio in its own clothes (her sundress), as always.
+- About 20 seconds later, at a quiet moment, she changes into the clothes their name calls for. The
+  words are the same as for her outfits: `night…` after 10 pm, then `cold…` under 45°F, `cool…` under
+  60°F (new, for this), `hot…`, `evening…`. `day…` takes turns with the patio's own clothes from visit
+  to visit, and `chosen…` only when she asks. She picks once a visit.
+- She can ask for them herself: `glass_wear("my long cardigan")` takes her out to the patio, and she
+  changes there. Her closet lists them as *worn only at your patio: you change into it there*. If she
+  asks for her usual clothes while she's out there, she changes back into the sundress.
+- Before she gets up she changes back, so her usual getting-back clip plays.
+- A change clip made for it plays; without one it's a camera cut.
+
+The names follow her outfits'. The look is `patio@coolstargaze`; its clips are
+`genesis_coolstargaze-patio` (her loop), `genesis_coolstargaze-patio_stars` and so on. The change in is
+`genesis_patiochange_coolstargaze_motes`, and the change back is
+`genesis_coolstargaze-patiochange_usual_motes`.
+
+### 1. The picture
+
+1. **Plan & render**, her wishes: a wish to wear something that names one of her places has
+   **Clothes for patio** instead of **New outfit**. It opens **New look → Clothes for one of her
+   places**, starting from `patio`. Her words go into **She wears there**, turned from "my" to "her",
+   with her title before the colon left out.
+2. **Trim She wears there to the clothes.** Take out *"Warm, cozy, a little rugged, made for standing
+   on the stone patio under the stars at 50 degrees"*. Klein reads all of it, and it goes into the
+   subject line of every clip in these clothes.
+3. **She wears them there on.** For the cardigan, *cool days and nights (under 60°F)*, since she said
+   50 degrees; name it `stargaze`, and the look is `patio@coolstargaze`. For the blanket over a
+   nightgown, *nights*; name it `blanket`, giving `patio@nightblanket`. After 10 pm on a cold night,
+   the night one wins.
+4. **How she is there** starts as the patio's pose (*facing the viewer with a soft smile, her hands
+   loosely clasped in front of her*). Keep it for the cardigan. For the blanket, give her the pose her
+   wish describes: *standing on a small stone patio at night, facing the viewer with a soft smile,
+   holding the blanket closed at her chest with both hands*. Every clip in those clothes starts and
+   ends on that pose, and the patio's moves are worded with it.
+5. **Make pictures.** Klein's instruction changes only her clothes (and her pose, if given) and keeps
+   her, the patio, its light and the black around it. Pick the one that keeps her most herself; the
+   Studio fades its edges, as it did for the patio.
+
+### 2. The clips
+
+**Plan & render**, look `patio@coolstargaze`. At the top is **Same clips as her other looks → As in
+patio**: everything she has on the patio, with the wording as it was. That includes her loop,
+listening, the stars, the shooting star, the sway, and her own *making a wish* and *night chill*.
+**Pick the ones she doesn't have** ticks them all. Untick what doesn't fit, such as rubbing her arms
+against the cold in a wool cardigan. In the blanket's new pose, moves that said *her hands loosely
+clasped* are marked `check: clasped`; once they're planned, **Edit** them to say how she holds the
+blanket. A clip also ticked in the activity's own pack is planned once.
+
+Moves for the clothes themselves come from her words. For example:
+
+*She stays where she is, {does}, tucks her hands into the cardigan's deep front pockets and hunches
+her shoulders happily against the cold, then takes them out and clasps her hands in front of her
+again.* (Write your own clip, 7 s.)
+
+**Ask Genesis for ideas for patio@coolstargaze** gets her own ideas for them.
+
+Then **Change of clothes**, From `patio` To `patio@coolstargaze`, named `motes`, 7 s:
+
+*Glowing violet motes swirl up around her and her sundress becomes the long charcoal cardigan, the
+cream henley and dark jeans, the scarf settling around her neck, while the patio, its warm light and
+the stars stay exactly as they are; she ends facing the viewer, her hands clasped in front of her.*
+
+Then the same back, From `patio@coolstargaze` To `patio`.
+
+**Render the change in first.** It's the new thing: do the patio and the stars hold still while her
+clothes change? Then render the rest, review, keep, **Put all on the glass** and **Build**.
+
+### Eve: a tee at her workouts
+
+Her dumbbells and bike start from her spandex (Part 2). For a tee and bike shorts as well, make
+**Clothes for one of her places** from `dumbbells`, *daytime, taking turns* (or *only when she chooses
+it*), named `tee`, giving `dumbbells@daytee`. Then make it again from `bike` with the same name and
+when, giving `bike@daytee`. The same name is the same clothes in her closet (*worn only at your
+dumbbells or your bike*). Each place has its own picture and its own clips, so the moves differ: **Same
+clips as dumbbells** brings the curls and presses, and **Same clips as bike** the sprint. Asked for the
+tee, she goes to whichever place she named, or wears it the next time she's at either.
+
