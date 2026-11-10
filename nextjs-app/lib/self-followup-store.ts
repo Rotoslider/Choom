@@ -55,6 +55,10 @@ export interface QueueEntry {
   // edit_self_followup (2026-11-05): when it was reworded and what it said before.
   edited_at?: string;
   previous_prompt?: string;
+  // Glass Studio asked her for ideas for one of her looks (lib/glass-ideas.ts, 2026-11-09): Donny sent it,
+  // so the scheduler says so instead of "you wrote this note". look: the look it asks about.
+  from?: 'glass_studio';
+  look?: string;
 }
 
 export function safeChoomId(choomId: string): string {

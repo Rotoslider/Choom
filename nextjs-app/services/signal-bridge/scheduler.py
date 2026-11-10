@@ -58,6 +58,14 @@ def _note_written_line(created_at: Optional[str], now: datetime) -> str:
     return f"[You wrote this note on {when} — {ago}.]"
 
 
+def _from_studio_line(written: str) -> str:
+    """The note line for a request Donny sent from Glass Studio (app/api/hologram/ideas, 2026-11-09):
+    ideas for one of her looks on the glass. It is his, not a note she wrote."""
+    if not written:
+        return written
+    return written.replace("You wrote this note", "Donny sent this from Glass Studio").replace(".]", ": a request from him, not a note of yours.]")
+
+
 def _parse_remind_at(value: str) -> datetime:
     """A reminder's remind_at as naive local time, which the scheduler compares
     against datetime.now(). The web app writes UTC with a Z; Python 3.11+ reads
@@ -1993,6 +2001,9 @@ Be practical. Only work on things that can actually be accomplished with the too
                 # Build grounding context from available state
                 awareness_parts = [f"[You are waking up — it is {now_str}.]"]
                 written = _note_written_line(entry.get("written_at") or entry.get("created_at"), now)
+                from_studio = entry.get("from") == "glass_studio"  # Donny asked from Glass Studio (lib/glass-ideas.ts)
+                if from_studio:
+                    written = _from_studio_line(written)
                 if written:
                     awareness_parts.append(written)
 
@@ -2035,19 +2046,21 @@ Be practical. Only work on things that can actually be accomplished with the too
                 # of those wake-ups. So: one short search per assumption, at
                 # the default 5 results (the recall benchmark: 3 results found
                 # the truth 73% of the time on short lookups, 5 found 90%).
-                awareness_parts.append(
-                    "Before your task, ground yourself in recent context — in ONE round if you can. "
-                    "The task below is a note YOU wrote earlier: it says what was true THEN, and things "
-                    "change (a package lands, a plan moves, Donny finishes what he owed). For EACH thing it "
-                    "assumes — a delivery, an appointment, a plan, a project step — call search_memories for "
-                    "that one thing on its own, e.g. search_memories(\"canvas\"): one short search per "
-                    "thing, all in the same round. Your newest memory beats the note — if they disagree, the "
-                    "note is out of date: act on the memory, and never copy the note's old facts into new notes. "
-                    "Alongside those, call whatever else the task needs: get_weather, get_calendar_events, "
-                    "ha_get_home_status, check_inbox (what your sisters or Donny left for you), "
-                    "workspace_list_files. If tool results already appear below this message, that IS your "
-                    "grounding — use it, do not call those tools again."
-                )
+                # (Not for Glass Studio's request: it is Donny's, made just now, with nothing gone stale.)
+                if not from_studio:
+                    awareness_parts.append(
+                        "Before your task, ground yourself in recent context — in ONE round if you can. "
+                        "The task below is a note YOU wrote earlier: it says what was true THEN, and things "
+                        "change (a package lands, a plan moves, Donny finishes what he owed). For EACH thing it "
+                        "assumes — a delivery, an appointment, a plan, a project step — call search_memories for "
+                        "that one thing on its own, e.g. search_memories(\"canvas\"): one short search per "
+                        "thing, all in the same round. Your newest memory beats the note — if they disagree, the "
+                        "note is out of date: act on the memory, and never copy the note's old facts into new notes. "
+                        "Alongside those, call whatever else the task needs: get_weather, get_calendar_events, "
+                        "ha_get_home_status, check_inbox (what your sisters or Donny left for you), "
+                        "workspace_list_files. If tool results already appear below this message, that IS your "
+                        "grounding — use it, do not call those tools again."
+                    )
 
                 # Routines (2026-09-12): tell her what just happened to HER
                 # schedule so she does not spend the wake re-planning it. A
