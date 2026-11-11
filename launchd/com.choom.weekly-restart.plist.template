@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Weekly restart of the dev server (com.choom.dev), Sunday 1:30 am. `next dev` grows for as long
+  as it runs (90 GB after 17 days in October). scripts/weekly-restart.py waits until no Choom turn
+  is under way and no followup or bridge task is due, then restarts it and checks it came back.
+  Its log: nextjs-app/data/logs/weekly-restart.log. Change the day or time here, then reinstall.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.choom.weekly-restart</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>__PROJECT_PATH__/nextjs-app/scripts/weekly-restart.py</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__PROJECT_PATH__/nextjs-app</string>
+
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Weekday</key>
+    <integer>0</integer>
+    <key>Hour</key>
+    <integer>1</integer>
+    <key>Minute</key>
+    <integer>30</integer>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>/dev/null</string>
+  <key>StandardErrorPath</key>
+  <string>__PROJECT_PATH__/nextjs-app/data/logs/weekly-restart.log</string>
+</dict>
+</plist>

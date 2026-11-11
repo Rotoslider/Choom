@@ -12,6 +12,7 @@
 #   ./install-launchd.sh --no-searxng # skip the local SearXNG instance
 #   ./install-launchd.sh --with-tts   # local Chatterbox TTS (Rapid-MLX + bridge)
 #   ./install-launchd.sh --with-lan-https  # HTTPS on :3443 so the LAN mic works
+#   ./install-launchd.sh --no-weekly-restart  # skip the dev server's Sunday 1:30 am restart
 
 set -euo pipefail
 
@@ -28,6 +29,7 @@ WITH_NGROK=false
 WITH_SEARXNG=true
 WITH_TTS=false
 WITH_LAN_HTTPS=false
+WEEKLY_RESTART=true
 for arg in "$@"; do
   case "$arg" in
     --dev-only)   DEV_ONLY=true ;;
@@ -35,6 +37,7 @@ for arg in "$@"; do
     --no-searxng) WITH_SEARXNG=false ;;
     --with-tts)   WITH_TTS=true ;;
     --with-lan-https) WITH_LAN_HTTPS=true ;;
+    --no-weekly-restart) WEEKLY_RESTART=false ;;
     *) echo -e "${RED}Unknown option: $arg${NC}"; exit 1 ;;
   esac
 done
@@ -152,6 +155,11 @@ echo ""
 echo -e "${GREEN}Installing com.choom.dev (Next.js + memory server)...${NC}"
 render com.choom.dev.plist.template com.choom.dev.plist
 reload com.choom.dev
+if [ "$WEEKLY_RESTART" = true ]; then
+  echo -e "\n${GREEN}Installing com.choom.weekly-restart (restarts the dev server Sundays at 1:30 am, when quiet)...${NC}"
+  render com.choom.weekly-restart.plist.template com.choom.weekly-restart.plist
+  reload com.choom.weekly-restart
+fi
 
 if [ "$DEV_ONLY" = false ]; then
   SIGNAL_PHONE_NUMBER="$(env_get SIGNAL_PHONE_NUMBER)"

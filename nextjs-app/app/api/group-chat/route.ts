@@ -15,6 +15,7 @@ import { getOwnerIdentity } from '@/lib/owner';
 import { getRoomCreatorModel } from '@/lib/group-model-config';
 import { Agent, fetch as undiciFetch } from 'undici';
 import { avatarLink } from '@/lib/choom-avatar';
+import { openTurn } from '@/lib/turns-open';
 
 const baseUrl = process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
 // Per-speaker ABSOLUTE turn ceiling (default 15min). Overridable via
@@ -415,6 +416,8 @@ export async function POST(request: NextRequest) {
       let currentSpeakerName = '(before first speaker)';
       let lastRound = -1;
 
+      // The whole run counts as one turn, gaps between speakers included (lib/turns-open.ts).
+      const closeTurn = openTurn(room.title || roomId, 'room');
       try {
         if (userMsg) {
           send({ type: 'user_saved', messageId: userMsg.id, authorName: ownerName, content: message, imageUrl });
@@ -678,6 +681,7 @@ export async function POST(request: NextRequest) {
         console.error(`   💥 [group-chat] room "${room.title || roomId}" round ${lastRound} after "${currentSpeakerName}" — aborting run:`, err instanceof Error ? err.stack || err.message : err);
         send({ type: 'error', error: (err as Error).message });
       } finally {
+        closeTurn();
         pauseRequested.delete(roomId); // asked too late: the run ended on its own
         releaseLock();
         try { controller.close(); } catch { /* already closed */ }

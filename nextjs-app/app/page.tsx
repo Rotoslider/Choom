@@ -191,7 +191,11 @@ export default function Home() {
           }
         }
       } catch (error) {
-        console.error('Failed to fetch chats:', error);
+        // A dropped connection between this browser and the Mac is tried again by the next poll in
+        // 30 s. A warning, so Next's dev overlay doesn't flag it as an app error (2026-11-11: five
+        // in two weeks, each one missed refresh).
+        if (error instanceof TypeError) console.warn('Chat list not refreshed (connection dropped); trying again in 30 s');
+        else console.error('Failed to fetch chats:', error);
       }
     };
 

@@ -27,6 +27,7 @@ import {
   type FallbackConfig, type DetectedProject,
 } from '@/lib/chat-shared';
 import { runAgenticLoop } from '@/lib/agentic-loop';
+import { openTurn } from '@/lib/turns-open';
 import { buildHeartbeatGrounding } from '@/lib/heartbeat-grounding';
 import { startHologramTurn } from '@/lib/hologram-bus';
 import { startChatRun } from '@/lib/chat-runs';
@@ -200,6 +201,8 @@ export async function runChatTurn(params: ChatTurnParams): Promise<void> {
             : undefined,
         };
 
+        // Counted until it ends, so the weekly restart waits for it (lib/turns-open.ts).
+        const closeTurn = openTurn(String(choom.name), isHeartbeat ? 'heartbeat' : isDelegation ? 'delegation' : isGroupTurn ? 'group' : 'chat');
         try {
           const requestStartTime = Date.now();
           let resolvedProvider = activeProviderId;
@@ -645,6 +648,7 @@ export async function runChatTurn(params: ChatTurnParams): Promise<void> {
             error: error instanceof Error ? error.message : 'Unknown error',
           });
         } finally {
+          closeTurn();
           run?.finish();
           // An ended reply leaves the glass and the activity marker to the newer one: its turn_end
           // would close her new turn there and open his reply window while she's still working.

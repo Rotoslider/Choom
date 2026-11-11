@@ -97,8 +97,13 @@ const server = https.createServer(tlsOptions, (req, res) => {
       // DHCP T1 renewal at the 30-minute mark making Firefox drop live sockets.
       const startedAt = Date.now();
       let clientError = null;
-      req.socket.on('error', (err) => { clientError = err; });
+      // Taken off again when the response closes: a keep-alive socket carries many requests, and
+      // each one used to leave its listener behind (10,452 MaxListenersExceededWarning lines in
+      // lan-https.log by 2026-11-11).
+      const noteClientError = (err) => { clientError = err; };
+      req.socket.on('error', noteClientError);
       res.on('close', () => {
+        req.socket.off('error', noteClientError);
         if (res.writableEnded) return;
         logStreamFailure(
           req,

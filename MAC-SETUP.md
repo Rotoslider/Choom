@@ -304,6 +304,17 @@ cd ~/Projects/Choom/launchd
 ./install-launchd.sh --with-lan-https  # HTTPS on :3443 so the LAN mic works
 ```
 
+The dev server also gets `com.choom.weekly-restart`, unless you pass
+`--no-weekly-restart`. `next dev` grows for as long as it runs: after 17 days
+it held 90 GB and its garbage collection spun the fans. So every Sunday at
+1:30 am, `nextjs-app/scripts/weekly-restart.py` restarts it, but only at a
+quiet moment. It waits until no Choom is mid-reply (`GET /api/turns`), no
+self-followup is due within 15 minutes and no bridge task is close to its time.
+If none comes by 2:05, it skips that week. Its log is
+`nextjs-app/data/logs/weekly-restart.log`, and
+`python3 scripts/weekly-restart.py --dry-run` tells you what it would do right
+now. To change the day or time, edit the template and reinstall.
+
 This writes `~/Library/LaunchAgents/com.choom.*.plist` and loads them. They are
 **user agents**, so no `sudo` — the dev server, memory server and signal-cli all
 need your login user's `HOME`, keychain and Homebrew tree. They start
@@ -393,6 +404,7 @@ point it somewhere else.
 | Is it running? | `systemctl --user status choom-dev` | `launchctl print gui/$(id -u)/com.choom.dev` |
 | Tail the console | `journalctl --user -u choom-dev -f` | `tail -f nextjs-app/data/logs/choom-dev.log` |
 | Stop it | `systemctl --user stop choom-dev` | `launchctl bootout gui/$(id -u)/com.choom.dev` |
+| Restart when quiet | — | `python3 nextjs-app/scripts/weekly-restart.py --now` |
 | Restart the bridge | `sudo systemctl restart signal-bridge` | `launchctl kickstart -k gui/$(id -u)/com.choom.signal-bridge` |
 | Bridge logs | `journalctl -u signal-bridge -f` | `tail -f nextjs-app/data/logs/signal-bridge.log` |
 | Restart SearXNG | `sudo systemctl restart searxng` | `launchctl kickstart -k gui/$(id -u)/com.choom.searxng` |
