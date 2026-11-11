@@ -88,7 +88,11 @@ if [[ -n "$FOCUSED" && "$FOCUSED" != 0x0 ]]; then
   setsid nohup python3 "$DIR/tools/focus_back.py" "$FOCUSED" "$PROFILE" > /dev/null 2>&1 < /dev/null &
 fi
 
+# --ozone-platform=x11: under Wayland a window can't place itself, so --window-position is ignored and GNOME
+# drops the kiosk on a monitor. Chrome came up native Wayland after the Nov 11 2026 power-down (same
+# version, 155); through XWayland the position works again.
 nohup google-chrome \
+  --ozone-platform=x11 \
   --user-data-dir="$PROFILE" \
   --no-first-run --no-default-browser-check --noerrdialogs --disable-session-crashed-bubble \
   --window-position="$X,$Y" --window-size=1536,2048 --kiosk \
