@@ -24,6 +24,13 @@ sends nobody a message. If it stayed down, the bridge's first health check after
 
 By hand: python3 scripts/weekly-restart.py --dry-run   (says what it would do, restarts nothing)
          python3 scripts/weekly-restart.py --now       (any hour; still waits for a quiet moment)
+         python3 scripts/weekly-restart.py --now --force   (any hour, right away)
+
+The app's Restart Choom button (sidebar; app/api/restart, lib/app-restart.ts) writes
+data/restart-request.json ({"mode": "now" | "quiet", "at": epoch s}) and starts this agent with
+`launchctl kickstart`, so the restart runs outside the server it restarts. A request is taken as --now
+("quiet": wait for a quiet moment, up to 40 minutes) or --now --force ("now"). A request for now that
+arrives while this waits ends the wait. Requests older than five minutes are ignored.
 """
 import argparse
 import glob
@@ -41,6 +48,8 @@ APP = "http://127.0.0.1:3000"
 MEMORY = "http://127.0.0.1:8100/"
 LABEL = "com.choom.dev"
 LOG = os.path.join(APP_ROOT, "data", "logs", "weekly-restart.log")
+REQUEST = os.environ.get("CHOOM_RESTART_REQUEST_FILE") or os.path.join(APP_ROOT, "data", "restart-request.json")
+REQUEST_FRESH_S = 300
 
 START_AFTER = (1, 25)       # launchd starts it at 1:30; a late start (the Mac was off) is skipped
 GIVE_UP_AT = (2, 5)
@@ -143,6 +152,28 @@ def not_quiet():
     return "; ".join(reasons) or None
 
 
+def take_request():
+    """A restart asked for in the app (its Restart Choom button): "now" or "quiet", or None. The file is
+    removed once read, so each request is taken once."""
+    try:
+        with open(REQUEST) as f:
+            req = json.load(f)
+    except (OSError, ValueError):
+        return None
+    try:
+        os.remove(REQUEST)
+    except OSError:
+        pass
+    try:
+        age = time.time() - float(req.get("at", 0))
+    except (TypeError, ValueError):
+        age = REQUEST_FRESH_S + 1
+    if age > REQUEST_FRESH_S:
+        log(f"  ignoring a restart request from {age / 60:.0f} min ago")
+        return None
+    return "now" if req.get("mode") == "now" else "quiet"
+
+
 def sizes():
     """How big the server processes are, for the log (MB)."""
     try:
@@ -180,7 +211,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     parser.add_argument("--now", action="store_true", help="run at any hour (still waits for a quiet moment)")
     parser.add_argument("--dry-run", action="store_true", help="say what it would do; restart nothing")
+    parser.add_argument("--force", action="store_true", help="with --now: don't wait for a quiet moment")
     args = parser.parse_args()
+
+    asked = None if args.dry_run else take_request()
+    if asked:
+        args.now = True
+        args.force = args.force or asked == "now"
 
     now = datetime.now()
     if not args.now and not args.dry_run and not (START_AFTER <= (now.hour, now.minute) < GIVE_UP_AT):
@@ -192,7 +229,7 @@ def main():
         print(f"{sizes()}\n" + (f"would wait: {why}" if why else "quiet: would restart after one more quiet check"))
         return 0
 
-    log(f"weekly restart: {sizes()}")
+    log(f"{'restart asked for in the app (' + ('now' if args.force else 'at a quiet moment') + ')' if asked else 'weekly restart'}: {sizes()}")
     give_up = now.replace(hour=GIVE_UP_AT[0], minute=GIVE_UP_AT[1], second=0, microsecond=0)
     if args.now or give_up <= now:
         give_up = now + timedelta(minutes=40)
@@ -200,6 +237,13 @@ def main():
     said = None
     while True:
         why = not_quiet()
+        if args.force:
+            if why and why != "down":
+                log(f"  restarting now as asked, although: {why}")
+            break
+        if take_request() == "now":
+            log("  asked in the app to restart now; not waiting any longer")
+            break
         if why == "down":
             log("  the app isn't answering; restarting it now")
             break

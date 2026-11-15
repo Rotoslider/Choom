@@ -18,6 +18,7 @@ import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { ChoomList } from './choom-list';
 import { ChatList } from './chat-list';
+import { RestartChoom } from './restart-choom';
 import { StatusIndicator } from '@/components/common/status-indicator';
 import { useAppStore } from '@/lib/store';
 import { cn } from '@/lib/utils';
@@ -246,6 +247,9 @@ export function Sidebar({
             <Blocks className="h-4 w-4" />
             Skills
           </Button>
+
+          {/* Restart the app and its memory server on the Mac (asks first) */}
+          <RestartChoom />
 
           {/* Settings button - navigates to full settings page */}
           <Button
