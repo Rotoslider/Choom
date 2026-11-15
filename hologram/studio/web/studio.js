@@ -38,6 +38,7 @@ const state = {
   chooms: [], cid: null, choom: null, tab: 'review',
   reviewFilter: 'rendered', reviewLook: '', reviewShown: 40,
   planLook: null, options: [], picked: new Set(), edits: {}, jobs: [], minutesPerClip: 2.2,
+  models: [], defaultModel: 'h3', plannedByModel: {},
 };
 try { Object.assign(state, JSON.parse(localStorage.getItem('glass-studio') || '{}'), { choom: null, options: [], picked: new Set(), edits: {}, jobs: [] }); } catch { /* fine without */ }
 state.planLooks ||= {};  // the look last planned for, per Choom
@@ -65,12 +66,51 @@ function toast(message, bad = false) {
 }
 const attempt = (fn) => async (...args) => { try { return await fn(...args); } catch (e) { toast(e.message, true); } };
 
+// Video models (studio/models.py): every clip records the one it renders with; new clips and re-rolls
+// take the default from the Model menu. A clip from before the choice has none: H3 made it.
+const modelInfo = (id) => state.models.find((m) => m.id === id) || { id, name: id, short: id, minutesPerClip: state.minutesPerClip };
+const modelOf = (c) => c.model || (['planned', 'queued'].includes(c.status) ? state.defaultModel : 'h3');
+const clipMinutes = (c) => (modelInfo(modelOf(c)).minutesPerClip || state.minutesPerClip) * (c.frames || 124) / 124;
+function modelChoice(value, onchange, tip) {
+  const s = el('select', { className: 'model-choice', tip, onchange: (e) => onchange(e.target.value) },
+    ...state.models.map((m) => el('option', { value: m.id, selected: m.id === value }, m.short)));
+  return s;
+}
+function renderModelPick() {
+  const s = $('#modelSelect');
+  s.replaceChildren(...state.models.map((m) => el('option', { value: m.id, selected: m.id === state.defaultModel },
+    m.download ? `${m.name} (not downloaded)` : m.name)));
+  const m = modelInfo(state.defaultModel);
+  $('#modelPick').dataset.tip = `New clips and re-rolls render with ${m.name}. ${m.about || ''} Each planned clip can be switched in Plan & render before it renders; the Review cards and earlier takes say which model made them.`;
+}
+$('#modelSelect').addEventListener('change', attempt(async (e) => {
+  const mid = e.target.value;
+  const m = modelInfo(mid);
+  const others = Object.entries(state.plannedByModel || {}).filter(([k, n]) => k !== mid && n);
+  const count = others.reduce((a, [, n]) => a + n, 0);
+  let planned = false;
+  if (count) {
+    planned = !!(await ask({
+      title: `New clips render with ${m.name}`,
+      text: `${count} clip${count === 1 ? ' is' : 's are'} planned now (all Chooms) on ${others.map(([k]) => modelInfo(k).name).join(' and ')}. Switch ${count === 1 ? 'it' : 'them'} to ${m.name} too? Queued clips keep theirs.`,
+      ok: 'Switch them too', cancel: 'Leave them',
+    }));
+  }
+  const r = await api('/api/models/default', { model: mid, planned });
+  Object.assign(state, { models: r.models, defaultModel: r.default, plannedByModel: r.plannedByModel || {} });
+  renderModelPick();
+  toast(`New clips and re-rolls render with ${m.name}${r.switched ? `; ${r.switched} planned clip${r.switched === 1 ? '' : 's'} switched` : ''}${m.download ? `. It isn’t downloaded yet (${m.download} GB): python3 studio/studio.py models --download ${m.id}` : ''}`, !!m.download);
+  if (state.cid) await refresh();
+}));
+
 // --- Chooms ---------------------------------------------------------------------------------------
 async function loadChooms() {
   const data = await api('/api/chooms');
   state.chooms = data.chooms;
   state.minutesPerClip = data.minutesPerClip;
   state.cleanPrompt = data.cleanPrompt;
+  Object.assign(state, { models: data.models || [], defaultModel: data.default || 'h3', plannedByModel: data.plannedByModel || {} });
+  renderModelPick();
   const nav = $('#chooms');
   nav.replaceChildren(...state.chooms.map((c) => {
     const b = el('button', { type: 'button', onclick: attempt(() => openChoom(c.id)), tip: `${c.name}: ${c.onGlass} clips on the glass${c.counts.rendered ? `, ${c.counts.rendered} to review` : ''}${c.counts.planned ? `, ${c.counts.planned} planned` : ''}` },
@@ -239,7 +279,7 @@ function reviewCard(name) {
   });
   const reroll = attempt(async () => {
     state.choom = (await api(`/api/choom/${cid}/reroll`, { names: [name] })).choom;
-    toast(`${short(cid, name)} planned again with a new seed; render it from Plan & render`);
+    toast(`${short(cid, name)} planned again with a new seed on ${modelInfo(state.defaultModel).name}; render it from Plan & render`);
     after(false);
   });
   const card = el('article', { className: `card ${c.status}`, tabIndex: 0 },
@@ -250,6 +290,7 @@ function reviewCard(name) {
         el('span', { className: 'tag' }, c.from === c.to ? c.from : `${c.from} → ${c.to}`),
         el('span', { className: `tag status-${c.status}` }, c.status),
         `${secondsOf(c)} s`,
+        modelOf(c) !== 'h3' ? el('span', { className: 'tag model', tip: `Made with ${modelInfo(modelOf(c)).name}` }, modelInfo(modelOf(c)).short) : null,
         ...(c.flags || []).map((f) => el('span', { className: 'tag flag', tip: FLAG_TIPS[f] || f }, f)),
         state.choom.sequence.includes(name) ? el('span', { className: 'tag' }, 'on the glass') : null),
       el('p', { className: 'action' }, c.action || '(prompt not recorded)'),
@@ -284,7 +325,7 @@ function takesRow(name) {
   return el('div', { className: 'takes' }, el('span', { className: 'muted' }, 'Earlier takes:'),
     ...takes.map(([i, file]) => {
       const h = c.history[i] || {};
-      const label = `take ${i + 1}${h.status ? ` (${h.status})` : ''}`;
+      const label = `take ${i + 1}${h.status ? ` (${h.status}, ${modelInfo(h.model || 'h3').short})` : ` (${modelInfo(h.model || 'h3').short})`}`;
       return el('span', { className: 'take' },
         el('button', { className: 'ghost small', type: 'button', onclick: () => play(name, `/media/take/${encodeURIComponent(file)}`, `${short(cid, name)}, ${label}`), tip: `Watch ${label}${h.note ? `: ${h.note}` : ''}` }, `▶ ${label}`),
         el('button', {
@@ -541,7 +582,7 @@ function tile(name, on) {
   const main = name === state.choom.sequence[0];
   const t = el('div', {
     className: `tile${main ? ' main' : ''}${(c.flags || []).length ? ' flagged' : ''}`, draggable: !main,
-    tip: `${short(state.cid, name)} · ${secondsOf(c)} s${c.flags?.length ? ` · flagged: ${c.flags.join(', ')}` : ''}${main ? ' · her main idle (stays first)' : ''}\n${c.action || ''}`,
+    tip: `${short(state.cid, name)} · ${secondsOf(c)} s${modelOf(c) !== 'h3' ? ` · ${modelInfo(modelOf(c)).name}` : ''}${c.flags?.length ? ` · flagged: ${c.flags.join(', ')}` : ''}${main ? ' · her main idle (stays first)' : ''}\n${c.action || ''}`,
   });
   t.dataset.name = name;
   if (c.checks) t.style.backgroundImage = `url("${sheetUrl(name, c.rendered || c.changed)}")`;
@@ -580,7 +621,7 @@ function tile(name, on) {
       onclick: attempt(async (e) => {
         e.stopPropagation();
         state.choom = (await api(`/api/choom/${state.cid}/reroll`, { names: [name] })).choom;
-        toast(`${short(state.cid, name)} re-rolled: change its wording here if you like, then render it`);
+        toast(`${short(state.cid, name)} re-rolled on ${modelInfo(state.defaultModel).name}: change its wording or model here if you like, then render it`);
         state.planLooks[state.cid] = c.from;
         state.openPlanned = name;
         state.tab = 'plan';
@@ -1014,9 +1055,19 @@ function renderPlanned() {
   list.replaceChildren(
     ...(planned.length ? planned.map(plannedItem) : [el('p', { className: 'muted' }, 'Nothing planned. Pick actions on the left.')]),
     ...(queued.length ? [el('p', { className: 'muted' }, queuedSummary(c))] : []));
-  const minutes = Math.round(planned.reduce((a, n) => a + state.minutesPerClip * (c.clips[n].frames || 124) / 124, 0));
+  const minutes = Math.round(planned.reduce((a, n) => a + clipMinutes(c.clips[n]), 0));
   const box = $('#renderBox');
   if (!planned.length) { box.replaceChildren(); return; }
+  const byModel = {};
+  for (const n of planned) byModel[modelOf(c.clips[n])] = (byModel[modelOf(c.clips[n])] || 0) + 1;
+  const used = Object.keys(byModel);
+  const downloads = used.map(modelInfo).filter((m) => m.download);
+  const allOn = modelChoice(used.length === 1 ? used[0] : '', attempt(async (mid) => {
+    state.choom = (await api(`/api/choom/${state.cid}/model`, { names: planned, model: mid })).choom;
+    toast(`Her ${planned.length} planned clip${planned.length === 1 ? '' : 's'} render with ${modelInfo(mid).name}`);
+    renderPlanned();
+  }), 'Switch every clip planned for her to one model');
+  if (used.length > 1) allOn.prepend(el('option', { value: '', selected: true, disabled: true }, 'mixed'));
   const when = el('input', { type: 'time', value: '23:00' });
   const go = (at) => attempt(async () => {
     const r = await api('/api/render', { chooms: [state.cid], at });
@@ -1027,6 +1078,9 @@ function renderPlanned() {
   box.replaceChildren(
     el('div', {}, `${planned.length} clips · about ${minutes < 90 ? `${minutes} min` : `${(minutes / 60).toFixed(1)} h`} of rendering. `,
       el('span', { className: 'muted' }, 'The glass runs slower while the GPU renders; about one clip in six comes out wrong, so review them all.')),
+    el('div', { className: 'row' }, el('span', { className: 'muted' }, used.length > 1
+      ? `On ${used.map((k) => `${modelInfo(k).short} ${byModel[k]}`).join(', ')} (each model loads once). All on:` : 'Model:'), allOn),
+    downloads.length ? el('div', { className: 'lint' }, `${downloads.map((m) => `${m.name} isn’t downloaded yet (${m.download} GB): run python3 studio/studio.py models --download ${m.id} in the hologram folder`).join('; ')}, or switch these clips to another model; the render refuses them until then.`) : null,
     el('div', { className: 'row' },
       el('button', { className: 'primary', type: 'button', onclick: () => go(0), tip: 'Queue every planned clip and start Wan2GP now (the glass runs slower meanwhile)' }, 'Render now'),
       el('span', { className: 'muted' }, 'or at'), when,
@@ -1069,7 +1123,11 @@ function plannedItem(name) {
   }
   const item = el('div', { className: `planned-item${opened ? ' opened' : ''}` },
     el('div', { className: 'row' }, el('code', {}, short(state.cid, name)), el('span', { className: 'tag' }, c.from), `${secondsOf(c)} s`,
-      c.history?.length ? el('span', { className: 'tag' }, `take ${c.history.length + 1}`) : null),
+      c.history?.length ? el('span', { className: 'tag' }, `take ${c.history.length + 1}`) : null,
+      modelChoice(modelOf(c), attempt(async (mid) => {
+        state.choom = (await api(`/api/choom/${state.cid}/model`, { names: [name], model: mid })).choom;
+        renderPlanned();
+      }), `The model it renders with${c.refs?.length ? ' (its reference version, for the pictures)' : ''}. ${c.history?.length ? `Its last take was made with ${modelInfo(c.history[c.history.length - 1].model || 'h3').name}.` : ''}`)),
     el('div', { className: 'muted' }, c.action || ''),
     refThumbs(c),
     ...lint.map((w) => el('div', { className: 'lint' }, w)),
@@ -1209,8 +1267,9 @@ async function deleteLook(look) {
 }
 // A question in the page (the browser's own confirm and prompt can't be styled or tested): resolves
 // to true, the typed text, or null when cancelled.
-function ask({ title, text, input, value = '', ok = 'OK', danger = false }) {
+function ask({ title, text, input, value = '', ok = 'OK', cancel = 'Cancel', danger = false }) {
   const d = $('#askDialog');
+  $('#askCancel').textContent = cancel;
   $('#askTitle').textContent = title;
   $('#askText').textContent = text || '';
   $('#askLabel').hidden = !input;
@@ -1647,7 +1706,9 @@ function renderJobs() {
   $('#jobsList').replaceChildren(...[...live, ...newest.filter((j) => !live.includes(j))].slice(0, 15).map((j) => {
     const p = j.progress || {};
     const pct = p.total ? Math.round(100 * p.done / p.total) : 0;
-    const what = j.kind === 'render' ? `${j.args.clips} clips (${j.args.queue})` : j.args.choom || '';
+    const what = j.kind === 'render' ? `${j.args.clips} clips (${j.args.queue})`
+      : j.kind === 'relaunch' ? (j.args.chooms?.length ? `after building ${j.args.chooms.map(nameOf).join(', ')}${j.args.now ? ', now' : ''}` : 'Restart the glass')
+        : j.args.choom || '';
     const when = j.status !== 'waiting' ? '' : j.next ? ', runs next' : j.after ? ' until the render has finished'
       : j.not_before > Date.now() / 1000 ? ` until ${clock(j.not_before)}` : '';
     // Run next: a waiting GPU job jumps the line; a render running now steps aside after the clip it's on.
@@ -1682,6 +1743,37 @@ function renderJobs() {
   if (!state.jobs.length) $('#jobsList').replaceChildren(el('p', { className: 'muted' }, 'No work yet.'));
 }
 $('#jobsButton').addEventListener('click', () => { $('#jobsPanel').hidden = !$('#jobsPanel').hidden; renderJobs(); });
+
+// Restart the glass (Donny, Nov 15: it hung, and it took closing the page by hand): launch.sh closes the
+// glass page and its helpers and opens them again, right away. It asks first, saying what would be cut off.
+$('#restartGlass').addEventListener('click', attempt(async () => {
+  const g = await api('/api/glass');
+  const said = [];
+  if (g.down) said.push('The glass isn’t answering at all; this starts it again.');
+  else {
+    if (g.silent != null && g.silent > 15) said.push(`The glass page hasn’t reported for ${g.silent < 120 ? `${g.silent} s` : `${Math.round(g.silent / 60)} min`}: it looks stuck.`);
+    else if (g.mood && g.mood !== 'idle') said.push(`${g.choom || 'A Choom'} is ${g.mood === 'speaking' ? 'talking' : g.mood} on it right now: a restart cuts her off.`);
+    else if (g.queued) said.push(`${g.choom || 'A Choom'} has something waiting to be said: a restart drops it.`);
+    if (g.talk) said.push('A conversation at the tower is under way.');
+    if (g.glassOff) said.push('It’s switched off (the Glass button) and stays off after the restart.');
+  }
+  if (g.reload) said.push(g.reload.args?.chooms?.length
+    ? `A reload after building ${g.reload.args.chooms.map(nameOf).join(', ')} is ${g.reload.status === 'running' ? 'waiting for a quiet moment' : 'on the work list'}: it goes now instead, and tidies up after the build as usual.`
+    : 'A restart is already on its way; this only hurries it.');
+  if (!said.length) said.push('Nobody is talking on it now.');
+  const ok = await ask({
+    title: 'Restart the glass?',
+    text: `${said.join(' ')} The glass goes dark for about 15 seconds while it closes the page and its listeners (ears, eyes) and opens them again on the Portrait; whoever was on it carries on.`,
+    ok: 'Restart it', danger: true,
+  });
+  if (!ok) return;
+  const r = await api('/api/glass/restart', {});
+  toast(r.how === 'new' ? 'Restarting the glass; it’s back in about 15 seconds (the work list shows how it went)'
+    : r.how === 'already' ? 'The glass is restarting already' : 'The reload waiting on the work list goes now');
+  $('#jobsPanel').hidden = false;
+  pollJobs();
+  setTimeout(pollJobs, 4000);
+}));
 $('#jobsClose').addEventListener('click', () => { $('#jobsPanel').hidden = true; });
 
 // The work list's pause: what's on the GPU finishes its item (a render, the clip it's on), then

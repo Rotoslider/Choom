@@ -360,3 +360,12 @@ button.primary.danger { background: var(--warn); }
 
 /* Plan & render: her wishes' heading with Ask her for ideas */
 .wishes-head { justify-content: space-between; align-items: center; }
+
+/* --- video models (studio/models.py): the Model menu, a planned clip's model, a take's maker -------- */
+.model-pick select { max-width: 280px; }
+select.model-choice {
+  padding: 1px 6px; font-size: 12px; border: 1px solid var(--line-2); border-radius: 999px;
+  background: var(--panel); color: var(--muted); cursor: pointer;
+}
+select.model-choice:hover { color: var(--fg); }
+.tag.model { color: var(--tint); border-color: color-mix(in srgb, var(--tint) 50%, transparent); }

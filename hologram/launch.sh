@@ -40,8 +40,18 @@ stop_all() {
   # Hand the voice back to the browsers right away instead of waiting for the heartbeat to lapse.
   curl -s -m 3 -X POST -H 'Content-Type: application/json' -d '{"voice":false}' \
     "$CHOOM_URL/api/hologram/voice" > /dev/null || true
-  # Chrome reuses a still-running instance for a new launch; wait until the old one is gone.
+  # Chrome reuses a still-running instance for a new launch; wait until the old one is gone. A hung one
+  # can ignore the polite signal (Nov 15 2026: Donny had to kill the page by hand), so after 5 s it's killed.
   for _ in $(seq 20); do pgrep -f -- "--user-data-dir=$PROFILE" > /dev/null || break; sleep 0.25; done
+  if pgrep -f -- "--user-data-dir=$PROFILE" > /dev/null; then
+    echo "the old glass page didn't close; killing it" >&2
+    pkill -9 -f -- "--user-data-dir=$PROFILE" || true
+    for _ in $(seq 20); do pgrep -f -- "--user-data-dir=$PROFILE" > /dev/null || break; sleep 0.25; done
+  fi
+  # The same for a server that hung: the new one couldn't take its port.
+  if pgrep -f -- "$DIR/server.py" > /dev/null; then
+    pkill -9 -f -- "$DIR/server.py" || true
+  fi
 }
 
 if [[ "$PAGE" == "stop" ]]; then

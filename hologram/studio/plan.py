@@ -9,8 +9,8 @@ import re
 import time
 from pathlib import Path
 
+import models
 import prompts
-from config import CFG
 from project import Project, base_of, closet, editing, next_seeds, outfit_of, roles
 
 PACKS_FILE = Path(__file__).resolve().parent / "packs.json"
@@ -354,7 +354,7 @@ def many(targets, picks, preview=True):
             fresh.append(o)
         frames = [prompts.SECONDS[int(o["seconds"])][0] for o in fresh]
         clips += len(fresh)
-        minutes += sum(CFG["minutes_per_clip"] * f / 124 for f in frames)
+        minutes += sum(models.minutes(f) for f in frames)  # planned on the Studio's default model
         out.append({"choom": cid, "look": look_id, "plan": [o["name"] for o in fresh], "have": have,
                     "blocked": blocked, "items": [o if o["pack"] in OWN_PACKS else
                                                   {(a["pack"], a["key"]): a for a in look_actions(proj.looks[look_id])}[(o["pack"], o["key"])]

@@ -70,6 +70,16 @@ the glass (and how many once the waiting changes are built), looks, clips to rev
 rendering. **Work** at the top right is the work list. The address keeps the view
 (`#genesis/review/kept`), so a view can be bookmarked or reloaded.
 
+Beside them, **Model** picks the video model new clips render with ([Video models](#video-models)), and
+**↻ Restart the glass** closes the glass page and opens it again, for when it hangs or looks wrong. It
+asks first and says what a restart would cut off: a Choom talking or about to, a conversation at the
+tower, a page that hasn't reported for a while (stuck). The glass goes dark for about 15 seconds and
+whoever was on it carries on; switched off with the Glass button, it stays off. It doesn't wait for a
+quiet moment the way the reload after a build does. If that reload is already waiting, it goes now
+instead, and still tidies up after the build. The restart is a job in the glass lane, so the work list
+shows how it went. `launch.sh` kills a page that won't close (Nov 15 2026, the page hung and had to be
+killed by hand), and a server that won't let go of its port.
+
 ### Review
 
 ![Review: a new clip flagged by the checks, with what the flag means](docs/images/review.jpg)
@@ -291,6 +301,49 @@ re-roll **Keep the old take** goes back to the take she had.
 Then **Render now**, or **Schedule** it for a time (23:00 unless you change it). The glass runs
 slower while the GPU renders. Each clip shows up in Review as soon as it lands, with its sheet and
 checks, while the rest keep rendering.
+
+### Video models
+
+Clips can render with more than one video model; `models.json` lists them. Each has a Wan2GP model for
+ordinary clips and one for clips with pictures of their own:
+
+| Model | Ordinary clips | Clips with pictures |
+|---|---|---|
+| **MiniMax H3**, PDD 8-step, 33B (every clip up to November 15, 2026) | `minimax_h3_fl2va_pdd` | `minimax_h3_ref2va_pdd` |
+| **10Eros-Max**, [TenStrip/10Eros-Max](https://huggingface.co/TenStrip/10Eros-Max) beta7 fix1: a merge built on H3, pruned 20B, an 8-step turbo baked in | `minimax_h3_10eros_max_fl2va` | `minimax_h3_10eros_max_ref2va` |
+
+10Eros-Max is H3 underneath, so the same prompts, pictures and checks work, and it uses H3's own text
+encoder (Qwen3-VL-32B, layer 50), video VAE and audio VAE, which Wan2GP already has. Only its weights
+are new: one 40 GB file (`10Eros_Max_h3_8stepTURBO_beta7_fix1.safetensors`, BF16) for both kinds of
+clip. `python3 studio/studio.py models --download 10eros` puts it in Wan2GP's `ckpts/` and checks its
+size and sha256. Until it's there, a render with it is refused (rather than spending its first clip
+on a 40 GB download). Its two Wan2GP definitions are in `finetunes/`, and the Studio copies them into
+Wan2GP's `finetunes/` before a render needs them. That matters because Wan2GP quietly renders a model
+type it doesn't know on its base model type instead. Three things about this checkpoint are easy to
+get wrong:
+- **`qkv_layout: grouped`**: it stores its attention rows grouped (all Q, then K, then V), unlike the
+  official interleaved H3 files. This was checked row by row against Wan2GP's pruned H3.
+- **PDD, with its heads inside:** like H3's PDD 8-step, it makes 8 passes over a 32-interval grid, each
+  merging four learned heads. Its final layer holds all 32 heads (`[32 × 96, 5376]`: head 0 whole, the
+  others as differences from head 0), where Wan2GP wants them as a separate heads module. `pdd_heads.py`
+  makes that module (`…_pdd_heads_fp32.safetensors`, 88 MB, beside the checkpoint) the first time a
+  render needs it. Loaded without it, the model refuses to start (a size mismatch on `final_layer`).
+- **No VSA gates:** this file has none, so it runs with dense attention (Euler, flow shift 12, guidance
+  1, the card's settings).
+
+Its card warns the Chooms may not look quite like themselves. That's why you choose it clip by clip:
+- **Model** at the top sets the default: new clips and re-rolls (**R** in Review, **↻** on the glass)
+  are planned on it. Changing it offers to switch the clips planned now too (queued ones keep theirs).
+- Each **planned clip** has its model beside its name, to change before it renders. Under the plan,
+  **All on** puts every clip planned for her on one model, and the box says how they split.
+- A render queues each clip on its own model, grouped so Wan2GP loads each model once.
+- **Review** tags a clip made with another model than H3, and every earlier take says its model
+  (`take 1 (kept, H3)`). Re-roll a kept H3 clip on 10Eros, compare it with the earlier take, and keep
+  whichever is better: **Use it** brings the other one back.
+
+A clip records its model (`"model"` in her project file); one rendered before models could be chosen
+has none, and counts as H3. To add a model, add an entry to `models.json` (its Wan2GP model types,
+any finetune definitions in `finetunes/`, its weights) and restart the Studio.
 
 ### The work list
 
@@ -653,7 +706,8 @@ The [tutorial](docs/tutorial-new-choom.md) walks through all of it.
 - The hologram running on a Looking Glass Portrait ([hologram README](../README.md)).
 - [Wan2GP](https://github.com/deepbeepmeep/Wan2GP) with MiniMax H3 (`minimax_h3_fl2va_pdd`) for clips,
   its reference model (`minimax_h3_ref2va_pdd`) for clips with pictures of their own, and Flux.2
-  Klein 9B (`flux2_klein_9b`) for pictures. Its venv also has rembg (U2-Net) and numpy,
+  Klein 9B (`flux2_klein_9b`) for pictures. Other video models, such as 10Eros-Max, are optional
+  ([Video models](#video-models)). Its venv also has rembg (U2-Net) and numpy,
   which the cut-outs and checks use.
 - A Python with Depth Anything V2 and MediaPipe for `tools/make_alive.py` (Forge Neo's venv here).
 - A GPU with room for H3: about 5½ minutes per five-second clip on an RTX PRO 6000 Blackwell.
@@ -670,12 +724,14 @@ you leave out uses the default in `config.py`:
   "reference_model": "minimax_h3_ref2va_pdd",
   "picture_model": "flux2_klein_9b",
   "minutes_per_clip": 2.2,
+  "clip_model": "h3",
   "port": 8767,
   "notify": {"url": "http://your-mac.local:3000", "choom": "Aloy", "quiet": ["22:00", "07:00"], "dry_run": false}
 }
 ```
 
-`minutes_per_clip` only sets the time estimates on the page. `notify` sends the morning summary:
+`minutes_per_clip` only sets the time estimates on the page (a model in `models.json` can have its
+own). `clip_model` is the model new clips render with; the page's Model menu writes it. `notify` sends the morning summary:
 - **url:** the Choom app; empty turns it off.
 - **choom:** whose Signal thread it comes in, by name or id.
 - **quiet:** when it holds messages, from the first time to the second: whole hours (`[22, 7]`) or
@@ -713,12 +769,15 @@ python3 studio/studio.py status [CHOOM]                # clips per status, looks
 python3 studio/studio.py packs optic main              # the library's actions for a look
 python3 studio/studio.py plan optic main quiet         # plan the quiet moments she doesn't have yet
 python3 studio/studio.py plan optic main quiet glance  # or only some actions of a pack
-python3 studio/studio.py render optic [--queue NAME]   # queue her planned clips and render them
+python3 studio/studio.py render optic [--queue NAME] [--model 10eros]   # queue her planned clips (on one model) and render them
+python3 studio/studio.py models [--default 10eros]     # the video models, and the one new clips get
+python3 studio/studio.py models --download 10eros      # fetch a model's weights into Wan2GP (checked)
 python3 studio/studio.py collect                       # pick up finished renders
 python3 studio/studio.py review optic [CLIP ...]       # sheets and checks for new renders
 python3 studio/studio.py keep optic optic_idle_glance  # or drop
 python3 studio/studio.py place optic optic_idle_glance # or remove
 python3 studio/studio.py build optic [--no-relaunch]   # put her sequence on the glass
+python3 studio/studio.py restart-glass                 # close the glass page and open it again, now
 python3 studio/studio.py import [CHOOM ...]            # adopt clips made before the Studio
 ```
 
@@ -741,6 +800,9 @@ glass.
 | `packs.json` | the clip library |
 | `plan.py` | turns library actions, your own clips and changes of clothes into named, seeded clips |
 | `render.py` | Wan2GP queue zips (`templates/h3_task.json`), the headless run, collecting outputs by seed |
+| `models.py`, `models.json` | the video models a clip can render with, and the Studio's default |
+| `finetunes/` | Wan2GP definitions of the models that are finetunes (10Eros-Max), copied into Wan2GP when needed |
+| `pdd_heads.py` | a PDD checkpoint's heads, from its final layer into Wan2GP's heads module (run with Wan2GP's Python) |
 | `review.py` | contact sheets and automatic checks (needs numpy) |
 | `pictures.py` | Klein edits for new looks (outfits, full body, asleep, new pictures, a new Choom) |
 | `build.py` | still reliefs for new Chooms; the build's steps (masks, depth and reliefs), her closet, relaunch, prune |

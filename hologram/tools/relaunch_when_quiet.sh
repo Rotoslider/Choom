@@ -1,11 +1,19 @@
 #!/bin/bash
 # Relaunch the hologram page only when no Choom is mid-turn (her mood idle, nothing queued to say) and no
 # conversation at the tower is under way (it waits through his reply window too), so a rebuild never cuts
-# anyone off. Waits up to 10 minutes. Exit codes:
+# anyone off. Waits up to 10 minutes. With --now it doesn't wait (Restart the glass, Glass Studio: a page
+# that hung can look busy forever); a waiting one stops waiting when .relaunch-now appears beside launch.sh
+# (written by the Studio's button within the last 2 minutes; older ones are ignored). Exit codes:
 #   0  relaunched: the new page reported in
 #   1  still busy after 10 minutes; not relaunched
 #   2  the launch failed: launch.sh failed (no Portrait at 1536x2048, say) or no new page within 40 s
 H="$(cd "$(dirname "$0")/.." && pwd -P)"  # the real folder (see launch.sh)
+NOW=0
+[[ "${1:-}" == "--now" ]] && NOW=1
+FLAG="$H/.relaunch-now"
+hurried() {  # the Studio asked for it now while this was waiting
+  [[ -e "$FLAG" ]] && (( $(date +%s) - $(stat -c %Y "$FLAG" 2>/dev/null || echo 0) < 120 ))
+}
 status() { curl -s -m 3 127.0.0.1:8765/status; }
 quiet() {  # 0 when nothing would be cut off (no server answering counts as quiet)
   status | python3 -c '
@@ -27,7 +35,12 @@ except Exception:
     print("")'
 }
 for _ in $(seq 1 300); do
-  if quiet; then
+  if hurried; then
+    NOW=1
+    echo "asked to restart now (Restart the glass)"
+  fi
+  if (( NOW )) || quiet; then
+    rm -f "$FLAG"
     before=$(started)
     if ! (cd "$H" && ./launch.sh living > /dev/null 2>&1); then
       echo "launch failed (see launch.sh living)"; exit 2

@@ -39,3 +39,5 @@ portraits/*/prefs.prefs-part
 # The campfire circle's fire clip (tools/make_fire.py) stays on the NUC like the Chooms' videos; fire.json is tracked
 props/*.mp4
 props/*.part
+# Restart the glass (Glass Studio) hurrying a reload that waits for a quiet moment (tools/relaunch_when_quiet.sh)
+.relaunch-now

@@ -156,10 +156,12 @@ def still(cid, color, style="motes", log=print, relaunch=True):
     log(f"{cid} is on the glass (her still relief until her clips are built)")
 
 
-def relaunch_now(log):
+def relaunch_now(log, now=False):
     """tools/relaunch_when_quiet.sh: True once the glass has reloaded, False if it stayed busy (it
-    waits up to ten minutes for no Choom to be talking)."""
-    proc = subprocess.run([str(TOOLS / "relaunch_when_quiet.sh")], cwd=HOLOGRAM, capture_output=True, text=True, env=env())
+    waits up to ten minutes for no Choom to be talking) or didn't come back. now: no waiting (Restart
+    the glass on the Studio page)."""
+    proc = subprocess.run([str(TOOLS / "relaunch_when_quiet.sh"), *(["--now"] if now else [])], cwd=HOLOGRAM,
+                          capture_output=True, text=True, env=env())
     for line in (proc.stdout + proc.stderr).strip().splitlines():
         log(line)
     return proc.returncode == 0

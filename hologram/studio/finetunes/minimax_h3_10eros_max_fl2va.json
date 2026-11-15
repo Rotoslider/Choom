@@ -1,0 +1,23 @@
+{
+    "model": {
+        "name": "10Eros-Max H3 FL2VA 8-Step Turbo beta7 fix1 20B",
+        "architecture": "minimax_h3_fl2va_pruned",
+        "description": "TenStrip/10Eros-Max beta7 fix1 (https://huggingface.co/TenStrip/10Eros-Max): a merge built on MiniMax H3, pruned 20B, with an 8-step turbo baked in. First/last frame to video and audio. Installed by Glass Studio (hologram/studio/finetunes).",
+        "URLs": [
+            "https://huggingface.co/TenStrip/10Eros-Max/resolve/main/10Eros_Max_h3_8stepTURBO_beta7_fix1.safetensors"
+        ],
+        "qkv_layout": "grouped",
+        "infos": "### 10Eros-Max beta7 fix1 (FL2VA)\n\nOne BF16 checkpoint (40 GB) for both FL2VA and Ref2VA, a PDD model like H3's own PDD 8-step: its final layer holds 32 heads, head 0 whole and heads 1-31 as differences from head 0, which Glass Studio's pdd_heads.py unpacks into WanGP's heads module (10Eros_Max_h3_8stepTURBO_beta7_fix1_pdd_heads_fp32.safetensors, made from the checkpoint the first time). It uses H3's own text encoder (Qwen3-VL-32B-Instruct layer 50), video VAE and audio VAE, which WanGP brings with the architecture. Its fused QKV rows are **grouped** (Q, then K, then V), unlike the official interleaved H3 files: checked row by row against WanGP's pruned H3 (Nov 15, 2026). 8 steps on the 32-interval PDD grid, Euler, flow shift 12 (audio 3), guidance 1. No VSA gates in this file: dense attention.",
+        "modules": [
+            [
+                "10Eros_Max_h3_8stepTURBO_beta7_fix1_pdd_heads_fp32.safetensors"
+            ]
+        ],
+        "pdd": true
+    },
+    "num_inference_steps": 8,
+    "guidance_phases": 1,
+    "guidance_scale": 1.0,
+    "sample_solver": "euler",
+    "flow_shift": 12.0
+}

@@ -3,6 +3,7 @@
 Started by `studio.py serve`; listens on 127.0.0.1:8767 unless studio.json says otherwise.
 Standard library only, like the hologram's own server."""
 import base64
+import calendar
 import json
 import mimetypes
 import re
@@ -18,6 +19,7 @@ from pathlib import Path
 import build
 import housekeeping
 import jobs
+import models
 import pictures
 import plan
 import prompts
@@ -57,7 +59,7 @@ def details(proj):
             # Earlier takes of re-rolled clips still on disk: {clip: [[history index, file]]}.
             "takes": {n: t for n, c in proj.clips.items() if c.get("history") and (t := proj.takes(n))},
             "color": colors().get(proj.id) or proj.data.get("color"),
-            "plannedMinutes": round(sum(render.minutes(c.get("frames") or 124) for c in planned))}
+            "plannedMinutes": round(sum(render.minutes(c.get("frames") or 124, models.of(c)) for c in planned))}
 
 
 def ideas_about(proj, look_id):
@@ -157,6 +159,42 @@ def finite(obj):
     return obj
 
 
+def planned_by_model(projects=None):
+    """{model id: planned clips on it} over every Choom: what the page's Model menu offers to switch."""
+    out = {}
+    for proj in projects if projects is not None else [Project.load(c) for c in Project.ids()]:
+        for c in proj.clips.values():
+            if c["status"] == "planned":
+                out[models.of(c)] = out.get(models.of(c), 0) + 1
+    return out
+
+
+def glass_now():
+    """What the glass is doing (its server's /status), and the Studio's own reload of it, if one is on
+    the work list: for the question before Restart the glass. "down" when its server doesn't answer."""
+    try:
+        with urllib.request.urlopen(CFG["hologram_url"].rstrip("/") + "/status", timeout=3) as r:
+            st = json.loads(r.read())
+    except (OSError, ValueError):
+        st = None
+    with jobs.lock:
+        reload = next(({k: j.get(k) for k in ("id", "status", "args", "not_before")} for j in jobs.jobs
+                       if j["kind"] == "relaunch" and j["status"] in jobs.ACTIVE), None)
+    if st is None:
+        return {"down": True, "reload": reload}
+    page = st.get("status") or {}
+    # Seconds since the page last reported: it reports every 2 s; a hung page goes quiet.
+    age = None
+    try:
+        age = round(time.time() - calendar.timegm(time.strptime(page["time"][:19], "%Y-%m-%dT%H:%M:%S")))  # the page's time is UTC
+    except (KeyError, TypeError, ValueError):
+        pass
+    return {"down": False, "reload": reload, "silent": age, "started": (st.get("start") or {}).get("time"),
+            "choom": page.get("choom"), "mood": page.get("mood"), "queued": page.get("queued") or 0,
+            "glassOff": bool(page.get("glassOff")), "fps": page.get("fps"),
+            "talk": bool((st.get("tower_conversation") or {}).get("open"))}
+
+
 def active_runs():
     with jobs.lock:
         return [j["out"] for j in jobs.jobs if j["kind"] == "picture" and j["status"] in jobs.ACTIVE and j.get("out")]
@@ -241,7 +279,12 @@ class Handler(BaseHTTPRequestHandler):
             chooms = [Project.load(c) for c in Project.ids()]
             return self.send_json({"chooms": [{**p.summary(), "onGlass": len(built_clips(p.id)), "color": tint.get(p.id) or p.data.get("color")} for p in chooms],
                                    "workspace": str(WORKSPACE), "minutesPerClip": CFG["minutes_per_clip"],
-                                   "cleanPrompt": pictures.CLEAN_PROMPT})
+                                   "cleanPrompt": pictures.CLEAN_PROMPT, **models.public(),
+                                   "plannedByModel": planned_by_model(chooms)})
+        if parts[:2] == ["api", "models"]:
+            return self.send_json({**models.public(), "plannedByModel": planned_by_model()})
+        if parts[:2] == ["api", "glass"]:  # the glass now, for Restart the glass's question
+            return self.send_json(glass_now())
         if parts[:2] == ["api", "choom"] and len(parts) == 3 and NAME.match(parts[2]):
             if not Project.file(parts[2]).exists():
                 return self.fail("no such Choom", 404)
@@ -324,6 +367,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(plan.many(targets, picks, preview=bool(data.get("preview", True))))
             if parts == ["api", "build"]:
                 return self.start_build(data)
+            if parts == ["api", "models", "default"]:
+                return self.set_model(data)
+            if parts == ["api", "glass", "restart"]:
+                job, how = jobs.restart_glass()
+                return self.send_json({"job": job, "how": how})
             if parts == ["api", "new-choom"]:
                 return self.new_choom(data)
             if parts == ["api", "still"]:
@@ -354,6 +402,21 @@ class Handler(BaseHTTPRequestHandler):
             traceback.print_exc()
             return self.fail(f"{type(e).__name__}: {e}", 500)
         return self.send_error(404)
+
+    def set_model(self, data):
+        """The model new clips and re-rolls are planned with; `planned`: switch every Choom's planned
+        clips to it too (queued ones keep theirs: their render is set)."""
+        mid = models.get(data["model"])["id"]
+        models.set_default(mid)
+        switched = 0
+        if data.get("planned"):
+            for cid in Project.ids():
+                with editing(cid) as proj:
+                    for c in proj.clips.values():
+                        if c["status"] == "planned" and c.get("model") != mid:
+                            c["model"] = mid
+                            switched += 1
+        return self.send_json({**models.public(), "switched": switched, "plannedByModel": planned_by_model()})
 
     def ask_ideas(self, cid, data):
         """Ask her for ideas for one of her looks (Donny, Nov 9: "the girls are a lot more creative"): the
@@ -402,9 +465,19 @@ class Handler(BaseHTTPRequestHandler):
                 if bad:
                     return self.fail(f"{bad[0]} isn't kept")
                 proj.data["sequence"] = list(dict.fromkeys(seq))
-            elif action == "reroll":
+            elif action == "reroll":  # on the model asked for, else the Studio's default
+                model = data.get("model") or None
+                if model:
+                    models.get(model)
                 for n, seed in zip(names, next_seeds(len(names))):
-                    proj.reroll(n, seed)
+                    proj.reroll(n, seed, model)
+            elif action == "model":  # planned clips switched to another model before they render
+                mid = models.get(data["model"])["id"]
+                bad = [n for n in names if proj.clips[n]["status"] != "planned"]
+                if bad:
+                    return self.fail(f"{bad[0]} is {proj.clips[bad[0]]['status']}: only a planned clip can change its model")
+                for n in names:
+                    proj.clips[n]["model"] = mid
             elif action == "take":  # bring an earlier take back (its sheet is made again)
                 status = proj.use_take(data["name"], int(data["index"]))
                 jobs.add("review", {"choom": cid, "clips": [data["name"]]})

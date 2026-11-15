@@ -89,6 +89,7 @@ def import_choom(cid, takes, names):
         status = "kept" if name in on_glass else "dropped"
         clip = proj.add_clip(name, prompt=last.get("prompt", ""), seed=last.get("seed"), frames=last.get("frames"),
                              start=last.get("start"), end=last.get("end"), queue=last.get("queue"), status=status,
+                             model="h3",  # made before the Studio: H3 made everything then
                              note="" if status == "kept" else "not on the glass when the Studio started")
         if len(mine) > 1:
             clip["history"] = [{"seed": t["seed"], "queue": t["queue"], "status": "dropped", "note": "re-rolled"} for t in mine[:-1]]

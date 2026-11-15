@@ -1,8 +1,9 @@
 """Rendering clips with Wan2GP: queue zips, the headless run, and collecting the finished clips.
 
-A queue is queue/<name>.zip holding queue.json (one MiniMax H3 task per clip: its prompt, seed,
-length and start/end pictures, and a clip's own pictures for the reference model) and the pictures; queue/<name>_plan.json maps each seed to its clip
-name. Wan2GP names its outputs by date, seed and prompt; collect() renames them <clip name>.mp4.
+A queue is queue/<name>.zip holding queue.json (one Wan2GP task per clip on the clip's own model, see
+models.py: its prompt, seed, length and start/end pictures, and a clip's own pictures for the model's
+reference type) and the pictures; queue/<name>_plan.json maps each seed to its clip name. Wan2GP
+names its outputs by date, seed and prompt; collect() renames them <clip name>.mp4.
 """
 import json
 import re
@@ -11,15 +12,16 @@ import time
 import zipfile
 from pathlib import Path
 
-from config import CFG, CLIPS, PICTURES, QUEUES, WAN2GP, WAN2GP_PYTHON
+import models
+from config import CLIPS, PICTURES, QUEUES, WAN2GP, WAN2GP_PYTHON
 from project import Project, editing
 
 TEMPLATE = Path(__file__).resolve().parent / "templates" / "h3_task.json"
 OUTPUT = re.compile(r"^\d{4}-\d\d-\d\d-.*_seed(\d+)_.*\.mp4$")
 
 
-def minutes(frames):
-    return CFG["minutes_per_clip"] * frames / 124
+def minutes(frames, model=None):
+    return models.minutes(frames, model)
 
 
 def make_queue(name, picks):
@@ -27,7 +29,7 @@ def make_queue(name, picks):
     Returns the zip's path. Everything is checked and the zip written before any clip is marked, so a
     clip that isn't planned or a picture that's gone stops it with nothing left half queued."""
     template = json.loads(TEMPLATE.read_text())
-    tasks, plan, pictures = [], {}, set()
+    tasks, plan, pictures, used = [], {}, set(), set()
     chooms = sorted({cid for cid, _ in picks})
     for cid in chooms:
         proj = Project.load(cid)
@@ -41,19 +43,27 @@ def make_queue(name, picks):
             for pic in (clip["start"], clip["end"], *refs):
                 if not (PICTURES / pic).is_file():
                     raise ValueError(f"{clip_name}: its picture {pic} is missing from {PICTURES}")
-            params = dict(template, model_type=CFG["video_model"], prompt=clip["prompt"], seed=clip["seed"],
+            mid = models.of(clip)
+            wan = models.wan_type(mid, reference=bool(refs))
+            used.add(mid)
+            # base_model_type is the model type itself (as for H3 before), never an architecture: Wan2GP
+            # falls back to it for a model type it doesn't know, and a finetune missing must fail, not
+            # render on (and download) the bare architecture.
+            params = dict(template, model_type=wan, base_model_type=wan, prompt=clip["prompt"], seed=clip["seed"],
                           video_length=clip["frames"], image_start=clip["start"], image_end=clip["end"])
             if refs:  # its own pictures (a mug she sips from): picture 3 on in the reference model's prompt
-                params.update(model_type=CFG["reference_model"], base_model_type=CFG["reference_model"],
-                              video_prompt_type="I", image_refs=list(refs), image_refs_relative_size=100,
+                params.update(video_prompt_type="I", image_refs=list(refs), image_refs_relative_size=100,
                               remove_background_images_ref=0)
-            tasks.append({"id": 0, "params": params})
+            tasks.append({"id": 0, "params": params, "_order": (models.ids().index(mid), bool(refs))})
             plan[str(clip["seed"])] = clip_name
             pictures.update((clip["start"], clip["end"], *refs))
-    # Clips with pictures last, so Wan2GP changes models once (loading one takes about a minute).
-    tasks.sort(key=lambda t: t["params"]["model_type"] != CFG["video_model"])
+    # By model, and on each model the clips with pictures last, so Wan2GP loads each model type once
+    # (loading one takes about a minute).
+    tasks.sort(key=lambda t: t.pop("_order"))
     for i, t in enumerate(tasks):
         t["id"] = i + 1
+    for mid in sorted(used):  # Wan2GP must know every model type in the queue before it starts
+        models.install(mid)
     write_zip(name, tasks, plan, {pic: PICTURES / pic for pic in pictures})
     marked = []
     try:

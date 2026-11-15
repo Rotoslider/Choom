@@ -5,12 +5,17 @@
     python3 studio/studio.py status [CHOOM]              clips per status, looks, what's on the glass
     python3 studio/studio.py packs CHOOM LOOK            the library's actions for a look
     python3 studio/studio.py plan CHOOM LOOK PACK [KEY ...]   plan clips (all of a pack, or some)
-    python3 studio/studio.py render CHOOM [CHOOM ...] [--queue NAME]   queue her planned clips, render them
+    python3 studio/studio.py render CHOOM [CHOOM ...] [--queue NAME] [--model ID]
+                                                         queue her planned clips (all on model ID), render them
+    python3 studio/studio.py models [--default ID] [--download ID]
+                                                         the video models (models.json), the one new clips get;
+                                                         --download fetches a model's weights into Wan2GP
     python3 studio/studio.py collect                     rename finished renders, mark them rendered
     python3 studio/studio.py review CHOOM [CLIP ...]     contact sheets and checks (Wan2GP's Python)
     python3 studio/studio.py keep|drop CHOOM CLIP ...    decide on rendered clips
     python3 studio/studio.py place|remove CHOOM CLIP ... put kept clips on the glass, or take them off
     python3 studio/studio.py build CHOOM [--no-relaunch]   build her sequence and reload the glass
+    python3 studio/studio.py restart-glass               close the glass page and open it again, now
 
 render and build go through the Studio's work list when it's running (so they take their turn on the
 GPU); otherwise they run here.
@@ -28,6 +33,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import build  # noqa: E402
+import models  # noqa: E402
 import plan  # noqa: E402
 import render  # noqa: E402
 from config import CFG, WAN2GP_PYTHON  # noqa: E402
@@ -84,9 +90,17 @@ def studio(path, body):
 
 
 def render_cmd(args):
-    chooms = [a for a in args if not a.startswith("--")]
     name = args[args.index("--queue") + 1] if "--queue" in args else time.strftime("studio_%Y%m%d-%H%M%S")
-    chooms = [c for c in chooms if c != name]
+    model = args[args.index("--model") + 1] if "--model" in args else None
+    chooms = [a for i, a in enumerate(args) if not a.startswith("--") and (i == 0 or args[i - 1] not in ("--queue", "--model"))]
+    if model:  # every clip planned for them goes on that model
+        models.get(model)
+        for cid in chooms:
+            names = [n for n, c in Project.load(cid).clips.items() if c["status"] == "planned"]
+            if names and studio(f"/api/choom/{cid}/model", {"names": names, "model": model}) is None:
+                with editing(cid) as proj:
+                    for n in names:
+                        proj.clips[n]["model"] = model
     sent = studio("/api/render", {"chooms": chooms, "queue": name})
     if sent is not None:  # the Studio's work list renders it, in turn with its other GPU work
         print(f"queued in the Studio as job {sent['job']['id']} ({sent['job']['args']['clips']} clips); follow it on the page")
@@ -95,7 +109,7 @@ def render_cmd(args):
     if not picks:
         raise SystemExit("nothing planned")
     render.make_queue(name, picks)
-    print(f"queue {name}: {len(picks)} clips, about {round(sum(render.minutes(Project.load(c).clips[n]['frames']) for c, n in picks))} minutes")
+    print(f"queue {name}: {len(picks)} clips, about {round(sum(render.minutes(k['frames'], models.of(k)) for k in (Project.load(c).clips[n] for c, n in picks)))} minutes")
     proc = render.start(name)
     while proc.poll() is None:
         time.sleep(15)
@@ -107,6 +121,30 @@ def render_cmd(args):
         print(f"  rendered {n}")
     render.unqueue(name)
     print(f"\nqueue {name} finished: {render.progress(name)}")
+
+
+def models_cmd(args):
+    if "--download" in args:
+        models.download(args[args.index("--download") + 1])
+    if "--default" in args:
+        mid = args[args.index("--default") + 1]
+        if studio("/api/models/default", {"model": mid}) is None:
+            models.set_default(mid)
+    pub = models.public()
+    for m in pub["models"]:
+        mark = "*" if m["id"] == pub["default"] else " "
+        extra = f"  (not downloaded: {m['download']} GB, models --download {m['id']})" if m["download"] else ""
+        print(f"{mark} {m['id']:8} {m['name']}{extra}\n           {m['about']}")
+    print("* new clips and re-rolls render with it (studio.json clip_model)")
+
+
+def restart_glass():
+    sent = studio("/api/glass/restart", {})
+    if sent is not None:
+        print(f"the Studio restarts the glass (job {sent['job']['id']}, {sent['how']}); its work list shows how it went")
+        return
+    proc = subprocess.run([str(build.TOOLS / "relaunch_when_quiet.sh"), "--now"], cwd=build.HOLOGRAM)
+    raise SystemExit(proc.returncode)
 
 
 def decide(status_name, args):
@@ -138,6 +176,10 @@ def main():
         plan_cmd(args)
     elif cmd == "render":
         render_cmd(args)
+    elif cmd == "models":
+        models_cmd(args)
+    elif cmd == "restart-glass":
+        restart_glass()
     elif cmd == "collect":
         for cid, n in render.collect():
             print(f"{cid}: {n}")

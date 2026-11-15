@@ -1818,11 +1818,28 @@ function backOn(p, walk) {
 }
 const offGlass = (p) => p.players[p.active].clip >= 0 && poseTo(p.alive.clips[p.players[p.active].clip]) === 'gone';
 
+// Her first clip since the page loaded: her base loop in the clothes she has on now (a visit under way,
+// clothes she chose, her night clothes; the wardrobe is kept in this browser profile), else her main
+// idle. Starting every page on her main idle in her usual clothes ended the visit at the first pick:
+// Eve, nine minutes into fifteen in her yellow dress, came back in her usual clothes after Restart the
+// glass (2026-11-15), and a Choom in clothes she'd chosen changed into them again after each relaunch.
+function startClip(p) {
+  const clips = p.alive.clips;
+  const dress = wantedOutfit(p, wantedMood(p));
+  if (!dress) return 0;
+  const loopIn = (pz) => clips.findIndex((c) => !c.bad && poseFrom(c) === pz && poseTo(c) === pz && clipMoods(c).includes('talk'));
+  for (const base of new Set([basePose(poseFrom(clips[0]) || 'main'), p.alive.home || 'main'])) {
+    const k = loopIn(`${base}@${dress}`);
+    if (k >= 0) return k;
+  }
+  return 0;
+}
+
 function aliveStart(p) {
   const a = p.players[p.active];
   if (p.arrive || offGlass(p)) backOn(p, p.arrive);
   p.arrive = false;
-  if (a.clip < 0) aliveLoad(p, a, 0);
+  if (a.clip < 0) aliveLoad(p, a, startClip(p));
   a.video.play().catch(videoError);
   const b = p.players[1 - p.active];
   if (p.alive.clips.length > 1 && b.clip < 0) aliveLoad(p, b, nextClip(p, a.clip));

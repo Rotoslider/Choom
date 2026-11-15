@@ -29,7 +29,7 @@ import build
 import notify
 import pictures
 import render
-from config import CFG, PROJECTS, WAN2GP_PYTHON
+from config import CFG, PROJECTS, RUN_TOOLS, WAN2GP_PYTHON
 from project import Project, editing
 
 JOBS_FILE = PROJECTS / "jobs.json"
@@ -470,18 +470,51 @@ def relaunch_later(cid):
     return add("relaunch", {"chooms": [cid]})
 
 
+RESTART_FLAG = RUN_TOOLS.parent / ".relaunch-now"  # tools/relaunch_when_quiet.sh stops waiting when it appears
+
+
+def restart_glass():
+    """Restart the glass now (Restart the glass on the Studio page: the page hung, say). A reload already
+    on the work list goes at once, and the clips of a build waiting for it are pruned as usual after it;
+    one waiting for a quiet moment stops waiting; otherwise a new one starts. Returns (job, how): how is
+    "hurried", "now", "new" or "already" (a restart under way)."""
+    with lock:
+        job = next((j for j in jobs if j["kind"] == "relaunch" and j["status"] in ("running", "waiting")), None)
+        if job and job["status"] == "running" and job["args"].get("now"):
+            return job, "already"  # a restart is under way already
+        if job and job["status"] == "running":
+            RESTART_FLAG.touch()
+            job["args"]["now"] = True
+            job["log"] = (job["log"] + ["asked to restart now (Restart the glass)"])[-60:]
+            save()
+            return job, "hurried"
+        if job:
+            job["args"]["now"] = True
+            job["not_before"] = 0
+            job["log"] = (job["log"] + ["asked to restart now (Restart the glass)"])[-60:]
+            save()
+            return job, "now"
+    return add("relaunch", {"chooms": [], "now": True}), "new"
+
+
 def do_relaunch(job):
     """Reload the glass once no Choom is talking (relaunch_when_quiet.sh waits up to ten minutes);
     if it stayed busy, try again in a few minutes. After a real reload, the videos and caches of
-    clips that aren't hers any more are deleted."""
+    clips that aren't hers any more are deleted. Asked for now (Restart the glass), it doesn't wait,
+    and a launch that fails fails the job (it's shown, not tried again later)."""
     log = lambda line: note(job, line)
-    if not build.relaunch_now(log):
+    now = bool(job["args"].get("now"))
+    if not build.relaunch_now(log, now=now):
+        if now:
+            raise RuntimeError("the glass didn't come back (see the lines above, and hologram/chrome.log)")
         when = time.time() + RELAUNCH_RETRY_S
         with lock:
             job.update(status="waiting", not_before=when, tries=job.get("tries", 0) + 1)
             job["log"] = (job["log"] + [f"the glass is busy; trying again at {time.strftime('%H:%M', time.localtime(when))}"])[-60:]
             save()
         return
+    if not job["args"]["chooms"]:
+        return  # Restart the glass: nothing built to prune
     time.sleep(20)  # the page has asked for the new clips before the old videos go
     for cid in job["args"]["chooms"]:
         build.run(build.prune_cmd(cid), log)

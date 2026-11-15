@@ -1,0 +1,45 @@
+{
+ "_about": "The video models Glass Studio renders clips with (models.py). Each clip records the model it was planned with; a render queues each clip on its own model and Wan2GP loads each model once. 'clip' is the Wan2GP model for ordinary clips (first and last frame), 'reference' the one for clips with pictures of their own. 'finetunes' are Wan2GP model definitions kept in studio/finetunes/ and copied into Wan2GP's finetunes folder before a render needs them. 'weights' are files in Wan2GP's ckpts folder: a render refuses a model whose weights aren't there, and `studio.py models --download ID` fetches them (size and sha256 checked). 'derived' files are made from them by a tool here the first time a render needs them (10Eros-Max's PDD heads). 'minutes_per_clip' is a five-second clip, start to finish (null: studio.json's minutes_per_clip). The Studio's default is studio.json's clip_model (the page's Model menu writes it).",
+ "models": [
+  {
+   "id": "h3",
+   "name": "MiniMax H3",
+   "short": "H3",
+   "about": "MiniMax H3 PDD 8-step (33B) through Wan2GP: every clip until November 15, 2026 was made with it. Its look is the Chooms' look.",
+   "clip": "minimax_h3_fl2va_pdd",
+   "reference": "minimax_h3_ref2va_pdd",
+   "minutes_per_clip": null
+  },
+  {
+   "id": "10eros",
+   "name": "10Eros-Max",
+   "short": "10Eros",
+   "about": "TenStrip/10Eros-Max, beta7 fix1: a merge built on MiniMax H3 (pruned 20B, PDD 8-step like H3's). Same prompts, text encoder (Qwen3-VL-32B) and VAEs as H3, so it fits every clip the Studio makes; she may not look quite like herself.",
+   "source": "https://huggingface.co/TenStrip/10Eros-Max",
+   "clip": "minimax_h3_10eros_max_fl2va",
+   "reference": "minimax_h3_10eros_max_ref2va",
+   "finetunes": [
+    "minimax_h3_10eros_max_fl2va",
+    "minimax_h3_10eros_max_ref2va"
+   ],
+   "weights": [
+    {
+     "file": "10Eros_Max_h3_8stepTURBO_beta7_fix1.safetensors",
+     "gb": 40.3,
+     "bytes": 40265608072,
+     "sha256": "8a670bf9962e7379946f10bede480d3e603d0d1ed2ab02c22d36398f4c796a29",
+     "url": "https://huggingface.co/TenStrip/10Eros-Max/resolve/main/10Eros_Max_h3_8stepTURBO_beta7_fix1.safetensors"
+    }
+   ],
+   "minutes_per_clip": 3.5,
+   "derived": [
+    {
+     "file": "10Eros_Max_h3_8stepTURBO_beta7_fix1_pdd_heads_fp32.safetensors",
+     "from": "10Eros_Max_h3_8stepTURBO_beta7_fix1.safetensors",
+     "tool": "pdd_heads.py"
+    }
+   ],
+   "_minutes_note": "Nov 15 2026, by day with Forge loaded (BF16, dense attention): 5 s clips 3.4-3.9 min, the 7 s picture clip 7 min with a model reload. H3's 2.2 is a night figure; refine after a night render."
+  }
+ ]
+}

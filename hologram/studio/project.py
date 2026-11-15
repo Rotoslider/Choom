@@ -16,7 +16,8 @@
 
 A clip's status: planned (not yet queued), queued (in a render queue), rendered (made, not reviewed),
 kept, or dropped. Only kept clips can be on the glass. Re-rolling a clip renders it again under the
-same name with a new seed; the old take is remembered in its history.
+same name with a new seed; the old take is remembered in its history. A clip's "model" is the video
+model it renders with or was made with (models.py; none: H3, from before the choice).
 """
 import contextlib
 import fcntl
@@ -26,6 +27,7 @@ import re
 import sys
 import time
 
+import models
 from config import CLIPS, PICTURES, PORTRAITS, PROJECTS, SHEETS, TOOLS
 
 sys.path.insert(0, str(TOOLS))
@@ -119,7 +121,8 @@ class Project:
 
     def add_clip(self, name, **fields):
         moods, start, end = roles(self.id, name)
-        clip = {"from": start, "to": end, "moods": moods, "status": "planned", "flags": [], "note": ""}
+        clip = {"from": start, "to": end, "moods": moods, "status": "planned", "flags": [], "note": "",
+                "model": models.default()}  # the model it renders with (models.py); the page can switch it
         clip.update(fields)
         self.clips[name] = clip
         return clip
@@ -140,17 +143,20 @@ class Project:
             self.sequence.append(name)
         clip["changed"] = time.strftime("%Y-%m-%dT%H:%M:%S")
 
-    def reroll(self, name, seed):
-        """Plan the clip again under the same name with a new seed; the old take goes in its history,
-        with the name its file gets in clips/takes/ once the new one lands (render.collect names it
-        from the file's time), so it can be brought back (use_take)."""
+    def reroll(self, name, seed, model=None):
+        """Plan the clip again under the same name with a new seed, on `model` (the Studio's default when
+        not given); the old take goes in its history, with the model that made it and the name its file
+        gets in clips/takes/ once the new one lands (render.collect names it from the file's time), so it
+        can be brought back (use_take)."""
         clip = self.clips[name]
         old = {k: clip.get(k) for k in ("seed", "status", "note", "flags", "checks", "queue", "rendered")}
+        old["model"] = models.of(clip)
         old["onGlass"] = name in self.sequence
         if self.clip_file(name).exists():
             old["take"] = take_name(name, self.clip_file(name))
         clip.setdefault("history", []).append(old)
-        clip.update({"seed": seed, "status": "planned", "flags": [], "note": "", "queue": None})
+        clip.update({"seed": seed, "status": "planned", "flags": [], "note": "", "queue": None,
+                     "model": models.get(model)["id"] if model else models.default()})
         clip.pop("checks", None)
         if name in self.sequence and name != self.sequence[0]:
             self.sequence.remove(name)
@@ -165,6 +171,7 @@ class Project:
         on_glass = old.pop("onGlass", False)
         old.pop("take", None)  # its file never moved: the re-roll hadn't rendered
         clip.update({k: v for k, v in old.items() if v is not None})
+        clip["model"] = old.get("model") or models.LEGACY  # the model of the take it goes back to
         if not clip["history"]:
             del clip["history"]
         if on_glass and clip["status"] == "kept" and name not in self.sequence:
@@ -214,6 +221,7 @@ class Project:
             raise ValueError(f"no file for {name}")
         h = clip["history"][index]
         now = {k: clip.get(k) for k in ("seed", "status", "note", "flags", "queue", "rendered")}
+        now["model"] = models.of(clip)
         now["onGlass"] = name in self.sequence
         now["take"] = take_name(name, current)
         if (TAKES / now["take"]).exists():  # two takes written in the same second
@@ -225,6 +233,7 @@ class Project:
         for k in ("seed", "status", "note", "flags", "queue", "rendered"):
             if h.get(k) is not None:
                 clip[k] = h[k]
+        clip["model"] = h.get("model") or models.LEGACY  # a take from before models were recorded: H3's
         clip.pop("checks", None)
         clip["changed"] = time.strftime("%Y-%m-%dT%H:%M:%S")
         if clip["status"] != "kept" and name in self.sequence and name != self.sequence[0]:
