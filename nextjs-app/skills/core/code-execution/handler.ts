@@ -1,6 +1,7 @@
 import { BaseSkillHandler, SkillHandlerContext } from '@/lib/skill-handler';
 import type { ToolCall, ToolResult } from '@/lib/types';
 import { WORKSPACE_ROOT } from '@/lib/config';
+import { translateLegacyPaths, legacyPathNote } from '@/lib/legacy-paths';
 import * as fs from 'fs';
 import * as path from 'path';
 import { choomHasSshPermission, REMOTE_SSH_DISABLED_MESSAGE } from '@/lib/choom-permissions';
@@ -79,7 +80,8 @@ export default class CodeExecutionHandler extends BaseSkillHandler {
     try {
       const { CodeSandbox } = await import('@/lib/code-sandbox');
       const sandbox = new CodeSandbox(WORKSPACE_ROOT);
-      const code = (toolCall.arguments.code || toolCall.arguments.command) as string;
+      // The NUC's old projects folder in her code means this one (lib/legacy-paths.ts).
+      const { text: code, changed: movedPath } = translateLegacyPaths((toolCall.arguments.code || toolCall.arguments.command) as string);
       const projectFolder = (toolCall.arguments.project_folder || toolCall.arguments.projectFolder || toolCall.arguments.folder || (code && inferProjectFolder(code))) as string;
       const language = (toolCall.arguments.language || 'python') as 'python' | 'node';
       const timeoutSeconds = toolCall.arguments.timeout_seconds as number | undefined;
@@ -88,7 +90,7 @@ export default class CodeExecutionHandler extends BaseSkillHandler {
       const result = language === 'python'
         ? await sandbox.executePython(projectFolder, code, timeoutMs)
         : await sandbox.executeNode(projectFolder, code, timeoutMs);
-      return this.success(toolCall, result);
+      return this.success(toolCall, movedPath ? { ...result, note: legacyPathNote() } : result);
     } catch (err) {
       console.error('   Code execution failed:', err instanceof Error ? err.message : err);
       return this.error(toolCall, `Code execution failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
@@ -135,7 +137,9 @@ export default class CodeExecutionHandler extends BaseSkillHandler {
       const { CodeSandbox } = await import('@/lib/code-sandbox');
       const sandbox = new CodeSandbox(WORKSPACE_ROOT);
       let projectFolder = toolCall.arguments.project_folder as string;
-      let command = toolCall.arguments.command as string;
+      // The NUC's old projects folder in her command means this one (lib/legacy-paths.ts).
+      const translated = translateLegacyPaths(toolCall.arguments.command as string);
+      let command = translated.text;
 
       // LLMs often put "cd <folder> && ..." in the command instead of using project_folder.
       // Extract the folder and strip the cd prefix so the sandbox runs in the right directory.
@@ -165,7 +169,7 @@ export default class CodeExecutionHandler extends BaseSkillHandler {
       const timeoutMs = timeoutSeconds ? Math.min(timeoutSeconds * 1000, 600_000) : undefined;
 
       const result = await sandbox.runCommand(projectFolder, command, timeoutMs);
-      return this.success(toolCall, result);
+      return this.success(toolCall, translated.changed ? { ...result, note: legacyPathNote() } : result);
     } catch (err) {
       console.error('   Command execution failed:', err instanceof Error ? err.message : err);
       return this.error(toolCall, `Command execution failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
