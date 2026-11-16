@@ -82,8 +82,10 @@ NAMES = {                        # what Whisper may write for each name
     "Genesis": r"genesis|genisis|jenesis",
     "Eve": r"eve|eva|eave|evie",
     # All of them: the group room. Not "everyone": "Okay, everyone..." on a call or a video near the tower
-    # would send the rest of the sentence to their room.
-    ROOM: r"chooms?|choom's|chums|chumps|girls|gals",
+    # would send the rest of the sentence to their room. Donny says "OK girls" (Nov 16 2026); "OK Chooms"
+    # stays, but not Whisper's near misses for it ("chums", "chumps", "gals") nor "hey" (group_wake):
+    # "Okay, that was a good one" came out as a wake twice on Nov 15 and went to the room.
+    ROOM: r"chooms?|choom's|girls",
 }
 
 # A Choom added later (Glass Studio) wakes by her name, or by the spellings in her manifest entry's
@@ -99,10 +101,15 @@ def _more_names():
 
 
 _more_names()
-WHISPER_HINT = " ".join(f"OK {name}." for name in NAMES if name != ROOM) + " OK Chooms. OK girls."
+WHISPER_HINT = " ".join(f"OK {name}." for name in NAMES if name != ROOM) + " OK girls."
 INVITED = object()               # utterance(): a Choom spoke to him unasked; open a reply window
 INTERRUPTED = object()           # utterance(): a Choom started speaking during a reply window
 WAKE = re.compile(r"^\W*(?:ok|okay|o\.k\.|hey)\W+(" + "|".join(NAMES.values()) + r")\b\W*(.*)$", re.I | re.S)
+
+
+def group_wake(match):
+    """A wake phrase naming the room counts only after "OK"/"okay", never after "hey"."""
+    return not (choom_for(match.group(1)) == ROOM and re.match(r"\W*hey\b", match.group(0), re.I))
 
 
 def die_with_parent():
@@ -214,6 +221,7 @@ class Ears:
         self.someone_speaking = False        # a Choom's voice is playing (from the page's status)
         self.someone_thinking = False        # a Choom's turn is under way, before her voice (the same)
         self.invite_seen = time.time()
+        self.working = None                  # {"choom", "ended", "spoke"}: still on his request when the wait ran out
 
     def capture(self):
         """Mono from the default PipeWire source, restarted if it ever stops. The recorder dies with
@@ -302,9 +310,28 @@ class Ears:
                 if welcome and welcome.get("at", 0) > self.invite_seen:
                     self.invite_seen = welcome["at"]
                     self.invite = welcome.get("choom")
+                self.follow_job(everything.get("chat_turns") or [])
             except Exception:
                 pass
             time.sleep(0.5)
+
+    def follow_job(self, turns, now=None):
+        """A Choom still on his request when the wait for her answer ran out (Genesis making him a
+        contour map, Nov 16 2026: 20 minutes and more of searches and code): once her turn is over and
+        she has spoken, her answer opens a reply window like a welcome back. A turn that ends without a
+        word to him opens none."""
+        job, now = self.working, now or time.time()
+        if not job:
+            return
+        job["spoke"] = job["spoke"] or self.someone_speaking
+        if job["choom"] in turns:
+            job["ended"] = None
+        elif job["ended"] is None:
+            job["ended"] = now
+        elif job["spoke"] and self.invite is None:
+            self.invite, self.working = job["choom"], None
+        elif now - job["ended"] > 90:
+            self.working = None
 
     def utterance(self, start_within=None, quiet_frames=25, close_if_speaking=False):
         """The next stretch of speech (with 300 ms before it), or None if none starts in time. It ends
@@ -370,7 +397,7 @@ class Ears:
         if not segments or segments[0].no_speech_prob > 0.6 or segments[0].avg_logprob < -1.0:
             return None
         match = WAKE.match(" ".join(s.text for s in segments))
-        return (choom_for(match.group(1)), match.group(2).strip()) if match else None
+        return (choom_for(match.group(1)), match.group(2).strip()) if match and group_wake(match) else None
 
     def is_speech(self, pcm):
         """Whisper invents tidy sentences out of noise; check the clip really holds words first."""
@@ -495,7 +522,15 @@ class Ears:
             if not sent:
                 return
             # Ignore what the mic hears while she thinks and talks (mostly her own voice).
-            self.wait_for_answer(10 if choom == ROOM else 2, choom)
+            answered = self.wait_for_answer(10 if choom == ROOM else 2, choom)
+            if not answered and choom != ROOM and choom in (hologram_status("chat_turns") or []):
+                # Still at it after five minutes: no reply window now (it chimed while Genesis was still
+                # searching, and closed unheard). The ears go back to wake phrases; her answer opens the
+                # window when it comes (follow_job).
+                self.working = {"choom": choom, "ended": None, "spoke": False}
+                tell_hologram("working", choom)
+                tell_hologram("listen", choom, listening=False)
+                return
             while not self.frames.empty():
                 self.frames.get_nowait()
             pcm, rest, follow_up = None, "", True

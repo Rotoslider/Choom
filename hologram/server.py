@@ -355,8 +355,10 @@ def follow_choom():
                             chat_turns[turn] = time.time()
                         elif event.get("type") in ("turn_end", "error"):
                             chat_turns.pop(turn, None)
+                        # (A turn whose end never came stops counting after 30 minutes: Genesis's contour
+                        # map for him ran past 10, and tower_ears waits for her answer to it.)
                         latest["chat_turns"] = sorted({c for (c, source, _), at in chat_turns.items()
-                                                       if source == "chat" and time.time() - at < 600})
+                                                       if source == "chat" and time.time() - at < 1800})
                     if event.get("type") == "content" and event.get("speak") is True and isinstance(event.get("text"), str):
                         spoken.append((time.time(), event["text"]))  # for tower_ears' echo guard
                     broadcast({**event, "type": "choom", "event": event.get("type")})
