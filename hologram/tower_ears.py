@@ -72,6 +72,10 @@ MIC_RESET_AFTER_S = 30
 MIC_RESET_EVERY_S = 10 * 60
 USBDEVFS_RESET = 0x5514          # _IO('U', 20)
 ROOM = "Chooms"                  # "OK Chooms" / "OK girls": the group room
+# How long the room may take to start answering before the reply window opens anyway. A room's first
+# Choom starts her turn 25 to 75 s after his words reach it (Nov 15 2026, 8 pm); waiting only 15 s
+# chimed twice before anyone had answered, and his replies to those chimes queued up as extra rounds.
+ROOM_START_S = 120
 NAMES = {                        # what Whisper may write for each name
     "Aloy": r"aloy|aloi|eloy|eloi|aloe|alloy|alloi|a loy|aloya|aloha",
     "Optic": r"optic|optik|optics|optick",
@@ -208,6 +212,7 @@ class Ears:
         self.frames = queue.Queue()
         self.invite = None                   # a Choom who just spoke to him unasked (a welcome back)
         self.someone_speaking = False        # a Choom's voice is playing (from the page's status)
+        self.someone_thinking = False        # a Choom's turn is under way, before her voice (the same)
         self.invite_seen = time.time()
 
     def capture(self):
@@ -292,6 +297,7 @@ class Ears:
                     everything = json.loads(response.read())
                 status = everything.get("status") or {}
                 self.someone_speaking = status.get("mood") == "speaking" or bool(status.get("queued"))
+                self.someone_thinking = status.get("mood") == "thinking"
                 welcome = everything.get("welcome")
                 if welcome and welcome.get("at", 0) > self.invite_seen:
                     self.invite_seen = welcome["at"]
@@ -315,6 +321,8 @@ class Ears:
                 return INVITED  # waiting for a wake phrase: a Choom just spoke to him unasked
             if close_if_speaking and self.someone_speaking:
                 return INTERRUPTED  # a reply window, and a Choom started talking: that's not him
+            if close_if_speaking == ROOM and speech is None and self.someone_thinking:
+                return INTERRUPTED  # the room's next Choom started her turn before he spoke: she goes first
             if frame is None:
                 if speech is None and deadline and time.time() > deadline:
                     return None
@@ -404,6 +412,7 @@ class Ears:
         conversation turn and the voice count: a heartbeat running beside it kept the page "thinking"
         and opened the window 13 s after she'd finished."""
         started, idle_polls, deadline = False, 0, time.time() + 300
+        start_by = time.time() + (ROOM_START_S if choom == ROOM else 15)  # (her turn may have begun and ended before we looked)
         while time.time() < deadline:
             status = hologram_status()
             if status is not None:
@@ -416,7 +425,7 @@ class Ears:
                     busy = status.get("mood") in ("thinking", "speaking") or status.get("queued")
                 if busy:
                     started, idle_polls = True, 0
-                elif started or time.time() > deadline - 285:  # (her turn may have ended before we looked)
+                elif started or time.time() > start_by:
                     idle_polls += 1
                     if idle_polls >= quiet_polls:
                         return True
@@ -436,7 +445,7 @@ class Ears:
                     # chime again, the window just runs on.
                     quiet_since = None
                     for _ in range(600):
-                        if self.someone_speaking:
+                        if self.someone_speaking or (choom == ROOM and self.someone_thinking):
                             quiet_since = None
                         elif quiet_since is None:
                             quiet_since = time.time()
@@ -450,12 +459,12 @@ class Ears:
                     window_until = time.time() + FOLLOW_UP_S
                 left = (window_until - time.time()) if follow_up else COMMAND_WAIT_S
                 pcm = None if left <= 0 else self.utterance(start_within=left, quiet_frames=SENTENCE_QUIET,
-                                                            close_if_speaking=follow_up)
+                                                            close_if_speaking=follow_up and (ROOM if choom == ROOM else True))
                 if pcm is INTERRUPTED:
                     # Someone started talking (her next thought, a sister in the room): wait until it's
                     # quiet again, then a fresh chime.
                     tell_hologram("window_interrupted", choom)
-                    self.wait_for_answer(3, choom)
+                    self.wait_for_answer(10 if choom == ROOM else 3, choom)
                     pcm, window_until = None, None
                     continue
                 if pcm is None:
