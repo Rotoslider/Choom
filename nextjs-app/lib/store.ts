@@ -45,6 +45,8 @@ const defaultSettings: AppSettings = {
   },
   imageGen: {
     endpoint: 'http://localhost:7860',
+    engine: 'forge',
+    h3Endpoint: '',
     defaultCheckpoint: '',
     defaultSampler: 'Euler a',
     defaultScheduler: '',
@@ -308,6 +310,8 @@ function buildBridgePayload(settings: AppSettings): Record<string, unknown> {
     search: settings.search,
     imageGen: {
       endpoint: settings.imageGen.endpoint,
+      engine: settings.imageGen.engine || 'forge',
+      h3Endpoint: settings.imageGen.h3Endpoint || '',
       defaultCheckpoint: settings.imageGen.defaultCheckpoint,
       defaultSampler: settings.imageGen.defaultSampler,
       defaultScheduler: settings.imageGen.defaultScheduler,

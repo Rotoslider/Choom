@@ -21,7 +21,20 @@ import { useAppStore } from '@/lib/store';
 import { cn } from '@/lib/utils';
 import { Separator } from '@/components/ui/separator';
 import { ReferenceLibrarySettings } from './reference-library-settings';
-import type { CheckpointType } from '@/lib/types';
+import type { CheckpointType, ImageEngine } from '@/lib/types';
+
+// What the H3 Image server is doing, in words (GET /api/services/h3image).
+function h3StatusWords(h: { ok?: boolean; state?: string; error?: string } | null): string {
+  if (!h) return 'checking...';
+  if (!h.ok) return h.error || 'not answering';
+  return ({
+    ready: 'loaded, ready for pictures',
+    busy: 'making a picture',
+    loading: 'loading the model (about 2 minutes)',
+    released: 'stepped aside for a Glass Studio render; loads again when it ends',
+    off: 'not loaded (loads with the first picture, about 2 minutes)',
+  } as Record<string, string>)[h.state || ''] || h.state || 'unknown';
+}
 
 interface CheckpointOption {
   id: string;
@@ -47,6 +60,19 @@ export function ImageSettings() {
   const [samplers, setSamplers] = useState<SamplerOption[]>([]);
   const [schedulers, setSchedulers] = useState<SchedulerOption[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const engine: ImageEngine = imageGen.engine || 'forge';
+  const [h3Status, setH3Status] = useState<{ ok?: boolean; state?: string; error?: string; endpoint?: string } | null>(null);
+  useEffect(() => {
+    if (engine !== 'h3image') return;
+    let stop = false;
+    const look = () => fetch('/api/services/h3image').then((r) => r.json()).then((h) => { if (!stop) setH3Status(h); }).catch(() => {});
+    look();
+    const timer = setInterval(look, 5000);
+    return () => { stop = true; clearInterval(timer); };
+  }, [engine]);
+  const h3Placeholder = useMemo(() => {
+    try { const u = new URL(imageGen.endpoint || 'http://localhost:7860'); u.port = '7870'; return u.origin; } catch { return 'http://localhost:7870'; }
+  }, [imageGen.endpoint]);
 
   // Detect current checkpoint type for Flux-specific options
   const currentCheckpointType = useMemo(() => {
@@ -83,7 +109,7 @@ export function ImageSettings() {
         <div>
           <h3 className="text-sm font-medium mb-1">Image Generation</h3>
           <p className="text-xs text-muted-foreground">
-            Configure Stable Diffusion Forge for image generation
+            Which model makes the Chooms' pictures, and its settings
           </p>
         </div>
         <Button
@@ -96,6 +122,51 @@ export function ImageSettings() {
           <RefreshCw className={cn('h-4 w-4', isLoading && 'animate-spin')} />
           <span className="ml-2 text-xs">Refresh</span>
         </Button>
+      </div>
+
+      {/* Image engine: Forge (Klein) or MiniMax H3 Image on the NUC */}
+      <div className="space-y-2">
+        <div className="flex items-center gap-2">
+          <label className="text-sm font-medium">Image engine</label>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" />
+            </TooltipTrigger>
+            <TooltipContent>
+              <p className="max-w-xs">Which model makes the Chooms' pictures. Switching keeps both engines' settings, so you can switch back at any time.</p>
+            </TooltipContent>
+          </Tooltip>
+        </div>
+        <Select value={engine} onValueChange={(v) => updateImageGenSettings({ engine: v as ImageEngine })}>
+          <SelectTrigger className="hover:border-primary/50 transition-colors">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="forge">Forge: Flux.2 Klein (each Choom's own settings)</SelectItem>
+            <SelectItem value="h3image">MiniMax H3 Image (on the NUC)</SelectItem>
+          </SelectContent>
+        </Select>
+        {engine === 'h3image' && (
+          <div className="rounded-md border border-border/60 p-3 space-y-2 text-xs text-muted-foreground">
+            <p>
+              H3 Image has one fixed recipe (6 steps, no CFG, no LoRAs). The checkpoint, steps, sampler, scheduler,
+              LoRA and hires-fix settings here and in each Choom apply to Klein only, and are kept for switching back.
+              Size, aspect and reference pictures apply to both. A picture asked for during a Glass Studio clip render
+              waits for the clip it's on (a few minutes).
+            </p>
+            <div className="flex items-center gap-2">
+              <span className="shrink-0">Server</span>
+              <Input
+                value={imageGen.h3Endpoint || ''}
+                onChange={(e) => updateImageGenSettings({ h3Endpoint: e.target.value })}
+                placeholder={`${h3Status?.endpoint || h3Placeholder} (default; type here only to use another)`}
+                className="h-7 text-xs"
+              />
+            </div>
+            <p>Using {h3Status?.endpoint || h3Placeholder}: the H3 Image server on the NUC. Status: {h3StatusWords(h3Status)}</p>
+            <p>Each Choom can also have her own engine (her settings &gt; Image), which wins over this one.</p>
+          </div>
+        )}
       </div>
 
       {/* Endpoint */}

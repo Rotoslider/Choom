@@ -1,6 +1,7 @@
 import type { CheckpointType, ImageGenSettings, ImageGenerationSettings, LoraConfig } from './types';
 import { ensureEndpoint } from './utils';
 import { resolveCheckpointModules } from './checkpoint-modules';
+import { generateWithH3 } from './h3-image-client';
 
 // Forge's built-in always-on script that turns images into reference latents for
 // edit-capable models (Flux.2 Klein, Flux.1 Kontext, Qwen-Image-Edit, ...).
@@ -53,6 +54,11 @@ export class ImageGenClient {
     seed: number;
     settings: ImageGenerationSettings;
   }> {
+    // Settings > Image engine: MiniMax H3 Image on the NUC instead of Forge.
+    if (this.defaults.engine === 'h3image') {
+      return generateWithH3(this.defaults, settings);
+    }
+
     const url = ensureEndpoint(this.endpoint, '/sdapi/v1/txt2img');
 
     const request: ForgeGenerationRequest = {
@@ -259,6 +265,7 @@ export class ImageGenClient {
     checkpointType: CheckpointType,
     modules?: string[]
   ): Promise<void> {
+    if (this.defaults.engine === 'h3image') return; // H3 Image has no checkpoints to switch
     const url = ensureEndpoint(this.endpoint, '/sdapi/v1/options');
 
     let additionalModules: string[];

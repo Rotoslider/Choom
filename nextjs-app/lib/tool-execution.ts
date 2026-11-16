@@ -13,6 +13,7 @@ import { galleryImageWhere, pruneExpiredCaptures } from '@/lib/captured-images';
 import { repairMissingRequiredArg } from './tool-arg-repair';
 import { MemoryClient, executeMemoryTool } from '@/lib/memory-client';
 import { ImageGenClient, buildPromptWithLoras } from '@/lib/image-gen-client';
+import { withServerEngine } from '@/lib/h3-image-client';
 import { WeatherService } from '@/lib/weather-service';
 import { WebSearchService } from '@/lib/web-search';
 import { WorkspaceService } from '@/lib/workspace-service';
@@ -226,15 +227,17 @@ export async function executeToolCall(
 
     try {
       const imageGenEndpoint = (settings?.imageGen as Record<string, unknown>)?.endpoint as string || DEFAULT_IMAGE_GEN_ENDPOINT;
-      const imageGenSettings: ImageGenSettings = {
+      const imageGenSettings: ImageGenSettings = await withServerEngine({
         ...defaultImageGenSettings,
         ...(settings?.imageGen as object),
         endpoint: imageGenEndpoint,
-      };
+      });
       const imageGenClient = new ImageGenClient(imageGenSettings);
 
       // Get Choom-specific image settings if available
       const choomImageSettings = choom.imageSettings ? JSON.parse(choom.imageSettings as string) : null;
+      // Her own engine choice wins over Settings' (the client holds this same settings object).
+      if (choomImageSettings?.engine === 'forge' || choomImageSettings?.engine === 'h3image') imageGenSettings.engine = choomImageSettings.engine;
 
       // Determine if this is a self-portrait or general image
       let isSelfPortrait = toolCall.arguments.self_portrait === true;
@@ -422,7 +425,7 @@ export async function executeToolCall(
       // Use image generation lock to serialize checkpoint switch + generation
       // This prevents race conditions when multiple requests try to switch checkpoints
       const { genResult, finalImageUrl } = await withImageGenLock(async () => {
-        if (checkpoint) {
+        if (checkpoint && imageGenSettings.engine !== 'h3image') {
           console.log(`   ⏳ Switching checkpoint to: ${checkpoint} (type: ${checkpointType})`);
           await imageGenClient.setCheckpointWithModules(checkpoint, checkpointType, modeSettings.modules);
           const stripHash = (s: string) => s.replace(/\s*\[[\da-f]+\]$/i, '').trim();

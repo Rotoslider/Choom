@@ -236,8 +236,14 @@ export interface STTSettings {
 
 export type STTInputMode = 'push-to-talk' | 'toggle' | 'vad';
 
+// Which image engine makes the Chooms' pictures (Settings > Image): Forge with each Choom's own Klein
+// settings, or MiniMax H3 Image on the NUC (lib/h3-image-client.ts), which has one fixed recipe.
+export type ImageEngine = 'forge' | 'h3image';
+
 export interface ImageGenSettings {
   endpoint: string;
+  engine?: ImageEngine;   // default 'forge'
+  h3Endpoint?: string;    // default: Forge's host on port 7870
   // General defaults
   defaultCheckpoint: string;
   defaultSampler: string;
@@ -329,6 +335,8 @@ export function imageAutonomy(mode: Pick<ImageModeSettings, 'choomDecides' | 'ch
 }
 
 export interface ImageSettings {
+  // This Choom's image engine, over Settings > Image's; absent means Settings'.
+  engine?: ImageEngine;
   // General image generation settings (for regular image requests)
   general?: ImageModeSettings;
   // Self-portrait settings (for generating images of the Choom itself)
@@ -380,6 +388,11 @@ export interface ImageGenerationSettings {
   hiresFix?: HiresFixSettings;
   // Mode indicators
   isSelfPortrait?: boolean;
+  // H3 Image: who the reference pictures are, in order (their <Picture N> names), and what the
+  // picture is for (shown in Glass Studio's job list while it borrows the GPU).
+  referenceSubjects?: { name: string; count: number }[];
+  label?: string;
+  engine?: ImageEngine;
 }
 
 export interface HiresFixSettings {

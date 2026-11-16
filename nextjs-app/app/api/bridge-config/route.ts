@@ -7,6 +7,8 @@ import {
   deepMerge,
   isLocalRequest,
 } from '@/lib/bridge-config-store';
+import { applyEngineSwitch } from '@/lib/h3-image-client';
+import type { ImageGenSettings } from '@/lib/types';
 
 // GET /api/bridge-config - Read bridge config
 export async function GET() {
@@ -50,6 +52,12 @@ export async function POST(request: NextRequest) {
 
     const merged = deepMerge(current, updates);
     await writeFile(CONFIG_PATH, JSON.stringify(merged, null, 2));
+
+    // Settings > Image engine changed: load H3 Image now, or have it let go of the GPU and its RAM.
+    const engineOf = (c: Record<string, unknown>) => ((c.imageGen as Record<string, unknown> | undefined)?.engine as string) || 'forge';
+    if (engineOf(merged) !== engineOf(current)) {
+      void applyEngineSwitch(merged.imageGen as Partial<ImageGenSettings>);
+    }
 
     return NextResponse.json(merged);
   } catch (error) {

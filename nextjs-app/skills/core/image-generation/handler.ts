@@ -1,5 +1,6 @@
 import { BaseSkillHandler, SkillHandlerContext } from '@/lib/skill-handler';
 import { ImageGenClient, buildPromptWithLoras } from '@/lib/image-gen-client';
+import { withServerEngine } from '@/lib/h3-image-client';
 import { WorkspaceService } from '@/lib/workspace-service';
 import prisma from '@/lib/db';
 import { galleryImageWhere, pruneExpiredCaptures } from '@/lib/captured-images';
@@ -112,11 +113,14 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
         : null;
 
       const imageGenEndpoint = (settings?.imageGen as Record<string, unknown>)?.endpoint as string || DEFAULT_IMAGE_GEN_ENDPOINT;
-      const imageGenSettings: ImageGenSettings = {
+      const imageGenSettings: ImageGenSettings = await withServerEngine({
         ...defaultImageGenSettings,
         ...(settings?.imageGen as object),
         endpoint: imageGenEndpoint,
-      };
+      });
+      // Her own engine choice (Choom settings > Image) wins over Settings', as her other image settings do.
+      const ownEngine = choomImageSettings?.engine;
+      if (ownEngine === 'forge' || ownEngine === 'h3image') imageGenSettings.engine = ownEngine;
       const imageGenClient = new ImageGenClient(imageGenSettings);
 
       // -------------------------------------------------------------------
@@ -365,8 +369,10 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
       // -------------------------------------------------------------------
       // Use image generation lock to serialize checkpoint switch + generation
       // -------------------------------------------------------------------
+      const h3 = imageGenSettings.engine === 'h3image';
+      if (h3) console.log(`   🎨 Image engine: MiniMax H3 Image (the Klein checkpoint, steps, sampler and hires-fix settings don't apply)`);
       const { genResult, finalImageUrl } = await withImageGenLock(async () => {
-        if (checkpoint) {
+        if (checkpoint && !h3) {
           console.log(`   ⏳ Switching checkpoint to: ${checkpoint} (type: ${checkpointType})`);
           await imageGenClient.setCheckpointWithModules(
             checkpoint,
@@ -410,6 +416,12 @@ export default class ImageGenerationHandler extends BaseSkillHandler {
           referenceMaxDim,
           hiresFix,
           isSelfPortrait,
+          // H3 Image names the references <Picture N>: who each one is, in the order sent.
+          referenceSubjects: [
+            ...library.used.map((u) => ({ name: u.name, count: u.images.length })),
+            ...(pinned.length ? [{ name: 'further reference pictures', count: pinned.length }] : []),
+          ],
+          label: `${ctx.choom?.name || 'A Choom'}'s ${isSelfPortrait ? 'selfie' : 'picture'}`,
         });
 
         // Upscale if configured or user requested (still inside lock)

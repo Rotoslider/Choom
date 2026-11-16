@@ -29,7 +29,7 @@ import {
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Separator } from '@/components/ui/separator';
-import type { Choom, ChoomPermissions, LoraConfig, ImageModeSettings, ImageSize, ImageAspect, LLMProviderConfig, CheckpointType, ReferenceImage } from '@/lib/types';
+import type { Choom, ChoomPermissions, LoraConfig, ImageModeSettings, ImageSize, ImageAspect, LLMProviderConfig, CheckpointType, ReferenceImage, ImageEngine } from '@/lib/types';
 import { IMAGE_SIZES, IMAGE_ASPECTS, computeImageDimensions, HIRES_FIX_DEFAULTS } from '@/lib/types';
 import { useLiveModels } from '@/lib/hooks/use-live-models';
 import { requestModelList } from '@/lib/model-list-request';
@@ -105,7 +105,20 @@ const emptyModeSettings: ImageModeSettings = {
 
 // IMPORTANT: This component is defined OUTSIDE ChoomEditPanel to prevent
 // re-mounting on every parent state change (which causes input focus loss)
+// Klein's own settings, dimmed while this Choom's pictures come from MiniMax H3 Image (one fixed recipe):
+// kept, and still editable, for when she's on Klein again.
+function KleinOnly({ off, children }: { off: boolean; children: React.ReactNode }) {
+  if (!off) return <>{children}</>;
+  return (
+    <div className="space-y-4 opacity-50" title="Klein only: not used while her pictures come from H3 Image">
+      <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Klein only (not used with H3 Image)</p>
+      {children}
+    </div>
+  );
+}
+
 interface ImageModeSettingsEditorProps {
+  kleinOff?: boolean;
   mode: 'general' | 'selfPortrait';
   choomId: string;
   settings: ImageModeSettings & { characterPrompt?: string };
@@ -118,6 +131,7 @@ interface ImageModeSettingsEditorProps {
 }
 
 function ImageModeSettingsEditor({
+  kleinOff,
   mode,
   choomId,
   settings: modeSettings,
@@ -243,6 +257,7 @@ function ImageModeSettingsEditor({
         </div>
       )}
 
+      <KleinOnly off={!!kleinOff}>
       {/* Checkpoint */}
       <div className="space-y-2">
         <div className="flex items-center gap-2">
@@ -422,6 +437,7 @@ function ImageModeSettingsEditor({
           </div>
         ))}
       </div>
+      </KleinOnly>
 
       {/* Reference Images */}
       <div className="space-y-2">
@@ -604,6 +620,7 @@ function ImageModeSettingsEditor({
         </div>
       </div>
 
+      <KleinOnly off={!!kleinOff}>
       {/* Negative Prompt */}
       <div className="space-y-2">
         <label className="text-sm font-medium">Negative Prompt</label>
@@ -615,6 +632,7 @@ function ImageModeSettingsEditor({
           className="hover:border-primary/50 transition-colors resize-none"
         />
       </div>
+      </KleinOnly>
 
       <Separator />
 
@@ -622,6 +640,7 @@ function ImageModeSettingsEditor({
       <div className="space-y-4">
         <h4 className="text-sm font-medium">Generation Parameters</h4>
 
+        <KleinOnly off={!!kleinOff}>
         {/* Sampler & Scheduler */}
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-2">
@@ -707,6 +726,7 @@ function ImageModeSettingsEditor({
           </div>
         </div>
 
+        </KleinOnly>
         {/* Size & Aspect Presets */}
         <Separator />
         <h4 className="text-sm font-medium">Size & Aspect Presets</h4>
@@ -767,6 +787,7 @@ function ImageModeSettingsEditor({
           />
         </div>
 
+        <KleinOnly off={!!kleinOff}>
         {/* Hires-fix */}
         <div className="flex items-center justify-between">
           <div className="space-y-0.5">
@@ -852,6 +873,8 @@ function ImageModeSettingsEditor({
           />
         </div>
 
+        </KleinOnly>
+
         <Separator />
 
         {/* Manual Width & Height Override */}
@@ -925,6 +948,10 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave, onDelete }: 
 
   // Current image tab
   const [imageTab, setImageTab] = useState<'general' | 'selfPortrait'>('general');
+  // Her own image engine ('' = Settings'), over Settings > Image's.
+  const [imageEngine, setImageEngine] = useState<'' | ImageEngine>('');
+  const settingsEngine: ImageEngine = useAppStore((st) => st.settings.imageGen.engine) || 'forge';
+  const effectiveEngine: ImageEngine = imageEngine || settingsEngine;
 
   // Dropdown options
   const [models, setModels] = useState<ModelOption[]>([]);
@@ -974,6 +1001,7 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave, onDelete }: 
 
       // Parse image settings
       const imgSettings = choom.imageSettings;
+      setImageEngine(imgSettings?.engine === 'forge' || imgSettings?.engine === 'h3image' ? imgSettings.engine : '');
       if (imgSettings) {
         setGeneralSettings(imgSettings.general || { ...emptyModeSettings });
         setSelfPortraitSettings(imgSettings.selfPortrait || { ...emptyModeSettings });
@@ -1180,7 +1208,8 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave, onDelete }: 
         wakeModel: wakeModel || null,
         wakeProvider: (wakeProvider && wakeProvider !== '_local') ? wakeProvider : null,
         permissions,
-        imageSettings: (cleanedGeneral || selfPortraitWithCharacter) ? {
+        imageSettings: (cleanedGeneral || selfPortraitWithCharacter || imageEngine) ? {
+          ...(imageEngine ? { engine: imageEngine } : {}),
           general: cleanedGeneral,
           selfPortrait: selfPortraitWithCharacter,
         } : null,
@@ -1865,6 +1894,27 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave, onDelete }: 
 
               {/* Image Settings Tab - with sub-tabs for General and Self-Portrait */}
               <TabsContent value="image" className="mt-0">
+                {/* Her image engine: Settings' unless she has her own */}
+                <div className="space-y-2 mb-4">
+                  <label className="text-sm font-medium">Image engine</label>
+                  <Select value={imageEngine || '__settings__'} onValueChange={(v) => setImageEngine(v === '__settings__' ? '' : (v as ImageEngine))}>
+                    <SelectTrigger className="hover:border-primary/50 transition-colors">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__settings__">Same as Settings ({settingsEngine === 'h3image' ? 'MiniMax H3 Image' : 'Forge: Flux.2 Klein'})</SelectItem>
+                      <SelectItem value="forge">Forge: Flux.2 Klein</SelectItem>
+                      <SelectItem value="h3image">MiniMax H3 Image</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {effectiveEngine === 'h3image' && (
+                    <p className="text-xs text-muted-foreground">
+                      Her pictures come from MiniMax H3 Image, which has one fixed recipe. Below, the checkpoint, modules,
+                      LoRAs, negative prompt, sampler, scheduler, steps, CFG and hires-fix are Klein's: dimmed, kept for when
+                      she's on Klein. Her description, prompt prefix and suffix, reference pictures, size and aspect apply to both.
+                    </p>
+                  )}
+                </div>
                 <Tabs value={imageTab} onValueChange={(v) => setImageTab(v as 'general' | 'selfPortrait')}>
                   <TabsList className="w-full mb-4">
                     <TabsTrigger value="general" className="flex-1">General Images</TabsTrigger>
@@ -1876,6 +1926,7 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave, onDelete }: 
                       Settings for general image generation (landscapes, objects, etc.)
                     </p>
                     <ImageModeSettingsEditor
+                      kleinOff={effectiveEngine === 'h3image'}
                       mode="general"
                       choomId={choom.id}
                       settings={generalSettings}
@@ -1893,6 +1944,7 @@ export function ChoomEditPanel({ choom, open, onOpenChange, onSave, onDelete }: 
                       Settings for self-portrait generation (images of this Choom)
                     </p>
                     <ImageModeSettingsEditor
+                      kleinOff={effectiveEngine === 'h3image'}
                       mode="selfPortrait"
                       choomId={choom.id}
                       settings={selfPortraitSettings}
