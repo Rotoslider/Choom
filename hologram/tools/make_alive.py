@@ -13,7 +13,7 @@ longer lists and, with a keep file (one clip name per line), the cut-out and dep
 in it. `--home relaxed` names her home pose (tools/clip_roles.py); HOLOGRAM_PORTRAITS moves the
 portraits folder (a test Studio's). `--drop-depth` deletes the depth cache of every clip it has built
 once alive.json is written, except her main clip's (the Studio's default; see stamp()).
-`make_alive.py aloy --retrack CLIPS` makes the mouth tracks of her built clips again when mouth_track
+`make_alive.py aloy --retrack CLIPS [--jobs N]` makes the mouth tracks of her built clips again when mouth_track
 has changed since (TRACK), leaving their videos alone (see retrack()).
 """
 import fcntl
@@ -178,7 +178,7 @@ def face_square(mouths, bgr):
     return int(min(max(cx - size / 2, 0), w - size)), int(min(max(cy - size * 0.55, 0), h - size)), size
 
 
-TRACK = 3  # bump when mouth_track changes; `make_alive.py <id> --retrack CLIPS` brings built clips up to it
+TRACK = 6  # bump when mouth_track changes; `make_alive.py <id> --retrack CLIPS` brings built clips up to it
 
 
 def near_median(mouths, i, reach=4):
@@ -188,17 +188,81 @@ def near_median(mouths, i, reach=4):
     return np.median(np.array(near), axis=0) if len(near) >= 3 else None
 
 
+def size_ratio(m, ref):
+    """How big mouth m is next to ref: by the mouth's width or by mouth to chin, whichever is nearer.
+    Turning her head narrows her mouth but keeps mouth to chin (Genesis turning to profile in
+    shoulderlook: width 75 to 36, chin 114 to 102); looking down shortens mouth to chin but keeps the
+    width. A face fitted wrong is small both ways (her cheek misfits under the motes: width 20, chin 25)."""
+    a, b = m[2] / ref[2], m[4] / ref[4]
+    return a if abs(math.log(a)) <= abs(math.log(b)) else b
+
+
+def reach_px(m):
+    """How far her mouth can be from where it was and still be the same mouth: 40 % of its width, or of
+    mouth to chin when that's longer (in profile her mouth is narrow, but no nearer her nose)."""
+    return 0.4 * max(m[2], 0.6 * m[4])
+
+
+def steady_runs(mouths, w, h):
+    """For every frame, how many frames in a row (it among them) this look found her mouth moving
+    smoothly: each a little from the one before in place and size."""
+    n, runs, i = len(mouths), [0] * len(mouths), 0
+    while i < n:
+        if mouths[i] is None:
+            i += 1
+            continue
+        j = i
+        while (j + 1 < n and mouths[j + 1] is not None
+               and math.hypot((mouths[j + 1][0] - mouths[j][0]) * w, (mouths[j + 1][1] - mouths[j][1]) * h) < reach_px(mouths[j])
+               and 0.8 < size_ratio(mouths[j + 1], mouths[j]) < 1.25):
+            j += 1
+        runs[i:j + 1] = [j - i + 1] * (j - i + 1)
+        i = j + 1
+    return runs
+
+
+def heading(mouths, i, side):
+    """Where the frames on one side of frame i (side -1 before, 1 after) that found her mouth put it at
+    frame i: carried on the way the nearest five were moving, when they're close together, else where
+    the nearest one has it. Only the place (u, v)."""
+    n, ks, j = len(mouths), [], i
+    while len(ks) < 5 and abs(j - i) < n // 2:
+        j += side
+        if mouths[j % n] is not None:
+            ks.append(j)
+    if not ks:
+        return None
+    if len(ks) < 3 or abs(ks[-1] - ks[0]) > 3 * len(ks):
+        return mouths[ks[0] % n][:2]
+    fit = np.polyfit(np.array(ks, float), np.array([mouths[k % n][:2] for k in ks], np.float64), 1)
+    return (fit[0] * i + fit[1]).tolist()
+
+
 def mouth_track(landmarker, frames, required=True):
     """Her mouth on every frame (texture UV, v up, and texture pixels), gaps filled and lightly smoothed.
 
-    Every frame is looked at twice: whole, then in a square half the frame wide around where the whole
-    frames about it put her face, and the square's answer is kept. Her face is bigger there, and nothing
-    else in the frame can pass for a face. In the whole frame Eve's bare chest did (her chosenbare clips,
-    Nov 15 2026): a mouth on her chest in picturedown, and in her talk clips a face fitted too high and
-    too small for a frame or two, so her lips opened beside her nose while she spoke. Then a frame whose
+    Every frame is looked at twice: whole, and in a square half the frame wide around where the whole
+    frames about it put her face. Where the two agree, that's her mouth (the square's answer: her face
+    is bigger there). Where they don't, each look gets it wrong in its own way: in the whole frame, Eve's
+    bare chest passed for a face (her chosenbare clips, Nov 15 2026: a mouth on her chest in picturedown,
+    and in her talk clips a face fitted too high and too small for a frame or two, so her lips opened
+    beside her nose while she spoke), and so did Aloy's in her pyjamas; in the square, Genesis's face
+    under her motes with her eyes closed was fitted far too small, on her cheek (fallasleep, fadein2).
+    Either way the wrong mouth is the wrong size, so the one kept is the one nearer the size her mouth
+    has on the frames about it where the two agree (and nearer where it is on them), and a mouth far off
+    that size counts as missed, unless only one look found her and found her steadily for a while: her
+    face really grew or shrank (leaning in to the camera, a cut to full length). Size is the mouth's
+    width or mouth to chin, whichever matches better (size_ratio), so a head turned to profile keeps
+    its size. Then a frame whose
     mouth still lands away from the frames about it (by 40 % of her mouth's width, or a quarter bigger or
     smaller) counts as missed, unless both looks found it in the same place: that's her moving fast, as
     she turns her head (Eve's pose_turn, where calling those frames strays put her lips on her chin).
+    A lone find among frames that found no face is judged by where her face was heading (heading).
+    TRACK 4 judged size by width alone and against the agreeing frames only, and lost Eve's lean-in
+    close-ups (idle_study, idle_skeptical), Aloy's cut in relaxed_sideways and Genesis's profiles
+    (daydenim-idle_shoulderlook, daydenim-picturelook); TRACK 5 judged a lone find by the median of the
+    12 frames each side and lost Genesis's head moving while unfound (cold-windy_gust, circleside_laugh,
+    eveningstargazeblanket-patio_glance): check those when changing this.
     A few missed frames in a row are filled in between the frames either side; a longer stretch (her
     face turned away) keeps the nearest frame's mouth, as a line drawn across a head turn goes astray.
 
@@ -218,22 +282,62 @@ def mouth_track(landmarker, frames, required=True):
         if not required:
             return np.zeros((0, 8)), 0
         raise SystemExit("no face found in any frame")
-    mouths, sure, last = [], [], seed
+    apart = lambda a, b: math.hypot((a[0] - b[0]) * w, (a[1] - b[1]) * h)
+    boxes, sure, last = [], [], seed
     for i, bgr in enumerate(frames):
         guide = near_median(whole, i)
         guide = last if guide is None else guide.tolist()
         boxed = mouth_at(landmarker, bgr, face_square([guide], bgr))
-        m = boxed or whole[i]
-        mouths.append(m)
-        sure.append(boxed is not None and whole[i] is not None
-                    and math.hypot((boxed[0] - whole[i][0]) * w, (boxed[1] - whole[i][1]) * h) < 0.25 * boxed[2])
-        last = m or last
-    # Strays: judged against the frames as they were, so one stray can't hide the one beside it.
+        boxes.append(boxed)
+        sure.append(boxed is not None and whole[i] is not None and apart(boxed, whole[i]) < 0.25 * boxed[2])
+        last = boxed or whole[i] or last
+    runs = {"whole": steady_runs(whole, w, h), "box": steady_runs(boxes, w, h)}
+    agreed = [boxes[i] for i in range(n) if sure[i]]
+    clip_ref = np.median(np.array(agreed), axis=0) if agreed else None
+    mouths = []
+    for i in range(n):
+        if sure[i]:
+            mouths.append(boxes[i])
+            continue
+        near = [boxes[j % n] for j in range(i - 12, i + 13) if sure[j % n]]
+        ref = np.median(np.array(near), axis=0) if near else clip_ref  # her mouth about now
+        at = np.median(np.array(near[len(near) // 3:2 * len(near) // 3 + 1]), axis=0) if near else None
+        looks = [(m, k) for m, k in ((whole[i], "whole"), (boxes[i], "box")) if m is not None]
+        if not looks:
+            mouths.append(None)
+        elif ref is None:
+            mouths.append(whole[i] or boxes[i])  # they never agree in this clip: the whole frame first, as before
+        else:
+            unit = max(ref[2], 0.6 * ref[4])
+            score = lambda mk: abs(math.log(size_ratio(mk[0], ref))) + (apart(mk[0], at) / unit if at is not None else 0)
+            m, k = min(looks, key=score)
+            r = size_ratio(m, ref)
+            # A mouth far off her size isn't hers (Genesis looking down at the frame's edge in
+            # evening-picturedown: the square found one a sixth of her size), unless it was the only look
+            # and that look found it steadily for five frames or more: her face really grew or shrank.
+            # Eve leaning in to the camera in idle_study (3.5 times the width), Genesis in
+            # chosenunder-idle_eyebrow, Aloy's relaxed_sideways cutting to full length (0.45).
+            mouths.append(m if 0.6 < r < 1.6 or (len(looks) == 1 and runs[k][i] >= 5 and 0.25 < r < 4) else None)
+    # Strays: judged against the frames as they were, so one stray can't hide the one beside it. Where
+    # fewer than three of the 4 frames each side have her mouth, a lone find among frames that found no
+    # face: its size against the 8 or the 12 each side, and its place against where the frames before and
+    # after were heading (her face moves on while nothing finds it: Genesis bowing her head as she laughs
+    # in cold-windy_gust, 85 px down in 11 frames; a misfit on her cheek as she turns to profile in
+    # daydenim-idle_shoulderlook is off both ways).
     judged = list(mouths)
     for i, m in enumerate(judged):
-        ref = None if m is None or sure[i] else near_median(judged, i)
-        if ref is not None and (math.hypot((m[0] - ref[0]) * w, (m[1] - ref[1]) * h) > 0.4 * ref[2]
-                                or not 0.8 < m[2] / ref[2] < 1.25):
+        if m is None or sure[i]:
+            continue
+        reach, ref = next(((k, r) for k, r in ((k, near_median(judged, i, k)) for k in (4, 8, 12)) if r is not None),
+                          (0, None))
+        if ref is None:
+            continue
+        if reach == 4:
+            off = apart(m, ref) > reach_px(ref)
+        else:
+            heads = [p for p in (heading(judged, i, side) for side in (-1, 1)) if p is not None]
+            off = min((apart(m, p) for p in heads), default=0) > 0.6 * max(ref[2], 0.6 * ref[4])
+        if off or not 0.8 < size_ratio(m, ref) < 1.25:
             mouths[i] = None
     known = [i for i, m in enumerate(mouths) if m is not None]
     if not known:
@@ -325,21 +429,47 @@ def write_meta(meta_file, update):
     return meta
 
 
-def retrack(cid, clips_dir):
-    """make_alive.py <id> --retrack CLIPS: her built clips' mouth tracks made again with this
+_retracker = {}  # the landmarker of this process (each worker of a --jobs re-track makes its own)
+
+
+def retrack_clip(c, clips_dir):
+    """One clip of a re-track: ("left", why) when its video changed since it was built, ("none", why)
+    when no face was found, or ("done", track, how far it moved in px, what to print)."""
+    src = Path(clips_dir) / c["source"]
+    stamp = (c.get("built") or [None] * 5)[4]
+    if not src.exists() or not isinstance(stamp, list) or round(src.stat().st_mtime) != stamp[0]:
+        return "left", "its video changed since it was built (or is gone); left for its next build"
+    fps, frames = read_clip(src)
+    if len(frames) != c["frames"]:
+        return "left", f"{len(frames)} frames, built with {c['frames']}; left for its next build"
+    if "landmarker" not in _retracker:
+        _retracker["landmarker"] = vision.FaceLandmarker.create_from_options(
+            vision.FaceLandmarkerOptions(base_options=BaseOptions(model_asset_path=str(MODEL)), num_faces=1))
+    h, w = frames[0].shape[:2]
+    mouths, found = mouth_track(_retracker["landmarker"], frames, required=not at_place(c["from"], c["to"]))
+    del frames
+    if not len(mouths):
+        return "none", "no face found; its track stays as it was"
+    old = np.asarray(c["mouth"], np.float64)
+    shift = float(np.max(np.hypot((mouths[:, 0] - old[:, 0]) * w, (mouths[:, 1] - old[:, 1]) * h)))
+    return ("done", [[round(v, 5) for v in m] for m in mouths.tolist()], shift,
+            f"face found in {found}/{c['frames']} frames, moved up to {shift:.0f} px")
+
+
+def retrack(cid, clips_dir, jobs=1):
+    """make_alive.py <id> --retrack CLIPS [--jobs N]: her built clips' mouth tracks made again with this
     mouth_track, for clips tracked by an older one (TRACK); their videos stay as they are. CLIPS is the
     folder of the clips they were built from (the Studio's clips folder). A clip whose video has changed
     since it was built is left for its next build, which tracks it anyway. Saved into alive.json every
     25 clips and at the end, merged into the file as it is then (a build that finished meanwhile keeps
     its clips, and keeps these tracks: see main), so a stopped run just carries on when run again. The
-    glass uses the new tracks once it reloads."""
+    glass uses the new tracks once it reloads. --jobs N tracks N clips at a time (each takes about
+    3 s of one core and up to 1 GB while it runs; all of Genesis's 1,300 clips took 76 min on one)."""
     folder = PORTRAITS / cid
     meta_file = folder / "alive.json"
     clips = json.loads(meta_file.read_text())["clips"]
     todo = [c for c in clips if c.get("mouth") and c.get("track", 1) < TRACK]
-    print(f"re-tracking {len(todo)} of {len(clips)} clips", flush=True)
-    landmarker = vision.FaceLandmarker.create_from_options(
-        vision.FaceLandmarkerOptions(base_options=BaseOptions(model_asset_path=str(MODEL)), num_faces=1))
+    print(f"re-tracking {len(todo)} of {len(clips)} clips" + (f", {jobs} at a time" if jobs > 1 else ""), flush=True)
     done, moved, left = {}, [], []
 
     def save():
@@ -350,29 +480,22 @@ def retrack(cid, clips_dir):
             return meta
         write_meta(meta_file, update)
 
-    for k, c in enumerate(todo, 1):
-        src = Path(clips_dir) / c["source"]
-        stamp = (c.get("built") or [None] * 5)[4]
-        if not src.exists() or not isinstance(stamp, list) or round(src.stat().st_mtime) != stamp[0]:
+    def results():
+        if jobs <= 1:
+            yield from (retrack_clip(c, clips_dir) for c in todo)
+            return
+        from concurrent.futures import ProcessPoolExecutor
+        with ProcessPoolExecutor(jobs) as pool:  # forked workers, each with its own landmarker
+            yield from pool.map(retrack_clip, todo, [clips_dir] * len(todo))
+
+    for k, (c, res) in enumerate(zip(todo, results()), 1):
+        if res[0] == "left":
             left.append(c["source"])
-            print(f"  {c['source']}: its video changed since it was built (or is gone); left for its next build", flush=True)
-            continue
-        fps, frames = read_clip(src)
-        if len(frames) != c["frames"]:
-            left.append(c["source"])
-            print(f"  {c['source']}: {len(frames)} frames, built with {c['frames']}; left for its next build", flush=True)
-            continue
-        h, w = frames[0].shape[:2]
-        mouths, found = mouth_track(landmarker, frames, required=not at_place(c["from"], c["to"]))
-        del frames
-        if not len(mouths):
-            continue
-        old = np.asarray(c["mouth"], np.float64)
-        shift = float(np.max(np.hypot((mouths[:, 0] - old[:, 0]) * w, (mouths[:, 1] - old[:, 1]) * h)))
-        done[c["file"]] = [[round(v, 5) for v in m] for m in mouths.tolist()]
-        if shift > 0.25 * float(np.median(old[:, 2])):
-            moved.append((round(shift), c["source"]))
-        print(f"  {c['source']}: face found in {found}/{c['frames']} frames, moved up to {shift:.0f} px", flush=True)
+        elif res[0] == "done":
+            done[c["file"]] = res[1]
+            if res[2] > 0.25 * float(np.median(np.asarray(c["mouth"])[:, 2])):
+                moved.append((round(res[2]), c["source"]))
+        print(f"  {c['source']}: {res[-1]}", flush=True)
         if k % 25 == 0:
             save()
     save()
@@ -397,7 +520,7 @@ def main():
     if sources[:1] == ["--prune"]:
         return prune(cid, sources[2] if sources[1:2] == ["--keep-file"] else None)
     if sources[:1] == ["--retrack"]:
-        return retrack(cid, sources[1])
+        return retrack(cid, sources[1], int(sources[3]) if sources[2:3] == ["--jobs"] else 1)
     folder = PORTRAITS / cid
     meta_file = folder / "alive.json"
     old = json.loads(meta_file.read_text()) if meta_file.exists() else {}
