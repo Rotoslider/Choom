@@ -1717,7 +1717,8 @@ function renderJobs() {
     const pct = p.total ? Math.round(100 * p.done / p.total) : 0;
     const what = j.kind === 'render' ? `${j.args.clips} clips (${j.args.queue})`
       : j.kind === 'relaunch' ? (j.args.chooms?.length ? `after building ${j.args.chooms.map(nameOf).join(', ')}${j.args.now ? ', now' : ''}` : 'Restart the glass')
-        : j.args.choom || '';
+        : j.kind === 'selfie' ? `${j.args.label} (H3 Image; a render steps aside for it)`
+          : j.args.choom || '';
     const when = j.status !== 'waiting' ? '' : j.next ? ', runs next' : j.after ? ' until the render has finished'
       : j.not_before > Date.now() / 1000 ? ` until ${clock(j.not_before)}` : '';
     // Run next: a waiting GPU job jumps the line; a render running now steps aside after the clip it's on.

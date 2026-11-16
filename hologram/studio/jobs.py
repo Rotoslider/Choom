@@ -5,7 +5,7 @@ and every tool runs in its own session with its process id kept in its job, so t
 after a reload, and a render, build or picture keeps going (and is picked up again) if the Studio
 itself restarts.
 
-A job: {id, kind: render|build|picture|still|review|relaunch, args,
+A job: {id, kind: render|build|picture|still|review|relaunch|selfie, args,
         status: waiting|running|paused|cancelling|done|failed|cancelled,
         not_before (epoch s: "tonight"), after (a job id it waits for: "after tonight's render"),
         pid (its tool's process, which is also its session), tag (what that process's command line
@@ -15,6 +15,13 @@ A job: {id, kind: render|build|picture|still|review|relaunch, args,
 The work list can be paused (studio/worklist.json): what's on the GPU finishes (a render, the clip
 it's on) and nothing more starts there until it's resumed. A render paused that way keeps its
 remaining clips queued and goes on from them, after anything queued while it was paused.
+
+A Choom's picture made with H3 Image (h3image_server.py) borrows the GPU as a "selfie" job in a lane of
+its own: a clip render running then steps aside once the clip it's on has landed (as for Run next), a
+Klein picture finishes first, and no render or Klein picture starts until the picture is made; then the
+render carries on by itself. A build runs on beside it (Depth Anything and H3 Image fit together, and a
+build can take an hour). Before a render or Klein picture starts, the H3 Image model leaves the GPU, and
+it loads again once the GPU has been idle a minute (h3image.py).
 """
 import json
 import os
@@ -26,6 +33,7 @@ import traceback
 from pathlib import Path
 
 import build
+import h3image
 import notify
 import pictures
 import render
@@ -34,7 +42,10 @@ from project import Project, editing
 
 JOBS_FILE = PROJECTS / "jobs.json"
 WORKLIST_FILE = PROJECTS / "worklist.json"
-LANES = {"render": "gpu", "build": "gpu", "picture": "gpu", "still": "gpu", "review": "cpu", "relaunch": "glass"}
+LANES = {"render": "gpu", "build": "gpu", "picture": "gpu", "still": "gpu", "review": "cpu", "relaunch": "glass",
+         "selfie": "image"}
+BIG = ("render", "picture")  # GPU jobs that don't share the GPU with an H3 Image picture
+SELFIE_HOLD_S = 20 * 60      # longest a picture may hold the GPU before the work list takes it back
 ACTIVE = ("waiting", "running", "paused", "cancelling")
 BUSY = ("running", "cancelling")  # a lane stays taken until its tool has really stopped
 RELAUNCH_RETRY_S = float(CFG.get("relaunch_retry_s", 300))  # a relaunch that found the glass busy tries again
@@ -272,12 +283,50 @@ def run_next(job_id):
 
 
 def step_back():
-    """The render that stepped aside carries on once the job picked to run next is done."""
+    """The render that stepped aside carries on once the job picked to run next (or a Choom's picture)
+    is done."""
     with lock:
         go = (worklist.get("stepAside") and worklist["paused"] and not gpu_busy()
-              and not any(j.get("next") and j["status"] == "waiting" for j in jobs))
+              and not any(j.get("next") and j["status"] == "waiting" for j in jobs) and not selfie_active())
     if go:
         resume()
+
+
+def selfie_active():
+    return any(j["kind"] == "selfie" and j["status"] in ACTIVE for j in jobs)
+
+
+def big_running():
+    return any(j["kind"] in BIG and j["status"] in BUSY for j in jobs)
+
+
+def lend(label):
+    """A Choom's H3 Image picture wants the GPU (h3image_server.py asks, POST /api/selfie): a waiting
+    "selfie" job, which the image lane starts once no render or Klein picture runs."""
+    return add("selfie", {"label": str(label)[:120]})
+
+
+def give_back(job_id):
+    """The picture is made (or given up on): the GPU goes back to the work list."""
+    with lock:
+        job = find(job_id)
+        if not job:
+            return False
+        if job["status"] == "waiting":
+            job.update(status="cancelled", ended=time.time())
+        job["returned"] = True
+        save()
+        return True
+
+
+def may_start(job):
+    """A render or Klein picture never starts beside a Choom's picture, or ahead of one waiting; a
+    picture starts once no render or Klein picture runs (one running is asked to step aside)."""
+    if job["kind"] in BIG:
+        return not selfie_active()
+    if job["kind"] == "selfie":
+        return not big_running()
+    return True
 
 
 def settle_pause():
@@ -535,6 +584,18 @@ def do_review(job):
         raise RuntimeError("review.py failed")
 
 
+def do_selfie(job):
+    """A Choom's H3 Image picture holds the GPU until the server gives it back (give_back)."""
+    note(job, "the GPU is lent to a Choom's picture")
+    deadline = time.time() + SELFIE_HOLD_S
+    while time.time() < deadline:
+        with lock:
+            if job.get("returned") or job["status"] != "running":
+                return
+        time.sleep(0.5)
+    note(job, f"not given back after {SELFIE_HOLD_S // 60} minutes: the work list takes the GPU back")
+
+
 def do_picture(job):
     """Klein versions of a new look; they wait in her project's drafts until one is chosen. A Klein
     still running when the Studio restarted is waited for, and its pictures taken as usual."""
@@ -565,7 +626,7 @@ def do_picture(job):
 
 
 WORK = {"render": do_render, "build": do_build, "picture": do_picture, "still": do_still, "review": do_review,
-        "relaunch": do_relaunch}
+        "relaunch": do_relaunch, "selfie": do_selfie}
 
 
 def ready(j, now):
@@ -576,6 +637,7 @@ def ready(j, now):
 
 
 def worker(lane):
+    idle_since = time.time()
     while True:
         job = None
         with lock:
@@ -583,7 +645,14 @@ def worker(lane):
             held = lane == "gpu" and (worklist["paused"] or worklist["pausing"])
             if not busy:  # while the work list holds, only a job picked to run next starts
                 job = next((j for j in jobs if LANES[j["kind"]] == lane and ready(j, time.time())
-                            and (not held or j.get("next"))), None)
+                            and (not held or j.get("next")) and may_start(j)), None)
+            if lane == "image" and not job and not busy and big_running():
+                waiting = any(j["kind"] == "selfie" and ready(j, time.time()) for j in jobs)
+                render_on = any(j["kind"] == "render" and j["status"] == "running" for j in jobs)
+                if waiting and render_on and not (worklist["paused"] or worklist["pausing"]):
+                    # As Run next does: the render stops once the clip it's on has landed.
+                    worklist.update(pausing=True, paused=False, since=time.time(), stepAside=True)
+                    save()
             if job:
                 job.pop("next", None)
                 job["status"] = "running"
@@ -594,11 +663,20 @@ def worker(lane):
             settle_pause()
             if not job:
                 step_back()
+                if busy:
+                    idle_since = time.time()
+                else:
+                    h3image.restore(idle_since)
         if not job:
-            time.sleep(3)
+            time.sleep(1 if lane == "image" else 3)
             continue
+        if job["kind"] in BIG:
+            said = h3image.release(job["kind"])
+            if said:
+                note(job, said)
         notify.job_started(job)
         run_job(job)
+        idle_since = time.time()
 
 
 def run_job(job):
@@ -653,6 +731,8 @@ def start_workers():
                 j.update(status="failed", error="the Studio stopped while this ran", ended=time.time())
             elif kind in ("review", "relaunch"):
                 j["status"] = "waiting"  # run again; they only redo what isn't done
+            elif kind == "selfie":
+                j.update(status="cancelled", ended=time.time())  # its server asks again if it still wants it
             else:
                 later.append((run_job, j))
         save()
@@ -675,6 +755,11 @@ def start_workers():
         mark_draft(j, "failed")
     for target, j in later:
         threading.Thread(target=target, args=(j,), daemon=True).start()
-    for lane in ("gpu", "cpu", "glass"):
+    with lock:
+        for j in jobs:  # a picture waiting when the Studio stopped: its server has gone ahead or will ask again
+            if j["kind"] == "selfie" and j["status"] == "waiting":
+                j.update(status="cancelled", ended=time.time())
+        save()
+    for lane in ("gpu", "cpu", "glass", "image"):
         threading.Thread(target=worker, args=(lane,), daemon=True).start()
     threading.Thread(target=notify.loop, args=(lambda: jobs, lock), daemon=True).start()

@@ -1,0 +1,13 @@
+[Unit]
+Description=Choom H3 Image server: MiniMax H3 Image for the Chooms' pictures (port 7870; hologram/studio/h3image_server.py)
+After=network-online.target
+
+[Service]
+WorkingDirectory=/home/nuc1/pinokio/api/wan2gp/app
+ExecStart=/home/nuc1/pinokio/api/wan2gp/app/venv/bin/python /home/nuc1/projects/Choom-portrait/hologram/studio/h3image_server.py
+Environment=PYTHONUNBUFFERED=1
+Restart=on-failure
+RestartSec=15
+
+[Install]
+WantedBy=default.target

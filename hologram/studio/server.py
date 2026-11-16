@@ -341,6 +341,10 @@ class Handler(BaseHTTPRequestHandler):
         if parts[:2] == ["api", "jobs"]:
             with jobs.lock:
                 return self.send_json({"jobs": jobs.recent(40), "worklist": jobs.state()})
+        if parts[:2] == ["api", "selfie"] and len(parts) == 3 and parts[2].isdigit():  # h3image_server.py
+            with jobs.lock:
+                job = jobs.find(int(parts[2]))
+                return self.send_json({"status": job["status"] if job else "gone"})
         if parts[:2] == ["api", "housekeeping"]:
             days = int(urllib.parse.parse_qs(url.query).get("takes_days", ["30"])[0])
             report = housekeeping.survey(days, active_queues(), active_runs(), building())
@@ -394,6 +398,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.start_build(data)
             if parts == ["api", "models", "default"]:
                 return self.set_model(data)
+            if parts == ["api", "selfie"]:  # h3image_server.py borrows the GPU for a Choom's picture
+                return self.send_json({"id": jobs.lend(data.get("label") or "a Choom's picture")["id"]})
+            if parts[:2] == ["api", "selfie"] and len(parts) == 4 and parts[2].isdigit() and parts[3] == "done":
+                return self.send_json({"returned": jobs.give_back(int(parts[2]))})
             if parts == ["api", "glass", "restart"]:
                 job, how = jobs.restart_glass()
                 return self.send_json({"job": job, "how": how})

@@ -434,6 +434,31 @@ and how many are flagged. Jobs you start right away don't open a run; they're li
 while a scheduled one's run is open. Anything that ends in the quiet hours (10 pm to 7 am unless you set them) waits
 until they're over. Turn it on in `studio.json` (see Setup).
 
+### The Chooms' pictures with H3 Image
+
+The Chooms can make their pictures (selfies, and anything else they draw) with **MiniMax H3 Image**
+instead of Forge's Flux.2 Klein: in the Choom app, **Settings > Image > Image engine**. On Nov 15 2026,
+Donny's five worst Klein selfies, at four seeds each, came out with extra limbs in 6 of 20 on Klein and
+in none on H3 Image, with better faces and fingers, at about the same speed once loaded (35-60 s).
+
+- **The server** is `h3image_server.py`, a systemd user unit (`choom-h3image.service`, port 7870, on at
+  boot). It runs WanGP's own Python through WanGP's API and keeps H3 Image pruned 20B loaded between
+  pictures, in about 32 GB of system RAM; drawing takes about 20 GB of the card for under a minute.
+  Loading takes 70-100 s. WanGP runs from a copy of its settings with the text encoder in INT8
+  (`~/.config/choom-h3image/`), so WanGP's own window and the Studio's renders keep theirs.
+- **Taking turns with the work list.** Each picture borrows the GPU as a **selfie** job (it shows in
+  the job list as "Genesis's selfie"): a clip render running steps aside once the clip it's on has
+  landed, as for Run next, the picture is made, and the render carries on by itself. A Klein picture
+  finishes first; a build runs on beside it. Before a render or Klein picture starts, the model leaves
+  the GPU and the RAM (a render needs nearly all of both), and it loads again once the GPU has been
+  idle a minute. So a picture asked for mid-render waits for the clip (a few minutes) and for loading.
+- **The token** the app sends is in `~/.config/choom-h3image/token` here and `H3_IMAGE_TOKEN` in the
+  Mac's `.env` (both outside git). Its state: `curl localhost:7870/health`.
+- **Switching back to Klein** in Settings has the server let go of the GPU and its RAM for good; the
+  Chooms' Klein settings were never changed, so their pictures are as before. To take H3 Image away
+  altogether: `systemctl --user disable --now choom-h3image`. Its model (21 GB) is in Wan2GP's
+  `ckpts/`.
+
 ### Looks
 
 ![Eve's looks: each picture with the lines her prompts start with](docs/images/looks.jpg)
