@@ -188,10 +188,13 @@ function renderHead() {
   const c = state.choom;
   const counts = Object.values(c.clips).reduce((a, k) => ({ ...a, [k.status]: (a[k.status] || 0) + 1 }), {});
   $('#choomName').textContent = c.name;
+  const retaken = c.glass.retaken || [];
   $('#choomLine').textContent = [
     c.glass.added.length || c.glass.removed.length
       ? `${c.sequence.length - c.glass.added.length + c.glass.removed.length} clips on the glass (${c.sequence.length} once built)`
-      : `${c.sequence.length} clips on the glass`, `${Object.keys(c.looks).length} looks`,
+      : `${c.sequence.length} clips on the glass`,
+    retaken.length ? `${retaken.length} new take${retaken.length > 1 ? 's' : ''} not built yet` : null,
+    `${Object.keys(c.looks).length} looks`,
     counts.rendered ? `${counts.rendered} to review` : null, counts.planned ? `${counts.planned} planned` : null,
     counts.queued ? queuedSummary(c) : null,
     state.renderLater ? 'newer changes show when you leave the field you’re editing or save it' : null,
@@ -377,13 +380,17 @@ const lookOrder = (looks) => Object.keys(looks).sort((a, b) => rank(a) - rank(b)
 function renderGlass() {
   const c = state.choom;
   const bar = $('#buildBar');
-  const { added, removed } = c.glass;
+  const { added, removed, retaken = [] } = c.glass;
+  const pending = added.length + removed.length + retaken.length;
   const building = state.jobs.some((j) => j.kind === 'build' && j.status === 'running' && j.args.choom === state.cid);
-  const changes = (added.length || removed.length
-    ? `Not built yet: ${added.length} to add, ${removed.length} to take off.`
+  // A re-roll kept (or an earlier take brought back) keeps its name and its place on the glass, but the
+  // glass plays the take it was built from until she's built again.
+  const changes = (pending
+    ? `Not built yet: ${[`${added.length} to add`, `${removed.length} to take off`,
+      retaken.length ? `${retaken.length} with a new take (${retaken.map((n) => short(state.cid, n)).join(', ')}): the glass plays the old take until she’s built` : null].filter(Boolean).join(', ')}.`
     : 'The glass shows this sequence.')
     + (building ? ' A build is running now; changes made since it started go in with the next one.' : '');
-  const build = el('button', { className: 'primary', type: 'button', disabled: !!c.problems.length || !(added.length || removed.length), tip: 'Cut-outs, depth and reliefs for new clips (only new ones are encoded), then the glass reloads once nobody is talking' },
+  const build = el('button', { className: 'primary', type: 'button', disabled: !!c.problems.length || !pending, tip: 'Cut-outs, depth and reliefs for new clips (only new ones are encoded), then the glass reloads once nobody is talking' },
     'Build and put on the glass');
   const startBuild = (body) => attempt(async () => {
     const r = await api('/api/build', { choom: state.cid, ...body });
@@ -580,11 +587,13 @@ function lane(look, names, on) {
 function tile(name, on) {
   const c = state.choom.clips[name];
   const main = name === state.choom.sequence[0];
+  const retaken = on && (state.choom.glass.retaken || []).includes(name);
   const t = el('div', {
     className: `tile${main ? ' main' : ''}${(c.flags || []).length ? ' flagged' : ''}`, draggable: !main,
-    tip: `${short(state.cid, name)} · ${secondsOf(c)} s${modelOf(c) !== 'h3' ? ` · ${modelInfo(modelOf(c)).name}` : ''}${c.flags?.length ? ` · flagged: ${c.flags.join(', ')}` : ''}${main ? ' · her main idle (stays first)' : ''}\n${c.action || ''}`,
+    tip: `${short(state.cid, name)} · ${secondsOf(c)} s${modelOf(c) !== 'h3' ? ` · ${modelInfo(modelOf(c)).name}` : ''}${c.flags?.length ? ` · flagged: ${c.flags.join(', ')}` : ''}${main ? ' · her main idle (stays first)' : ''}${retaken ? ' · a new take, not built yet: the glass plays the old one until she’s built' : ''}\n${c.action || ''}`,
   });
   t.dataset.name = name;
+  if (retaken) t.append(el('span', { className: 'take-badge' }, 'new take'));
   if (c.checks) t.style.backgroundImage = `url("${sheetUrl(name, c.rendered || c.changed)}")`;
   t.addEventListener('dragstart', (e) => { dragged = name; t.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; });
   t.addEventListener('dragend', () => { dragged = null; t.classList.remove('dragging'); });

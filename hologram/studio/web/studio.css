@@ -145,6 +145,7 @@ button:focus-visible, select:focus-visible, textarea:focus-visible, input:focus-
 .tile.main::after { content: "main"; position: absolute; left: 3px; bottom: 2px; font-size: 9px; color: var(--tint); text-shadow: 0 0 4px #000; }
 .tile.flagged::before { content: ""; position: absolute; right: 4px; top: 4px; z-index: 1; width: 7px; height: 7px; border-radius: 50%; background: var(--warn); box-shadow: 0 0 0 2px #000; }
 .tile.target { outline: 2px solid var(--tint); outline-offset: 1px; }
+.tile .take-badge { position: absolute; right: 3px; bottom: 2px; z-index: 1; padding: 0 4px; border-radius: 3px; background: #000c; color: var(--warn); font-size: 9px; line-height: 14px; pointer-events: none; }
 .tile.dragging { opacity: 0.3; }
 
 /* --- plan ------------------------------------------------------------------------------------- */

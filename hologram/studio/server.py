@@ -36,8 +36,31 @@ FILE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_@\-.]*$")
 
 def built_clips(cid):
     """The clips her glass plays now: her alive.json, as the last build left it."""
+    return list(built_times(cid))
+
+
+def built_times(cid):
+    """{clip: the time of the video file it was built from (None if not recorded)} for the clips her
+    glass plays now (alive.json's "built" stamp, which make_alive.py compares to see a clip changed)."""
     alive = PORTRAITS / cid / "alive.json"
-    return [c["source"].removesuffix(".mp4") for c in json.loads(alive.read_text())["clips"]] if alive.exists() else []
+    out = {}
+    for c in json.loads(alive.read_text())["clips"] if alive.exists() else []:
+        stamp = (c.get("built") or [None] * 5)[4:5]
+        out[c["source"].removesuffix(".mp4")] = stamp[0][0] if stamp and isinstance(stamp[0], list) and stamp[0] else None
+    return out
+
+
+def new_takes(proj, built):
+    """Clips on the glass whose video is no longer the one they were built from: a re-roll kept since (it
+    goes back on the glass by itself), or an earlier take brought back. Same name, so neither to add
+    nor to take off, but the glass plays the old take until she's built again (Genesis's re-rolled
+    full_spread, Nov 15 2026: kept, and the page said the glass showed her sequence)."""
+    out = []
+    for n in proj.sequence:
+        f = CLIPS / f"{n}.mp4"
+        if built.get(n) and f.exists() and round(f.stat().st_mtime) != built[n]:
+            out.append(n)
+    return out
 
 
 def details(proj):
@@ -51,11 +74,13 @@ def details(proj):
         looks[look] = {"onGlass": len(on), "quiet": len(quiet), "minutes": round(seconds / 60, 1)}
     planned = [c for c in proj.clips.values() if c["status"] == "planned"]
     # What the glass shows now (her alive.json) against her sequence: changes not built yet.
-    built = built_clips(proj.id)
-    glass = {"added": [n for n in proj.sequence if n not in built], "removed": [n for n in built if n not in proj.sequence]}
+    built = built_times(proj.id)
+    retaken = new_takes(proj, built)
+    glass = {"added": [n for n in proj.sequence if n not in built], "removed": [n for n in built if n not in proj.sequence],
+             "retaken": retaken}
     closet = {look: proj.closet_words(look) for look in proj.looks if "@" in look}
     return {**proj.data, "stats": looks, "problems": build.problems(proj), "glass": glass, "inManifest": build.in_manifest(proj.id),
-            "closet": closet, "wishes": wishes(proj.id), "wishesDone": wishes_done(proj.id), "readiness": proj.readiness(built),
+            "closet": closet, "wishes": wishes(proj.id), "wishesDone": wishes_done(proj.id), "readiness": proj.readiness([n for n in built if n not in retaken]),
             # Earlier takes of re-rolled clips still on disk: {clip: [[history index, file]]}.
             "takes": {n: t for n, c in proj.clips.items() if c.get("history") and (t := proj.takes(n))},
             "color": colors().get(proj.id) or proj.data.get("color"),
