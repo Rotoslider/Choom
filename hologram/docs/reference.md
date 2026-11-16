@@ -175,8 +175,18 @@ whole pipeline. The steps underneath:
    - The depth is lined up with the main clip and normalized to the main clip's depth range, which
      is kept in `alive.json`.
    - It is then smoothed in time and shaped for the panel.
-   - MediaPipe tracks her mouth. In a wide shot (a place, a seat) where her face is too small to find in
-     the whole frame, it looks again in a square half the frame wide, centred on her face.
+   - MediaPipe tracks her mouth. It looks at each frame whole, then again in a square half the frame
+     wide around her face, and keeps that second look: her face is bigger there, and nothing else can
+     pass for a face. (In the whole frame, Eve's bare chest did: a mouth on her chest, or a face fitted
+     too high for a frame or two, so her lips opened beside her nose while she talked.) A frame whose
+     mouth still jumps away from the frames around it counts as missed and is filled in from them. In a
+     wide shot (a place, a seat) that no whole frame finds her face in, it searches the first frame
+     square by square.
+
+   When mouth tracking changes (`TRACK` in `make_alive.py`), `make_alive.py <id> --retrack CLIPS` makes
+   the built clips' tracks again without touching their videos; the glass uses them after its next
+   reload. A build and a re-track can run together: `alive.json` is written under a lock, and each keeps
+   the other's newer tracks.
 
    It writes `portraits/<id>/alive_<clip>.mp4` (colour, depth and cut-out stacked) and `alive.json`.
    It encodes only clips that are new or changed; a re-encoded clip gets a new name

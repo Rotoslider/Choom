@@ -13,7 +13,10 @@ longer lists and, with a keep file (one clip name per line), the cut-out and dep
 in it. `--home relaxed` names her home pose (tools/clip_roles.py); HOLOGRAM_PORTRAITS moves the
 portraits folder (a test Studio's). `--drop-depth` deletes the depth cache of every clip it has built
 once alive.json is written, except her main clip's (the Studio's default; see stamp()).
+`make_alive.py aloy --retrack CLIPS` makes the mouth tracks of her built clips again when mouth_track
+has changed since (TRACK), leaving their videos alone (see retrack()).
 """
+import fcntl
 import json
 import math
 import os
@@ -175,28 +178,68 @@ def face_square(mouths, bgr):
     return int(min(max(cx - size / 2, 0), w - size)), int(min(max(cy - size * 0.55, 0), h - size)), size
 
 
+TRACK = 2  # bump when mouth_track changes; `make_alive.py <id> --retrack CLIPS` brings built clips up to it
+
+
+def near_median(mouths, i, reach=4):
+    """The median mouth of the frames about frame i (not i itself), or None with fewer than three."""
+    n = len(mouths)
+    near = [mouths[j % n] for j in range(i - reach, i + reach + 1) if j != i and mouths[j % n] is not None]
+    return np.median(np.array(near), axis=0) if len(near) >= 3 else None
+
+
 def mouth_track(landmarker, frames, required=True):
     """Her mouth on every frame (texture UV, v up, and texture pixels), gaps filled and lightly smoothed.
-    Not required (a wide shot at a place or a seat, her face small): missed in any frame, it looks again
-    in a square around her face (where it was found, else wherever the first frame shows it) and keeps
-    whichever finds it more often; no face either way means no lip sync. Genesis turned three-quarters
-    in the firelight at her campfire seat was found in 11 of 124 whole frames, and in all 124 that way."""
-    mouths = [mouth_at(landmarker, bgr) for bgr in frames]
-    found = sum(m is not None for m in mouths)
-    if not required and found < len(frames):
-        box = face_square(mouths, frames[0]) or face_box(landmarker, frames[0])
-        boxed = [mouth_at(landmarker, bgr, box) for bgr in frames] if box else []
-        if sum(m is not None for m in boxed) > found:
-            mouths = boxed
-    n = len(mouths)
+
+    Every frame is looked at twice: whole, then in a square half the frame wide around where the whole
+    frames about it put her face, and the square's answer is kept. Her face is bigger there, and nothing
+    else in the frame can pass for a face. In the whole frame Eve's bare chest did (her chosenbare clips,
+    Nov 15 2026): a mouth on her chest in picturedown, and in her talk clips a face fitted too high and
+    too small for a frame or two, so her lips opened beside her nose while she spoke. Then a frame whose
+    mouth still lands away from the frames about it (by 40 % of her mouth's width, or a quarter bigger or
+    smaller) counts as missed, and missed frames are filled in between the frames either side.
+
+    Not required (a wide shot at a place or a seat, her face small): if no whole frame finds her, the
+    first frame is searched square by square (face_box); no face either way means no lip sync. Genesis
+    turned three-quarters in the firelight at her campfire seat was found in 11 of 124 whole frames, and
+    in all 124 in a square around her face."""
+    n = len(frames)
+    h, w = frames[0].shape[:2]
+    whole = [mouth_at(landmarker, bgr) for bgr in frames]
+    found = [m for m in whole if m is not None]
+    seed = np.median(np.array(found), axis=0).tolist() if found else None  # a stray or two can't move it
+    if seed is None:
+        box = face_box(landmarker, frames[0])
+        seed = mouth_at(landmarker, frames[0], box) if box else None
+    if seed is None:
+        if not required:
+            return np.zeros((0, 8)), 0
+        raise SystemExit("no face found in any frame")
+    mouths, last = [], seed
+    for i, bgr in enumerate(frames):
+        guide = near_median(whole, i)
+        guide = last if guide is None else guide.tolist()
+        m = mouth_at(landmarker, bgr, face_square([guide], bgr)) or whole[i]
+        mouths.append(m)
+        last = m or last
+    # Strays: judged against the frames as they were, so one stray can't hide the one beside it.
+    judged = list(mouths)
+    for i, m in enumerate(judged):
+        ref = None if m is None else near_median(judged, i)
+        if ref is not None and (math.hypot((m[0] - ref[0]) * w, (m[1] - ref[1]) * h) > 0.4 * ref[2]
+                                or not 0.8 < m[2] / ref[2] < 1.25):
+            mouths[i] = None
     known = [i for i, m in enumerate(mouths) if m is not None]
     if not known:
         if not required:
             return np.zeros((0, 8)), 0
         raise SystemExit("no face found in any frame")
-    for i in range(n):
+    for i in range(n):  # in between the frames either side, around the loop
         if mouths[i] is None:
-            mouths[i] = mouths[min(known, key=lambda k: min(abs(k - i), n - abs(k - i)))]
+            before = max((k for k in known if k < i), default=known[-1] - n)
+            after = min((k for k in known if k > i), default=known[0] + n)
+            t = (i - before) / (after - before)
+            mouths[i] = [(1 - t) * a + t * b for a, b in zip(mouths[before % n], mouths[after % n])]
     smooth = circular_smooth(np.array(mouths, np.float64), (0.25, 0.5, 0.25))  # light: it must keep up
     return smooth, len(known)
 
@@ -259,6 +302,75 @@ def prune(cid, keep_file=None):
     print(f"prune {cid}: {freed / 1e9:.1f} GB freed")
 
 
+def write_meta(meta_file, update):
+    """alive.json read as it is now, changed by update(meta) and swapped in, all under a lock: a build
+    and a re-track can both be writing it."""
+    with open(meta_file.with_name(meta_file.name + ".lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        meta = update(json.loads(meta_file.read_text()) if meta_file.exists() else {})
+        part = meta_file.with_suffix(".part")
+        part.write_text(json.dumps(meta))
+        part.replace(meta_file)
+    return meta
+
+
+def retrack(cid, clips_dir):
+    """make_alive.py <id> --retrack CLIPS: her built clips' mouth tracks made again with this
+    mouth_track, for clips tracked by an older one (TRACK); their videos stay as they are. CLIPS is the
+    folder of the clips they were built from (the Studio's clips folder). A clip whose video has changed
+    since it was built is left for its next build, which tracks it anyway. Saved into alive.json every
+    25 clips and at the end, merged into the file as it is then (a build that finished meanwhile keeps
+    its clips, and keeps these tracks: see main), so a stopped run just carries on when run again. The
+    glass uses the new tracks once it reloads."""
+    folder = PORTRAITS / cid
+    meta_file = folder / "alive.json"
+    clips = json.loads(meta_file.read_text())["clips"]
+    todo = [c for c in clips if c.get("mouth") and c.get("track", 1) < TRACK]
+    print(f"re-tracking {len(todo)} of {len(clips)} clips", flush=True)
+    landmarker = vision.FaceLandmarker.create_from_options(
+        vision.FaceLandmarkerOptions(base_options=BaseOptions(model_asset_path=str(MODEL)), num_faces=1))
+    done, moved, left = {}, [], []
+
+    def save():
+        def update(meta):
+            for c in meta.get("clips", []):
+                if c["file"] in done:
+                    c["mouth"], c["track"] = done[c["file"]], TRACK
+            return meta
+        write_meta(meta_file, update)
+
+    for k, c in enumerate(todo, 1):
+        src = Path(clips_dir) / c["source"]
+        stamp = (c.get("built") or [None] * 5)[4]
+        if not src.exists() or not isinstance(stamp, list) or round(src.stat().st_mtime) != stamp[0]:
+            left.append(c["source"])
+            print(f"  {c['source']}: its video changed since it was built (or is gone); left for its next build", flush=True)
+            continue
+        fps, frames = read_clip(src)
+        if len(frames) != c["frames"]:
+            left.append(c["source"])
+            print(f"  {c['source']}: {len(frames)} frames, built with {c['frames']}; left for its next build", flush=True)
+            continue
+        h, w = frames[0].shape[:2]
+        mouths, found = mouth_track(landmarker, frames, required=not at_place(c["from"], c["to"]))
+        del frames
+        if not len(mouths):
+            continue
+        old = np.asarray(c["mouth"], np.float64)
+        shift = float(np.max(np.hypot((mouths[:, 0] - old[:, 0]) * w, (mouths[:, 1] - old[:, 1]) * h)))
+        done[c["file"]] = [[round(v, 5) for v in m] for m in mouths.tolist()]
+        if shift > 0.25 * float(np.median(old[:, 2])):
+            moved.append((round(shift), c["source"]))
+        print(f"  {c['source']}: face found in {found}/{c['frames']} frames, moved up to {shift:.0f} px", flush=True)
+        if k % 25 == 0:
+            save()
+    save()
+    moved.sort(reverse=True)
+    print(f"re-tracked {len(done)} clips; {len(moved)} moved by more than a quarter of her mouth's width"
+          + (f": {', '.join(f'{s} ({px} px)' for px, s in moved[:40])}" if moved else "")
+          + (f"; {len(left)} left for their next build" if left else ""))
+
+
 def main():
     """make_alive.py <id> CLIP [CLIP ...]: the first clip is her main idle; every clip must start and
     end on the same picture of her, so the page can play them in any order."""
@@ -273,6 +385,8 @@ def main():
         sources.remove("--drop-depth")
     if sources[:1] == ["--prune"]:
         return prune(cid, sources[2] if sources[1:2] == ["--keep-file"] else None)
+    if sources[:1] == ["--retrack"]:
+        return retrack(cid, sources[1])
     folder = PORTRAITS / cid
     meta_file = folder / "alive.json"
     old = json.loads(meta_file.read_text()) if meta_file.exists() else {}
@@ -468,7 +582,7 @@ def main():
         meta_clips.append({"file": out.name, "frames": c["frames"], "source": name,
                            "moods": moods, "from": start, "to": end, "talk": "talk" in moods,
                            "built": [BUILD, round(lo, 6), round(hi, 6), round(focus, 6), c["stamp"], main_stamp] + (["lit"] if particles(src) else []) + (["joined"] if joined(src) else []),
-                           "mouth": [[round(v, 5) for v in m] for m in mouths.tolist()]})
+                           "mouth": [[round(v, 5) for v in m] for m in mouths.tolist()], "track": TRACK})
         encoded += 1
         print(f"  wrote {out.name} ({out.stat().st_size / 1e6:.1f} MB), face found in {found}/{c['frames']} frames")
     del model
@@ -478,9 +592,16 @@ def main():
             "home": home,
             "rangeFrom": [Path(sources[0]).name, main_stamp, BUILD], "panels": ["color", "depth", "cut"],
             "mouthFields": ["u", "v", "halfWidth", "halfHeight", "chin", "tilt", "halfGap", "lift"], "clips": meta_clips}
-    part = meta_file.with_suffix(".part")
-    part.write_text(json.dumps(meta))
-    part.replace(meta_file)
+
+    def keep_newer_tracks(now):
+        """A re-track (--retrack) may have run during this build: its clips' newer tracks stay."""
+        newer = {c["file"]: c for c in now.get("clips", []) if c.get("track", 1) > 1}
+        for c in meta_clips:
+            n = newer.get(c["file"])
+            if n and n["track"] > c.get("track", 1):
+                c["mouth"], c["track"] = n["mouth"], n["track"]
+        return meta
+    write_meta(meta_file, keep_newer_tracks)
     print(f"wrote alive.json: {len(meta_clips)} clips ({encoded} encoded), focus {focus:.3f}")
     if drop_depth:  # only now: a build stopped before alive.json is written finds them all again
         dropped = 0
