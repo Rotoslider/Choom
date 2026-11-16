@@ -178,7 +178,7 @@ def face_square(mouths, bgr):
     return int(min(max(cx - size / 2, 0), w - size)), int(min(max(cy - size * 0.55, 0), h - size)), size
 
 
-TRACK = 2  # bump when mouth_track changes; `make_alive.py <id> --retrack CLIPS` brings built clips up to it
+TRACK = 3  # bump when mouth_track changes; `make_alive.py <id> --retrack CLIPS` brings built clips up to it
 
 
 def near_median(mouths, i, reach=4):
@@ -197,7 +197,10 @@ def mouth_track(landmarker, frames, required=True):
     Nov 15 2026): a mouth on her chest in picturedown, and in her talk clips a face fitted too high and
     too small for a frame or two, so her lips opened beside her nose while she spoke. Then a frame whose
     mouth still lands away from the frames about it (by 40 % of her mouth's width, or a quarter bigger or
-    smaller) counts as missed, and missed frames are filled in between the frames either side.
+    smaller) counts as missed, unless both looks found it in the same place: that's her moving fast, as
+    she turns her head (Eve's pose_turn, where calling those frames strays put her lips on her chin).
+    A few missed frames in a row are filled in between the frames either side; a longer stretch (her
+    face turned away) keeps the nearest frame's mouth, as a line drawn across a head turn goes astray.
 
     Not required (a wide shot at a place or a seat, her face small): if no whole frame finds her, the
     first frame is searched square by square (face_box); no face either way means no lip sync. Genesis
@@ -215,17 +218,20 @@ def mouth_track(landmarker, frames, required=True):
         if not required:
             return np.zeros((0, 8)), 0
         raise SystemExit("no face found in any frame")
-    mouths, last = [], seed
+    mouths, sure, last = [], [], seed
     for i, bgr in enumerate(frames):
         guide = near_median(whole, i)
         guide = last if guide is None else guide.tolist()
-        m = mouth_at(landmarker, bgr, face_square([guide], bgr)) or whole[i]
+        boxed = mouth_at(landmarker, bgr, face_square([guide], bgr))
+        m = boxed or whole[i]
         mouths.append(m)
+        sure.append(boxed is not None and whole[i] is not None
+                    and math.hypot((boxed[0] - whole[i][0]) * w, (boxed[1] - whole[i][1]) * h) < 0.25 * boxed[2])
         last = m or last
     # Strays: judged against the frames as they were, so one stray can't hide the one beside it.
     judged = list(mouths)
     for i, m in enumerate(judged):
-        ref = None if m is None else near_median(judged, i)
+        ref = None if m is None or sure[i] else near_median(judged, i)
         if ref is not None and (math.hypot((m[0] - ref[0]) * w, (m[1] - ref[1]) * h) > 0.4 * ref[2]
                                 or not 0.8 < m[2] / ref[2] < 1.25):
             mouths[i] = None
@@ -234,12 +240,17 @@ def mouth_track(landmarker, frames, required=True):
         if not required:
             return np.zeros((0, 8)), 0
         raise SystemExit("no face found in any frame")
-    for i in range(n):  # in between the frames either side, around the loop
+    filled = list(mouths)
+    for i in range(n):  # around the loop: in between the frames either side, or the nearest of them
         if mouths[i] is None:
             before = max((k for k in known if k < i), default=known[-1] - n)
             after = min((k for k in known if k > i), default=known[0] + n)
-            t = (i - before) / (after - before)
-            mouths[i] = [(1 - t) * a + t * b for a, b in zip(mouths[before % n], mouths[after % n])]
+            if after - before <= 5:
+                t = (i - before) / (after - before)
+                filled[i] = [(1 - t) * a + t * b for a, b in zip(mouths[before % n], mouths[after % n])]
+            else:
+                filled[i] = mouths[(before if i - before <= after - i else after) % n]
+    mouths = filled
     smooth = circular_smooth(np.array(mouths, np.float64), (0.25, 0.5, 0.25))  # light: it must keep up
     return smooth, len(known)
 
