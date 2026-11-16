@@ -846,6 +846,7 @@ export interface LogEntry {
   message: string;
   details?: Record<string, unknown>;
   duration?: number; // milliseconds
+  unsaved?: boolean; // this page's own entry, not yet seen among the saved rows (lib/log-merge.ts)
 }
 
 // ============================================================================

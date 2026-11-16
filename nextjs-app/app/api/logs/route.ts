@@ -10,12 +10,16 @@ export async function GET(request: NextRequest) {
     const category = searchParams.get('category');
     const level = searchParams.get('level');
     const limit = parseInt(searchParams.get('limit') || '200');
+    // since=ISO: only rows saved at or after it (the open Activity Log panel looking for new ones)
+    const since = searchParams.get('since');
+    const sinceDate = since ? new Date(since) : null;
 
     const where: Record<string, unknown> = {};
     if (choomId) where.choomId = choomId;
     if (chatId) where.chatId = chatId;
     if (category) where.category = category;
     if (level) where.level = level;
+    if (sinceDate && !Number.isNaN(sinceDate.getTime())) where.createdAt = { gte: sinceDate };
 
     const logs = await prisma.activityLog.findMany({
       where,

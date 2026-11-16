@@ -1,7 +1,9 @@
 import { create } from 'zustand';
 import type { LogEntry, LogLevel, LogCategory } from './types';
+import { fromSavedRow, mergeSavedRows, type OwnTurn, type SavedLogRow } from './log-merge';
 
 const MAX_LOGS = 500; // Keep last 500 entries
+let _looking = false; // a lookNew() request is out
 
 // Batch persist buffer - collects logs and POSTs in batches
 const _persistBuffer: Array<{
@@ -37,6 +39,12 @@ interface LogState {
   isOpen: boolean;
   currentChoomId: string | null;
   currentChatId: string | null;
+  // lookNew(): the chat (or room) the shown logs were loaded for, the newest saved row looked at, and
+  // the ids of the rows saved at that same moment (looked again next time, so they're skipped).
+  loadedFor: string | null;
+  seenUntil: string | null;
+  seenAtEdge: string[];
+  ownTurns: OwnTurn[];
   filter: {
     categories: LogCategory[];
     levels: LogLevel[];
@@ -54,6 +62,8 @@ interface LogActions {
   resetFilter: () => void;
   setContext: (choomId: string | null, chatId: string | null) => void;
   loadLogs: (choomId?: string, chatId?: string) => Promise<void>;
+  lookNew: () => Promise<void>;
+  ownTurn: (streaming: boolean) => void;
 }
 
 type LogStore = LogState & LogActions;
@@ -69,6 +79,10 @@ export const useLogStore = create<LogStore>((set, get) => ({
   isOpen: false,
   currentChoomId: null,
   currentChatId: null,
+  loadedFor: null,
+  seenUntil: null,
+  seenAtEdge: [],
+  ownTurns: [],
   filter: { ...defaultFilter },
 
   addLog: (entry) => {
@@ -76,6 +90,7 @@ export const useLogStore = create<LogStore>((set, get) => ({
       ...entry,
       id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       timestamp: new Date(),
+      unsaved: true, // saved below; its saved row must not show again (lookNew)
     };
 
     set((state) => ({
@@ -139,7 +154,11 @@ export const useLogStore = create<LogStore>((set, get) => ({
 
   resetFilter: () => set({ filter: { ...defaultFilter } }),
 
-  setContext: (choomId, chatId) => set({ currentChoomId: choomId, currentChatId: chatId }),
+  setContext: (choomId, chatId) => set((state) => ({
+    currentChoomId: choomId,
+    currentChatId: chatId,
+    ...(chatId !== state.currentChatId ? { loadedFor: null, seenUntil: null, seenAtEdge: [] } : {}),
+  })),
 
   loadLogs: async (choomId, chatId) => {
     try {
@@ -150,45 +169,61 @@ export const useLogStore = create<LogStore>((set, get) => ({
 
       const res = await fetch(`/api/logs?${params}`);
       if (!res.ok) return;
-      const serverLogs = await res.json();
+      const serverLogs: SavedLogRow[] = await res.json();
 
-      // Convert server logs to LogEntry format
-      const entries: LogEntry[] = serverLogs.map((log: {
-        id: string; level: string; category: string; title: string;
-        message: string; details?: string; duration?: number; createdAt: string;
-      }) => {
-        let parsedDetails: Record<string, unknown> | undefined;
-        if (log.details) {
-          try {
-            const parsed = JSON.parse(log.details);
-            // Ensure it's an object with keys (not a bare string/number/array)
-            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-              parsedDetails = parsed;
-            } else {
-              parsedDetails = { raw: parsed };
-            }
-          } catch {
-            // JSON.parse failed — wrap the raw string so expand arrow still shows
-            parsedDetails = { raw: log.details };
-          }
-        }
-        return {
-          id: log.id,
-          level: log.level as LogLevel,
-          category: log.category as LogCategory,
-          title: log.title,
-          message: log.message,
-          details: parsedDetails,
-          duration: log.duration || undefined,
-          timestamp: new Date(log.createdAt),
-        };
+      const entries: LogEntry[] = serverLogs.map(fromSavedRow);
+      const newest = serverLogs[0]?.createdAt ?? null; // newest first
+      set({
+        logs: entries,
+        ...(chatId && chatId === get().currentChatId
+          ? { loadedFor: chatId, seenUntil: newest, seenAtEdge: serverLogs.filter((r) => r.createdAt === newest).map((r) => r.id) }
+          : {}),
       });
-
-      set({ logs: entries });
     } catch {
       // Keep existing logs on failure
     }
   },
+
+  // What was saved for the open chat or room since the panel last looked: the turns this page didn't
+  // stream itself (the tower, Signal, a heartbeat, a room running on its own) show as they go. The
+  // open panel asks every few seconds (LogPanel); not while this page streams a turn of its own.
+  lookNew: async () => {
+    const { currentChatId: chatId, loadedFor, seenUntil, ownTurns } = get();
+    if (!chatId || loadedFor !== chatId || _looking || ownTurns.some((t) => t.to === null)) return;
+    _looking = true;
+    try {
+      const params = new URLSearchParams({ chatId, limit: '200' });
+      if (seenUntil) params.set('since', seenUntil);
+      const res = await fetch(`/api/logs?${params}`);
+      if (!res.ok) return;
+      const rows: SavedLogRow[] = await res.json();
+      const state = get();
+      if (!Array.isArray(rows) || rows.length === 0 || state.currentChatId !== chatId || state.loadedFor !== chatId) return;
+      const newest = rows.reduce((m, r) => (r.createdAt > m ? r.createdAt : m), state.seenUntil ?? '');
+      const atEdge = rows.filter((r) => r.createdAt === newest).map((r) => r.id);
+      const merged = mergeSavedRows(state.logs, rows, state.ownTurns, MAX_LOGS, new Set(state.seenAtEdge));
+      set({
+        ...(merged ? { logs: merged } : {}),
+        seenUntil: newest,
+        seenAtEdge: newest === state.seenUntil ? [...new Set([...state.seenAtEdge, ...atEdge])] : atEdge,
+      });
+    } catch {
+      // Try again on the next look
+    } finally {
+      _looking = false;
+    }
+  },
+
+  // This page streams a turn of its own (true) or its stream ended (false): it shows that turn from
+  // its own stream, so the rows the server saves meanwhile aren't shown again.
+  ownTurn: (streaming) => set((state) => {
+    if (streaming) return { ownTurns: [...state.ownTurns.slice(-19), { from: Date.now(), to: null }] };
+    const open = state.ownTurns.findLastIndex((t) => t.to === null);
+    if (open < 0) return {};
+    const ownTurns = [...state.ownTurns];
+    ownTurns[open] = { ...ownTurns[open], to: Date.now() };
+    return { ownTurns };
+  }),
 }));
 
 // Helper functions for common log operations

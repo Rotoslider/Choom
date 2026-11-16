@@ -655,6 +655,7 @@ export default function Home() {
 
     // Start streaming
     setIsStreaming(true);
+    useLogStore.getState().ownTurn(true); // the Activity Log shows this turn from the stream, not the saved rows
     clearStreamingContent();
     clearStreamingThinking();
     setAgentProgress(null);
@@ -934,6 +935,7 @@ export default function Home() {
       }
     } finally {
       setIsStreaming(false);
+      useLogStore.getState().ownTurn(false);
       clearStreamingContent();
       clearStreamingThinking();
       setStreamingImage(null);

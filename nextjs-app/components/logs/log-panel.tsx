@@ -238,6 +238,8 @@ interface LogPanelProps {
   onClose: () => void;
 }
 
+const LOOK_EVERY_MS = 4000; // the open panel looking for newly saved rows (lookNew)
+
 export function LogPanel({ onClose }: LogPanelProps) {
   const { filter, setFilter, clearLogs, resetFilter } = useLogStore();
   const filteredLogs = useFilteredLogs();
@@ -248,6 +250,21 @@ export function LogPanel({ onClose }: LogPanelProps) {
     document.body.style.overflow = 'hidden';
     return () => {
       document.body.style.overflow = '';
+    };
+  }, []);
+
+  // While open, what's been saved for this chat or room since: a turn begun at the tower, on Signal
+  // or by a heartbeat (this page hears only the turns it streams itself) shows as it goes.
+  useEffect(() => {
+    const look = () => {
+      if (document.visibilityState === 'visible') void useLogStore.getState().lookNew();
+    };
+    look();
+    const timer = setInterval(look, LOOK_EVERY_MS);
+    document.addEventListener('visibilitychange', look);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', look);
     };
   }, []);
 
