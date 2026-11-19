@@ -74,6 +74,8 @@ happening in the Choom app: listening, thinking, using tools, changing clothes, 
 - **A travel glass.** A spare Portrait on a laptop plays the same clips on the road, with her voice and
   your mic ([choom-glass-player](https://github.com/Rotoslider/choom-glass-player)); the clips are made
   here ([Travel glass](docs/reference.md#travel-glass)).
+- **A kitchen screen (Tower Spine).** A 2560 × 720 touch bar stands upright on the back of the tower,
+  facing the kitchen, and lights when the room sensor sees you there ([Kitchen screen](#kitchen-screen)).
 
 | | |
 |:---:|:---:|
@@ -91,6 +93,7 @@ happening in the Choom app: listening, thinking, using tools, changing clothes, 
 | Speakerphone | her voice, and the microphone for wake phrases | EMEET OfficeCore M0 Plus |
 | USB camera (optional) | eye contact, welcome back, and waking the screens | Logitech MX Brio at the Portrait's top edge |
 | Home Assistant (optional) | presence (home, desk, bed) and a weather station | |
+| 2560 × 720 touch bar (optional) | the kitchen screen | 12-inch HDMI touch bar (AUO C149HAX01.1 panel) on the GPU's last DisplayPort through a DP→HDMI adapter, touch over USB, its own USB-C power, turned upright in GNOME's display settings |
 
 The Choom app runs on another machine (here a Mac Studio). The hologram reaches it over the LAN.
 
@@ -135,6 +138,47 @@ The clips themselves are made with Wan2GP and Forge Neo (Pinokio installs), as t
 | Look at the glass | she turns to you (needs the camera) |
 | Portrait buttons | top: previous Choom; middle: next; hold bottom: listen, or interrupt her |
 | Mute in the Choom app | silences her everywhere, the glass included |
+
+## Kitchen screen
+
+The back of the tower faces the kitchen, so it has a screen of its own: `kitchen.html` on a 2560 × 720
+touch bar turned upright, in a kiosk window `launch.sh` opens whenever a screen of that size is
+connected (`HOLOGRAM_KITCHEN=0` leaves it closed). Buttons along its bottom edge switch scenes:
+
+- **Core:** the tower cut open, seen from the kitchen. Air rises from the bottom fan at the fan
+  controller's speed and warms from blue to amber between its two sensors, the GPU glows with its power
+  draw (with its watts, temperature, memory, load and blower beside it), and at the top are the top
+  plate's rings with the four names in Morse: the name of whoever is on the glass runs with light while
+  she talks and shimmers while she thinks. The clock, the weather and the sunset sit below them.
+- **Kitchen:** the time and weather, the next twelve hours as a strip of sky, timers that chime from
+  the tower speaker, the kitchen speaker (Music Assistant) and four lights.
+- **The girls:** each in what she has on now, what she's doing, and a button that brings her to the
+  glass; below, the clips Glass Studio has planned. Clothes she wears only when she chooses them show
+  her usual picture here, since anyone in the kitchen can see this screen.
+- **Night** (11 pm to 6 am, or once you're in bed), on its own: a dim amber clock and a warm glow
+  along the bottom edge.
+
+It lights when the room sensor's kitchen zone has seen you for 3 seconds (10 at night, because moving
+in bed throws short ghost readings there), goes dark a minute after you leave (20 seconds at night), and
+a touch keeps it lit. The Chooms never light it. While dark it draws nothing, and lit, Core redraws at
+most 20 times a second. GNOME blanks every screen together, so while the desk screens are dark it is
+too; a screen of its own would need its own small computer.
+
+`~/.config/choom-hologram/kitchen.json` names the Home Assistant entities, and the screen can switch
+only the lights listed there:
+
+```json
+{
+  "weather": "weather.home",
+  "music": "media_player.kitchen_speaker",
+  "lights": [["light.kitchen_lights", "Kitchen"], ["light.sink_light", "Sink"]]
+}
+```
+
+The fan controller's sensors are found by name (`tower` with `rpm`, `intake_temp`, `exhaust_temp`,
+`delta`, `command`, `fault`); until they're in Home Assistant, Core says it's waiting for them.
+
+![Core, Kitchen and The girls on the kitchen screen](docs/images/kitchen-screen.jpg)
 
 ## How it works
 
