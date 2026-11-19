@@ -1,4 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { loadConfig } from '@/lib/bridge-config-store';
+import { h3Health } from '@/lib/h3-image-client';
+import prisma from '@/lib/db';
+import type { ImageEngine, ImageGenSettings } from '@/lib/types';
 
 interface HealthResult {
   service: string;
@@ -17,9 +21,9 @@ async function checkService(
 
   // Try each health path until one succeeds
   for (const healthPath of healthPaths) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
     try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 5000);
 
       const url = `${endpoint}${healthPath}`;
       const response = await fetch(url, {
@@ -29,8 +33,6 @@ async function checkService(
           'Accept': 'application/json',
         },
       });
-
-      clearTimeout(timeout);
       const latency = Date.now() - startTime;
 
       // 405 Method Not Allowed means server is up (endpoint exists but needs POST)
@@ -59,6 +61,8 @@ async function checkService(
     } catch {
       // If aborted or network error, continue trying other paths
       continue;
+    } finally {
+      clearTimeout(timeout);  // a failed path used to leave its 5 s timer running
     }
   }
 
@@ -111,6 +115,78 @@ const defaultEndpoints = {
   searxng: process.env.SEARXNG_ENDPOINT || 'http://localhost:8888',
 };
 
+// Image Gen checks the engine the Chooms make their pictures with, not always Forge. Donny, Nov 19:
+// they use MiniMax H3 Image now, and a check of Forge said nothing about whether their pictures work.
+// The engine is Settings > Image as the server has it (bridge-config.json: a browser's own settings can
+// be from before a switch), plus any Choom's own choice over it (Choom settings > Images), so a Choom
+// still on Forge keeps Forge checked too.
+async function imageEnginesInUse(): Promise<{ imageGen: Partial<ImageGenSettings>; engines: ImageEngine[] }> {
+  const config = (await loadConfig().catch(() => ({}))) as Record<string, unknown>;
+  const imageGen = (config.imageGen || {}) as Partial<ImageGenSettings>;
+  const engines = new Set<ImageEngine>([imageGen.engine === 'h3image' ? 'h3image' : 'forge']);
+  try {
+    for (const c of await prisma.choom.findMany({ select: { imageSettings: true } })) {
+      let own: unknown;
+      try { own = c.imageSettings ? (JSON.parse(c.imageSettings) as { engine?: unknown }).engine : undefined; } catch { /* not JSON */ }
+      if (own === 'forge' || own === 'h3image') engines.add(own);
+    }
+  } catch {
+    // Settings' engine alone
+  }
+  return { imageGen, engines: [...engines] };
+}
+
+// The H3 Image server (studio/h3image_server.py on the NUC) answers /health with its model's state.
+// Ready means it can draw now; "released" means it stepped aside for a Glass Studio render and takes
+// the GPU back for a picture. "off" means its model isn't loaded: a failed load, or switched off.
+const H3_STATES: Record<string, string> = {
+  ready: 'ready',
+  busy: 'ready, drawing a picture',
+  loading: 'loading its model',
+  released: 'ready, stepped aside for a Glass Studio render',
+};
+async function checkH3Image(imageGen: Partial<ImageGenSettings>): Promise<HealthResult> {
+  const started = Date.now();
+  const h = await h3Health(imageGen);
+  const latency = Date.now() - started;
+  const details = { engine: 'h3image', provider: 'MiniMax H3 Image', endpoint: h.endpoint, state: h.state, queued: h.queued };
+  if (!h.ok) {
+    return { service: 'imageGen', status: 'disconnected', error: h.error || `H3 Image isn't answering at ${h.endpoint}`, details };
+  }
+  const note = h.state ? H3_STATES[h.state] : undefined;
+  if (!note) {
+    return {
+      service: 'imageGen', status: 'disconnected', latency, details,
+      error: h.wanted
+        ? 'H3 Image is up, but its model failed to load (the next picture tries again)'
+        : 'H3 Image is up, but its model is switched off (the next picture loads it first)',
+    };
+  }
+  return { service: 'imageGen', status: 'connected', latency, details: { ...details, note } };
+}
+
+async function checkImageGen(forgeEndpoint: string): Promise<HealthResult> {
+  const { imageGen, engines } = await imageEnginesInUse();
+  const results = await Promise.all(engines.map(async (engine) => {
+    if (engine === 'h3image') return checkH3Image(imageGen);
+    const r = await checkService('imageGen', forgeEndpoint, healthPaths.imageGen);
+    return { ...r, details: { engine: 'forge', provider: 'Forge', endpoint: forgeEndpoint } };
+  }));
+  if (results.length === 1) return results[0];
+  const down = results.filter((r) => r.status !== 'connected');
+  return {
+    service: 'imageGen',
+    status: down.length ? 'disconnected' : 'connected',
+    latency: Math.max(...results.map((r) => r.latency || 0)) || undefined,
+    error: down.map((r) => `${r.details?.provider}: ${r.error}`).join('; ') || undefined,
+    details: {
+      engine: engines.join('+'),
+      provider: results.map((r) => r.details?.provider).join(' + '),
+      note: results.map((r) => `${r.details?.provider} ${r.status === 'connected' ? (r.details?.note || 'up') : 'down'}`).join(', '),
+    },
+  };
+}
+
 function buildWeatherCheck(settings?: { provider?: string; apiKey?: string }): HealthResult {
   const provider = settings?.provider || 'openweathermap';
   const apiKey = settings?.apiKey || process.env.OPENWEATHER_API_KEY || process.env.WEATHERAPI_KEY || '';
@@ -137,6 +213,7 @@ export async function GET(request: NextRequest) {
   const service = searchParams.get('service');
 
   // If specific service requested
+  if (service === 'imageGen') return NextResponse.json(await checkImageGen(defaultEndpoints.imageGen));
   if (service && service in defaultEndpoints) {
     const endpoint = defaultEndpoints[service as keyof typeof defaultEndpoints];
     const paths = healthPaths[service] || ['/health', '/'];
@@ -150,7 +227,7 @@ export async function GET(request: NextRequest) {
     checkService('memory', defaultEndpoints.memory, healthPaths.memory),
     checkService('tts', defaultEndpoints.tts, healthPaths.tts),
     checkService('stt', defaultEndpoints.stt, healthPaths.stt),
-    checkService('imageGen', defaultEndpoints.imageGen, healthPaths.imageGen),
+    checkImageGen(defaultEndpoints.imageGen),
     buildWeatherCheck(),
     buildSearchCheck(),
     checkService('searxng', defaultEndpoints.searxng, healthPaths.searxng),
@@ -195,7 +272,7 @@ export async function POST(request: NextRequest) {
       checkService('memory', serviceEndpoints.memory, healthPaths.memory),
       checkService('tts', serviceEndpoints.tts, healthPaths.tts),
       checkService('stt', serviceEndpoints.stt, healthPaths.stt),
-      checkService('imageGen', serviceEndpoints.imageGen, healthPaths.imageGen),
+      checkImageGen(serviceEndpoints.imageGen),
       buildWeatherCheck(weather),
       buildSearchCheck(search),
       checkService('searxng', serviceEndpoints.searxng, healthPaths.searxng),

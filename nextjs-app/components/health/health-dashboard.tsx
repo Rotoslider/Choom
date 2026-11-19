@@ -66,11 +66,12 @@ const services: ServiceInfo[] = [
     defaultPort: '5000',
   },
   {
-    name: 'Image Gen (Forge)',
+    // Named after the engine the check found in use (Settings > Image): Forge or MiniMax H3 Image.
+    name: 'Image Gen',
     key: 'imageGen',
     icon: Image,
-    description: 'Stable Diffusion image generation',
-    defaultPort: '7860',
+    description: 'The Chooms’ pictures, with the engine Settings > Image uses',
+    defaultPort: '7860 (Forge) / 7870 (H3 Image)',
   },
   {
     name: 'Weather',
@@ -213,9 +214,10 @@ export function HealthDashboard({ open, onOpenChange }: HealthDashboardProps) {
               {visibleServices.map((service) => {
                 const status = serviceStatus[service.key];
                 const detail = details[service.key] as
-                  | { latency?: number; error?: string; details?: { provider?: string } }
+                  | { latency?: number; error?: string; details?: { provider?: string; endpoint?: string; note?: string } }
                   | undefined;
                 const Icon = service.icon;
+                const engine = service.key === 'imageGen' ? detail?.details : undefined;
 
                 return (
                   <div
@@ -245,7 +247,7 @@ export function HealthDashboard({ open, onOpenChange }: HealthDashboardProps) {
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center justify-between">
                           <span className="text-sm font-medium">
-                            {service.name}
+                            {engine?.provider ? `${service.name} (${engine.provider})` : service.name}
                           </span>
                           <StatusIndicator status={status} size="sm" />
                         </div>
@@ -253,8 +255,13 @@ export function HealthDashboard({ open, onOpenChange }: HealthDashboardProps) {
                           {service.description}
                         </p>
                         <p className="text-xs text-muted-foreground/70 mt-0.5">
-                          {service.defaultPort === 'API' ? 'Cloud API' : `Default port: ${service.defaultPort}`}
+                          {engine?.endpoint
+                            ? engine.endpoint
+                            : service.defaultPort === 'API' ? 'Cloud API' : `Default port: ${service.defaultPort}`}
                         </p>
+                        {engine?.note && status === 'connected' && (
+                          <p className="text-xs text-muted-foreground mt-0.5">State: {engine.note}</p>
+                        )}
                         {detail?.latency && (
                           <p className="text-xs text-green-500 mt-1">
                             Latency: {detail.latency}ms
