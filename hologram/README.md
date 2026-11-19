@@ -159,8 +159,8 @@ connected (`HOLOGRAM_KITCHEN=0` leaves it closed). Buttons along its bottom edge
   along the bottom edge.
 
 It lights when the room sensor's kitchen zone has seen you for 3 seconds (10 at night, because moving
-in bed throws short ghost readings there), goes dark a minute after you leave (20 seconds at night), and
-a touch keeps it lit. The Chooms never light it. While dark it draws nothing, and lit, Core redraws at
+in bed throws short ghost readings there), and goes dark five minutes after you leave or last touch it
+(at night, 20 seconds after you leave or a minute after a touch). The Chooms never light it. While dark it draws nothing, and lit, Core redraws at
 most 20 times a second. GNOME blanks every screen together, so while the desk screens are dark it is
 too; a screen of its own would need its own small computer.
 

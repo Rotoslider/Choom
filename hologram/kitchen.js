@@ -10,15 +10,16 @@
 //   brings her to the Glass; and what Glass Studio has planned. No motion here.
 // - Night (11 pm to 6 am, or once he's in bed), on its own: a dim amber clock and a warm glow along the bottom.
 // It lights when the radar sees him in the kitchen (held 3 s by day, 10 s at night, because moving in bed
-// throws short ghost readings there), goes dark a minute after he leaves (20 s at night), and a touch
-// keeps it lit. Never because of the girls: the Glass's rule. While dark it draws nothing and reads only
+// throws short ghost readings there), goes dark five minutes after he leaves or last touched it (20 s and a
+// minute at night). Never because of the girls: the Glass's rule. While dark it draws nothing and reads only
 // /status; lit, Core redraws at most 20 times a second ("Pushing the gpu already hard enough").
 // GNOME blanks every screen together, so while the desk screens are dark this one is too.
 'use strict';
 
 const $ = (s) => document.querySelector(s);
 const NIGHT_FROM = 23, NIGHT_TO = 6;
-const HOLD_S = { day: 3, night: 10 }, LINGER_S = { day: 60, night: 20 }, TOUCH_S = 60, START_S = 120;
+// Donny, Nov 19: it went dark a minute after a touch; "5 minutes whould have been good". Night stays short.
+const HOLD_S = { day: 3, night: 10 }, LINGER_S = { day: 300, night: 20 }, TOUCH_S = { day: 300, night: 60 }, START_S = 120;
 const FRAME_MS = 50;
 const GIRLS = {
   Genesis: { color: '#b79bff', word: 'GENESIS' },
@@ -49,7 +50,7 @@ function decide() {
   setScene(part === 'night' ? 'night' : view);
   setLit(now < litUntil);
 }
-document.addEventListener('pointerdown', () => { litUntil = Math.max(litUntil, Date.now() + TOUCH_S * 1000); decide(); });
+document.addEventListener('pointerdown', () => { litUntil = Math.max(litUntil, Date.now() + TOUCH_S[isNight() ? 'night' : 'day'] * 1000); decide(); });
 
 function setLit(on) {
   if (on === lit) return;
