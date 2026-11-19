@@ -54,6 +54,76 @@ html, body { margin: 0; width: 720px; height: 2560px; overflow: hidden; backgrou
 .n-clock .s-line { color: var(--ember); font-size: 24px; margin-top: 8px; }
 .pathlight { left: -120px; right: -120px; bottom: -300px; height: 900px; border-radius: 50%; background: radial-gradient(closest-side, rgba(255,154,61,.55), rgba(255,120,40,.18) 55%, transparent); }
 
+/* The scene buttons along the bottom edge */
+.nav { position: absolute; left: 0; right: 0; bottom: 0; height: 120px; display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid #1a1c26; }
+.nav button { background: none; border: 0; color: #5d5a72; font: 500 24px var(--mono); letter-spacing: .14em; text-transform: uppercase; }
+.nav button[aria-current="true"] { color: var(--fg); }
+.nav button[aria-current="true"]::before { content: ""; display: block; width: 10px; height: 10px; border-radius: 50%; background: var(--fg); margin: 0 auto 10px; }
+
+/* Kitchen */
+.k-head { left: 40px; right: 40px; top: 50px; display: flex; justify-content: space-between; align-items: flex-end; }
+.k-head .s-time { font-size: 150px; }
+.k-now { left: 40px; right: 40px; top: 240px; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 28px; align-items: center; }
+.k-now .deg { font-family: var(--display); font-weight: 300; font-size: 230px; line-height: .85; font-variant-numeric: tabular-nums; }
+.k-now .s-line { line-height: 1.35; }
+.k-now .s-line b { color: var(--fg); font-weight: 500; }
+.sky { left: 40px; right: 40px; top: 540px; display: grid; }
+.sky .hr { display: grid; grid-template-columns: 96px 26px minmax(0, 1fr) 84px 92px; align-items: center; gap: 16px; height: 56px; font-size: 26px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.sky .hr i { display: block; width: 26px; height: 56px; }
+.sky .hr .t { color: var(--fg); text-align: right; }
+.sky .hr .bar { height: 8px; border-radius: 4px; background: #1a1c26; position: relative; }
+.sky .hr .bar span { position: absolute; top: -6px; width: 20px; height: 20px; border-radius: 50%; background: var(--fg); transform: translateX(-50%); }
+.sky .hr .x { font-family: var(--mono); font-size: 20px; text-align: right; }
+.sky .hr .x.wet { color: #7fb8ff; }
+.k-sec { left: 40px; right: 40px; }
+.k-sec h4 { margin: 0 0 16px; }
+.chips { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+.chips button { height: 118px; border-radius: 20px; border: 1px solid #2a2d3a; background: #0e1018; color: var(--fg); font: 500 40px var(--display); letter-spacing: .04em; }
+.chips button:active, .ctl button:active, .lights button:active, .band button:active { filter: brightness(1.6); }
+.timers { display: grid; gap: 12px; margin-top: 16px; }
+.timer { display: grid; grid-template-columns: 90px minmax(0, 1fr) auto; align-items: center; gap: 22px; padding: 12px 18px; border-radius: 20px; background: #0e1018; border: 1px solid #2a2d3a; }
+.timer svg { width: 90px; height: 90px; }
+.timer .left { font-family: var(--display); font-size: 70px; font-weight: 500; font-variant-numeric: tabular-nums; line-height: 1; }
+.timer .nm { font-size: 24px; color: var(--muted); }
+.timer .x { font-family: var(--mono); font-size: 20px; color: var(--faint); letter-spacing: .1em; }
+.timer.done { border-color: var(--warm); }
+.timer.done .left { color: var(--warm); }
+.music { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 22px; padding: 22px; border-radius: 24px; background: #0e1018; border: 1px solid #2a2d3a; }
+.music img, .music .noart { width: 150px; height: 150px; border-radius: 14px; object-fit: cover; background: #171a26; }
+.music .meta { display: grid; gap: 6px; align-content: center; min-width: 0; }
+.music .tr { font-size: 34px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.music .ar { font-size: 26px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.music .wide { grid-column: 1 / -1; display: grid; gap: 16px; }
+.prog { height: 8px; background: #1a1c26; border-radius: 4px; overflow: hidden; }
+.prog i { display: block; height: 100%; width: 0; background: var(--fg); }
+.ctl { display: flex; justify-content: space-between; align-items: center; }
+.ctl button { width: 150px; height: 110px; border-radius: 24px; border: 0; background: #171a26; color: var(--fg); display: grid; place-items: center; }
+.ctl button svg { width: 54px; height: 54px; fill: currentColor; }
+.vol { width: 100%; accent-color: var(--fg); height: 44px; }
+.lights { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.lights button { height: 74px; border-radius: 18px; border: 1px solid #2a2d3a; background: #0e1018; color: var(--muted); font: 500 28px var(--body); display: flex; align-items: center; justify-content: center; gap: 14px; }
+.lights button::before { content: ""; width: 20px; height: 20px; border-radius: 50%; border: 2px solid currentColor; }
+.lights button[aria-pressed="true"] { color: #1b1408; background: var(--warm); border-color: var(--warm); }
+.lights button[aria-pressed="true"]::before { background: #1b1408; border-color: #1b1408; }
+
+/* The girls */
+.g-head { left: 40px; right: 40px; top: 50px; display: flex; justify-content: space-between; align-items: baseline; }
+.g-head h4 { margin: 0; font-family: var(--display); font-weight: 700; font-size: 72px; letter-spacing: .04em; text-transform: uppercase; }
+.g-head .s-time { font-size: 64px; color: var(--muted); }
+.band { left: 0; right: 0; height: 470px; padding: 30px 40px; display: grid; grid-template-columns: 248px minmax(0, 1fr); gap: 30px; align-items: center; border-top: 1px solid #161822; box-sizing: border-box; }
+.band img { width: 248px; height: 330px; object-fit: cover; border-radius: 14px; border-bottom: 4px solid var(--c); background: #0b0c12; }
+.band .info { display: grid; gap: 12px; align-content: center; min-width: 0; }
+.band .nm { font-family: var(--display); font-weight: 800; font-size: 96px; line-height: .85; letter-spacing: .02em; text-transform: uppercase; color: var(--c); }
+.band .st { display: inline-flex; align-items: center; gap: 14px; font-size: 30px; }
+.band .st::before { content: ""; width: 18px; height: 18px; border-radius: 50%; background: #3a3d4c; flex: none; }
+.band.on .st::before { background: var(--c); box-shadow: 0 0 16px var(--c); }
+.band .wear { font-size: 28px; color: var(--fg); line-height: 1.25; }
+.band .facts { font-family: var(--mono); font-size: 20px; color: var(--faint); letter-spacing: .04em; }
+.band button { justify-self: start; height: 76px; padding: 0 30px; border-radius: 38px; border: 1px solid var(--c); background: none; color: var(--c); font: 600 26px var(--body); }
+.band.on button { opacity: .35; }
+.studio { left: 40px; right: 40px; top: 2120px; display: grid; gap: 12px; }
+.toast { position: absolute; left: 40px; right: 40px; top: 1180px; padding: 30px 34px; border-radius: 26px; background: #12141e; border: 1px solid #2a2d3a; font-size: 32px; text-align: center; }
+
 /* Dark: nobody in the kitchen. Black on top, and nothing is drawn underneath. */
 #dark { position: absolute; inset: 0; background: #000; opacity: 0; pointer-events: none; transition: opacity 1.2s ease; }
 #dark.on { opacity: 1; }
@@ -86,6 +156,42 @@ html, body { margin: 0; width: 720px; height: 2560px; overflow: hidden; backgrou
     <div class="abs blocklabel" style="left: 74px; top: 1404px">eGPU dock</div>
     <div class="abs blocklabel" style="left: 470px; top: 1668px">NUC</div>
     <div class="abs fanlabel"><span>Noctua NF-A20</span><b id="rpm">—</b></div>
+    <nav class="nav"></nav>
+  </section>
+  <section class="scene" id="kitchen" hidden>
+    <div class="abs k-head"><div class="s-time clock"></div><div class="s-label" id="kDate"></div></div>
+    <div class="abs k-now"><div class="deg" id="kDeg">—</div><div class="s-line" id="kNow"></div></div>
+    <div class="abs sky" id="sky"></div>
+    <div class="abs k-sec" style="top: 1270px">
+      <h4 class="s-label">Timers</h4>
+      <div class="chips" id="chips"><button data-m="3">3 min</button><button data-m="5">5 min</button><button data-m="10">10 min</button><button data-m="15">15 min</button></div>
+      <div class="timers" id="timers"></div>
+    </div>
+    <div class="abs k-sec" style="top: 1760px">
+      <h4 class="s-label" id="speakerName">The speaker</h4>
+      <div class="music">
+        <img id="art" alt="" hidden><div class="noart" id="noart"></div>
+        <div class="meta"><div class="tr" id="track">Nothing playing</div><div class="ar" id="artist"></div></div>
+        <div class="wide">
+          <div class="prog"><i id="prog"></i></div>
+          <div class="ctl">
+            <button type="button" data-cmd="previous" aria-label="Previous"><svg viewBox="0 0 24 24"><path d="M6 5h2v14H6zM20 5v14L9 12z"/></svg></button>
+            <button type="button" data-cmd="play_pause" aria-label="Play or pause"><svg viewBox="0 0 24 24" id="playIcon"><path d="M7 5v14l12-7z"/></svg></button>
+            <button type="button" data-cmd="next" aria-label="Next"><svg viewBox="0 0 24 24"><path d="M16 5h2v14h-2zM4 5v14l11-7z"/></svg></button>
+          </div>
+          <input class="vol" type="range" id="vol" min="0" max="100" value="30" aria-label="Volume">
+        </div>
+      </div>
+    </div>
+    <div class="abs k-sec lights" id="lights" style="top: 2280px"></div>
+    <nav class="nav"></nav>
+  </section>
+  <section class="scene" id="girls" hidden>
+    <div class="abs g-head"><h4>The girls</h4><div class="s-time clock"></div></div>
+    <div id="bands"></div>
+    <div class="abs studio"><div class="s-label">Glass Studio</div><div class="s-line" id="studioLine" style="font-size: 28px"></div></div>
+    <div class="toast" id="toast" hidden></div>
+    <nav class="nav"></nav>
   </section>
   <section class="scene" id="night" hidden>
     <canvas id="nightCanvas" width="720" height="2560"></canvas>

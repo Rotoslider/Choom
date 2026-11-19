@@ -2,6 +2,7 @@
 .chrome-profile/
 .chrome-kitchen/
 kitchen-chrome.log
+.kitchen-cache/
 telemetry.log
 server.log
 chrome.log

@@ -3483,11 +3483,25 @@ const windowInfo = () => ({
   text: `${innerWidth}x${innerHeight} @${devicePixelRatio}x at ${screenX},${screenY}`,
 });
 post('start', { page: 'living', chooms: portraits.map((p) => p.name), window: windowInfo() });
+// What each one has on, for the kitchen screen (server.py kitchen_girls): the one on the glass in the clip
+// she's in, the others as last seen here or in clothes they've chosen since (glass_wear). The server takes
+// it out of the status before logging it.
+function wearingNow() {
+  const out = {};
+  for (const q of portraits) {
+    const pl = q.players?.[q.active], c = q.alive && pl?.clip >= 0 ? q.alive.clips[pl.clip] : null;
+    let chosen = null;
+    try { chosen = q === portraits[current] ? null : chosenOutfit(q) || null; } catch { /* her wardrobe isn't loaded yet */ }
+    out[q.name] = { pose: c ? poseFrom(c) : null, chosen };
+  }
+  return out;
+}
 function sendStatus() {
   const cp = portraits[current], pl = cp.players?.[cp.active];
   post('status', {
     page: 'living', fps: glassOff ? 0 : fps, glassOff, choom: cp.name, body: body ? body.url : null, listening: heard(), mood, voiceOn, paused,
     queued: speech.queue.length, window: windowInfo(), clip: cp.alive && pl?.clip >= 0 ? cp.alive.clips[pl.clip]?.source : null,
+    wearing: wearingNow(),
   });
 }
 setInterval(sendStatus, 2000);

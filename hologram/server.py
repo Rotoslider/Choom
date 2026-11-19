@@ -1231,32 +1231,66 @@ def synthesize(text, voice):
 
 # --- The kitchen screen -----------------------------------------------------------------------
 # kitchen.html runs on the 2560 x 720 touch bar standing upright on the tower's kitchen side ("Tower
-# Spine", Donny, Nov 19 2026). Its Core scene is a cutaway of the tower: the fan controller's air
-# readings, the GPU working, and who's on the glass (that part from /status). Read here at most every few
-# seconds and only while the page asks, so a dark kitchen screen costs nothing.
+# Spine", Donny, Nov 19 2026). Core is a cutaway of the tower (the fan controller's air readings, the GPU,
+# who's on the glass from /status); Kitchen has the weather, timers, the kitchen speaker and lights; The
+# girls shows each Choom in what she has on. Read here only while the page asks, and only what the scene
+# on screen needs, so a dark kitchen screen costs nothing.
+# kitchen.json (beside ha_url) names Home Assistant's entities, e.g. {"weather": "weather.home",
+# "music": "media_player.kitchen", "lights": [["light.kitchen_lights", "Kitchen"], ...]}; the page can switch
+# only the lights listed there.
 KITCHEN_FAN = (("rpm", "rpm"), ("intake", "intake_temp"), ("exhaust", "exhaust_temp"), ("delta", "delta"),
                ("command", "command"), ("fault", "fault"))  # tower-fan.yaml's sensors, found by name in HA
-kitchen_cache = {"at": 0.0, "data": {}, "ha_at": 0.0, "fan_ids": {}, "sun": {}}
+KITCHEN_SCENES = ("core", "kitchen", "girls")
+kitchen_cache = {"ha_at": 0.0, "fan_ids": {}, "sun": {}, "forecast": [], "forecast_at": 0.0}
+kitchen_scene_cache = {}  # scene -> (when, data)
 
 
-def kitchen_state():
-    now = time.time()
-    if now - kitchen_cache["at"] < 2.5:
-        return kitchen_cache["data"]
-    data = {"time": time.strftime("%Y-%m-%dT%H:%M:%S"), "zones_now": latest.get("zones_now") or {}}
+def kitchen_config():
     try:
-        out = subprocess.run(["nvidia-smi", "--query-gpu=power.draw,power.limit,temperature.gpu,memory.used,"
-                              "memory.total,utilization.gpu,fan.speed", "--format=csv,noheader,nounits"],
-                             capture_output=True, text=True, timeout=5).stdout.strip().splitlines()[0]
-        watts, limit, temp, used, total, util, fan = [v.strip() for v in out.split(",")]
-        data["gpu"] = {"watts": round(float(watts)), "limit": round(float(limit)), "temp": int(temp),
-                       "mem_used": int(used), "mem_total": int(total), "util": int(util),
-                       "fan": int(fan) if fan.isdigit() else None}
-    except Exception as e:
-        data["gpu_error"] = f"{type(e).__name__}: {e}"
+        return json.loads((HA_CONFIG / "kitchen.json").read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def ha_login():
     url_file, token_file = HA_CONFIG / "ha_url", HA_CONFIG / "ha_token"
-    if url_file.exists() and token_file.exists():
-        base, token = url_file.read_text().strip().rstrip("/"), token_file.read_text().strip()
+    if not (url_file.exists() and token_file.exists()):
+        return None, None
+    return url_file.read_text().strip().rstrip("/"), token_file.read_text().strip()
+
+
+def ha_post(base, token, path, body):
+    request = urllib.request.Request(f"{base}{path}", data=json.dumps(body).encode(), method="POST",
+                                     headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+    with urllib.request.urlopen(request, timeout=15) as response:
+        text = response.read()
+        return json.loads(text) if text else {}
+
+
+def kitchen_gpu():
+    out = subprocess.run(["nvidia-smi", "--query-gpu=power.draw,power.limit,temperature.gpu,memory.used,"
+                          "memory.total,utilization.gpu,fan.speed", "--format=csv,noheader,nounits"],
+                         capture_output=True, text=True, timeout=5).stdout.strip().splitlines()[0]
+    watts, limit, temp, used, total, util, fan = [v.strip() for v in out.split(",")]
+    return {"watts": round(float(watts)), "limit": round(float(limit)), "temp": int(temp), "mem_used": int(used),
+            "mem_total": int(total), "util": int(util), "fan": int(fan) if fan.isdigit() else None}
+
+
+def kitchen_state(scene):
+    scene = scene if scene in KITCHEN_SCENES else "core"
+    now = time.time()
+    when, cached = kitchen_scene_cache.get(scene, (0.0, None))
+    if cached is not None and now - when < 2.5:
+        return cached
+    data = {"time": time.strftime("%Y-%m-%dT%H:%M:%S"), "scene": scene, "zones_now": latest.get("zones_now") or {}}
+    if scene == "core":
+        try:
+            data["gpu"] = kitchen_gpu()
+        except Exception as e:
+            data["gpu_error"] = f"{type(e).__name__}: {e}"
+    base, token = ha_login()
+    cfg = kitchen_config()
+    if base:
         try:
             if now - kitchen_cache["ha_at"] > 600:  # look the fan controller and the sun up every 10 minutes
                 kitchen_cache["ha_at"] = now
@@ -1272,19 +1306,247 @@ def kitchen_state():
                 kitchen_cache["fan_ids"] = ids
                 sun = next((st for st in states if st["entity_id"] == "sun.sun"), None)
                 kitchen_cache["sun"] = {k: sun["attributes"].get(k) for k in ("next_setting", "next_rising")} if sun else {}
-            fan = {}
-            for key, eid in kitchen_cache["fan_ids"].items():
-                raw = ha_get(base, token, f"/api/states/{eid}").get("state")
-                try:
-                    fan[key] = float(raw)
-                except (TypeError, ValueError):
-                    fan[key] = raw
-            data["fan"] = fan or None  # None until the fan controller is in Home Assistant
             data["sun"] = kitchen_cache["sun"]
+            if scene == "core":
+                fan = {}
+                for key, eid in kitchen_cache["fan_ids"].items():
+                    raw = ha_get(base, token, f"/api/states/{eid}").get("state")
+                    try:
+                        fan[key] = float(raw)
+                    except (TypeError, ValueError):
+                        fan[key] = raw
+                data["fan"] = fan or None  # None until the fan controller is in Home Assistant
+            if scene == "kitchen":
+                data.update(kitchen_home(base, token, cfg, now))
         except Exception as e:
             data["ha_error"] = f"{type(e).__name__}: {e}"
-    kitchen_cache["at"], kitchen_cache["data"] = now, data
+    if scene == "girls":
+        data["girls"] = kitchen_girls()
+    kitchen_scene_cache[scene] = (now, data)
     return data
+
+
+def kitchen_home(base, token, cfg, now):
+    """The Kitchen scene's Home Assistant part: the forecast (every 15 minutes), the speaker, the lights."""
+    out = {}
+    weather = cfg.get("weather")
+    if weather and now - kitchen_cache["forecast_at"] > 900:
+        kitchen_cache["forecast_at"] = now
+        answer = ha_post(base, token, "/api/services/weather/get_forecasts?return_response",
+                         {"entity_id": weather, "type": "hourly"})
+        hours = (answer.get("service_response") or {}).get(weather, {}).get("forecast") or []
+        kitchen_cache["forecast"] = [{k: h.get(k) for k in ("datetime", "condition", "temperature", "precipitation_probability",
+                                                             "wind_speed", "wind_gust_speed", "wind_bearing", "is_daytime")}
+                                     for h in hours[:13]]
+    out["forecast"] = kitchen_cache["forecast"]
+    if weather:
+        w = ha_get(base, token, f"/api/states/{weather}")
+        out["weather_now"] = {"condition": w.get("state"), "temperature": w["attributes"].get("temperature")}
+    if cfg.get("music"):
+        m = ha_get(base, token, f"/api/states/{cfg['music']}")
+        a = m.get("attributes", {})
+        art = a.get("entity_picture") or ""
+        out["music"] = {"state": m.get("state"), "title": a.get("media_title"), "artist": a.get("media_artist"),
+                        "volume": a.get("volume_level"), "position": a.get("media_position"),
+                        "duration": a.get("media_duration"), "updated": a.get("media_position_updated_at"),
+                        "art": art if art.startswith("http") else None, "name": a.get("friendly_name")}
+    lights = []
+    for entity, name in cfg.get("lights") or []:
+        try:
+            lights.append({"entity": entity, "name": name, "on": ha_get(base, token, f"/api/states/{entity}").get("state") == "on"})
+        except urllib.error.HTTPError:
+            lights.append({"entity": entity, "name": name, "on": None})
+    out["lights"] = lights
+    return out
+
+
+def kitchen_action(entry):
+    """A tap on the Kitchen scene: a light listed in kitchen.json switched, or the speaker played, paused,
+    skipped or turned up or down. Returns (answer, HTTP status)."""
+    base, token = ha_login()
+    cfg = kitchen_config()
+    if not base:
+        return {"error": "Home Assistant isn't set up here"}, 503
+    try:
+        if entry.get("do") == "light":
+            entity = entry.get("entity")
+            if entity not in [e for e, _ in cfg.get("lights") or []]:
+                return {"error": "not one of the kitchen lights"}, 400
+            ha_post(base, token, f"/api/services/{entity.split('.')[0]}/toggle", {"entity_id": entity})
+        elif entry.get("do") == "music" and cfg.get("music"):
+            service = {"play_pause": "media_play_pause", "next": "media_next_track", "previous": "media_previous_track",
+                       "volume": "volume_set"}.get(entry.get("cmd"))
+            if not service:
+                return {"error": "unknown speaker command"}, 400
+            body = {"entity_id": cfg["music"]}
+            if service == "volume_set":
+                body["volume_level"] = max(0.0, min(1.0, float(entry.get("value", 0))))
+            ha_post(base, token, f"/api/services/media_player/{service}", body)
+        else:
+            return {"error": "unknown action"}, 400
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}, 502
+    kitchen_scene_cache.pop("kitchen", None)  # the next look shows the change
+    log_entry({"kind": "kitchen-action", **{k: entry.get(k) for k in ("do", "entity", "cmd")}})
+    return {"ok": True}, 200
+
+
+# The girls: each Choom in what she has on. The glass page reports it in its status (living.js wearingNow:
+# the one on the glass in the clip she's in, the others as last seen there or in clothes they chose since);
+# her picture and the words for it come from her Glass Studio project. Clothes she wears only when she
+# chooses them (chosen…) show her usual picture here, since anyone in the kitchen can see this screen.
+KITCHEN_CACHE_DIR = HERE / ".kitchen-cache"
+girls_cache = {"at": 0.0, "projects": {}, "clips": {}}
+WAIST_UP = ("main", "relaxed")
+NOT_PLACES = ("main", "relaxed", "full", "asleep", "gone", "circle", "circleside", "campfire")
+
+
+def studio_workspace():
+    try:
+        cfg = json.loads((HA_CONFIG / "studio.json").read_text())
+        return Path(os.path.expanduser(cfg.get("workspace", "~/choom-studio")))
+    except (OSError, ValueError):
+        return None
+
+
+def girl_look(project, pose, chosen):
+    """The look whose picture shows her as she is: her waist-up look in those clothes."""
+    looks = project.get("looks", {})
+    usual = "main" if "main" in looks else next(iter(looks), "main")
+    pose = pose or usual
+    base, _, outfit = pose.partition("@")
+    if chosen:
+        outfit = chosen
+    if outfit.startswith("chosen"):
+        return usual, True
+    if base not in NOT_PLACES and pose in looks:  # at a place, in its own clothes or clothes for it
+        return pose, False
+    if base == "campfire" and "campfire" in looks:
+        return "campfire", False
+    if not outfit:
+        return usual, False
+    for home in ("relaxed", "main") if f"relaxed@{outfit}" in looks else ("main", "relaxed"):
+        if f"{home}@{outfit}" in looks and looks[f"{home}@{outfit}"].get("picture"):
+            return f"{home}@{outfit}", False
+    return usual, False
+
+
+GARMENTS = r"shirt|t-shirt|tee|top|blouse|sweater|cardigan|jacket|coat|dress|gown|slip|nightgown|nightie|teddy|pajamas|" \
+           r"overalls|outfit|set|blanket|wrap|hoodie|fleece|tank top|camisole"
+
+
+def garment(text, usual=""):
+    """Her clothes in a few words, from the closet's description: "glowing orange ring headphones and a light
+    denim jacket over a mint t-shirt" -> "light denim jacket"; "a long, soft ivory cotton nightgown with long
+    sleeves" -> "long soft ivory cotton nightgown". Accessories go (headphones, a necklace), so do what's
+    under or with it, and at most six words are kept from the end, where the garment's name is."""
+    text = str(text or "").strip()
+    if text.lower().startswith("your usual clothes"):
+        return garment(usual)
+    if "wireframe" in text:
+        return "glowing wireframe dress"
+    text = re.sub(r"^.*?\b(?:headphones|glasses|necklace|earrings|pendant)\s+and\s+", "", text)  # her headphones first
+    parts = [p for p in re.split(r"\s+and\s+(?=(?:a|an|the)\s)|,\s+(?=(?:a|an)\s)", text) if p.strip()]
+    main = [p for p in parts if not re.search(r"headphones|glasses|necklace|earrings|pendant|bracelet|sandals|boots|hat\b",
+                                              re.split(r" with | over ", p)[0], re.I)] or parts
+    piece = re.split(r" with | over | under | that | which |;", main[0] if main else "", maxsplit=1)[0]
+    cut = re.search(rf"\b({GARMENTS}),", piece)  # "work shirt, open at the collar": the garment ends at its comma
+    if cut:
+        piece = piece[:cut.end() - 1]
+    first = re.search(rf"\b({GARMENTS})\b", piece)  # a long tail after it ("blanket in deep red, rust and ... wrapped
+    if first and len(piece[first.end():].split()) > 4:  # around her shoulders") goes; a short one stays
+        piece = piece[:first.end()]
+    words = re.sub(r"^(a|an|the|her)\s+", "", piece.replace(",", " ").strip(), flags=re.I).split()[-6:]
+    while words and words[0].lower() in ("and", "or"):
+        words = words[1:]
+    return " ".join(words)
+
+
+def look_wear(look):
+    """A Studio look's own words for what she wears in it ("" for her usual look)."""
+    return str(look.get("wearing") or "")
+
+
+def kitchen_girls():
+    now = time.time()
+    workspace = studio_workspace()
+    if now - girls_cache["at"] > 120 and workspace:  # her project and clip count, every two minutes
+        girls_cache["at"] = now
+        for cid in ("aloy", "optic", "genesis", "eve"):
+            try:
+                project = json.loads((workspace / "studio" / f"{cid}.json").read_text())
+                girls_cache["projects"][cid] = {"looks": {k: {"picture": v.get("picture"), "wearing": look_wear(v)}
+                                                          for k, v in project.get("looks", {}).items()},
+                                                "planned": sum(1 for c in project.get("clips", {}).values() if c.get("status") == "planned")}
+            except (OSError, ValueError):
+                pass
+            try:
+                girls_cache["clips"][cid] = len(json.loads((HERE / "portraits" / cid / "alive.json").read_text()).get("clips", []))
+            except (OSError, ValueError):
+                pass
+            try:  # the glass's closet: what she wears in each outfit, in the words the girls see too
+                girls_cache.setdefault("closets", {})[cid] = json.loads((HERE / "portraits" / cid / "closet.json").read_text())
+            except (OSError, ValueError):
+                pass
+    status = latest.get("status") or {}
+    wearing, on_glass = latest.get("wearing") or {}, status.get("choom")
+    names = (latest.get("start") or {}).get("chooms") or ["Aloy", "Optic", "Genesis", "Eve"]
+    girls = []
+    for name in names:
+        cid = name.lower()
+        project = girls_cache["projects"].get(cid)
+        if not project:
+            continue
+        seen = wearing.get(name) or {}
+        pose = seen.get("pose") if isinstance(seen, dict) else None
+        look, chose_privately = girl_look(project, pose, seen.get("chosen") if isinstance(seen, dict) else None)
+        base = (pose or "main").split("@")[0]
+        closet = girls_cache.get("closets", {}).get(cid) or {}
+        outfit = look.split("@", 1)[1] if "@" in look else ""
+        described = (closet.get("looks", {}).get(outfit) or {}).get("wearing") if outfit else closet.get("usual")
+        words = garment(described or project["looks"].get(look, {}).get("wearing"), closet.get("usual", ""))
+        if chose_privately or not words:
+            words = "her usual clothes"
+        if name == on_glass and not status.get("glassOff"):
+            mood = status.get("mood")
+            state = "talking at the glass" if mood == "speaking" else "thinking" if mood == "thinking" else \
+                "listening" if status.get("listening") else "on the glass"
+        elif base == "asleep":
+            state = "asleep"
+        elif base not in NOT_PLACES or base == "campfire":
+            state = f"at her {base}"
+        else:
+            state = "off the glass for now"
+        girls.append({"name": name, "id": cid, "look": look, "wearing": words, "state": state,
+                      "onGlass": name == on_glass, "clips": girls_cache["clips"].get(cid),
+                      "planned": project.get("planned", 0),
+                      "picture": f"/kitchen-picture/{cid}/{urllib.parse.quote(look)}"})
+    return girls
+
+
+def kitchen_picture(cid, look):
+    """Her look's picture made small for the kitchen screen (330 x 440, 3:4), kept in .kitchen-cache."""
+    project = girls_cache["projects"].get(cid) or {}
+    picture = (project.get("looks", {}).get(look) or {}).get("picture")
+    workspace = studio_workspace()
+    if not picture or not workspace:
+        return None
+    source = workspace / "clean" / picture
+    stamp = int(source.stat().st_mtime)
+    KITCHEN_CACHE_DIR.mkdir(exist_ok=True)
+    small = KITCHEN_CACHE_DIR / f"{cid}_{re.sub(r'[^a-z0-9@_-]', '_', look)}_{stamp}.jpg"
+    if not small.exists():
+        from PIL import Image
+        im = Image.open(source).convert("RGB")
+        w, h = im.size
+        if w / h > 0.75:
+            nw = round(h * 0.75)
+            im = im.crop(((w - nw) // 2, 0, (w - nw) // 2 + nw, h))
+        else:
+            nh = round(w / 0.75)
+            im = im.crop((0, 0, w, nh))  # keep her face: crop from the bottom
+        im.resize((330, 440), Image.LANCZOS).save(small, quality=85)
+    return small.read_bytes()
 
 
 # --- HTTP ----------------------------------------------------------------------------------
@@ -1311,8 +1573,20 @@ class Handler(SimpleHTTPRequestHandler):
                                     "spoken": [text for at, text in list(spoken) if time.time() - at < SPOKEN_S]})
         if self.path == "/events":
             return self._stream_events()
-        if self.path == "/kitchen-state":
-            return self._send_json(kitchen_state())
+        if self.path.startswith("/kitchen-state"):
+            query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            return self._send_json(kitchen_state((query.get("scene") or ["core"])[0]))
+        if self.path.startswith("/kitchen-picture/"):
+            parts = self.path.split("/")
+            data = kitchen_picture(parts[2], urllib.parse.unquote(parts[3])) if len(parts) == 4 and parts[2].isalpha() else None
+            if not data:
+                return self.send_error(404)
+            self.send_response(200)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if self.path.startswith("/choom-image/"):
             image_id = self.path[len("/choom-image/"):]
             if not IMAGE_ID.fullmatch(image_id):
@@ -1331,7 +1605,7 @@ class Handler(SimpleHTTPRequestHandler):
         return super().do_GET()
 
     def do_POST(self):
-        if self.path not in ("/log", "/control", "/speak", "/simulate", "/ears", "/eyes", "/glass"):
+        if self.path not in ("/log", "/control", "/speak", "/simulate", "/ears", "/eyes", "/glass", "/kitchen-action"):
             self.send_error(404)
             return
         length = int(self.headers.get("Content-Length", 0))
@@ -1355,6 +1629,12 @@ class Handler(SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(audio)
             return
+        if self.path == "/kitchen-action":
+            # Only from the kitchen page itself: another web page open on this machine can't switch his lights.
+            if self.headers.get("Origin") not in (None, f"http://127.0.0.1:{self.server.server_port}"):
+                return self._send_json({"error": "not from the kitchen screen"}, status=403)
+            answer, code = kitchen_action(entry)
+            return self._send_json(answer, status=code)
         if self.path == "/glass":
             # Test hook: a Choom's glass request without the Choom app, e.g. {"choom": "genesis", "op": "move",
             # "what": "twirl"}; answered here instead of to the Mac.
@@ -1434,6 +1714,8 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_response(204)
             self.end_headers()
             return
+        if entry.get("kind") == "status" and "wearing" in entry:
+            latest["wearing"] = entry.pop("wearing")  # for the kitchen screen; kept out of telemetry.log
         if entry.get("kind") == "status":
             previous = (latest.get("status") or {}).get("voiceOn")
             if previous is not None and previous != entry.get("voiceOn"):
