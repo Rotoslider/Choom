@@ -281,6 +281,30 @@ and at a place that the place stays as it is and she ends in her pose there. It 
 
 ![A change of clothes from the burgundy dress to the cold-night look](docs/images/change-clip.jpg)
 
+**Her changes of clothes**, just above Change of clothes, shows every change she has at once, so you
+don't have to hunt for them among her clips: a table for each framing a change keeps (waist-up, full
+body, each of her places), with a row for the look she changes **from** and a column for the look she
+changes **to**. Each square is one way between two looks:
+
+- **green**: a change the glass plays; a darker green one goes on at the next build
+- **green outline**: kept, but not on the glass (put it on in On the glass)
+- **orange**: rendered, waiting for Review
+- **dashed**: planned or queued
+- **red ×**: only dropped takes, so the glass still cuts
+- **empty**: no change yet, and the glass cuts from one look to the other
+
+A number in a square counts its changes when there's more than one (the glass picks one at random).
+Hover a square to see its clips by name. Click an empty one and Change of clothes opens with those two
+looks in From and To and a first wording to edit; click a made one to see its clips (hover to play,
+click to watch it large) and how the other way stands, with a button to write it if it's missing. The
+numbers at the end of each row and the foot of each column count a look's ways out and in, and the row
+and column under the pointer light up, so one outfit's changes are easy to follow. The table uses the
+same looks as Change of clothes, so a new outfit gets its row and column as soon as it has a picture.
+
+![Her changes of clothes: Aloy's waist-up looks, a row for each look she changes from](docs/images/changes-made.jpg)
+
+![A square clicked: Aloy's change into her coldsweater, and the way back](docs/images/changes-made-pair.jpg)
+
 Each prompt is built from the look's subject line, its keep line, the action, the camera line and the
 loop ending. A clip with pictures of its own gets the same lines in the reference model's six-part
 prompt: who she is and what each picture shows come first. The pictures are numbered there as the
@@ -454,6 +478,11 @@ in none on H3 Image, with better faces and fingers, at about the same speed once
   idle a minute. So a picture asked for mid-render waits for the clip (a few minutes) and for loading.
 - **The token** the app sends is in `~/.config/choom-h3image/token` here and `H3_IMAGE_TOKEN` in the
   Mac's `.env` (both outside git). Its state: `curl localhost:7870/health`.
+- **Service Health** in the Choom app checks the engine the Chooms use (Settings > Image, and any
+  Choom's own choice over it): H3 Image counts as up while it's ready, drawing, loading or stepped aside
+  for a render, and as down when it doesn't answer or runs without its model loaded. Forge is checked
+  only while one of them uses it. The Signal bridge's health alerts and the morning briefing use the
+  same check.
 - **Switching back to Klein** in Settings has the server let go of the GPU and its RAM for good; the
   Chooms' Klein settings were never changed, so their pictures are as before. To take H3 Image away
   altogether: `systemctl --user disable --now choom-h3image`. Its model (21 GB) is in Wan2GP's

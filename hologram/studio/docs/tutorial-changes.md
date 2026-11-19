@@ -41,6 +41,15 @@ uses the same pages and only spells out what's new.
   floor, stepping into or out of something. The glass cuts to her whole figure for it, as it does for
   her twirls, and after it cuts back to her waist-up look in the new clothes. It plays only while
   she's on the glass by herself; in a group room she changes waist-up, or with a cut.
+- **Seeing what she has.** **Her changes of clothes**, on Plan & render just above Change of clothes,
+  is a table of every change she has: a row for the look she changes from, a column for the one she
+  changes to. A green square is a change on the glass, an empty one a camera cut. Clicking an empty
+  square opens Change of clothes with those two looks filled in, so it's the quickest way to see
+  what's done and what to make next for an outfit: follow its row for the ways out of it, and its
+  column for the ways in.
+
+  ![Her changes of clothes for Aloy: from her usual clothes (top row) she has six, and six ways back](images/changes-made.jpg)
+
 - **The first and last frames are fixed.** Whatever happens has to arrive exactly at the second
   picture. Say how it ends ("…then she smiles at the viewer"), and in the end picture's pose: Eve
   crosses her arms again, because every look of hers has them crossed.
@@ -165,7 +174,9 @@ On **Plan & render**, as for any outfit:
 
 ### 4. The change, and the way back
 
-Still on **Plan & render**, open **Change of clothes**:
+Still on **Plan & render**, open **Change of clothes** (or, in **Her changes of clothes** just above it, click
+the square in the `nightwarm` row and `chosenunder` column of her **Full body** table: while it's empty,
+that fills in From and To for you):
 
 - **From** `full@nightwarm`, **To** `full@chosenunder`.
 - **Short name:** `slip`. **Length:** 7 s.
@@ -358,7 +369,8 @@ body and clothes she sleeps in.
    or two full bodies, the second made as an outfit from the first.
 2. **When does the glass go from one to the other?** Their names decide: nights, cold days, evenings,
    or when she chooses. A change only plays between exactly its two looks.
-3. **One each way.**
+3. **One each way.** Her changes of clothes shows both at a glance: a look's row is its ways out, its
+   column its ways in.
 4. **One motion, ending on the second picture.** Say where the garment goes or comes from.
 5. **Render, review the whole clip, build.**
 

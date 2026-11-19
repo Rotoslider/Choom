@@ -235,6 +235,10 @@ and keeps it until morning.
    seconds works best; a change by magic (motes swirling, one dress melting into the other) renders
    more reliably than clothes moved by hand. A change that needs her feet in the frame goes between
    two full bodies instead; [the changes tutorial](tutorial-changes.md) has one.
+
+   **Her changes of clothes** (just above Change of clothes) shows the new outfit as soon as its look
+   has a picture: its row holds the ways out of it, its column the ways in, and an empty square there
+   is a camera cut. Click one to write that change.
 5. **Its full body** (optional): as in step 8, from the night outfit.
 
 Until it has its own asleep look, she wears it from 10 pm and changes back to her usual clothes to
