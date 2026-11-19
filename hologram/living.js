@@ -1856,8 +1856,22 @@ for (const p of portraits) {
     // Her clip videos live only on this machine (not in git). One that can't be loaded (replaced or
     // removed by a build before the relaunch, a bad encode) is left out from then on and another
     // loads in its place; only several failures in a row show her still relief instead.
-    pl.video.addEventListener('error', () => {
+    pl.video.addEventListener('error', async () => {
       if (!p.alive || pl.clip < 0) return;
+      // A restart of server.py (it serves the clips) fails every load for a few seconds, and four in a row
+      // used to drop her moving relief until the next launch: Genesis spent an evening in her still relief
+      // after one (2026-11-19). While the server doesn't answer, the same clip is tried again in 3 s.
+      const tried = pl.clip;
+      const up = await fetch(`${p.dir}/alive.json`, { method: 'HEAD', cache: 'no-store' }).then((r) => r.ok).catch(() => false);
+      if (!up) {
+        setTimeout(() => {
+          if (!p.alive || pl.clip !== tried) return;
+          aliveLoad(p, pl, tried);
+          if (p.players[p.active] === pl) pl.video.play().catch(videoError);
+        }, 3000);
+        return;
+      }
+      if (!p.alive || pl.clip !== tried) return;
       const bad = p.alive.clips[pl.clip];
       bad.bad = true;  // poseFrom() puts it nowhere, so nothing picks it again
       p.videoFails = (p.videoFails || 0) + 1;
