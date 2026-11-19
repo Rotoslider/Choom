@@ -259,8 +259,28 @@ function fillGirls() {
     band.querySelector('.wear').textContent = g.wearing === 'her usual clothes' ? 'In her usual clothes' : `Wearing her ${g.wearing}`;
     band.querySelector('.facts').textContent = g.clips ? `${g.clips.toLocaleString()} clips on the glass` : '';
   });
+  // What Glass Studio is doing: a render (whose clip, how far, the time left), a build, a picture being drawn;
+  // then what's planned and not started.
+  const mins = (sec) => (sec > 90 ? `about ${Math.round(sec / 60)} min left` : sec > 0 ? 'under 2 min left' : '');
+  const clipName = (c) => c.clip.replace(/[_-]+/g, ' ');
+  const lines = (ks.studio || []).map((j) => {
+    const wait = j.status !== 'running', bits = [];
+    if (j.kind === 'render') {
+      const who = [...new Set((j.clips || []).map((c) => c.choom))];
+      const what = j.clips?.length === 1 ? `${j.clips[0].choom}'s ${clipName(j.clips[0])}` : `${j.total || j.clips?.length || ''} clips for ${who.join(' and ') || 'the girls'}`;
+      bits.push(`${wait ? 'Waiting to render' : 'Rendering'} ${what}`);
+      if (!wait && j.total > 1) bits.push(`${j.done} of ${j.total} done`);
+      else if (!wait && j.step) bits.push(j.step);
+    } else if (j.kind === 'build') bits.push(`${wait ? 'Waiting to build' : 'Building'} ${j.choom} onto the glass`);
+    else if (j.kind === 'review') bits.push(`Checking ${j.choom}'s new clips`);
+    else if (j.kind === 'relaunch') bits.push(`Putting ${j.choom}'s new clips on the glass`);
+    else if (j.kind === 'selfie') bits.push(wait ? `Waiting to draw ${j.label || 'a picture'}` : `Drawing ${j.label || 'a picture'}`);
+    if (!wait && j.left) bits.push(mins(j.left));
+    return bits.filter(Boolean).join(' · ');
+  });
   const planned = girls.filter((g) => g.planned).map((g) => `${g.planned} for ${g.name}`);
-  $('#studioLine').textContent = planned.length ? `Clips planned: ${planned.join(', ')}` : 'Nothing planned right now';
+  if (planned.length) lines.push(`Planned, not started: ${planned.join(', ')}`);
+  $('#studioLine').replaceChildren(...(lines.length ? lines : ['Nothing rendering or planned']).map((l) => Object.assign(document.createElement('div'), { textContent: l })));
 }
 
 // ---------- Core: the cutaway ----------

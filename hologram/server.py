@@ -1322,6 +1322,7 @@ def kitchen_state(scene):
             data["ha_error"] = f"{type(e).__name__}: {e}"
     if scene == "girls":
         data["girls"] = kitchen_girls()
+        data["studio"] = studio_now()
     kitchen_scene_cache[scene] = (now, data)
     return data
 
@@ -1470,16 +1471,22 @@ def look_wear(look):
 def kitchen_girls():
     now = time.time()
     workspace = studio_workspace()
-    if now - girls_cache["at"] > 120 and workspace:  # her project and clip count, every two minutes
+    for cid in ("aloy", "optic", "genesis", "eve") if workspace else ():  # her project, re-read when the Studio writes it
+        try:
+            path = workspace / "studio" / f"{cid}.json"
+            stamp = path.stat().st_mtime
+            if (girls_cache["projects"].get(cid) or {}).get("stamp") != stamp:
+                project = json.loads(path.read_text())
+                clips = project.get("clips", {})
+                girls_cache["projects"][cid] = {
+                    "stamp": stamp, "looks": {k: {"picture": v.get("picture"), "wearing": look_wear(v)} for k, v in project.get("looks", {}).items()},
+                    "planned": sum(1 for c in clips.values() if c.get("status") == "planned"),
+                    "queued": {n: c.get("queue") for n, c in clips.items() if c.get("status") == "queued"}}  # clip -> its render queue
+        except (OSError, ValueError):
+            pass
+    if now - girls_cache["at"] > 120 and workspace:  # clip counts and closets, every two minutes
         girls_cache["at"] = now
         for cid in ("aloy", "optic", "genesis", "eve"):
-            try:
-                project = json.loads((workspace / "studio" / f"{cid}.json").read_text())
-                girls_cache["projects"][cid] = {"looks": {k: {"picture": v.get("picture"), "wearing": look_wear(v)}
-                                                          for k, v in project.get("looks", {}).items()},
-                                                "planned": sum(1 for c in project.get("clips", {}).values() if c.get("status") == "planned")}
-            except (OSError, ValueError):
-                pass
             try:
                 girls_cache["clips"][cid] = len(json.loads((HERE / "portraits" / cid / "alive.json").read_text()).get("clips", []))
             except (OSError, ValueError):
@@ -1522,6 +1529,41 @@ def kitchen_girls():
                       "planned": project.get("planned", 0),
                       "picture": f"/kitchen-picture/{cid}/{urllib.parse.quote(look)}"})
     return girls
+
+
+STUDIO_URL = "http://127.0.0.1:8767"
+
+
+def studio_now():
+    """What Glass Studio is doing now, for the bottom of The girls: a clip rendering (whose, which, how far,
+    the time left), a build, a picture being drawn for a Choom, and what waits after them. None if the
+    Studio isn't answering."""
+    try:
+        with urllib.request.urlopen(f"{STUDIO_URL}/api/jobs", timeout=3) as response:
+            jobs = json.loads(response.read()).get("jobs", [])
+    except Exception:
+        return None
+    queues = {}
+    for cid, project in girls_cache["projects"].items():
+        for clip, queue in (project.get("queued") or {}).items():
+            queues.setdefault(queue, []).append({"choom": cid.capitalize(), "clip": clip.split("_", 1)[1] if "_" in clip else clip})
+    out = []
+    for job in jobs:
+        if job.get("status") not in ("running", "waiting", "paused"):
+            continue
+        kind, args, progress = job.get("kind"), job.get("args") or {}, job.get("progress") or {}
+        item = {"kind": kind, "status": job["status"], "step": progress.get("step"), "left": progress.get("left"),
+                "done": progress.get("done"), "total": progress.get("total")}
+        if kind == "render":
+            item["clips"] = queues.get(args.get("queue"), [])
+        elif kind in ("build", "review", "relaunch"):
+            item["choom"] = (args.get("choom") or ",".join(args.get("chooms") or [])).capitalize()
+        elif kind == "selfie":
+            item["label"] = args.get("label")
+        else:
+            continue
+        out.append(item)
+    return out
 
 
 def kitchen_picture(cid, look):
