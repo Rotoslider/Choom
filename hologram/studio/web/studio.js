@@ -651,6 +651,7 @@ async function renderPlan() {
   if (!state.planLook || !c.looks[state.planLook]) state.planLook = c.sequence.length ? c.clips[c.sequence[0]].from : Object.keys(c.looks)[0];
   lookOptions($('#planLook'), state.planLook, false);
   renderChangeForm();
+  renderChanges();
   const look = c.looks[state.planLook];
   $('#planLookInfo').textContent = look.picture ? `starts and ends on ${look.picture}` : 'this look has no picture yet';
   renderWishes();
@@ -927,10 +928,10 @@ $('#customAdd').addEventListener('click', attempt(async () => {
 // A change of clothes on screen: from one of her waist-up looks to another, or one full body to another.
 // At one of her places too: between the place and clothes she wears only there (patio to patio@coolstargaze).
 // To lists the looks in the same frame as From, the only ones a change can go to.
+const changeFramed = (l) => waistUp(l) || l.split('@')[0] === 'full' || (isPlaceLook(l) && !!state.choom.looks[l]?.does);
 function renderChangeForm() {
-  const framed = (l) => waistUp(l) || l.split('@')[0] === 'full' || (isPlaceLook(l) && !!state.choom.looks[l].does);
-  const looks = lookOrder(state.choom.looks).filter((l) => framed(l) && state.choom.looks[l].picture);
-  const was = $('#changeFrom').value, pick = framed(state.planLook) && looks.includes(state.planLook) ? state.planLook : looks[0];
+  const looks = lookOrder(state.choom.looks).filter((l) => changeFramed(l) && state.choom.looks[l].picture);
+  const was = $('#changeFrom').value, pick = changeFramed(state.planLook) && looks.includes(state.planLook) ? state.planLook : looks[0];
   $('#changeFrom').replaceChildren(...looks.map((l) => el('option', { value: l, selected: l === (looks.includes(was) ? was : pick) }, l)));
   renderChangeTo();
 }
@@ -972,6 +973,128 @@ $('#changeAdd').addEventListener('click', attempt(async () => {
   $('#changeKey').value = ''; $('#changeText').value = ''; changeSuggested = '';
   render();
 }));
+
+// Her changes of clothes, all of them at once. Donny, Nov 19: with 1,900 clips, finding them meant
+// hovering one icon after another, and he wants to see "whats done and what could be done next for a
+// given outfit to outfit". A table for each framing a change keeps (waist-up, full body, each place),
+// with the same looks Change of clothes offers: a row for the look she changes from, a column for the
+// look she changes to. A filled square is a change the glass plays; an empty one is a camera cut, and
+// clicking it fills in Change of clothes with those two looks. Clicking a made one opens its clips.
+const CHANGE_STATES = {  // furthest along first: a square shows the best of its clips
+  on: 'on the glass', placed: 'on the glass after the next build', kept: 'kept, not on the glass',
+  review: 'rendered, to review', queued: 'in a render queue', planned: 'planned', dropped: 'dropped',
+};
+function changeState(name) {
+  const c = state.choom.clips[name];
+  if (c.status === 'kept') return !state.choom.sequence.includes(name) ? 'kept' : state.choom.glass.added.includes(name) ? 'placed' : 'on';
+  return { rendered: 'review', queued: 'queued', dropped: 'dropped' }[c.status] || 'planned';
+}
+const bestChange = (names) => names.map(changeState).sort((a, b) => Object.keys(CHANGE_STATES).indexOf(a) - Object.keys(CHANGE_STATES).indexOf(b))[0];
+// "usual" for her usual clothes, the outfit's own name for an outfit, and at a place the clothes she arrives in.
+const changeLabel = (l) => (l.includes('@') ? l.split('@')[1] : isPlaceLook(l) ? 'as she arrives' : 'usual');
+const changeTitle = (base) => (base === 'main' ? 'Waist-up' : base === 'relaxed' ? 'Waist-up, relaxed pose' : base === 'full' ? 'Full body' : `At her ${base}`);
+const dat = (e, d) => { Object.assign(e.dataset, d); return e; };
+let changePick = null;  // the square opened below its table ("from|to"); kept across refreshes
+function changeGroups() {
+  const looks = state.choom.looks, groups = new Map();
+  for (const l of lookOrder(looks)) {
+    if (!changeFramed(l) || !looks[l].picture) continue;
+    const base = l.split('@')[0];
+    groups.set(base, [...(groups.get(base) || []), l]);
+  }
+  return [...groups].filter(([, ls]) => ls.length > 1);
+}
+function changePairs() {
+  const pairs = {};
+  for (const [name, c] of Object.entries(state.choom.clips)) {
+    if ((c.moods || []).includes('change') && c.from && c.to && c.from !== c.to) (pairs[`${c.from}|${c.to}`] ||= []).push(name);
+  }
+  return pairs;
+}
+// Change of clothes, filled in with these two looks and open to write in.
+function writeChange(from, to) {
+  const d = $('#changeClip');
+  d.open = true;
+  $('#changeFrom').value = from;
+  renderChangeTo();
+  $('#changeTo').value = to;
+  suggestChange();
+  d.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  $('#changeText').focus({ preventScroll: true });
+}
+function renderChanges() {
+  const c = state.choom, groups = changeGroups(), pairs = changePairs();
+  const ways = groups.flatMap(([, ls]) => ls.flatMap((f) => ls.filter((t) => t !== f).map((t) => `${f}|${t}`)));
+  const tally = ways.reduce((a, k) => { const s = pairs[k] ? bestChange(pairs[k]) : 'none'; a[s] = (a[s] || 0) + 1; return a; }, {});
+  const glass = (tally.on || 0) + (tally.placed || 0), coming = (tally.kept || 0) + (tally.review || 0) + (tally.queued || 0) + (tally.planned || 0);
+  $('#changesCount').textContent = ways.length
+    ? `· ${glass} of ${ways.length} ways on the glass${coming ? ` · ${coming} more on the way` : ''}` : '· she needs two looks in the same framing';
+  if (changePick && !ways.includes(changePick)) changePick = null;
+  const legend = el('div', { className: 'chg-legend' }, ...['on', 'placed', 'kept', 'review', 'planned', 'dropped', 'none'].map((s) => el('span', {},
+    el('span', { className: `chg-cell s-${s}` }), s === 'none' ? 'none yet: the glass cuts' : s === 'planned' ? 'planned or queued' : CHANGE_STATES[s])));
+  const tables = groups.map(([base, ls]) => {
+    const made = (k) => pairs[k] && bestChange(pairs[k]) !== 'dropped';
+    const head = el('tr', {}, el('th', { className: 'corner' }, 'from ↓   to →'),
+      ...ls.map((t, j) => dat(el('th', { className: 'to', tip: t }, el('span', {}, changeLabel(t))), { c: j })), el('th', {}));
+    const rows = ls.map((f, i) => el('tr', {}, dat(el('th', { className: 'from', tip: f }, changeLabel(f)), { r: i }),
+      ...ls.map((t, j) => {
+        if (f === t) return el('td', { className: 'self' });
+        const k = `${f}|${t}`, names = pairs[k] || [], s = names.length ? bestChange(names) : 'none';
+        const live = names.filter((n) => changeState(n) !== 'dropped').length;
+        const tip = `${changeLabel(f)} → ${changeLabel(t)}\n${names.length
+          ? `${names.map((n) => `${short(c.id, n)}: ${CHANGE_STATES[changeState(n)]}`).join('\n')}\n${s === 'dropped' ? 'Only dropped ones, so the glass cuts. ' : ''}Click to see ${names.length > 1 ? 'them' : 'it'}`
+          : 'No change yet: the glass cuts. Click to write one'}`;
+        return dat(el('td', {}, el('button', {
+          type: 'button', className: `chg-cell s-${s}${changePick === k ? ' picked' : ''}`, tip, ariaLabel: tip.replace(/\n/g, '. '),
+          onclick: () => { if (!names.length) return writeChange(f, t); changePick = changePick === k ? null : k; renderChanges(); },
+        }, live > 1 ? String(live) : '')), { r: i, c: j });
+      }),
+      el('td', { className: 'count', tip: `ways out of ${f} made` }, `${ls.filter((t) => t !== f && made(`${f}|${t}`)).length}/${ls.length - 1}`)));
+    const foot = el('tr', {}, el('th', { className: 'from muted' }, 'ways in'),
+      ...ls.map((t) => el('td', { className: 'count in', tip: `ways into ${t} made` }, String(ls.filter((f) => f !== t && made(`${f}|${t}`)).length))), el('td', {}));
+    const table = el('table', { className: 'changes-table' }, el('thead', {}, head), el('tbody', {}, ...rows), el('tfoot', {}, foot));
+    // The row and column under the pointer light up, so one look's ways out and in are easy to follow.
+    table.addEventListener('mouseover', (e) => {
+      const cell = e.target.closest('td, th'), { r, c: col } = cell?.dataset || {};
+      $$('.hl', table).forEach((x) => x.classList.remove('hl'));
+      if (r !== undefined) $(`th.from[data-r="${r}"]`, table)?.classList.add('hl');
+      if (col !== undefined) $(`th.to[data-c="${col}"]`, table)?.classList.add('hl');
+    });
+    table.addEventListener('mouseleave', () => $$('.hl', table).forEach((x) => x.classList.remove('hl')));
+    const [pf, pt] = changePick?.split('|') || [];
+    return el('div', { className: 'chg-group' }, el('h4', {}, changeTitle(base)), el('div', { className: 'chg-scroll' }, table),
+      ls.includes(pf) ? changePairPanel(pf, pt, pairs) : null);
+  });
+  $('#changesGrid').replaceChildren(legend, ...tables);
+}
+function changePairPanel(from, to, pairs) {
+  const names = pairs[`${from}|${to}`] || [], back = pairs[`${to}|${from}`] || [];
+  const backState = back.length ? bestChange(back) : 'none';
+  return el('div', { className: 'chg-pair' },
+    el('div', { className: 'row' }, el('b', {}, `${from} → ${to}`),
+      el('button', { type: 'button', className: 'ghost', tip: 'Change of clothes, filled in with these two looks', onclick: () => writeChange(from, to) }, 'Write another'),
+      el('button', { type: 'button', className: 'ghost', onclick: () => { changePick = null; renderChanges(); } }, 'Close')),
+    el('div', { className: 'chg-clips' }, ...names.map(changeClip)),
+    el('p', { className: 'hint' }, `The other way, ${to} → ${from}: `,
+      backState === 'none' || backState === 'dropped'
+        ? el('button', { type: 'button', className: 'ghost', onclick: () => writeChange(to, from) }, backState === 'none' ? 'none yet, write it' : 'only dropped, write another')
+        : CHANGE_STATES[backState]));
+}
+function changeClip(name) {
+  const c = state.choom.clips[name], s = changeState(name), made = ['rendered', 'kept', 'dropped'].includes(c.status);
+  const t = el('div', { className: `chg-thumb s-${s}`, tip: `${c.action || ''}${made ? '\nHover to play, click to watch it large' : ''}` });
+  if (c.checks) t.style.backgroundImage = `url("${sheetUrl(name, c.rendered || c.changed)}")`;
+  if (made) {
+    let hover;
+    t.addEventListener('mouseenter', () => {
+      hover = setTimeout(() => t.append(el('video', { src: clipUrl(name), muted: true, loop: true, autoplay: true, playsInline: true })), 250);
+    });
+    t.addEventListener('mouseleave', () => { clearTimeout(hover); $('video', t)?.remove(); });
+    t.addEventListener('click', () => play(name));
+  }
+  return el('figure', { className: 'chg-clip' }, t,
+    el('figcaption', {}, el('span', {}, short(state.cid, name)), el('small', { className: 'muted' }, `${CHANGE_STATES[s]} · ${secondsOf(c)} s`)));
+}
 
 // --- Plan for many looks at once ------------------------------------------------------------------
 // Library actions for many looks in one step (Expressions and Oops for every outfit): tick actions and
@@ -1089,7 +1212,7 @@ function renderPlanned() {
       el('span', { className: 'muted' }, 'The glass runs slower while the GPU renders; about one clip in six comes out wrong, so review them all.')),
     el('div', { className: 'row' }, el('span', { className: 'muted' }, used.length > 1
       ? `On ${used.map((k) => `${modelInfo(k).short} ${byModel[k]}`).join(', ')} (each model loads once). All on:` : 'Model:'), allOn),
-    downloads.length ? el('div', { className: 'lint' }, `${downloads.map((m) => `${m.name} isn’t downloaded yet (${m.download} GB): run python3 studio/studio.py models --download ${m.id} in the hologram folder`).join('; ')}, or switch these clips to another model; the render refuses them until then.`) : null,
+    downloads.length ? el('div', { className: 'lint' }, `${downloads.map((m) => `${m.name} isn’t downloaded yet (${m.download} GB): run python3 studio/studio.py models --download ${m.id} in the hologram folder`).join('; ')}, or switch these clips to another model; the render refuses them until then.`) : '',  // replaceChildren writes a null out as the word
     el('div', { className: 'row' },
       el('button', { className: 'primary', type: 'button', onclick: () => go(0), tip: 'Queue every planned clip and start Wan2GP now (the glass runs slower meanwhile)' }, 'Render now'),
       el('span', { className: 'muted' }, 'or at'), when,

@@ -185,6 +185,51 @@ button:focus-visible, select:focus-visible, textarea:focus-visible, input:focus-
   padding: 7px 9px; border: 1px solid var(--line-2); border-radius: 7px; background: var(--bg); color: var(--fg); width: 100%;
 }
 .custom-form button { justify-self: start; padding: 7px 14px; border-radius: 7px; border: 1px solid var(--tint); background: none; cursor: pointer; }
+/* Her changes of clothes: a square per way from one look (row) to another (column). */
+.chg-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 2px 0 10px; color: var(--muted); font-size: 12px; }
+.chg-legend > span { display: inline-flex; align-items: center; gap: 6px; }
+.chg-legend .chg-cell { width: 14px; height: 14px; cursor: default; }
+.chg-group h4 { margin: 10px 0 2px; font-size: 13px; font-weight: 600; }
+.chg-scroll { overflow-x: auto; }
+.changes-table { border-collapse: separate; border-spacing: 3px; font-size: 12px; margin: 0 0 8px; }
+.changes-table th { font-weight: 400; color: var(--muted); white-space: nowrap; }
+.changes-table th.hl { color: var(--fg); }
+.changes-table th.corner { vertical-align: bottom; text-align: right; color: var(--faint); font-size: 11px; white-space: pre; padding: 0 6px 4px 0; }
+.changes-table thead th.to { vertical-align: bottom; padding: 0 0 4px; }
+.changes-table thead th.to span { writing-mode: vertical-rl; transform: rotate(180deg); }
+.changes-table th.from { text-align: right; padding-right: 6px; }
+.changes-table td { width: 22px; height: 22px; padding: 0; text-align: center; }
+.changes-table td.self { border-radius: 5px; background: repeating-linear-gradient(135deg, transparent 0 4px, var(--line) 4px 5px); }
+.changes-table td.count { width: auto; padding: 0 0 0 6px; text-align: left; color: var(--faint); font-variant-numeric: tabular-nums; }
+.changes-table td.count.in { padding: 0; text-align: center; }
+.chg-cell {
+  display: inline-block; width: 22px; height: 22px; padding: 0; vertical-align: middle; border-radius: 5px; cursor: pointer;
+  border: 1px solid var(--line-2); background: var(--panel-2); color: #07080b; font: 600 11px/20px var(--sans); font-variant-numeric: tabular-nums;
+}
+.chg-cell.s-none:hover::after { content: "+"; color: var(--muted); font-weight: 400; }
+.chg-cell.s-on { background: var(--good); border-color: var(--good); }
+.chg-cell.s-placed { background: color-mix(in srgb, var(--good) 40%, var(--panel-2)); border-color: var(--good); color: var(--fg); }
+.chg-cell.s-kept { background: none; border: 2px solid var(--good); color: var(--fg); line-height: 18px; }
+.chg-cell.s-review { background: var(--warn); border-color: var(--warn); }
+.chg-cell.s-queued, .chg-cell.s-planned { background: none; border: 1px dashed var(--tint); color: var(--fg); }
+.chg-cell.s-dropped { background: none; border-color: color-mix(in srgb, var(--bad) 45%, var(--line-2)); color: var(--bad); }
+.chg-cell.s-dropped:empty::after { content: "×"; font-weight: 400; }
+.chg-cell.picked { outline: 2px solid var(--tint); outline-offset: 1px; }
+.chg-pair { background: var(--panel-2); border: 1px solid var(--line-2); border-radius: var(--radius); padding: 10px 12px; margin: 0 0 12px; }
+.chg-pair .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.chg-pair .hint { margin: 8px 0 0; }
+.chg-clips { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 10px; }
+.chg-clip { margin: 0; width: 116px; }
+.chg-thumb {
+  position: relative; width: 116px; height: 152px; border-radius: 6px; overflow: hidden; border: 1px solid var(--line);
+  background: #000 no-repeat; background-size: 928px 152px;
+}
+.chg-thumb.s-on, .chg-thumb.s-placed { border-color: var(--good); }
+.chg-thumb.s-review { border-color: var(--warn); }
+.chg-thumb.s-dropped { opacity: 0.55; }
+.chg-thumb[data-tip*="Hover"] { cursor: pointer; }
+.chg-thumb video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.chg-clip figcaption { display: grid; font-size: 12px; margin-top: 4px; overflow-wrap: anywhere; }
 .plan-queue { position: sticky; top: 84px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; max-height: calc(100vh - 110px); overflow: auto; }
 .plan-queue h3 { font-size: 15px; margin-bottom: 8px; }
 .planned-item { border-top: 1px solid var(--line); padding: 9px 0; display: grid; gap: 4px; }
