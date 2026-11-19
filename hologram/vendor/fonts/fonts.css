@@ -1,0 +1,7 @@
+/* Fonts for kitchen.html, kept here so the kitchen screen needs no internet. Big Shoulders Display and
+   Hanken Grotesk (variable), IBM Plex Mono 400 and 500: SIL Open Font License 1.1, from Google Fonts,
+   latin subset. */
+@font-face { font-family: 'Big Shoulders Display'; font-style: normal; font-weight: 100 900; font-display: swap; src: url('/vendor/fonts/BigShouldersDisplay.woff2') format('woff2'); }
+@font-face { font-family: 'Hanken Grotesk'; font-style: normal; font-weight: 100 900; font-display: swap; src: url('/vendor/fonts/HankenGrotesk.woff2') format('woff2'); }
+@font-face { font-family: 'IBM Plex Mono'; font-style: normal; font-weight: 400; font-display: swap; src: url('/vendor/fonts/IBMPlexMono-400.woff2') format('woff2'); }
+@font-face { font-family: 'IBM Plex Mono'; font-style: normal; font-weight: 500; font-display: swap; src: url('/vendor/fonts/IBMPlexMono-500.woff2') format('woff2'); }

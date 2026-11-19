@@ -1,5 +1,7 @@
 # Runtime files written next to the hologram client
 .chrome-profile/
+.chrome-kitchen/
+kitchen-chrome.log
 telemetry.log
 server.log
 chrome.log

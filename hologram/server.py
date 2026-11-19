@@ -167,7 +167,7 @@ def read_buttons():
 
 # --- Display watchdog ------------------------------------------------------------------------
 def xrandr_outputs():
-    """Connected outputs: name -> {active, primary, preferred (w, h), portrait}."""
+    """Connected outputs: name -> {active, primary, preferred (w, h), portrait, kitchen}."""
     text = subprocess.run(["xrandr", "--query"], capture_output=True, text=True, timeout=10).stdout
     outputs, name = {}, None
     for line in text.splitlines():
@@ -176,13 +176,15 @@ def xrandr_outputs():
             if " connected" in line:
                 name = line.split()[0]
                 outputs[name] = {"active": re.search(r"\d+x\d+\+\d+\+\d+", line) is not None,
-                                 "primary": " primary " in line, "preferred": None, "portrait": False}
+                                 "primary": " primary " in line, "preferred": None, "portrait": False, "kitchen": False}
         elif name:
             mode = re.match(r"\s+(\d+)x(\d+)\s+(.*)", line)
             if mode:
                 w, h = int(mode.group(1)), int(mode.group(2))
                 if (w, h) == (1536, 2048):
                     outputs[name]["portrait"] = True
+                if (w, h) in ((2560, 720), (720, 2560)):  # the bar screen on the tower's kitchen side
+                    outputs[name]["kitchen"] = True
                 if "+" in mode.group(3) and outputs[name]["preferred"] is None:
                     outputs[name]["preferred"] = (w, h)
     return outputs
@@ -190,21 +192,26 @@ def xrandr_outputs():
 
 def standard_layout(outputs):
     """The xrandr command for the standard layout: the primary monitor at the left, the other monitors to
-    its right, the Portrait at the far right. The Portrait is never made primary (GNOME's top bar and
+    its right, then the Portrait, and last the kitchen screen (the 2560 x 720 bar on the tower's back,
+    turned upright: Donny's layout from Nov 19 2026; sorted in with the others, it landed between his
+    ultrawides). The Portrait is never made primary (GNOME's top bar and
     notifications would land on the glass), and no output is listed twice: with no primary flagged, or the
     flag on the Portrait, the alphabetical first output (DP-3, the Portrait) became primary and was listed
     twice."""
     portrait = next((n for n, o in outputs.items() if o["portrait"]), None)
-    others = sorted(n for n in outputs if n != portrait)
+    kitchen = next((n for n, o in outputs.items() if o.get("kitchen") and n != portrait), None)
+    others = sorted(n for n in outputs if n not in (portrait, kitchen))
     primary = next((n for n in others if outputs[n]["primary"]), None) or (others[0] if others else None)
-    order = ([primary] if primary else []) + [n for n in others if n != primary] + ([portrait] if portrait else [])
+    order = ([primary] if primary else []) + [n for n in others if n != primary] + ([portrait] if portrait else []) + (
+        [kitchen] if kitchen else [])
     cmd, x = ["xrandr"], 0
     for n in order:
-        w, h = (1536, 2048) if n == portrait else (outputs[n]["preferred"] or (0, 0))
+        w, h = (1536, 2048) if n == portrait else (2560, 720) if n == kitchen else (outputs[n]["preferred"] or (0, 0))
         if w == 0:
             continue
-        cmd += ["--output", n, "--mode", f"{w}x{h}", "--pos", f"{x}x0"] + (["--primary"] if n == primary else [])
-        x += w
+        cmd += ["--output", n, "--mode", f"{w}x{h}", "--pos", f"{x}x0"] + (["--primary"] if n == primary else []) + (
+            ["--rotate", "left"] if n == kitchen else [])
+        x += h if n == kitchen else w
     return cmd
 
 
@@ -1093,6 +1100,7 @@ def presence_watch():
                     now[role] = raw == spec["equals"]
                 else:
                     now[role] = raw.lower() in PRESENT_STATES
+            latest["zones_now"] = {role: now.get(role) for role in ("kitchen", "bed", "desk") if role in now}  # raw, for kitchen.html
             now = debounce.update(time.time(), now, entities)
             debounce.save(PRESENCE_SAVED, time.time())
             latest["in_bed_now"] = debounce.in_bed_now
@@ -1221,6 +1229,64 @@ def synthesize(text, voice):
     return base64.b64decode(result["audio"])
 
 
+# --- The kitchen screen -----------------------------------------------------------------------
+# kitchen.html runs on the 2560 x 720 touch bar standing upright on the tower's kitchen side ("Tower
+# Spine", Donny, Nov 19 2026). Its Core scene is a cutaway of the tower: the fan controller's air
+# readings, the GPU working, and who's on the glass (that part from /status). Read here at most every few
+# seconds and only while the page asks, so a dark kitchen screen costs nothing.
+KITCHEN_FAN = (("rpm", "rpm"), ("intake", "intake_temp"), ("exhaust", "exhaust_temp"), ("delta", "delta"),
+               ("command", "command"), ("fault", "fault"))  # tower-fan.yaml's sensors, found by name in HA
+kitchen_cache = {"at": 0.0, "data": {}, "ha_at": 0.0, "fan_ids": {}, "sun": {}}
+
+
+def kitchen_state():
+    now = time.time()
+    if now - kitchen_cache["at"] < 2.5:
+        return kitchen_cache["data"]
+    data = {"time": time.strftime("%Y-%m-%dT%H:%M:%S"), "zones_now": latest.get("zones_now") or {}}
+    try:
+        out = subprocess.run(["nvidia-smi", "--query-gpu=power.draw,power.limit,temperature.gpu,memory.used,"
+                              "memory.total,utilization.gpu,fan.speed", "--format=csv,noheader,nounits"],
+                             capture_output=True, text=True, timeout=5).stdout.strip().splitlines()[0]
+        watts, limit, temp, used, total, util, fan = [v.strip() for v in out.split(",")]
+        data["gpu"] = {"watts": round(float(watts)), "limit": round(float(limit)), "temp": int(temp),
+                       "mem_used": int(used), "mem_total": int(total), "util": int(util),
+                       "fan": int(fan) if fan.isdigit() else None}
+    except Exception as e:
+        data["gpu_error"] = f"{type(e).__name__}: {e}"
+    url_file, token_file = HA_CONFIG / "ha_url", HA_CONFIG / "ha_token"
+    if url_file.exists() and token_file.exists():
+        base, token = url_file.read_text().strip().rstrip("/"), token_file.read_text().strip()
+        try:
+            if now - kitchen_cache["ha_at"] > 600:  # look the fan controller and the sun up every 10 minutes
+                kitchen_cache["ha_at"] = now
+                states = ha_get(base, token, "/api/states")
+                ids = {}
+                for st in states:
+                    eid = st["entity_id"]
+                    if not eid.startswith(("sensor.", "binary_sensor.")) or "tower" not in eid or "camera" in eid:
+                        continue
+                    for key, word in KITCHEN_FAN:
+                        if word in eid and key not in ids:
+                            ids[key] = eid
+                kitchen_cache["fan_ids"] = ids
+                sun = next((st for st in states if st["entity_id"] == "sun.sun"), None)
+                kitchen_cache["sun"] = {k: sun["attributes"].get(k) for k in ("next_setting", "next_rising")} if sun else {}
+            fan = {}
+            for key, eid in kitchen_cache["fan_ids"].items():
+                raw = ha_get(base, token, f"/api/states/{eid}").get("state")
+                try:
+                    fan[key] = float(raw)
+                except (TypeError, ValueError):
+                    fan[key] = raw
+            data["fan"] = fan or None  # None until the fan controller is in Home Assistant
+            data["sun"] = kitchen_cache["sun"]
+        except Exception as e:
+            data["ha_error"] = f"{type(e).__name__}: {e}"
+    kitchen_cache["at"], kitchen_cache["data"] = now, data
+    return data
+
+
 # --- HTTP ----------------------------------------------------------------------------------
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
@@ -1245,6 +1311,8 @@ class Handler(SimpleHTTPRequestHandler):
                                     "spoken": [text for at, text in list(spoken) if time.time() - at < SPOKEN_S]})
         if self.path == "/events":
             return self._stream_events()
+        if self.path == "/kitchen-state":
+            return self._send_json(kitchen_state())
         if self.path.startswith("/choom-image/"):
             image_id = self.path[len("/choom-image/"):]
             if not IMAGE_ID.fullmatch(image_id):

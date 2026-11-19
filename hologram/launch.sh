@@ -10,6 +10,7 @@ set -euo pipefail
 DIR="$(cd "$(dirname "$0")" && pwd -P)"
 PORT=8765
 PROFILE="$DIR/.chrome-profile"
+KITCHEN_PROFILE="$DIR/.chrome-kitchen"  # the kitchen screen's own kiosk (kitchen.html)
 PAGE="${1:-living}"
 
 CHOOM_URL="${CHOOM_URL:-http://donnys-mac-studio-3.local:3000}"
@@ -33,6 +34,7 @@ logto() {
 
 stop_all() {
   pkill -f -- "--user-data-dir=$PROFILE" || true
+  pkill -f -- "--user-data-dir=$KITCHEN_PROFILE" || true
   pkill -f -- "$DIR/server.py" || true
   pkill -f -- "$DIR/tower_ears.py" || true
   pkill -f -- "$DIR/tower_eyes.py" || true
@@ -43,6 +45,8 @@ stop_all() {
   # Chrome reuses a still-running instance for a new launch; wait until the old one is gone. A hung one
   # can ignore the polite signal (Nov 15 2026: Donny had to kill the page by hand), so after 5 s it's killed.
   for _ in $(seq 20); do pgrep -f -- "--user-data-dir=$PROFILE" > /dev/null || break; sleep 0.25; done
+  # A kitchen window still closing would take the new one's address into itself and close with it.
+  for _ in $(seq 20); do pgrep -f -- "--user-data-dir=$KITCHEN_PROFILE" > /dev/null || break; sleep 0.25; done
   if pgrep -f -- "--user-data-dir=$PROFILE" > /dev/null; then
     echo "the old glass page didn't close; killing it" >&2
     pkill -9 -f -- "--user-data-dir=$PROFILE" || true
@@ -113,3 +117,26 @@ nohup google-chrome \
   "http://127.0.0.1:$PORT/$PAGE.html" >> "$(logto chrome.log)" 2>&1 &
 
 echo "Opening $PAGE on the Portrait at +$X+$Y"
+
+# The kitchen screen: the 2560 x 720 touch bar standing upright on the tower's kitchen side ("Tower Spine",
+# kitchen.html, Nov 19 2026), in a kiosk of its own. Opened only while that screen is connected;
+# HOLOGRAM_KITCHEN=0 leaves it closed. Its window takes the focus too, so it gets its own focus_back.
+KGEOM=$(xrandr --query | grep " connected" | grep -o -E "(720x2560|2560x720)\+[0-9]+\+[0-9]+" | head -1 || true)
+if [[ -n "$KGEOM" && "${HOLOGRAM_KITCHEN:-1}" != 0 ]]; then
+  KSIZE=${KGEOM%%+*}
+  KPOS=${KGEOM#*+}
+  KX=${KPOS%+*}
+  KY=${KPOS#*+}
+  if [[ -n "$FOCUSED" && "$FOCUSED" != 0x0 ]]; then
+    setsid nohup python3 "$DIR/tools/focus_back.py" "$FOCUSED" "$KITCHEN_PROFILE" > /dev/null 2>&1 < /dev/null &
+  fi
+  nohup google-chrome \
+    --ozone-platform=x11 \
+    --user-data-dir="$KITCHEN_PROFILE" \
+    --no-first-run --no-default-browser-check --noerrdialogs --disable-session-crashed-bubble \
+    --window-position="$KX,$KY" --window-size="${KSIZE/x/,}" --kiosk \
+    --force-device-scale-factor=1 \
+    --disable-features=Translate \
+    "http://127.0.0.1:$PORT/kitchen.html" >> "$(logto kitchen-chrome.log)" 2>&1 &
+  echo "Opening the kitchen screen at +$KX+$KY"
+fi

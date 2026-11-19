@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Tower Spine</title>
+<meta name="viewport" content="width=720">
+<link rel="stylesheet" href="/vendor/fonts/fonts.css">
+<!-- Tower Spine: the 2560 x 720 touch bar standing upright on the hologram tower's kitchen side (Donny,
+     Nov 19 2026). Core is a cutaway of the tower seen from the kitchen; Night is a dim clock and a warm
+     glow along the bottom. kitchen.js says when it lights and what it reads. -->
+<style>
+:root {
+  --void: #000;
+  --fg: #ebe8f3;
+  --muted: #a6a3b9;
+  --faint: #737089;
+  --warm: #ffad5c;
+  --ember: #ff9a3d;
+  --display: "Big Shoulders Display", "Oswald", "Arial Narrow", sans-serif;
+  --body: "Hanken Grotesk", "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+html, body { margin: 0; width: 720px; height: 2560px; overflow: hidden; background: var(--void); color: var(--fg); font-family: var(--body); cursor: none; user-select: none; }
+#screen { position: relative; width: 720px; height: 2560px; overflow: hidden; }
+.scene { position: absolute; inset: 0; }
+.scene canvas { position: absolute; inset: 0; width: 720px; height: 2560px; }
+.abs { position: absolute; }
+.s-time { font-family: var(--display); font-weight: 300; line-height: .9; font-variant-numeric: tabular-nums; }
+.s-label { font-family: var(--mono); font-size: 22px; letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
+.s-line { font-size: 30px; color: var(--muted); }
+
+/* Core */
+.talker { left: 40px; right: 40px; top: 470px; display: flex; justify-content: space-between; align-items: baseline; gap: 20px; }
+.talker b { font-family: var(--display); font-weight: 700; font-size: 54px; letter-spacing: .04em; text-transform: uppercase; }
+.talker span { font-size: 28px; color: var(--muted); text-align: right; }
+.core-clock { left: 40px; right: 40px; top: 560px; }
+.core-clock .s-time { font-size: 210px; }
+.core-clock .s-line { margin-top: 12px; }
+.readout { left: 440px; width: 250px; display: grid; gap: 6px; }
+.readout .big { font-family: var(--display); font-weight: 500; font-size: 104px; line-height: .95; font-variant-numeric: tabular-nums; }
+.readout .of { font-size: 24px; color: var(--faint); margin-top: -4px; }
+.readout .row { display: flex; justify-content: space-between; font-size: 26px; color: var(--muted); }
+.readout .row b { color: var(--fg); font-weight: 500; font-variant-numeric: tabular-nums; }
+.readout .note { font-size: 24px; color: var(--faint); line-height: 1.3; }
+.meter { height: 12px; border-radius: 6px; background: #1a1c26; overflow: hidden; margin-top: 4px; }
+.meter i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #57dbe3, #b79bff); }
+.blocklabel { font-family: var(--mono); font-size: 20px; letter-spacing: .1em; text-transform: uppercase; color: #cfc9e6; }
+.fanlabel { left: 40px; right: 40px; top: 2330px; display: flex; justify-content: space-between; font-size: 26px; color: var(--muted); }
+.fanlabel b { color: var(--fg); font-weight: 500; }
+
+/* Night */
+.n-clock { left: 0; right: 0; top: 2140px; text-align: center; color: var(--ember); opacity: .38; }
+.n-clock .s-time { font-size: 120px; }
+.n-clock .s-line { color: var(--ember); font-size: 24px; margin-top: 8px; }
+.pathlight { left: -120px; right: -120px; bottom: -300px; height: 900px; border-radius: 50%; background: radial-gradient(closest-side, rgba(255,154,61,.55), rgba(255,120,40,.18) 55%, transparent); }
+
+/* Dark: nobody in the kitchen. Black on top, and nothing is drawn underneath. */
+#dark { position: absolute; inset: 0; background: #000; opacity: 0; pointer-events: none; transition: opacity 1.2s ease; }
+#dark.on { opacity: 1; }
+</style>
+</head>
+<body>
+<div id="screen">
+  <section class="scene" id="core">
+    <canvas id="coreCanvas" width="720" height="2560"></canvas>
+    <div class="abs talker"><b id="talkName"></b><span id="talkState"></span></div>
+    <div class="abs core-clock"><div class="s-time clock"></div><div class="s-line" id="wx"></div></div>
+    <div class="abs readout" style="top: 860px">
+      <div class="s-label">Air through it</div>
+      <div class="big" id="dT">—</div>
+      <div class="row"><span>exhaust</span><b id="exhaust">—</b></div>
+      <div class="row"><span>intake</span><b id="intake">—</b></div>
+      <div class="note" id="airNote"></div>
+    </div>
+    <div class="abs readout" style="top: 1230px">
+      <div class="s-label">The GPU</div>
+      <div class="big" id="watts">—</div>
+      <div class="of" id="limit"></div>
+      <div class="row"><span>core</span><b id="gpuTemp">—</b></div>
+      <div class="row"><span>memory</span><b id="mem">—</b></div>
+      <div class="meter"><i id="memBar"></i></div>
+      <div class="row" style="margin-top: 6px"><span>load</span><b id="util">—</b></div>
+      <div class="row"><span>its blower</span><b id="blower">—</b></div>
+    </div>
+    <div class="abs blocklabel" style="left: 104px; top: 868px">RTX PRO 6000</div>
+    <div class="abs blocklabel" style="left: 74px; top: 1404px">eGPU dock</div>
+    <div class="abs blocklabel" style="left: 470px; top: 1668px">NUC</div>
+    <div class="abs fanlabel"><span>Noctua NF-A20</span><b id="rpm">—</b></div>
+  </section>
+  <section class="scene" id="night" hidden>
+    <canvas id="nightCanvas" width="720" height="2560"></canvas>
+    <div class="abs pathlight"></div>
+    <div class="abs n-clock"><div class="s-time clock"></div><div class="s-line">only this, until morning</div></div>
+  </section>
+  <div id="dark"></div>
+</div>
+<script src="kitchen.js"></script>
+</body>
+</html>
