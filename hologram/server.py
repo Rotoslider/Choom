@@ -430,6 +430,12 @@ def weather_watch():
                         entry["source"] = "station"
                     except (TypeError, ValueError):
                         pass  # unavailable for now: keep the town reading
+            if url_file.exists() and token_file.exists():  # the sun, for Genesis's sunset look (living.js sunsetNow)
+                try:
+                    sun = ha_get(url_file.read_text().strip().rstrip("/"), token_file.read_text().strip(), "/api/states/sun.sun")
+                    entry["sunset"], entry["sunrise"] = sun["attributes"].get("next_setting"), sun["attributes"].get("next_rising")
+                except Exception:
+                    pass  # Home Assistant restarting: no sunset look until it answers
             # Windy on a 10-minute average of 12 mph or gusts of 20, held for 20 minutes after the last
             # such reading: gusts come and go, and the rule alone turned her windy day on and off every
             # few minutes (living.js windy() uses `windy`).

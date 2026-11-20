@@ -1151,7 +1151,20 @@ function nightOutfit(p, outfits) {
 }
 const COLD_BELOW_F = setting('coldBelowF', 45), COOL_BELOW_F = setting('coolBelowF', 60), HOT_ABOVE_F = setting('hotAboveF', 85);
 const EVENING_FROM = setting('eveningFrom', 18), EVENING_UNTIL = setting('eveningUntil', 23);
+// Her sunset (Genesis's day-one picture, the desert sunset over the buttes, Donny, Nov 19 2026: "if she is on
+// the glass 15 min before sunset to 15 minutes after it pops up"): from 15 minutes before the sun sets to 15
+// after, by Home Assistant's sun (server.py sends the next sunset with the weather; once it has set, the
+// next one is tomorrow's, so today's was a day before). Worn all through those minutes, ahead of any other
+// outfit, and she can choose it any time (glass_wear "my sunset").
+const SUNSET_MINUTES = setting('sunsetMinutes', 15);
+function sunsetNow() {
+  const next = Date.parse(weather.sunset || '');
+  if (!next) return false;
+  const now = Date.now(), set = next - now > 12 * 3600000 ? next - 24 * 3600000 : next;
+  return Math.abs(now - set) <= SUNSET_MINUTES * 60000;
+}
 const OUTFIT_RULES = [
+  [/^sunset/, () => sunsetNow()],
   [/^cold/, () => typeof weather.temperature === 'number' && weather.temperature < COLD_BELOW_F],  // °F
   [/^cool/, () => typeof weather.temperature === 'number' && weather.temperature < COOL_BELOW_F],  // a cool evening (2026-11-09)
   [/^hot/, () => typeof weather.temperature === 'number' && weather.temperature > HOT_ABOVE_F],
@@ -1190,6 +1203,7 @@ function mayWear(p, o) {
   // it from last night after a relaunch) would go on as a visit with no hours to end it. Eve put
   // her pajamas back on at 8 am and wore them all day (2026-10-18).
   if (/^night/.test(o)) return nightNow();
+  if (/^sunset/.test(o)) return sunsetNow();  // all through its minutes, and only then (no visits, no daily total)
   const w = wardrobe(p), now = Date.now();
   if (w.visit && w.visit.o === o) return now - w.visit.start < visitLength(p, o);  // wearing it: until the visit is up
   if (now - (w.rested[o] || 0) < VISIT_REST_MS) return false;                     // just took it off
@@ -1201,7 +1215,7 @@ function syncVisit(p, pose) {
   const w = wardrobe(p), o = isPlace(pose) ? null : outfitOf(pose), now = Date.now();
   if (w.visit && w.visit.o !== o) {
     w.rested[w.visit.o] = now;
-    if (!ALT_LOOKS.has(w.visit.o) && !/^night/.test(w.visit.o)) w.restedAny = now;
+    if (!ALT_LOOKS.has(w.visit.o) && !/^(night|sunset)/.test(w.visit.o)) w.restedAny = now;  // no rest after those
     w.visit = null;
   }
   if (o && !w.visit) w.visit = { o, start: now };
@@ -1300,6 +1314,8 @@ function wantedOutfit(p, want) {
   const outfits = wearable(p).filter((o) => mayWear(p, o));
   const night = nightNow() && nightOutfit(p, outfits);
   if (night) return night;
+  const sunset = sunsetNow() && outfits.find((o) => /^sunset/.test(o));
+  if (sunset) return sunset;
   // A visit under way goes on until it's up (or its hours or weather end), not swapped mid-way for
   // another outfit of the same kind. After an outfit's visit (up now, or within 25 minutes) she's in
   // her usual clothes (or another look in them), not straight into the next outfit: with three

@@ -708,7 +708,7 @@ class Handler(BaseHTTPRequestHandler):
                     if wearing:
                         data["subject"] = pictures.subject_for(look, wearing)
                     data["wearing"] = wearing
-                for key in ("subject", "ending", "keep", "picture", "wardrobe", "kleinKeep", "wearing"):
+                for key in ("subject", "ending", "keep", "picture", "wardrobe", "kleinKeep", "wearing", "closetWearing"):
                     if key in data:
                         look[key] = data[key]
                 if any(k in data for k in ("subject", "ending", "keep")):

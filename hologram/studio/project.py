@@ -350,7 +350,9 @@ class Project:
         for lid in sorted(self.looks, key=lambda l: (base_of(l) != "main", l)):  # main@evening before relaxed@evening
             o, subject = outfit_of(lid), self.looks[lid].get("subject", "")
             if o and o not in looks and base_of(lid) in ("main", "relaxed", "asleep"):  # the outfit, not its full body
-                worn = closet.wearing(subject, main)
+                # closetWearing: a look's own words for her answer, where its subject line can't give them
+                # (Genesis's sunset: her usual motes with a desert sunset below her, Nov 19 2026).
+                worn = self.looks[lid].get("closetWearing") or closet.wearing(subject, main)
                 looks[o] = {"tags": self.closet_words(lid),  # her usual clothes, changed some other way: say how
                             "wearing": closet.same_clothes(subject, main) if worn == usual else worn}
         # Clothes she wears only at one of her places (her long cardigan on the patio): what she wears, and where.
