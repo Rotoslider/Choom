@@ -531,7 +531,10 @@ function readinessWarnings() {
 }
 async function placeAll(look) {
   const c = state.choom;
-  const off = Object.keys(c.clips).filter((n) => c.clips[n].from === look && c.clips[n].status === 'kept' && !c.sequence.includes(n));
+  // Its own clips and the change back out start in the look; the change into it starts in another one
+  // (main → main@sunset) and went unplaced until 2026-11-19, so a new look came on with a cut, not its clip.
+  const off = Object.keys(c.clips).filter((n) => (c.clips[n].from === look || c.clips[n].to === look)
+    && c.clips[n].status === 'kept' && !c.sequence.includes(n));
   state.choom = (await api(`/api/choom/${state.cid}/place`, { names: off, on: true })).choom;
   toast(`${off.length} clips of ${look} added; build to put them on the glass`);
   render();

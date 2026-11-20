@@ -167,7 +167,9 @@ how many a build still has to make, and for an outfit whether it has a talk loop
 long the build of its new clips takes (about 2.5 minutes a clip). The bar warns about the two easy
 misses, each with its fix:
 - **a look whose kept clips are none of them on the glass** (`main@dayshop: 49 kept clips, none on
-  the glass yet`), with **Put them on the glass**;
+  the glass yet`), with **Put them on the glass**: its own clips, the change back out of it and the
+  change into it (that one starts in another look, and until Nov 19 2026 it was left off, so Genesis's
+  sunset came on with a camera cut instead of its glow);
 - **an outfit's full body or asleep look on the glass while she can't wear the outfit**, because its
   waist-up look has no talk loop placed: those clips would never play.
 
@@ -627,6 +629,7 @@ An outfit's name tells the glass when she wears it (`OUTFIT_RULES` in `living.js
 | Name | When |
 |---|---|
 | `night…` | from 10 pm until she wakes; she sleeps in it if it has its own asleep look. `nightwarm…` when it's 70°F or warmer, `nightcold…` below, chosen when she puts them on and kept until morning |
+| `sunset…` | from 15 minutes before sunset to 15 after (Home Assistant's sun), the whole time and ahead of the others; she can choose it any time too. Genesis's desert sunset (`main@sunset`) is one: her day-one picture, made into a look with the Studio's look action |
 | `cold…` | under 45°F |
 | `cool…` | under 60°F (a cool evening; checked after `cold…`) |
 | `hot…` | over 85°F |
