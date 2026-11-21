@@ -733,7 +733,15 @@ The looking-glass skill in the Choom app (`skills/core/looking-glass`) gives eac
     they don't ("my own green dress" is her green dress).
   - A garment, colour or fabric she names has to be in the outfit: "a silk slip" never matches a
     cotton dress.
-  - Scoring is 10 per garment, 3 per colour, 2 per other word.
+  - An outfit's own name finds it straight away: "eveningblanket", "main@eveningblanket", or the two
+    words side by side ("evening blanket"). Only names made of two words count this way, so "my
+    evening blanket" isn't her `evening` sweater.
+  - Scoring is 10 per garment, 3 per colour, 2 per other word (two words side by side also count as
+    one: "stargaze blanket" for `stargazeblanket`).
+  - Clothes she wears only at one of her places get 5 more when she names the place ("my blanket on
+    the patio"), are left out when she says "inside", "indoors" or "here", and lose a tie with clothes
+    she can wear anywhere. Genesis's "my evening blanket and nightgown, inside" walked her out to the
+    patio for its blanket (Nov 21, 2026), because that description has socks "inside" her slippers.
   - A tie with her usual clothes goes to them ("my mint tee" is her usual tee, not the one under her
     cold-day jacket). A tie between warm and cold night clothes goes by the temperature (only night
     clothes: Eve's cold-day flannel isn't "cold" night clothes). Then, if she named a garment, the

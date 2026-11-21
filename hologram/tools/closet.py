@@ -60,6 +60,8 @@ MATCH_EXTRA = MATERIALS | {"long", "short", "strappy", "sleeveless"}  # also kep
 GARMENT_OF = {w: g for g, words in GARMENTS.items() for w in words}
 COLOR_OF = {w: c for c, words in COLORS.items() for w in words}
 USUAL = {"usual", "normal", "regular", "default", "everyday", "original", "own"}
+# Words for clothes to wear where she is, not ones she wears only at one of her places (match_outfit).
+INDOORS = {"inside", "indoors", "indoor", "here", "home", "room"}
 STOP = {"a", "an", "the", "my", "your", "her", "some", "on", "in", "into", "with", "wear", "wearing", "put", "change",
         "outfit", "clothes", "please", "little", "i", "want", "to", "me", "something", "one", "that", "this", "for",
         "do", "of", "and", "again", "now", "bit", "quick", "just", "go", "get", "dressed"}
@@ -351,22 +353,38 @@ def match_outfit(request, available, warm=None, usual=""):
     `usual` describes her usual clothes (closet.json's "usual" and her main subject line), so they can be
     asked for like any outfit: "my wireframe dress" (Eve) and "my cream blouse" (Aloy) found other outfits
     before, and "my motes" (Genesis) became a wish. "Usual", "normal", "own" alone mean her usual clothes,
-    but not beside a garment, colour or fabric: "my own green dress" is her green dress."""
-    asked = canon(words(request))
+    but not beside a garment, colour or fabric: "my own green dress" is her green dress.
+
+    An outfit's own name finds it ("eveningblanket", or the look "main@eveningblanket"), if the name is
+    made of two words: "my evening blanket" isn't her "evening" sweater. Clothes she wears only at one of
+    her places (`available` entries with "places": her patio blanket) win when she names the place, drop
+    out when she says "inside" or "here", and lose a tie with clothes she can wear anywhere. Genesis asked
+    for her new evening blanket by its name and it became a wish, then "my evening blanket and nightgown,
+    inside" walked her out to the patio for the patio one, whose description has socks "inside fleece-lined
+    slippers" (2026-11-21)."""
+    said = words(request)
+    asked = canon(said)
+    joined = {a + b for a, b in zip(said, said[1:])}  # "stargaze blanket" for her eveningstargazeblanket
     garments = asked & set(GARMENTS)
     colors = asked & set(COLORS)
     fabrics = asked & MATERIALS
     if asked & USUAL and not (garments or colors or fabrics):
         return ("usual", None)
+    by_name = [n for n in available if n in asked | joined and name_words(n) != [n]]
+    if len(by_name) == 1:
+        return (by_name[0], available[by_name[0]])
     candidates = dict(available, **({"usual": {"tags": [], "wearing": usual}} if usual.strip() else {}))
+    at_named = lambda o: any(p in asked or p.rstrip("s") in asked for p in o.get("places", []))  # noqa: E731
     scored, others = [], {}
     for name, o in candidates.items():
+        if o.get("places") and asked & INDOORS and not at_named(o):
+            continue
         has = canon(words(" ".join(o["tags"]) + " " + o.get("wearing", "") + " " + " ".join(name_words(name))))
         if any(named and not named & has for named in (garments, colors, fabrics)):
             continue
-        score = 10 * len(garments & has) + 3 * len(colors & has) + 2 * len((asked - garments - colors) & has)
+        score = 10 * len(garments & has) + 3 * len(colors & has) + 2 * len((asked - garments - colors | joined) & has)
         if score:
-            scored.append((score, name))
+            scored.append((score + (5 if at_named(o) else 0), name))
             others[name] = len((has & set(GARMENTS)) - garments)  # garments she didn't name
     if not scored:
         return None
@@ -374,6 +392,10 @@ def match_outfit(request, available, warm=None, usual=""):
     tied = [n for s, n in scored if s == best]
     if "usual" in tied:  # "my mint tee": her usual tee, not the tee under her cold-day jacket
         return ("usual", None)
+    # Clothes for the place she named, else the ones she can wear anywhere (her blanket inside, not the
+    # patio one, for "my evening blanket").
+    tied = ([n for n in tied if at_named(candidates[n])] or [n for n in tied if not candidates[n].get("places")]
+            or tied)
     if warm is not None:  # night clothes for the other weather drop out (not her cold-day clothes: Eve's flannel)
         tied = [n for n in tied if not n.startswith("night") or ("warm" if warm else "cold") in n] or tied
     if garments:  # "my tank top": the outfit that's just one, not the flannel or the overalls over one (Eve's)
