@@ -852,6 +852,16 @@ while the camera sees you, the server stops it.
 after an input switch (`display_fix` in telemetry): the primary monitor at the left, the others to its
 right, the Portrait at the far right. The Portrait is never made primary, and no output is listed twice.
 
+**Frozen glass.** GNOME with the NVIDIA driver now and then stops sending frames to the Portrait while
+the page runs on, usually when a new window opens (a browser starting). The page drops to XWayland's
+1 fps fallback and the glass holds one picture: an idle Choom just looks still, so it shows when the
+next Choom should come on. It lasts as long as the screens stay lit. When the page reports 2 fps or
+less for 12 s with the glass on, the screens lit, and you seen by the camera or using the desk, the
+server powers every screen down for 2 s and back (Mutter's `PowerSaveMode`), the same as a double tap
+of the Portrait's power button. It never wakes dark screens, resets at most every 5 minutes, and stops
+after three resets that didn't help until the page moves again. Each reset is logged as
+`glass-unfreeze` (`stalled_s`, `choom`, `fps_after`, `fixed`).
+
 Each wake and blank is logged as `screens`.
 
 ## Everything else on the page

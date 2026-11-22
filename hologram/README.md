@@ -118,8 +118,8 @@ The Choom app runs on another machine (here a Mac Studio). The hologram reaches 
    `glass-settings.example.json` to `glass-settings.json` ([Looks and outfits](docs/reference.md#looks-and-outfits)).
 7. **Start.** Run `./launch.sh`; `./launch.sh stop` closes everything. To start at login, point an
    autostart entry at `tools/autostart.sh`, which waits for the Portrait ([Running](docs/reference.md#running)).
-   While it runs, the server relaunches a page that stops reporting and keeps the tower's listener and
-   camera running ([Recovery](docs/reference.md#running)).
+   While it runs, the server relaunches a page that stops reporting, keeps the tower's listener and
+   camera running, and resets the screens when the glass freezes ([Recovery](docs/reference.md#running)).
 8. **Glass Studio.** Point `~/.config/choom-hologram/studio.json` at a workspace folder and open
    http://127.0.0.1:8767 ([studio/README.md](studio/README.md)). `launch.sh` starts the Studio if it
    isn't running.
@@ -176,7 +176,10 @@ only the lights listed there:
 ```
 
 The fan controller's sensors are found by name (`tower` with `rpm`, `intake_temp`, `exhaust_temp`,
-`delta`, `command`, `fault`); until they're in Home Assistant, Core says it's waiting for them.
+`delta`, `command`, `fault`); until they're in Home Assistant, Core says it's waiting for them. Since
+November 22 they are: the tower's ESPHome board (`tower-fan`, "Hologram Tower Fan"; its YAML is in the
+tower project). Home Assistant shows the air in °F and the board sends ΔT in °F too; the server keeps the
+air in °C (the firmware's own units) and Core shows intake, exhaust and ΔT in °F. The GPU stays in °C.
 
 ![Core, Kitchen and The girls on the kitchen screen](docs/images/kitchen-screen.jpg)
 
