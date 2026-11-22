@@ -683,8 +683,61 @@ def screen_watch():
                     log_entry({"kind": "screens", "on": False, "why": "unseen", "idle": round(idle),
                                "unseen": round(min(unseen, idle))})
             idle_was = idle_now
+            glass_freeze_check(dark, unseen < SCREEN_SEEN_S or not idle_now)
         except Exception as e:
             latest["screen_watch_error"] = f"{type(e).__name__}: {e}"
+
+
+# --- A frozen Glass -----------------------------------------------------------------------------
+# GNOME (with the NVIDIA driver) now and then stops sending frames to the Portrait while the page
+# runs on: a new window opening is the usual trigger (Firefox Nov 19 + 22, Brave Nov 20). The page
+# drops to XWayland's 1 fps fallback and the Portrait holds one picture; idle Genesis just looks still,
+# so Donny saw it when Aloy's check-in should have put her on (Nov 21, Nov 22). It lasts while the
+# screens stay lit, and the camera keeps them lit while he's here: his double tap of the Portrait's
+# power button cleared it. The same reset done here, as on Nov 19 by hand: every screen powered
+# down for 2 s and back (Mutter's PowerSaveMode). Only when the screens are lit and he's here or using
+# the desk (never wakes dark screens), at most every 5 minutes, and not again after 3 that didn't help.
+FREEZE_FPS = 2       # the page's frames per second at or under this ...
+FREEZE_S = 12        # ... for this long, with the glass on and the screens lit: frozen
+FREEZE_GAP_S = 300   # between resets
+freeze = {"since": None, "last": 0.0, "failed": 0}
+
+
+def glass_freeze_check(dark, here):
+    status = latest.get("status") or {}
+    fps = status.get("fps")
+    fresh = time.time() - received_at.get("status", 0) < 6  # the page is reporting (not mid-relaunch)
+    if not (fresh and isinstance(fps, (int, float)) and fps <= FREEZE_FPS and status.get("glassOff") is False):
+        if freeze["since"] is not None and fresh and isinstance(fps, (int, float)) and fps > 10:
+            freeze["failed"] = 0  # moving again
+        freeze["since"] = None
+        return
+    now = time.time()
+    if freeze["since"] is None:
+        freeze["since"] = now
+    stalled = now - freeze["since"]
+    if (stalled < FREEZE_S or dark is not False or not here or now - freeze["last"] < FREEZE_GAP_S
+            or freeze["failed"] >= 3 or monitors_off()):
+        return
+    freeze["last"] = now
+    threading.Thread(target=unfreeze_glass, args=(round(stalled), status.get("choom")), daemon=True).start()
+
+
+def unfreeze_glass(stalled, choom):
+    def power_save(mode):
+        return gnome("org.gnome.Mutter.DisplayConfig", "/org/gnome/Mutter/DisplayConfig",
+                     "org.freedesktop.DBus.Properties.Set", "org.gnome.Mutter.DisplayConfig",
+                     "PowerSaveMode", f"<int32 {mode}>")
+    power_save(3)
+    time.sleep(2)
+    power_save(0)
+    gnome("org.gnome.ScreenSaver", "/org/gnome/ScreenSaver", "org.gnome.ScreenSaver.SetActive", "false")
+    time.sleep(10)
+    fps = (latest.get("status") or {}).get("fps")
+    fixed = isinstance(fps, (int, float)) and fps > 10
+    freeze["failed"] = 0 if fixed else freeze["failed"] + 1
+    freeze["since"] = None
+    log_entry({"kind": "glass-unfreeze", "stalled_s": stalled, "choom": choom, "fps_after": fps, "fixed": fixed})
 
 
 # --- The glass camera, for the Choom app -----------------------------------------------------
