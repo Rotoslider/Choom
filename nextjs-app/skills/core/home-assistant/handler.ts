@@ -22,6 +22,38 @@ const TOOL_NAMES = new Set([
 ]);
 
 /**
+ * Keep Home Assistant's access tokens out of everything a Choom reads. HA puts
+ * a live token in each camera's `access_token` attribute and in picture links
+ * (/api/camera_proxy/…?token=, /api/media_player_proxy/…?token=). ha_get_state
+ * and ha_render_template handed them to the model, and so to every provider
+ * her requests passed through. In November 2026 OpenRouter said an attacker
+ * had read the stored requests of one of its providers (GMI Cloud) and searched
+ * them for credentials. Between Sep 15 and Nov 20, 105 ha_get_state results
+ * carried a camera token. She needs none of them: snapshots are fetched with
+ * the token from Settings.
+ * Objects lose their access_token keys; text (a rendered template, a URL)
+ * keeps its shape with the token replaced by "removed".
+ */
+const HA_TOKEN_IN_URL = /([?&](?:access_)?token=)[^&\s"'<>\\]+/gi;
+const HA_TOKEN_IN_TEXT = /(\baccess_token\b\\?["']?\s*[:=]\s*\\?["']?)[A-Za-z0-9._~+/-]{8,}/gi;
+export function stripHaTokens<T>(value: T): T {
+  if (typeof value === 'string') {
+    return value.replace(HA_TOKEN_IN_URL, '$1removed').replace(HA_TOKEN_IN_TEXT, '$1removed') as T;
+  }
+  if (Array.isArray(value)) return value.map(v => stripHaTokens(v)) as T;
+  if (value && typeof value === 'object') {
+    const proto = Object.getPrototypeOf(value);
+    if (proto !== Object.prototype && proto !== null) return value;
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) {
+      if (k.toLowerCase() !== 'access_token') out[k] = stripHaTokens(v);
+    }
+    return out as T;
+  }
+  return value;
+}
+
+/**
  * Coerce a service_data value into a plain object. Chooms sometimes pass it
  * as a YAML-ish string ("entity_id: camera.x") or a JSON string; HA rejects
  * both because the REST API requires an object body. Parse transparently.
@@ -449,9 +481,10 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
 
   // Home Assistant gives every time in UTC (state changes, history, the
   // logbook, timestamp sensors like the rain gauge's last rain); she gets
-  // them in local time, the way she says them to Donny.
+  // them in local time, the way she says them to Donny. And no HA token
+  // reaches her, from any HA tool (stripHaTokens).
   async execute(toolCall: ToolCall, ctx: SkillHandlerContext): Promise<ToolResult> {
-    const r = await this.run(toolCall, ctx);
+    const r = stripHaTokens(await this.run(toolCall, ctx));
     return r.result == null ? r : { ...r, result: localizeTimestamps(r.result) };
   }
 
