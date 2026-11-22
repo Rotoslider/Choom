@@ -51,6 +51,7 @@ export function MemoryDetailPanel({
   const [editing, setEditing] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   // Edit state
   const [title, setTitle] = useState(memory.title);
@@ -70,10 +71,20 @@ export function MemoryDetailPanel({
     setMemoryType(memory.memory_type);
     setEditing(false);
     setConfirmDelete(false);
+    setActionError(null);
   }, [memory]);
+
+  // A save or delete counts only when the memory server took it: the route
+  // answers an error status with { success: false, reason } when it refused.
+  const refusal = async (res: Response): Promise<string | null> => {
+    const data = await res.json().catch(() => null) as { success?: boolean; reason?: string } | null;
+    if (res.ok && data?.success !== false) return null;
+    return data?.reason || `HTTP ${res.status}`;
+  };
 
   const handleSave = async () => {
     setSaving(true);
+    setActionError(null);
     try {
       const res = await fetch('/api/memories', {
         method: 'PUT',
@@ -86,11 +97,18 @@ export function MemoryDetailPanel({
           title,
           content,
           tags: tagsStr,
-          importance,
+          // Only a moved slider sends importance. The memory server takes whole
+          // numbers 1-10, but its own reinforcement and decay leave values like
+          // 6.5 on about a third of memories; sending those back unchanged got
+          // every edit of them refused (2026-11-21).
+          ...(importance !== memory.importance && { importance }),
           memory_type: memoryType,
         }),
       });
-      if (res.ok) {
+      const refused = await refusal(res);
+      if (refused) {
+        setActionError(`Not saved: ${refused}`);
+      } else {
         const updated: Memory = {
           ...memory,
           title,
@@ -104,12 +122,14 @@ export function MemoryDetailPanel({
       }
     } catch (err) {
       console.error('Failed to update memory:', err);
+      setActionError(`Not saved: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setSaving(false);
     }
   };
 
   const handleDelete = async () => {
+    setActionError(null);
     try {
       const res = await fetch('/api/memories', {
         method: 'DELETE',
@@ -119,11 +139,15 @@ export function MemoryDetailPanel({
         },
         body: JSON.stringify({ memory_id: memory.id }),
       });
-      if (res.ok) {
+      const refused = await refusal(res);
+      if (refused) {
+        setActionError(`Not deleted: ${refused}`);
+      } else {
         onDeleted(memory.id);
       }
     } catch (err) {
       console.error('Failed to delete memory:', err);
+      setActionError(`Not deleted: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
 
@@ -146,7 +170,7 @@ export function MemoryDetailPanel({
         <h2 className="text-sm font-semibold truncate flex-1">Memory Detail</h2>
         <div className="flex items-center gap-1">
           {!editing && (
-            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setEditing(true)}>
+            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => { setEditing(true); setActionError(null); }}>
               <Edit3 className="h-3.5 w-3.5" />
             </Button>
           )}
@@ -281,6 +305,7 @@ export function MemoryDetailPanel({
               </Button>
               <Button size="sm" variant="outline" onClick={() => {
                 setEditing(false);
+                setActionError(null);
                 setTitle(memory.title);
                 setContent(memory.content);
                 setTagsStr(Array.isArray(memory.tags) ? memory.tags.join(', ') : memory.tags || '');
@@ -289,6 +314,13 @@ export function MemoryDetailPanel({
               }}>
                 Cancel
               </Button>
+            </div>
+          )}
+
+          {actionError && (
+            <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
+              <AlertTriangle className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" />
+              <span className="break-words">{actionError}</span>
             </div>
           )}
 

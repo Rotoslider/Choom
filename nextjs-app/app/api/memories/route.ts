@@ -9,6 +9,15 @@ function getClient(req: NextRequest): MemoryClient {
   return new MemoryClient(endpoint);
 }
 
+// The memory client turns a refused request into { success: false, reason }
+// instead of throwing, and edits used to answer 200 with it: Second Brain read
+// that as saved. Donny edited the old Tower password out of a memory twice on
+// 2026-11-21; the memory server refused both (422, importance 6.5 is not a
+// whole number) and the page closed the editor as if it had worked.
+function failedStatus(result: unknown): number {
+  return result && typeof result === 'object' && (result as { success?: unknown }).success === false ? 502 : 200;
+}
+
 // GET /api/memories?action=recent|stats&limit=20&companion_id=...
 export async function GET(req: NextRequest) {
   try {
@@ -92,7 +101,7 @@ export async function PUT(req: NextRequest) {
     }
 
     const result = await client.update(memory_id, updates);
-    return NextResponse.json(result);
+    return NextResponse.json(result, { status: failedStatus(result) });
   } catch (error) {
     return NextResponse.json(
       { success: false, reason: error instanceof Error ? error.message : 'Unknown error' },
@@ -113,7 +122,7 @@ export async function DELETE(req: NextRequest) {
     }
 
     const result = await client.delete(memory_id);
-    return NextResponse.json(result);
+    return NextResponse.json(result, { status: failedStatus(result) });
   } catch (error) {
     return NextResponse.json(
       { success: false, reason: error instanceof Error ? error.message : 'Unknown error' },
