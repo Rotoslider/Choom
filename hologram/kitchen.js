@@ -108,9 +108,11 @@ function fill() {
   // The air through the tower: the fan controller (tower-fan.yaml) through Home Assistant
   const f = ks.fan;
   const num = (v, d = 1) => (typeof v === 'number' ? v.toFixed(d) : '—');
-  $('#dT').textContent = f && typeof f.delta === 'number' ? `ΔT ${f.delta.toFixed(1)}°` : '—';
-  $('#exhaust').textContent = f ? `${num(f.exhaust)} °C` : '—';
-  $('#intake').textContent = f ? `${num(f.intake)} °C` : '—';
+  // The server keeps the air in °C (the firmware's units); the room reads °F (Donny, Nov 22). The GPU stays °C.
+  const toF = (c) => (typeof c === 'number' ? c * 9 / 5 + 32 : c);
+  $('#dT').textContent = f && typeof f.delta === 'number' ? `ΔT ${(f.delta * 1.8).toFixed(1)}°F` : '—';
+  $('#exhaust').textContent = f ? `${num(toF(f.exhaust))} °F` : '—';
+  $('#intake').textContent = f ? `${num(toF(f.intake))} °F` : '—';
   $('#airNote').textContent = f ? (f.fault === 'on' ? 'the fan reports a fault' : '') : 'waiting for the fan controller';
   $('#rpm').textContent = f && typeof f.rpm === 'number'
     ? `${Math.round(f.rpm)} rpm${typeof f.command === 'number' ? ` · ${Math.round(f.command)}%` : ''}` : 'waiting for its controller';

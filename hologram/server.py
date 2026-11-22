@@ -1316,11 +1316,20 @@ def kitchen_state(scene):
             if scene == "core":
                 fan = {}
                 for key, eid in kitchen_cache["fan_ids"].items():
-                    raw = ha_get(base, token, f"/api/states/{eid}").get("state")
+                    st = ha_get(base, token, f"/api/states/{eid}")
+                    raw = st.get("state")
                     try:
                         fan[key] = float(raw)
                     except (TypeError, ValueError):
                         fan[key] = raw
+                    # Kept in °C here, like the firmware's thresholds; kitchen.js shows them in °F.
+                    # HA has the DHT22s in the house's °F, and the board sends ΔT in °F since Nov 22
+                    # (a difference: x 1.8, no 32° offset)
+                    if isinstance(fan[key], float) and (st.get("attributes") or {}).get("unit_of_measurement") == "°F":
+                        if key in ("intake", "exhaust"):
+                            fan[key] = round((fan[key] - 32) * 5 / 9, 2)
+                        elif key == "delta":
+                            fan[key] = round(fan[key] / 1.8, 2)
                 data["fan"] = fan or None  # None until the fan controller is in Home Assistant
             if scene == "kitchen":
                 data.update(kitchen_home(base, token, cfg, now))
