@@ -4,7 +4,7 @@ A self-hosted AI companion framework with persistent memory, image generation, t
 
 Each AI persona ("Choom") can have its own LLM model, voice, image style, and memory space. Chooms are agentic — they autonomously chain tools across multi-step tasks, searching the web, writing files, generating images, running code, and managing your calendar without manual prompting between steps. **Chooms can also delegate tasks to each other** — an orchestrator Choom can assign research to one agent, coding to another, and image analysis to a third, then synthesize the results. They can also **hold live group conversations** — you and two-or-more Chooms in one shared, turn-based room, with cross-device continuity between the web app and Signal. Talk to them through the web UI or via Signal messages.
 
-All 116 tools are organized into 27 modular **skills** with progressive disclosure — the LLM only sees detailed documentation for skills relevant to the current request, saving ~3,400 tokens per message. Skills can be enabled/disabled, custom skills can be created via a visual builder, and external skills can be installed from GitHub with safety verification.
+All 133 built-in tools are organized into 31 modular **skills** with progressive disclosure — the LLM only sees detailed documentation for skills relevant to the current request, saving ~3,400 tokens per message. Skills can be enabled/disabled, custom skills can be created via a visual builder, and external skills can be installed from GitHub with safety verification.
 
 ![Chat Interface](docs/screenshots/chat-interface.png)
 
@@ -23,7 +23,7 @@ All 116 tools are organized into 27 modular **skills** with progressive disclosu
 - **Smart Home (Home Assistant)**: Full integration with Home Assistant for reading sensors, controlling lights/switches/climate, viewing history trends, and ambient home awareness. Three-layer environmental awareness: system prompt injection (every LLM call knows the current home state), heartbeat monitoring (periodic checks with intelligent reasoning), and conditional automations (trigger actions based on sensor thresholds). Includes an Entity Browser in Settings and works from both the web UI and Signal. See the [Smart Home Guide](#smart-home-home-assistant-1) for setup and usage
 - **Scheduled Tasks**: Cron-driven morning briefings, weather checks, aurora forecasts, health heartbeats, and YouTube music downloads. Custom heartbeats support **per-task model routing** — assign a fast/cheap model to simple tasks (selfies, reminders) while keeping the Choom's primary model for complex work
 - **Google Integration**: Full Google Workspace access — Calendar (CRUD), Tasks, Sheets, Docs, Drive, Gmail (read/send/draft/search/archive/reply), Contacts (search/lookup), and YouTube (search/video details/channel info/playlists) — 35 tools via OAuth2
-- **Skills Architecture**: 116 tools organized into 27 modular skills with 3-level progressive disclosure — Level 1 (one-line summaries, always sent), Level 2 (full docs, injected on match), Level 3 (reference files, on demand). Custom skills via visual builder, external skills from GitHub with safety scanning. See the [Skills Guide](SKILLS-GUIDE.md) for details
+- **Skills Architecture**: 133 built-in tools organized into 31 modular skills with 3-level progressive disclosure — Level 1 (one-line summaries, always sent), Level 2 (full docs, injected on match), Level 3 (reference files, on demand). Custom skills via visual builder, external skills from GitHub with safety scanning. See the [Skills Guide](SKILLS-GUIDE.md) for details
 - **Agentic Tool Loop**: Chooms autonomously execute up to 50 tool-call rounds per turn by default (configurable per-Choom via `<!-- max_iterations: N -->` in the system prompt, or per-project via `maxIterations` in `.choom-project.json` — an explicit setting always wins over the defaults and is never silently moved) — chaining memory lookups, web searches, image generation, file operations, calendar updates, and more in a single response. Includes automatic nudging (retries with `tool_choice=required` if the LLM describes a tool instead of calling it), tool call deduplication, parallel execution of read-only tools, and smart completion detection
 - **Planner Mode**: Complex multi-step requests (e.g., "research solar panels and write a comparison report") are automatically detected and broken into structured execution plans with real-time progress display, step-by-step watcher evaluation, and automatic retry/rollback on failure
 - **Automation Builder**: Visual drag-and-drop builder for creating scheduled task chains — combine any tools into multi-step automations with cron scheduling, interval triggers, template variables (`{{prev.result.field}}`), per-Choom targeting, and **conditional triggers** (weather, time range, day of week, calendar) with cooldown support. See the [Conditional Triggers Guide](CONDITIONAL-TRIGGERS.md) for details. Managed from Settings > Automations
@@ -103,11 +103,11 @@ nextjs-app/
       habits/route.ts               Habit tracker API (entries, stats, heatmap, categories)
       token-usage/route.ts          Token usage API (stats, filters, breakdowns)
   skills/
-    core/                           27 built-in skill modules (SKILL.md + tools.ts + handler.ts)
+    core/                           31 built-in skill modules (SKILL.md + tools.ts + handler.ts)
       choom-delegation/             3 tools (delegate_to_choom, list_team, get_delegation_result)
-      group-chat/                   7 tools (talk_with_sisters, list_my_rooms, read_room, join_room, leave_room, rename_room, set_room_topic — Choom-initiated group rooms)
+      group-chat/                   8 tools (talk_with_sisters, list_my_rooms, read_room, search_rooms, join_room, leave_room, rename_room, set_room_topic — Choom-initiated group rooms)
       memory-management/            9 tools (remember, search, update, delete, stats, etc.)
-      image-generation/             1 tool (checkpoint switching, LoRA, self-portrait mode)
+      image-generation/             2 tools (generate, save; checkpoint switching, LoRA, self-portrait mode)
       web-searching/                1 tool (Brave/SerpAPI/SearXNG with auto-fallback)
       weather-forecasting/          2 tools (current weather, 5-day forecast)
       google-calendar/              4 tools (CRUD events)
@@ -120,14 +120,21 @@ nextjs-app/
       google-youtube/               4 tools (search, video details, channel info, playlist items)
       workspace-files/              7 tools (read, write, list, create folder, create project, delete, rename)
       pdf-processing/               2 tools (generate PDF, read PDF)
-      web-scraping/                 4 tools (scrape content w/ JS rendering, scrape images, download image, download file)
+      web-scraping/                 5 tools (scrape content w/ JS rendering, scrape images, download image, download file, fetch URL)
       image-analysis/               1 tool (vision analysis)
-      code-execution/               4 tools (execute, venv, install, run command)
-      notifications/                1 tool (Signal notifications)
+      code-execution/               6 tools (execute, venv, install, run command, SSH command, SSH copy)
+      notifications/                2 tools (Signal notifications, heartbeat complete)
       reminders/                    2 tools (create, list reminders)
       plan-mode/                    3 tools (create, execute, adjust plans)
-      home-assistant/               5 tools (get state, list entities, call service, history, home status)
+      home-assistant/               10 tools (state, entities, services, events, templates, history, logbook, camera snapshots, home status)
       habit-tracker/                5 tools (log_habit, query_habits, habit_stats, manage_categories, delete_habit)
+      knowledge-graph/              9 tools (ForgeRAG: ask, search, smart search, page images, knowledge graph, collections, status)
+      music-assistant/              5 tools (search, play, control, now playing, players)
+      self-scheduling/              5 tools (own and room follow-ups: schedule, list, edit, cancel)
+      sister-mail/                  2 tools (check_inbox, leave_for_sister)
+      printer-monitor/              4 tools (status, job history, files, camera snapshot)
+      looking-glass/                4 tools (glass_move, glass_wear, glass_wish, glass_closet — the hologram)
+      skill-loader/                 1 tool (open_skill — loads a skill's tools on demand)
   components/
     chat/                           Message display, input, image attachment, typing indicator, plan display
     sidebar/                        Choom list, chat list, edit panel, skills nav
@@ -1024,7 +1031,7 @@ README for usage and — important — cleanup.
 
 ![Skills Catalog](docs/screenshots/skills-catalog.png)
 
-Choom's ~136 tools are organized into 29 modular **skills** (27 core plus custom skills under `~/choom-projects/.choom-skills/`). Each skill is a self-contained directory with metadata, tool definitions, and a handler implementation. The skill registry provides progressive disclosure to minimize token usage while ensuring the LLM always has the right documentation at the right time.
+Choom's 133 built-in tools are organized into 31 core **skills**, and any custom skills you add under `~/choom-projects/.choom-skills/` bring their own. Each skill is a self-contained directory with metadata, tool definitions, and a handler implementation. The skill registry provides progressive disclosure to minimize token usage while ensuring the LLM always has the right documentation at the right time.
 
 ### Progressive Disclosure (3 Levels)
 
@@ -1347,15 +1354,22 @@ When enabled, every LLM call includes a `## HOME ENVIRONMENT` block in the syste
 
 This gives Chooms ambient awareness of your home in every conversation without needing to explicitly ask.
 
-### Smart Home Tools (5 tools)
+### Smart Home Tools (10 tools)
 
 | Tool | What It Does | Example Prompt |
 |------|-------------|----------------|
-| `ha_get_state` | Read a single entity's current state and attributes | "What's the bathroom temperature?" |
-| `ha_list_entities` | Discover available entities, filter by domain or area | "What smart home devices do I have?" |
-| `ha_call_service` | Control devices (lights, switches, climate, fans, covers) | "Turn on the kitchen light" |
-| `ha_get_history` | Get historical trends (min/max/avg) for an entity | "Show me bathroom temperature trends for the last 6 hours" |
-| `ha_get_home_status` | Full snapshot of all active entities grouped by domain | "Give me a home status report" |
+| `ha_get_home_status` | Glance at the house: who is home, what is on, anything open, climate, power/solar/battery | "Give me a home status report" |
+| `ha_get_state` | Read a single entity's current state and attributes (loose names resolve to the real entity) | "What's the bathroom temperature?" |
+| `ha_list_entities` | Discover available entities, filter by domain, area or a word in the name | "What smart home devices do I have?" |
+| `ha_call_service` | Control devices (lights, switches, climate, fans, covers), scenes, scripts, notify, TTS | "Turn on the kitchen light" |
+| `ha_list_services` | List the services this HA instance really has, before calling one | "Can the porch camera do presets?" |
+| `ha_fire_event` | Fire a custom event on the HA bus for automations that listen for it | "Tell the house a guest arrived" |
+| `ha_render_template` | Render a Jinja2 template against live state, for questions that would take many reads | "How many lights are on upstairs?" |
+| `ha_get_history` | Historical trends (min/max/avg) for numbers, timestamped changes for everything else | "Show me bathroom temperature trends for the last 6 hours" |
+| `ha_get_logbook` | What changed and when: doors, locations, device trackers | "When did the garage door last open?" |
+| `ha_get_camera_snapshot` | Take a camera picture, turn a PTZ camera to a preset first, and have it looked at, in one call | "Is anything in the driveway?" |
+
+Turn on **Only entities exposed to Assist** in Settings > Smart Home and the tools see the same curated list Home Assistant's own assistant sees (Settings → Voice assistants → Expose), plus any entities you pin. That turns a 1,000-entity house into the few dozen that matter. Every tool result has HA access tokens stripped before a model sees it.
 
 ### Talking to Your Smart Home
 
