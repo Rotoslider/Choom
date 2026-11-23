@@ -13,6 +13,7 @@ from typing import Optional, List, Dict, Any
 from pathlib import Path
 
 import config
+from tts_text import strip_voice_cues
 
 logger = logging.getLogger(__name__)
 
@@ -248,6 +249,9 @@ class SignalHandler:
         Returns:
             True if successful, False otherwise
         """
+        # A Choom on Drama 3 writes delivery cues ("[warm] …") for her voice;
+        # they're for the voice, not for reading.
+        message = strip_voice_cues(message)
         params = {
             "recipient": [recipient],
             "message": message,

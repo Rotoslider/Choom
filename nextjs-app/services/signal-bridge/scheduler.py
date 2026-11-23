@@ -25,7 +25,7 @@ import requests
 import config
 from paths import APP_ROOT, MEMORY_DATA_DIR, WORKSPACE_ROOT
 from signal_handler import get_signal_handler
-from choom_client import get_choom_client, get_tts_client
+from choom_client import get_choom_client, get_tts_client, tts_client_for
 from tts_text import strip_markup_for_tts
 from google_client import get_google_client
 from task_config import load_config as load_task_config, save_config as save_task_config, is_task_enabled, is_quiet_period, get_custom_heartbeats
@@ -339,19 +339,18 @@ class ScheduledTaskManager:
         try:
             attachments = []
 
-            # Get the Choom's voice_id if available
+            # Get the Choom's voice_id (and her own TTS provider) if available
             voice_id = "sophie"  # default
-            if choom_name:
-                choom = self.choom.get_choom_by_name(choom_name)
-                if choom and choom.voice_id:
-                    voice_id = choom.voice_id
+            choom = self.choom.get_choom_by_name(choom_name) if choom_name else None
+            if choom and choom.voice_id:
+                voice_id = choom.voice_id
 
             # Generate audio if requested
             if include_audio and message:
                 tts_text = strip_markup_for_tts(message)
 
                 audio_path = f"{config.TEMP_AUDIO_PATH}/scheduled_{datetime.now().strftime('%Y%m%d_%H%M%S')}.wav"
-                made = self.tts.synthesize(tts_text, voice=voice_id, output_path=audio_path)
+                made = tts_client_for(choom).synthesize(tts_text, voice=voice_id, output_path=audio_path)
                 if made:
                     attachments.append(made)  # the .m4a it became (compress_voice_note)
 

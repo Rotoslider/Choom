@@ -2,6 +2,7 @@
 
 import React, { useState, Component, ErrorInfo, ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
+import { markVoiceCues, VOICE_CUE_HREF } from '@/lib/voice-cues';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/cjs/styles/prism';
 import { cn } from '@/lib/utils';
@@ -89,6 +90,8 @@ function ExternalImage({ src, alt }: { src: string; alt: string }) {
 function MarkdownContent({ content }: { content: string }) {
   // Strip raw tool call XML that local models sometimes emit as text
   const cleanContent = content.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').trim();
+  // Delivery cues ("[warm]") for a Drama 3 voice become links the a() renderer draws dimmed.
+  const markdown = markVoiceCues(cleanContent);
   return (
     <MarkdownErrorBoundary fallback={cleanContent}>
       <ReactMarkdown
@@ -140,6 +143,9 @@ function MarkdownContent({ content }: { content: string }) {
           },
           // Links open in new tab
           a({ href, children }) {
+            if (href === VOICE_CUE_HREF) {
+              return <span className="voice-cue text-[0.85em] italic text-muted-foreground/70 select-none" title="How her voice says the next words">[{children}]</span>;
+            }
             return (
               <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary underline hover:opacity-80">
                 {children}
@@ -221,7 +227,7 @@ function MarkdownContent({ content }: { content: string }) {
           },
         }}
       >
-        {cleanContent}
+        {markdown}
       </ReactMarkdown>
     </MarkdownErrorBoundary>
   );

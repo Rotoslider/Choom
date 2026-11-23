@@ -36,6 +36,7 @@ class ChoomInfo:
     llm_model: Optional[str] = None
     llm_endpoint: Optional[str] = None
     image_settings: Optional[Dict[str, Any]] = None
+    tts_provider_id: Optional[str] = None  # Settings' TTS provider she speaks through (None = global)
 
 
 @dataclass
@@ -130,6 +131,7 @@ class ChoomClient:
                 llm_model=choom_data.get("llmModel"),
                 llm_endpoint=choom_data.get("llmEndpoint"),
                 image_settings=choom_data.get("imageSettings"),
+                tts_provider_id=choom_data.get("ttsProviderId"),
             )
             self.chooms[choom.name.lower()] = choom
             logger.info(f"Loaded Choom: {choom.name} ({choom.id}) llmModel={choom.llm_model} llmEndpoint={choom.llm_endpoint}")
@@ -1118,6 +1120,11 @@ def get_tts_client(endpoint: Optional[str] = None) -> TTSClient:
         client = TTSClient(key)
         _tts_clients[key] = client
     return client
+
+
+def tts_client_for(choom: Optional["ChoomInfo"]) -> TTSClient:
+    """The TTS client for a Choom's own provider (Drama 3, say), else the global one."""
+    return get_tts_client(resolve_tts_endpoint(choom.tts_provider_id if choom else None))
 
 
 def resolve_tts_endpoint(tts_provider_id: Optional[str], bridge_cfg: Optional[Dict[str, Any]] = None) -> str:

@@ -291,6 +291,32 @@ window inherits the loop. Upstream will not change that, so the app handles it:
   `STT repetition loop collapsed`. If that line shows up, the speech after the
   loop began in that stretch was lost — say so rather than guessing.
 
+## 5d. Drama 3 voices (optional)
+
+A second voice engine for any Choom: Fish Audio Drama 3 on MLX, behind the TTS
+bridge's `/drama` route, which falls back to Chatterbox. Needs Apple Silicon with
+~32 GB free (4-bit build). Measured on an M3 Ultra: 16 s load, ~27 GB, 2.3x real
+time, 0.16 s to first audio when streamed with the voice loaded.
+
+```bash
+cd nextjs-app/services/drama3-tts
+python3.12 -m venv venv && ./venv/bin/pip install -r requirements.txt
+./venv/bin/hf download mlx-community/fish-audio-drama-3-4bit      # ~24 GB
+# Reference clips from your ORIGINAL recordings (not the 12 s / 24 kHz cuts):
+./venv/bin/python prepare_voices.py --src "/path/to/voice recordings"
+#   -> ~/Library/Application Support/Choom/voices-drama3/<name>.wav + .txt
+#   Read every .txt: it must match its clip word for word.
+cd ../../.. && ./launchd/install-launchd.sh --with-tts --with-drama3
+```
+
+Then Settings, TTS providers: add "Drama 3" at `http://localhost:8004/drama`,
+and pick it in a Choom's edit panel. Restart the TTS bridge after updating it
+(`launchctl kickstart -k gui/$(id -u)/com.choom.tts-bridge`). Logs:
+`data/logs/drama3-tts.log` (each line: voice, characters, seconds, speed) and
+`data/logs/tts-bridge.log` ("drama3 -> chatterbox" when it fell back, and why).
+Health: `curl localhost:8004/drama/health`. Tests:
+`cd services/tts-bridge && venv/bin/python -m unittest test_voice_cues test_drama_route`.
+
 ## 6. Running the services
 
 Install the launchd agents (the counterpart of `install-services.sh`):

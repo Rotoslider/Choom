@@ -10,6 +10,7 @@
 import { getOwnerIdentity } from '@/lib/owner';
 import { imageAutonomy } from '@/lib/types';
 import type { ImageModeSettings } from '@/lib/types';
+import { VOICE_CUES_NOTE } from '@/lib/voice-cues';
 import type { Choom } from '@prisma/client';
 
 export interface SystemPromptParams {
@@ -35,6 +36,8 @@ export interface SystemPromptParams {
    *  2026-10-29. Off by default: they travel with the message instead (see
    *  buildTurnContext). CHOOM_CONTEXT_IN_SYSTEM=1 turns it back on. */
   turnContextInSystem?: boolean;
+  /** Her TTS provider takes delivery cues (Drama 3): tell her about "[warm]"-style cues. */
+  voiceCues?: boolean;
 }
 
 /**
@@ -196,6 +199,9 @@ When presenting search results:
 Aspect guide: "portrait" or "portrait-tall" for a close-up or a standing figure; "landscape" or "wide" when the setting matters — a dock, a road, a room, a group; "square" for a centred subject. A self-portrait may be landscape when the scene is the point of the picture.
 Size guide: "large" or "xx-large" for people (faces need the pixels), "medium" for quick sketches and objects, "small" only for throwaway drafts.`;
     }
+
+    // Drama 3 voice: how to write delivery cues, and how sparingly (lib/voice-cues.ts).
+    if (params.voiceCues) finalSystemPrompt += VOICE_CUES_NOTE;
 
     // Group-room context: this Choom is one participant in a shared, turn-based
     // room with the user and sibling Chooms. The transcript is supplied via

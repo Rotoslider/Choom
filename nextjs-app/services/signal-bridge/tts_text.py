@@ -18,6 +18,38 @@ _EMOJI = re.compile(
 )
 
 
+# Delivery cues a Choom on Drama 3 may write: "[warm] You left the lights on."
+# Spoken audio keeps them (the TTS bridge filters them for Drama 3 and removes
+# them for Chatterbox); Signal TEXT drops them (signal_handler.send_message).
+# Same rule as services/tts-bridge/voice_cues.py and nextjs-app/lib/voice-cues.ts:
+# lowercase, 3-48 chars, not [[...]], not followed by "(", "[", "]" or ":".
+_VOICE_CUE = re.compile(r"(?<!\[)\[([a-z][a-z' ,\-]{2,47})\](?![(\[\]:])")
+_FENCED = re.compile(r"```[\s\S]*?```|`[^`\n]*`")  # code, fenced or inline, is left alone
+
+
+def strip_voice_cues(text: str) -> str:
+    """Text with its delivery cues removed (code blocks left alone)."""
+    if not text or "[" not in text:
+        return text
+
+    def strip(part: str) -> str:
+        # Only the spaces around a removed cue are touched: indentation stays.
+        gap = "\x01"
+        part = _VOICE_CUE.sub(lambda m: gap if len(re.split(r"[\s,]+", m.group(1).strip())) <= 6 else m.group(0), part)
+        part = re.sub(r"[ \t]*\x01(?:[ \t]*\x01)*[ \t]*", gap, part)
+        part = re.sub(r"(^|\n)\x01", r"\1", part)
+        part = re.sub(r"\x01(?=[,.!?;:…]|\n|$)", "", part)
+        return part.replace(gap, " ")
+
+    out, last = [], 0
+    for m in _FENCED.finditer(text):
+        out.append(strip(text[last:m.start()]))
+        out.append(m.group(0))
+        last = m.end()
+    out.append(strip(text[last:]))
+    return "".join(out).strip()
+
+
 def strip_markup_for_tts(text: str) -> str:
     # A <button>'s label is UI chrome a model invented, not speech.
     text = re.sub(r'<button\b[^>]*>.*?</button>', ' ', text, flags=re.DOTALL | re.IGNORECASE)

@@ -24,7 +24,7 @@ import re
 import requests
 import config
 from signal_handler import get_signal_handler, MessageParser
-from choom_client import get_choom_client, get_tts_client, get_stt_client
+from choom_client import get_choom_client, get_tts_client, get_stt_client, tts_client_for
 from tts_text import strip_markup_for_tts
 from scheduler import get_scheduler
 from google_client import get_google_client
@@ -1260,13 +1260,12 @@ class SignalBridge:
 
             attachments = []
 
-            # Get the Choom's voice_id if available
+            # Get the Choom's voice_id (and her own TTS provider) if available
             voice_id = "sophie"  # default
-            if choom_name:
-                choom = self.choom.get_choom_by_name(choom_name)
-                if choom and choom.voice_id:
-                    voice_id = choom.voice_id
-                    logger.debug(f"Using voice '{voice_id}' for {choom_name}")
+            choom = self.choom.get_choom_by_name(choom_name) if choom_name else None
+            if choom and choom.voice_id:
+                voice_id = choom.voice_id
+                logger.debug(f"Using voice '{voice_id}' for {choom_name}")
 
             # Generate audio response
             import re
@@ -1300,7 +1299,7 @@ class SignalBridge:
                 if tts_text:  # Only generate if there's actual text after stripping
                     audio_path = f"{config.TEMP_AUDIO_PATH}/response_{datetime.now().strftime('%Y%m%d_%H%M%S')}.wav"
                     logger.info(f"Generating TTS audio ({len(tts_text)} chars) with voice '{voice_id}'")
-                    made = self.tts.synthesize(tts_text, voice=voice_id, output_path=audio_path)
+                    made = tts_client_for(choom).synthesize(tts_text, voice=voice_id, output_path=audio_path)
                     if made:
                         audio_path = made  # the .m4a it became (compress_voice_note)
                         attachments.append(audio_path)

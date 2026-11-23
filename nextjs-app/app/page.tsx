@@ -115,9 +115,14 @@ export default function Home() {
   // Initialize TTS when settings or current Choom change
   useEffect(() => {
     if (settings.tts.autoPlay) {
-      // Use Choom's voice if set, otherwise use global default
+      // Use Choom's voice if set, otherwise use global default — and her own
+      // TTS provider (Drama 3, say) when she's pinned to one, as rooms do.
+      const pinned = currentChoom?.ttsProviderId
+        ? (settings.ttsProviders || []).find((p) => p.id === currentChoom.ttsProviderId)?.endpoint
+        : undefined;
       const ttsSettings = {
         ...settings.tts,
+        endpoint: pinned || settings.tts.endpoint,
         defaultVoice: currentChoom?.voiceId || settings.tts.defaultVoice,
       };
       ttsRef.current = new StreamingTTS(
@@ -134,7 +139,7 @@ export default function Home() {
       ttsRef.current?.dispose();
       ttsRef.current = null;
     };
-  }, [settings.tts, currentChoom?.voiceId]);
+  }, [settings.tts, settings.ttsProviders, currentChoom?.voiceId, currentChoom?.ttsProviderId]);
 
   // Update TTS muted state — broadcast so orphaned players are silenced too
   useEffect(() => {

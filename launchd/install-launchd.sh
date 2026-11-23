@@ -11,6 +11,7 @@
 #   ./install-launchd.sh --with-ngrok # also install the ngrok tunnel
 #   ./install-launchd.sh --no-searxng # skip the local SearXNG instance
 #   ./install-launchd.sh --with-tts   # local Chatterbox TTS (Rapid-MLX + bridge)
+#   ./install-launchd.sh --with-drama3  # Fish Audio Drama 3 voices (falls back to Chatterbox)
 #   ./install-launchd.sh --with-lan-https  # HTTPS on :3443 so the LAN mic works
 #   ./install-launchd.sh --no-weekly-restart  # skip the dev server's Sunday 1:30 am restart
 
@@ -28,6 +29,7 @@ DEV_ONLY=false
 WITH_NGROK=false
 WITH_SEARXNG=true
 WITH_TTS=false
+WITH_DRAMA3=false
 WITH_LAN_HTTPS=false
 WEEKLY_RESTART=true
 for arg in "$@"; do
@@ -36,6 +38,7 @@ for arg in "$@"; do
     --with-ngrok) WITH_NGROK=true ;;
     --no-searxng) WITH_SEARXNG=false ;;
     --with-tts)   WITH_TTS=true ;;
+    --with-drama3) WITH_DRAMA3=true ;;
     --with-lan-https) WITH_LAN_HTTPS=true ;;
     --no-weekly-restart) WEEKLY_RESTART=false ;;
     *) echo -e "${RED}Unknown option: $arg${NC}"; exit 1 ;;
@@ -237,6 +240,26 @@ if [ "$WITH_TTS" = true ]; then
       echo -e "\n${YELLOW}Skipping com.choom.wyoming-tts: build its venv first:${NC}"
       echo -e "${YELLOW}  cd $PROJECT_PATH/nextjs-app/services/wyoming-tts && python3.12 -m venv venv && ./venv/bin/pip install -r requirements.txt${NC}"
     fi
+  fi
+fi
+
+if [ "$WITH_DRAMA3" = true ]; then
+  # Optional second voice engine. The TTS bridge (--with-tts) fronts it on
+  # :8004/drama and falls back to Chatterbox, so install that too.
+  DRAMA3_DIR="$PROJECT_PATH/nextjs-app/services/drama3-tts"
+  DRAMA3_VOICES="$HOME/Library/Application Support/Choom/voices-drama3"
+  if [ ! -x "$DRAMA3_DIR/venv/bin/python" ]; then
+    echo -e "\n${YELLOW}Skipping Drama 3: build its venv first (Apple Silicon, ~24 GB model download):${NC}"
+    echo -e "${YELLOW}  cd $DRAMA3_DIR && python3.12 -m venv venv && ./venv/bin/pip install -r requirements.txt${NC}"
+    echo -e "${YELLOW}  ./venv/bin/hf download mlx-community/fish-audio-drama-3-4bit${NC}"
+  elif [ ! -d "$DRAMA3_VOICES" ]; then
+    echo -e "\n${YELLOW}Skipping Drama 3: no voices yet. Make them from your original recordings:${NC}"
+    echo -e "${YELLOW}  cd $DRAMA3_DIR && ./venv/bin/python prepare_voices.py --src <folder of name.wav recordings>${NC}"
+  else
+    echo -e "\n${GREEN}Installing com.choom.drama3-tts (Drama 3 on 127.0.0.1:8006)...${NC}"
+    render com.choom.drama3-tts.plist.template com.choom.drama3-tts.plist
+    reload com.choom.drama3-tts
+    echo -e "${YELLOW}  In Settings, add a TTS provider \"Drama 3\" at http://localhost:8004/drama and pick it for a Choom.${NC}"
   fi
 fi
 

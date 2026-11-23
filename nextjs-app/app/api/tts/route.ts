@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { stripForTTS } from '@/lib/utils';
 import { toOpus } from '@/lib/audio-transcode';
 import { requestFromAway } from '@/lib/hologram-bus';
+import { resolveTTSEndpointForVoice } from '@/lib/tts-provider';
 
 export const dynamic = 'force-dynamic';
 
@@ -61,8 +62,12 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const ttsEndpoint = endpoint ?? process.env.TTS_ENDPOINT ?? 'http://localhost:8004';
     const selectedVoice = voice ?? 'sophie';
+    // The web chat and rooms send the Choom's own endpoint. The Looking Glass
+    // sends only the voice, so find the Choom who speaks with it and use her
+    // provider (Drama 3, say); else the global endpoint.
+    const ttsEndpoint = endpoint
+      ?? await resolveTTSEndpointForVoice(selectedVoice, process.env.TTS_ENDPOINT ?? 'http://localhost:8004');
 
     // Normalize for natural speech — expand "mph", drop decimals on weather values
     // (temperature/wind/humidity), spell clock times. This is the only TTS path that
@@ -120,7 +125,8 @@ export async function POST(request: NextRequest) {
     const audioBuffer = await response.arrayBuffer();
     const wav = Buffer.from(audioBuffer);
 
-    console.log(`🔊 TTS Success: ${audioBuffer.byteLength} bytes`);
+    const engine = response.headers.get('x-tts-engine');
+    console.log(`🔊 TTS Success: ${audioBuffer.byteLength} bytes${engine ? ` (${engine})` : ''}`);
     recordSuccess();
 
     // A listener away from home whose player plays Opus gets it: a twelfth the size (lib/voice-format.ts).

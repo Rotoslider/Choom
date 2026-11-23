@@ -21,6 +21,20 @@ at the same length saved only ~10%), so keep them short.
 The first request after an idle period pays ~45s of model load. KEEP_WARM_VOICE
 re-synthesises a short phrase on an interval to hold the model resident, so the
 voice you use most never pays that cost.
+
+Drama 3 (Nov 2026). The same API under /drama:
+
+    POST /drama/v1/audio/speech   -> Drama 3 (services/drama3-tts, DRAMA3_URL),
+                                     or Chatterbox when Drama 3 fails
+    GET  /drama/v1/voices         -> the same voices as /v1/voices
+    GET  /drama/health
+
+A Choom is pinned to it with Settings' TTS provider "Drama 3"
+(endpoint http://localhost:8004/drama). Delivery cues like "[warm]" are
+filtered for Drama 3 and removed for Chatterbox (voice_cues.py). If Drama 3
+is down, slow past its timeout, or doesn't know the voice, the same line is
+said by Chatterbox in the same voice, so a Choom never goes quiet over it;
+the X-TTS-Engine response header says which engine spoke.
 """
 import base64
 import io
@@ -34,6 +48,8 @@ import wave
 
 import requests
 from flask import Flask, Response, jsonify, request
+
+from voice_cues import filter_cues, strip_cues
 
 RAPID_MLX_URL = os.getenv("RAPID_MLX_URL", "http://127.0.0.1:8890")
 TTS_MODEL = os.getenv("TTS_MODEL", "chatterbox")
@@ -50,6 +66,16 @@ DEFAULT_VOICE = os.getenv("DEFAULT_VOICE", "sophie")
 KEEP_WARM_VOICE = os.getenv("KEEP_WARM_VOICE", DEFAULT_VOICE)
 KEEP_WARM_INTERVAL = int(os.getenv("KEEP_WARM_INTERVAL", "240"))
 REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "300"))
+
+DRAMA3_URL = os.getenv("DRAMA3_URL", "http://127.0.0.1:8006")
+# Drama 3 runs ~2x faster than real time; a line of n characters is ~n/15 s
+# of speech. Past this it's queued behind a long line or stuck: Chatterbox
+# says it instead.
+DRAMA3_BASE_TIMEOUT = float(os.getenv("DRAMA3_BASE_TIMEOUT", "8"))
+DRAMA3_SECONDS_PER_CHAR = float(os.getenv("DRAMA3_SECONDS_PER_CHAR", "0.06"))
+# After this many failures in a row, skip Drama 3 for DRAMA3_REST seconds.
+DRAMA3_FAILURES_TO_REST = int(os.getenv("DRAMA3_FAILURES_TO_REST", "3"))
+DRAMA3_REST = int(os.getenv("DRAMA3_REST", "60"))
 
 # Cadence. chatterbox-turbo clones its pace from the reference clip, and it
 # speaks slower than the older model did. Note the upstream /v1/audio/speech
@@ -96,6 +122,7 @@ logger = logging.getLogger("tts-bridge")
 app = Flask(__name__)
 _last_synth = 0.0
 _lock = threading.Lock()
+_drama = {"failures": 0, "rest_until": 0.0, "last_error": None, "spoke": 0, "fell_back": 0}
 
 
 def voice_path(name: str):
@@ -214,6 +241,7 @@ def speech():
     # value always wins; TTS_SPEED is only the fallback for callers that send
     # none (Home Assistant, the keep-warm ping).
     speed = _parse_speed(body["speed"], "request speed") if body.get("speed") is not None else TTS_SPEED
+    text = strip_cues(text)  # Chatterbox would read "[small laugh]" aloud
     if not text:
         return jsonify({"error": "input is required"}), 400
     try:
@@ -225,6 +253,90 @@ def speech():
         logger.error("synthesis failed for voice=%s: %s", voice, e)
         return jsonify({"error": str(e)}), 502
     return Response(audio, mimetype="audio/wav")
+
+
+def _drama_failed(reason: str, counts: bool = True):
+    _drama["last_error"] = f"{time.strftime('%H:%M:%S')} {reason}"
+    if not counts:
+        return
+    _drama["failures"] += 1
+    if _drama["failures"] >= DRAMA3_FAILURES_TO_REST:
+        _drama["rest_until"] = time.time() + DRAMA3_REST
+        _drama["failures"] = 0
+        logger.warning("drama3: %d failures in a row, using Chatterbox for %ss",
+                       DRAMA3_FAILURES_TO_REST, DRAMA3_REST)
+
+
+def drama3_audio(text: str, voice: str):
+    """WAV from Drama 3, or None (with the reason logged) to fall back."""
+    if time.time() < _drama["rest_until"]:
+        return None, "resting after failures"
+    timeout = DRAMA3_BASE_TIMEOUT + DRAMA3_SECONDS_PER_CHAR * len(text)
+    try:
+        r = requests.post(f"{DRAMA3_URL}/v1/audio/speech", json={"input": text, "voice": voice},
+                          timeout=(2, timeout))
+    except requests.exceptions.Timeout:
+        _drama_failed(f"no answer in {timeout:.0f}s")
+        return None, f"no answer in {timeout:.0f}s"
+    except Exception as e:  # noqa: BLE001 — down, refused, reset
+        _drama_failed(type(e).__name__)
+        return None, f"unreachable ({type(e).__name__})"
+    if r.status_code == 200 and r.content[:4] == b"RIFF":
+        _drama["failures"] = 0
+        return r.content, None
+    reason = f"HTTP {r.status_code}: {r.text[:160]}"
+    # A voice it hasn't got is that voice's problem, not the server's.
+    _drama_failed(reason, counts=r.status_code != 404)
+    return None, reason
+
+
+@app.post("/drama/v1/audio/speech")
+def drama_speech():
+    body = request.get_json(silent=True) or {}
+    text = (body.get("input") or "").strip()
+    voice = body.get("voice") or DEFAULT_VOICE
+    speed = _parse_speed(body["speed"], "request speed") if body.get("speed") is not None else TTS_SPEED
+    if not strip_cues(text):
+        return jsonify({"error": "input is required"}), 400
+    cued, dropped = filter_cues(text)
+    if dropped:
+        logger.info("drama3: dropped cues %s", dropped)
+    started = time.time()
+    audio, reason = drama3_audio(cued, voice)
+    if audio is not None:
+        _drama["spoke"] += 1
+        logger.info("drama3 spoke %s: %d chars in %.1fs", voice, len(cued), time.time() - started)
+        return Response(apply_speed(audio, speed), mimetype="audio/wav", headers={"X-TTS-Engine": "drama3"})
+    _drama["fell_back"] += 1
+    logger.warning("drama3 -> chatterbox for %s (%s)", voice, reason)
+    try:
+        audio = synthesize(strip_cues(text), voice, speed)
+    except KeyError:
+        return jsonify({"error": f"unknown voice {voice!r}", "voices": list_voices()}), 400
+    except Exception as e:  # noqa: BLE001
+        logger.error("fallback synthesis failed for voice=%s: %s", voice, e)
+        return jsonify({"error": str(e)}), 502
+    return Response(audio, mimetype="audio/wav",
+                    headers={"X-TTS-Engine": "chatterbox-fallback", "X-TTS-Fallback-Reason": reason[:200]})
+
+
+@app.get("/drama/v1/voices")
+def drama_voices():
+    # Every voice works here: one Drama 3 lacks is said by Chatterbox.
+    return jsonify({"voices": list_voices()})
+
+
+@app.get("/drama/health")
+def drama_health():
+    try:
+        r = requests.get(f"{DRAMA3_URL}/health", timeout=3)
+        upstream = r.json()
+    except Exception as e:  # noqa: BLE001
+        upstream = {"status": f"unreachable: {type(e).__name__}"}
+    resting = max(0, round(_drama["rest_until"] - time.time()))
+    return jsonify({"status": "ok", "drama3": upstream, "fallback": "chatterbox",
+                    "resting_seconds": resting, "spoke": _drama["spoke"], "fell_back": _drama["fell_back"],
+                    "last_error": _drama["last_error"]})
 
 
 def keep_warm():
@@ -245,6 +357,7 @@ if __name__ == "__main__":
     logger.info("voices dir : %s (%d voices)", VOICES_DIR, len(list_voices()))
     logger.info("upstream   : %s (%s)", RAPID_MLX_URL, TTS_MODEL)
     logger.info("keep-warm  : %s every %ss", KEEP_WARM_VOICE or "disabled", KEEP_WARM_INTERVAL)
+    logger.info("drama3     : %s (falls back to chatterbox)", DRAMA3_URL)
     logger.info("speed      : %s%s", TTS_SPEED,
                 "" if abs(TTS_SPEED - 1.0) < 1e-3 else " (atempo retime)")
     if KEEP_WARM_VOICE:

@@ -35,7 +35,7 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { name, description, avatarUrl, systemPrompt, voiceId, llmModel, llmEndpoint, llmProviderId, imageSettings, companionId, llmFallbackModel1, llmFallbackProvider1, llmFallbackModel2, llmFallbackProvider2, groupChatModel, groupChatProvider, wakeModel, wakeProvider, permissions } = body;
+    const { name, description, avatarUrl, systemPrompt, voiceId, ttsProviderId, llmModel, llmEndpoint, llmProviderId, imageSettings, companionId, llmFallbackModel1, llmFallbackProvider1, llmFallbackModel2, llmFallbackProvider2, groupChatModel, groupChatProvider, wakeModel, wakeProvider, permissions } = body;
 
     if (!name) {
       return NextResponse.json(
@@ -51,6 +51,7 @@ export async function POST(request: NextRequest) {
         avatarUrl: avatarUrl || null,
         systemPrompt: systemPrompt || '',
         voiceId: voiceId || null,
+        ttsProviderId: ttsProviderId || null,
         llmModel: llmModel || null,
         llmEndpoint: llmEndpoint || null,
         llmProviderId: llmProviderId || null,

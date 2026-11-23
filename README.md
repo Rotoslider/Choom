@@ -649,6 +649,17 @@ wins, so it does not affect Choom's own playback. The active value is in
 ffmpeg is missing or errors, it logs and serves unadjusted audio rather than
 letting a cosmetic setting silence a Choom.
 
+### Drama 3 voices (optional)
+
+A Choom can speak through [Fish Audio Drama 3](https://fish.audio/blog/fish-audio-drama-3/) instead of Chatterbox: an open-weight, more expressive model that takes delivery cues in square brackets, e.g. `[warm] You left the shop lights on again.` It runs on the Mac (4-bit MLX build, `services/drama3-tts`, ~27 GB of unified memory, about 2.3x faster than real time on an M3 Ultra) and is reached through the TTS bridge at `http://localhost:8004/drama`.
+
+- **Per Choom.** Add a TTS provider "Drama 3" with that endpoint in Settings, then pick it in a Choom's edit panel; pick "Mac (local)" to switch her back. The web chat, group rooms, play buttons, Signal voice notes and the Looking Glass all follow her pick (the glass, which only knows the voice, is matched to the Choom who uses it).
+- **Never silent.** If Drama 3 is down, slow past its timeout, or lacks the voice, the bridge says the line with Chatterbox in the same voice, cues removed. The `X-TTS-Engine` header and `GET :8004/drama/health` say which engine is speaking.
+- **Cues, lightly.** A Drama 3 Choom's system prompt explains the cues and asks for them rarely. The bridge drops the ones that sounded fake in listening tests (sighs, whispering, deep breaths, crying, anything over three words) and keeps one per sentence (`services/tts-bridge/voice_cues.py`, tunable with `DRAMA3_BLOCKED_CUES`, `DRAMA3_CUE_MAX_WORDS`, `DRAMA3_CUES_PER_SENTENCE`). Chatterbox never sees a cue, the chat shows them dimmed, and Signal text leaves them out.
+- **Setup:** see MAC-SETUP.md, "5d. Drama 3 voices".
+
+Built with Fish Audio. The Drama 3 weights are under the [Fish Audio Community License](https://huggingface.co/fishaudio/drama-3/blob/main/LICENSE) (free for personal use, with conditions, including no imitating a real person's voice without consent); Choom doesn't include them, the setup downloads them to your own machine.
+
 ### Per-Message Playback
 
 Every saved Choom response — assistant messages in 1:1 chats and Choom-authored group-room messages — has a play/stop button next to its timestamp. Audio is served by `GET /api/tts/message/<id>[?kind=group]`: the message text is stripped for speech, synthesized **sequentially** in sentence chunks (burst load crashes Chatterbox), stitched into a single WAV, and cached in `data/tts-cache/` keyed by text + voice + speed. First play generates (a few seconds; ~25s for very long messages), replays are instant, and only one message plays at a time. Handy for catching up on group-room conversations by listening instead of reading — each Choom speaks in her own voice.

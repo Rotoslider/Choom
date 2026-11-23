@@ -65,7 +65,7 @@ export async function PUT(
   try {
     const { id } = await params;
     const body = await request.json();
-    const { name, description, avatarUrl, systemPrompt, voiceId, llmModel, llmEndpoint, llmProviderId, llmTimeoutSec, imageSettings, companionId, llmFallbackModel1, llmFallbackProvider1, llmFallbackModel2, llmFallbackProvider2, groupChatModel, groupChatProvider, wakeModel, wakeProvider, permissions } = body;
+    const { name, description, avatarUrl, systemPrompt, voiceId, ttsProviderId, llmModel, llmEndpoint, llmProviderId, llmTimeoutSec, imageSettings, companionId, llmFallbackModel1, llmFallbackProvider1, llmFallbackModel2, llmFallbackProvider2, groupChatModel, groupChatProvider, wakeModel, wakeProvider, permissions } = body;
 
     const choom = await prisma.choom.update({
       where: { id },
@@ -76,6 +76,9 @@ export async function PUT(
         ...(avatarUrl !== undefined && !isAvatarLink(avatarUrl, id) && { avatarUrl }),
         ...(systemPrompt !== undefined && { systemPrompt }),
         ...(voiceId !== undefined && { voiceId }),
+        // Her TTS provider (Settings' TTS providers; null = the global one). The
+        // edit panel always sent it, but it was dropped here until Nov 22 2026.
+        ...(ttsProviderId !== undefined && { ttsProviderId: ttsProviderId || null }),
         ...(llmModel !== undefined && { llmModel }),
         ...(llmEndpoint !== undefined && { llmEndpoint }),
         ...(llmProviderId !== undefined && { llmProviderId }),

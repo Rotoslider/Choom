@@ -46,6 +46,7 @@ import {
   historyWindowStart, HISTORY_WINDOW_MAX,
 } from '@/lib/chat-shared';
 import { runChatTurn } from '@/lib/chat-stream';
+import { choomTakesVoiceCues } from '@/lib/tts-provider';
 
 // ============================================================================
 // Main POST handler
@@ -461,6 +462,7 @@ export async function POST(request: NextRequest) {
       isGroupTurn, groupSpeakerName, groupParticipantNames, groupRoomTopic,
       groupRecentImages, groupImageDescriptions, groupIsInitiator, groupProjectFolder,
       turnContextInSystem,
+      voiceCues: await choomTakesVoiceCues(choom.ttsProviderId),
     });
     const turnContextParts = {
       timeInfo, weatherInfo, homeAssistantInfo, recentImagesInfo,

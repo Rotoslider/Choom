@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Choom Drama 3 voice server (Fish Audio Drama 3 on MLX) on 127.0.0.1:8006.
+
+  Optional. Nothing calls it directly: the TTS bridge's /drama route does, and
+  says the line with Chatterbox whenever this server is down or slow, so a
+  Choom pinned to the "Drama 3" provider never goes quiet over it. Holds
+  ~27 GB of unified memory once loaded (4-bit build).
+
+  Built with Fish Audio. The weights are under the Fish Audio Community
+  License and come from the Hugging Face cache, not from this repo.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.choom.drama3-tts</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__PROJECT_PATH__/nextjs-app/services/drama3-tts/venv/bin/python</string>
+    <string>server.py</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__PROJECT_PATH__/nextjs-app/services/drama3-tts</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>__PROJECT_PATH__/nextjs-app/services/drama3-tts/venv/bin:__HOMEBREW_BIN__:/usr/bin:/bin</string>
+    <key>HOME</key>
+    <string>__HOME__</string>
+    <key>PORT</key>
+    <string>8006</string>
+    <key>VOICES_DIR</key>
+    <string>__HOME__/Library/Application Support/Choom/voices-drama3</string>
+    <key>DRAMA3_MODEL</key>
+    <string>mlx-community/fish-audio-drama-3-4bit</string>
+    <!-- Never reach out to Hugging Face at start-up: the model is in the cache. -->
+    <key>HF_HUB_OFFLINE</key>
+    <string>1</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+
+  <key>StandardOutPath</key>
+  <string>__PROJECT_PATH__/nextjs-app/data/logs/drama3-tts.log</string>
+  <key>StandardErrorPath</key>
+  <string>__PROJECT_PATH__/nextjs-app/data/logs/drama3-tts.log</string>
+</dict>
+</plist>

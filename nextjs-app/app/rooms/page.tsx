@@ -22,6 +22,7 @@ import { cn, isSentenceEnd, formatDayTime } from '@/lib/utils';
 import { setHologramViewing } from '@/lib/hologram-voice';
 import type { Choom } from '@/lib/types';
 import { ThinkingBox } from '@/components/chat/thinking-box';
+import { VoiceCueText } from '@/components/chat/voice-cue-text';
 
 interface Participant {
   id: string;
@@ -932,7 +933,7 @@ export default function RoomsPage() {
                         </span>
                       </p>
                       {streamingThinking && <ThinkingBox text={streamingThinking} live />}
-                      {streamingText && <p className="text-sm whitespace-pre-wrap">{streamingText}</p>}
+                      {streamingText && <p className="text-sm whitespace-pre-wrap"><VoiceCueText text={streamingText} /></p>}
                     </div>
                   </div>
                 )}
@@ -1039,7 +1040,7 @@ function RoomBubble({ msg, chooms }: { msg: RoomMessage; chooms: Choom[] }) {
           'rounded-2xl px-4 py-2 inline-block max-w-full',
           isUser ? 'bg-primary/15' : 'bg-muted/50'
         )}>
-          <p className="text-sm whitespace-pre-wrap break-words">{msg.content}</p>
+          <p className="text-sm whitespace-pre-wrap break-words"><VoiceCueText text={msg.content} /></p>
           {msg.imageUrl && (
             <a
               href={msg.imageUrl}
