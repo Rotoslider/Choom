@@ -4,7 +4,7 @@ from unittest import mock
 
 import choom_client
 from choom_client import ChoomInfo, tts_client_for
-from tts_text import strip_voice_cues
+from tts_text import strip_markup_for_tts, strip_voice_cues
 
 
 class StripVoiceCues(unittest.TestCase):
@@ -26,6 +26,16 @@ class StripVoiceCues(unittest.TestCase):
 
     def test_empty(self):
         self.assertEqual(strip_voice_cues(""), "")
+
+
+class StageDirections(unittest.TestCase):
+    def test_not_spoken(self):
+        self.assertEqual(strip_markup_for_tts("*and then, quietly*\n\nHere is the part."), "Here is the part.")
+        self.assertEqual(strip_markup_for_tts("Queued. *settles in* Now. Come on."), "Queued. Now. Come on.")
+
+    def test_emphasis_kept(self):
+        self.assertEqual(strip_markup_for_tts("I *really* mean it."), "I really mean it.")
+        self.assertEqual(strip_markup_for_tts("*I love you.*"), "I love you.")
 
 
 class TTSClientFor(unittest.TestCase):

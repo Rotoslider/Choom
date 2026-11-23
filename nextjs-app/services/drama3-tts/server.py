@@ -35,6 +35,7 @@ import io
 import json
 import logging
 import os
+import re
 import threading
 import time
 import wave
@@ -81,13 +82,32 @@ def list_voices():
     )
 
 
+FRAME_RATE = 44100 / 2048  # Drama 3 codec frames per second (~21.5); set from the model at load
+CUE = re.compile(r"\[[^\[\]]*\]")
+
+
+class RunawayTake(RuntimeError):
+    """Drama 3 kept going well past the words (it loops or runs on), twice."""
+
+
+def spoken_length(text: str) -> int:
+    """Bytes of words to say: cues take little time of their own."""
+    return len(re.sub(r"\s+", " ", CUE.sub("", text)).strip().encode("utf-8"))
+
+
 def frame_budget(text: str) -> int:
-    """Frames one chunk may run (21.5 frames = 1 s). Speech needs ~1.4 frames
-    per character; the slack covers laughs and pauses. A cap well under the
-    library's 1024 keeps a take that won't stop (a known Drama 3 failure: it
-    finishes the words, then keeps making sound or silence) short."""
-    n = min(len(text.encode("utf-8")), 300)  # the library cuts chunks at ~300 bytes
-    return max(96, min(1024, 120 + 3 * n))
+    """Frames one chunk may run (~21.5 frames = 1 s). Speech needs ~1.5 frames
+    per character; the rest is room for a laugh or a pause. Kept tight because
+    a take that won't stop — Drama 3 loops or runs on — fills all of it: on
+    Nov 22 a 114-character line (a run of commas where code had been removed)
+    ran to the old 3-frames-per-character cap, 21.7 s for ~8 s of words."""
+    n = min(spoken_length(text), 300)  # the library cuts chunks at ~300 bytes
+    return max(80, min(1024, 60 + 2 * n))
+
+
+def too_long(seconds: float, text: str) -> bool:
+    """Audio far past what the words need (~14 characters a second, doubled, plus 3 s)."""
+    return seconds > 3.0 + 2.0 * spoken_length(text) / 14.0
 
 
 def trim_silence(audio: np.ndarray, sr: int) -> np.ndarray:
@@ -127,22 +147,36 @@ def synthesize(text: str, voice: str) -> tuple[bytes, float, float]:
     with open(txt, "r", encoding="utf-8") as fh:
         ref_text = fh.read().strip()
     started = time.perf_counter()
-    with _lock:
-        pieces = [np.array(r.audio, dtype=np.float32)
-                  for r in _model.generate(text=text, ref_audio=wav, ref_text=ref_text,
-                                           max_tokens=frame_budget(text))]
-    took = time.perf_counter() - started
     sr = _model.sample_rate
-    audio = trim_silence(np.concatenate(pieces) if pieces else np.zeros(0, np.float32), sr)
+    budget = frame_budget(text)
+    one_chunk = len(text.encode("utf-8")) <= 300
+    for attempt in (1, 2):
+        with _lock:
+            pieces = [np.array(r.audio, dtype=np.float32)
+                      for r in _model.generate(text=text, ref_audio=wav, ref_text=ref_text, max_tokens=budget)]
+        raw = np.concatenate(pieces) if pieces else np.zeros(0, np.float32)
+        audio = trim_silence(raw, sr)
+        hit_cap = one_chunk and raw.size / sr >= budget / FRAME_RATE - 0.3
+        if not (hit_cap or too_long(audio.size / sr, text)):
+            break
+        logger.warning("%s: runaway take %d (%.1f s for %d characters)%s", voice, attempt,
+                       audio.size / sr, spoken_length(text), ", trying again" if attempt == 1 else "")
+    else:
+        raise RunawayTake(f"ran on twice ({audio.size / sr:.1f} s for {spoken_length(text)} characters)")
+    took = time.perf_counter() - started
     return to_wav(audio, sr), audio.size / sr, took
 
 
 def load():
-    global _model, _loaded_at, _load_error
+    global _model, _loaded_at, _load_error, FRAME_RATE
     try:
         from mlx_audio.tts.utils import load_model
         t = time.perf_counter()
         model = load_model(MODEL_ID)
+        try:
+            FRAME_RATE = model.sample_rate / model.codec.frame_length
+        except Exception:  # noqa: BLE001 — keep the default
+            pass
         try:  # hold every voice's encoded reference, not just the last four
             from mlx_audio.tts.models.fish_drama3 import drama3 as d3
             model._voices = d3._VoiceCache(VOICE_CACHE)
@@ -209,6 +243,10 @@ class Handler(BaseHTTPRequestHandler):
             audio, secs, took = synthesize(text, voice)
         except KeyError:
             return self._json({"error": f"unknown voice {voice!r}", "voices": list_voices()}, 404)
+        except RunawayTake as e:
+            # The bridge says this line with Chatterbox; not a sign the server is unwell.
+            _stats["runaways"] = _stats.get("runaways", 0) + 1
+            return self._json({"error": f"runaway take: {e}"}, 422)
         except Exception as e:  # noqa: BLE001
             _stats["failures"] += 1
             _stats["last_error"] = f"{time.strftime('%H:%M:%S')} {type(e).__name__}: {e}"

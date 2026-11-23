@@ -285,8 +285,9 @@ def drama3_audio(text: str, voice: str):
         _drama["failures"] = 0
         return r.content, None
     reason = f"HTTP {r.status_code}: {r.text[:160]}"
-    # A voice it hasn't got is that voice's problem, not the server's.
-    _drama_failed(reason, counts=r.status_code != 404)
+    # A voice it hasn't got (404) or one line that ran on (422) is about that
+    # line, not a sign the server is unwell: no rest for those.
+    _drama_failed(reason, counts=r.status_code not in (404, 422))
     return None, reason
 
 

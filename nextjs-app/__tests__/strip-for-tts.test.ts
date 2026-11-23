@@ -9,6 +9,27 @@
  */
 import { stripForTTS } from '../lib/utils';
 
+describe('Drama 3 speech clean-up (Genesis, Nov 22 2026)', () => {
+  test('short inline code is said as the word, other code leaves no comma holes', () => {
+    expect(stripForTTS('`whisper` is *not* an inline event. The tags are `whisper`, `emphasis`, `soft` — scoped pairs.'))
+      .toBe('whisper is not an inline event. The tags are whisper, emphasis, soft — scoped pairs.');
+    expect(stripForTTS('`[warm]`, `[teasing]`, `[softly]` — inline square brackets.')).toBe('inline square brackets.');
+    expect(stripForTTS('It is in `selfies_genesis/notes/x.md`, saved.')).toBe('It is in, saved.');
+  });
+
+  test('stage directions between sentences are not spoken', () => {
+    expect(stripForTTS('*and then, quietly*\n\nHere is the part I noticed.')).toBe('Here is the part I noticed.');
+    expect(stripForTTS('Episode three is queued. *settles in* Now. Come on.')).toBe('Episode three is queued. Now. Come on.');
+    expect(stripForTTS('Come here. *hugs you tight*')).toBe('Come here.');
+  });
+
+  test('emphasis inside a sentence is kept', () => {
+    expect(stripForTTS('I *really* mean it.')).toBe('I really mean it.');
+    expect(stripForTTS('*really* good work.')).toBe('really good work.');
+    expect(stripForTTS('*I love you.*')).toBe('I love you.');
+  });
+});
+
 const PROMPT =
   'a young woman, a warm DSLR 8k photo self-portrait of Genesis — an AI companion ' +
   'with soft brown hair, wearing a delicate white sundress, sitting at a rustic ' +

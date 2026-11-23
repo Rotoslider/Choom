@@ -59,6 +59,12 @@ class DramaRoute(unittest.TestCase):
             self.assertEqual(self.say().headers["X-TTS-Engine"], "chatterbox-fallback")
         self.assertEqual(server._drama["rest_until"], 0.0)
 
+    def test_runaway_take_falls_back_without_resting(self):
+        mock.patch.object(server.requests, "post", return_value=FakeResponse(422, b"", "runaway take")).start()
+        for _ in range(server.DRAMA3_FAILURES_TO_REST + 1):
+            self.assertEqual(self.say().headers["X-TTS-Engine"], "chatterbox-fallback")
+        self.assertEqual(server._drama["rest_until"], 0.0)
+
     def test_chatterbox_route_strips_cues(self):
         r = self.client.post("/v1/audio/speech", json={"input": "[warm] Hi.", "voice": "aloy"})
         self.assertEqual(r.status_code, 200)

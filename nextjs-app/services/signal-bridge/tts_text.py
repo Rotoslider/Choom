@@ -60,6 +60,14 @@ def strip_markup_for_tts(text: str) -> str:
     # full diffusion prompt (C-44). Must run before the link rule below,
     # which would keep the alt.
     text = re.sub(r'!\[[^\]]*\]\([^)]*\)', '', text)
+    # *Stage directions* standing between sentences ("*settles in*",
+    # "*and then, quietly*") are not words to say. Same rule as stripForTTS in
+    # lib/utils.ts: short, lowercase, no sentence punctuation, at the start or
+    # after a sentence end, followed by a new sentence or the end — emphasis
+    # inside a sentence ("I *really* mean it") stays.
+    text = re.sub(
+        r'(^|[.!?…:]\s+|\n\s*)\*(?!\*)([a-z][^*\n.!?]{0,60}?)\*(?!\*)(?=\s*(?:$|\n|[A-Z"“\'‘(\[]))',
+        lambda m: m.group(1) if len(m.group(2).split()) <= 8 else m.group(0), text)
     # Markdown links: keep the text, drop the URL.
     text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
     # Bare URLs
@@ -67,4 +75,8 @@ def strip_markup_for_tts(text: str) -> str:
     # Other markdown
     text = re.sub(r'[*_~`#]+', '', text)
     text = _EMOJI.sub('', text)
-    return re.sub(r'\s+', ' ', text).strip()
+    # Commas left standing where links or tags were removed: at most one.
+    text = re.sub(r'(?:[ \t]*,){2,}', ',', text)
+    text = re.sub(r'[ \t]+,', ',', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    return re.sub(r'^[\s,;:—–]+', '', text)

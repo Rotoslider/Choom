@@ -251,6 +251,14 @@ export function stripForTTS(text: string): string {
     // markdown-formatting strip below, which would erase the asterisk markers
     // and leave the bracket content spoken.
     .replace(/\*+\s*\[[^\]]*\]\s*\*+/g, '')
+    // Remove *stage directions* standing between sentences — "*settles in*",
+    // "*and then, quietly*" — which were read aloud as words ("settles in Now",
+    // Genesis, Nov 22 2026). Only a short lowercase italic span with no sentence
+    // punctuation, at the start or after a sentence end, and followed by a new
+    // sentence or the end: emphasis inside a sentence ("I *really* mean it",
+    // "*really* good") is untouched. Must run before the markdown strip below.
+    .replace(/(^|[.!?…:]\s+|\n\s*)\*(?!\*)([a-z][^*\n.!?]{0,60}?)\*(?!\*)(?=\s*(?:$|\n|[A-Z"“'‘(\[]))/g,
+      (m: string, pre: string, inner: string) => (inner.trim().split(/\s+/).length <= 8 ? pre : m))
     // Remove bare bracketed ACTION asides — [generating image...], [taking a
     // snapshot], [checking the camera] — verb-anchored so ordinary bracketed
     // words ([Mount Graham], [Eve]: labels) are never touched.
@@ -269,7 +277,11 @@ export function stripForTTS(text: string): string {
     .replace(/```\w*[\s\S]*?```/g, '')
     // Remove indented code blocks (4+ spaces or tab at start of line — common code pattern)
     .replace(/^(?:[ ]{4,}|\t).+$/gm, '')
-    // Remove inline code
+    // Inline code that is just a word or a name (`whisper`, `drama-3`) is said
+    // as that word. Dropping it left holes — "the tags are , , , , and" — that
+    // made Drama 3 stumble and loop for 21 s (Genesis, Nov 22 2026).
+    .replace(/`([A-Za-z0-9][A-Za-z0-9 .'-]{0,23})`/g, '$1')
+    // Remove other inline code
     .replace(/`[^`]+`/g, '')
     // Remove lines that look like code (common programming patterns)
     .replace(/^[\s]*(?:import |from |def |class |function |const |let |var |return |if \(|for \(|while \(|print\(|console\.).+$/gm, '')
@@ -298,8 +310,14 @@ export function stripForTTS(text: string): string {
     .replace(/[*_~]+/g, '')
     // Remove emojis (constructed at runtime for TS compatibility)
     .replace(new RegExp('[\\u{1F600}-\\u{1F64F}\\u{1F300}-\\u{1F5FF}\\u{1F680}-\\u{1F6FF}\\u{1F1E0}-\\u{1F1FF}\\u{2600}-\\u{26FF}\\u{2700}-\\u{27BF}\\u{FE00}-\\u{FE0F}\\u{1F900}-\\u{1F9FF}\\u{1FA00}-\\u{1FA6F}\\u{1FA70}-\\u{1FAFF}\\u{200D}\\u{20E3}\\u{E0020}-\\u{E007F}]', 'gu'), '')
+    // Commas left standing where code or links were removed ("are , , , —"):
+    // at most one, none with a space before it, none opening a line.
+    .replace(/(?:[ \t]*,){2,}/g, ',')
+    .replace(/[ \t]+,/g, ',')
+    .replace(/(^|\n)[ \t]*[,;]+[ \t]*/g, '$1')
     // Clean up extra whitespace
     .replace(/\s+/g, ' ')
+    .replace(/^[\s,;:—–]+/, '')
     .trim()));
 }
 
