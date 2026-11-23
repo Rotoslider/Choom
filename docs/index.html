@@ -88,7 +88,7 @@
   }
 
   /* Section scaffolding */
-  section { padding: 72px 0; }
+  section { padding: 72px 0; scroll-margin-top: 64px; }
   .kicker { text-transform: uppercase; letter-spacing: .18em; font-size: .78rem; font-weight: 700; color: #c084fc; margin-bottom: 10px; }
   h2 { font-size: clamp(1.7rem, 3.4vw, 2.3rem); font-weight: 800; letter-spacing: -.015em; line-height: 1.2; }
   .sub { color: var(--muted); max-width: 620px; margin-top: 12px; }
@@ -116,6 +116,17 @@
   .shot img { display: block; width: 100%; height: auto; }
   .shot .cap { padding: 13px 16px; font-size: .88rem; color: var(--muted); border-top: 1px solid var(--line); }
   .shot .cap b { color: var(--text); font-weight: 600; }
+
+  /* Video tour: a poster that becomes the YouTube player on click (nothing loads from YouTube until then) */
+  .video {
+    margin-top: 36px; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden;
+    background: #000; aspect-ratio: 16 / 9; box-shadow: 0 20px 60px rgba(0,0,0,.5);
+  }
+  .video a, .video img, .video iframe { display: block; width: 100%; height: 100%; border: 0; }
+  .video img { object-fit: cover; transition: transform .3s, filter .3s; }
+  .video a:hover img { transform: scale(1.015); filter: brightness(1.06); }
+  .video-note { margin-top: 12px; font-size: .85rem; color: var(--muted); }
+  .video-note a { color: #c084fc; }
 
   /* Stack */
   .stack { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 34px; }
@@ -163,6 +174,9 @@
     .hero { padding: 60px 0 44px; }
     section { padding: 52px 0; }
     .nav-links { gap: 14px; }
+    .nav { height: auto; min-height: 64px; padding-top: 10px; padding-bottom: 10px; row-gap: 6px; }
+    .nav-links .wide-only { display: none; }
+    .nav-links .btn { white-space: nowrap; }
   }
   @media (prefers-reduced-motion: reduce) {
     html { scroll-behavior: auto; }
@@ -180,6 +194,7 @@
       Choom
     </a>
     <nav class="nav-links">
+      <a href="#tour" class="wide-only">Video</a>
       <a href="#features">Features</a>
       <a href="#screenshots">Screenshots</a>
       <a href="#setup">Setup</a>
@@ -195,6 +210,7 @@
     <p class="tagline">A self-hosted AI companion framework. Persistent memory, image generation, text-to-speech, and Signal messaging — for as many distinct AI personas as you want.</p>
     <div class="cta">
       <a class="btn" href="https://github.com/Rotoslider/Choom">View on GitHub</a>
+      <a class="btn ghost" href="#tour">▶ Watch the tour</a>
       <a class="btn ghost" href="#features">Explore the platform</a>
     </div>
     <div class="trust">
@@ -203,6 +219,20 @@
       <span>Your data stays local</span>
     </div>
   </div>
+
+  <section id="tour" style="padding-top:0">
+    <div class="wrap">
+      <div class="kicker">Watch the tour</div>
+      <h2>Twelve minutes with the Chooms</h2>
+      <p class="sub">Memory, ForgeRAG, images, voice, Home Assistant, Signal, group rooms, models and skills, each Choom presenting her own specialty from a Looking Glass hologram. All of it running off-grid, on solar.</p>
+      <div class="video">
+        <a href="https://youtu.be/Cr5xdvDn5jo" data-yt="Cr5xdvDn5jo" aria-label="Play Choom: a technical tour (12 minutes, YouTube)">
+          <img loading="lazy" src="screenshots/web/choom-tour.webp" width="1280" height="720" alt="Choom: AI companions that do things. Aloy, Optic, Genesis and Eve, with a Watch the 12-minute tour button.">
+        </a>
+      </div>
+      <p class="video-note">Plays from YouTube. <a href="https://youtu.be/Cr5xdvDn5jo">Open it on YouTube</a> for captions and chapters.</p>
+    </div>
+  </section>
 
   <section id="features">
     <div class="wrap">
@@ -223,7 +253,7 @@
         <div class="card">
           <div class="ic"><svg><path d="M13 2L4.5 13.5H11L9.5 22 19 10.5h-6.5z"/></svg></div>
           <h3>Agentic tool loop</h3>
-          <p>100+ tools across modular skills, chainable up to 100 calls per turn — web search, files, code, calendar, images, and more.</p>
+          <p>133 tools in 31 modular skills, chained up to 50 rounds per turn — web search, files, code, calendar, images, and more.</p>
         </div>
         <div class="card">
           <div class="ic"><svg><path d="M17 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9.5" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg></div>
@@ -284,7 +314,7 @@
         <figure class="shot"><img loading="lazy" src="screenshots/web/settings-smart-home.webp" width="1440" height="900" alt="Smart Home settings with entity browser"><figcaption class="cap"><b>Smart Home</b> — Home Assistant entities, history trends, and ambient awareness</figcaption></figure>
         <figure class="shot"><img loading="lazy" src="screenshots/web/sidebar-chooms.webp" width="1280" height="800" alt="Choom sidebar with multiple personas"><figcaption class="cap"><b>Personas</b> — distinct Chooms, side by side</figcaption></figure>
         <figure class="shot"><img loading="lazy" src="screenshots/web/image-gallery.webp" width="786" height="819" alt="Generated image gallery"><figcaption class="cap"><b>Gallery</b> — images your Chooms have created</figcaption></figure>
-        <figure class="shot"><img loading="lazy" src="screenshots/web/skills-catalog.webp" width="1280" height="948" alt="Skills catalog page"><figcaption class="cap"><b>Skills</b> — 100+ tools in modular, auto-documented skills</figcaption></figure>
+        <figure class="shot"><img loading="lazy" src="screenshots/web/skills-catalog.webp" width="1280" height="948" alt="Skills catalog page"><figcaption class="cap"><b>Skills</b> — 133 tools in 31 modular, auto-documented skills</figcaption></figure>
         <figure class="shot"><img loading="lazy" src="screenshots/web/habit-tracker.webp" width="1280" height="880" alt="Habit tracker heatmap"><figcaption class="cap"><b>Habits</b> — tracked from chat, with streaks and heatmaps</figcaption></figure>
         <figure class="shot"><img loading="lazy" src="screenshots/web/Token-Usage.webp" width="1280" height="1043" alt="Token usage dashboard"><figcaption class="cap"><b>Usage</b> — tokens per Choom, model, and provider</figcaption></figure>
         <figure class="shot"><img loading="lazy" src="screenshots/web/settings-automations.webp" width="1280" height="800" alt="Automation builder"><figcaption class="cap"><b>Automations</b> — visual drag-and-drop task chains</figcaption></figure>
@@ -331,6 +361,22 @@
     </div>
   </div>
 </main>
+
+<script>
+  // The tour poster turns into the player when clicked (ctrl/cmd-click still opens YouTube in a new tab).
+  document.querySelectorAll('.video a[data-yt]').forEach((a) => {
+    a.addEventListener('click', (e) => {
+      if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+      e.preventDefault();
+      const f = document.createElement('iframe');
+      f.src = 'https://www.youtube-nocookie.com/embed/' + a.dataset.yt + '?autoplay=1&rel=0';
+      f.title = 'Choom: a technical tour';
+      f.allow = 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share';
+      f.allowFullscreen = true;
+      a.replaceWith(f);
+    });
+  });
+</script>
 
 <footer>
   <div class="wrap foot">

@@ -6,6 +6,12 @@ Each AI persona ("Choom") can have its own LLM model, voice, image style, and me
 
 All 133 built-in tools are organized into 31 modular **skills** with progressive disclosure — the LLM only sees detailed documentation for skills relevant to the current request, saving ~3,400 tokens per message. Skills can be enabled/disabled, custom skills can be created via a visual builder, and external skills can be installed from GitHub with safety verification.
 
+## Watch the tour
+
+[![Watch the 12-minute tour of Choom on YouTube](docs/screenshots/web/choom-tour.webp)](https://youtu.be/Cr5xdvDn5jo)
+
+**[Choom: a technical tour](https://youtu.be/Cr5xdvDn5jo)** (12 minutes, YouTube). Memory, ForgeRAG, image generation, voice, Home Assistant, Signal, group rooms, local and online models, and skills, with each Choom presenting her own specialty from the Looking Glass hologram. All of it runs off-grid, on solar.
+
 ![Chat Interface](docs/screenshots/chat-interface.png)
 
 ## Features
