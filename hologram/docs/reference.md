@@ -61,6 +61,14 @@ relaunch, wrap each in the same lock, e.g. `flock /tmp/glass-relaunch.lock tools
   (Chrome crashed, the page froze), the server relaunches everything with `launch.sh`. Not in the
   first 2 minutes after a launch, not while `launch.sh` runs, and at most once every 10 minutes.
   Only the living page is watched.
+- **A deaf page:** one that runs on but no longer hears the server's `/events` (Nov 24, 2026: from
+  09:59 it missed three of Genesis's turns; no voice, and Aloy stayed on). The server sends a tick at
+  least every 15 s and the page's status says how long since it heard anything (`feedS`). At 40 s the
+  page opens its feed again; at 45 s the server stops telling the app the glass has the voice, so a
+  browser at home speaks the reply itself; at 90 s it relaunches like a silent page (same 10-minute
+  rule, and at most 3 times in an hour for deafness). Logged as `feed-reopen`/`feed-heard` (page),
+  `glass-deaf` (the voice handed back and returned), and a `recovery` line with `deaf_s`.
+  `POST /control {"deafTest": 50}` holds the page's feed that long to try it.
 - **The tower's helpers:** exactly one `tower_ears.py` and one `tower_eyes.py`. A dead one is started
   again (its log appended), up to 3 times in 10 minutes, then left down; a second one is stopped (the
   newer).
@@ -976,6 +984,7 @@ player's page settings are `"views": 32, "smoothing": false, "campfire": false`.
 | `{"picture": "<image id>"}` | float a gallery picture |
 | `{"glassReset": true}` | forget clothes the Chooms chose |
 | `{"welcomeTest": 30}` | send a real welcome back now |
+| `{"deafTest": 50}` | hold the page's feed that many seconds (at most 300): tries the deaf-page watch |
 | `{"mouthStyle": 3}`, `{"jaw": 0.6}` | try a mouth style (0 to 3); hold her mouth open (`null` to let go) |
 | `{"body": true}` | the experimental 3D body, if `bodies/<id>.glb` exists |
 | `{"closeTurn": true}` | close an open turn as if its end were lost (the watchdog's path) |
@@ -996,7 +1005,7 @@ player's page settings are `"views": 32, "smoothing": false, "campfire": false`.
 
 | Kind | From | |
 |---|---|---|
-| `status` | page | every 2 s: Choom, mood, clip, fps, voice, paused, queue |
+| `status` | page | every 2 s: Choom, mood, clip, fps, voice, paused, queue, `feedS` (seconds since it heard its feed) |
 | `alive-clip`, `choom`, `stage`, `circle`, `quiet-turn` | page | clips played, Choom switches, the stage and the campfire circle (`members`), screensaver turns (`why: bedtime` for a hand-over to a Choom who can sleep; `walkOff`, `walkOn` when she walks off or the next walks on) |
 | `turn-closed` | page | a turn closed by the watchdog or a feed reconnect |
 | `latency`, `lipsync`, `speak`, `gap` | page, server | voice timing |
@@ -1005,6 +1014,7 @@ player's page settings are `"views": 32, "smoothing": false, "campfire": false`.
 | `desk`, `welcome`, `rooms` | server | welcome back |
 | `screens`, `display_fix`, `weather`, `camera` | server | screens, monitor layout, weather changes, camera settings and snapshots |
 | `recovery`, `feed` | server | a page relaunch or a helper restarted or stopped (also in `recovery.log`); the Choom feed reconnecting |
+| `glass-deaf`, `feed-reopen`, `feed-heard` | server, page | a page that stopped hearing its feed: the voice handed to the browsers and back, the page reopening its feed and hearing again |
 
 `tools/deinterleave.py OUT.jpg [view ...]` grabs the Portrait and rebuilds individual views. Use it to
 check depth without standing in front of the glass; run it with a Python that has numpy and Pillow. It

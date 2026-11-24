@@ -112,11 +112,16 @@ def monitors_off():
         return False
 
 
+CLIENT_BACKLOG_MAX = 5000  # events waiting for one page; past this it isn't reading (see page_watch)
+deaf_test_until = [0.0]    # /control {"deafTest": s}: the page's feed held until then (testing page_watch)
+
+
 def broadcast(event):
     data = json.dumps(event)
     with clients_lock:
         for q in list(clients):
-            q.put(data)
+            if q.qsize() < CLIENT_BACKLOG_MAX:  # a page that stopped reading doesn't grow without end
+                q.put(data)
 
 
 def find_button_device():
@@ -377,11 +382,19 @@ def follow_choom():
 
 def voice_heartbeat():
     """Every 10 s, tell the Choom app whether the hologram is speaking for the Chooms: true while
-    the page is running with its voice on. Browsers at home then stay quiet (its voice hand-off)."""
+    the page is running with its voice on. Browsers at home then stay quiet (its voice hand-off).
+    A page that has stopped hearing its feed (page_deaf) can't speak what it never hears, so the
+    browsers get the voice back until it hears again or is relaunched."""
+    deaf_was = False
     while True:
         status = latest.get("status") or {}
         page_alive = time.time() - received_at.get("status", 0) < 10
-        voice = bool(page_alive and status.get("voiceOn"))
+        deaf = page_alive and page_deaf(status) >= PAGE_DEAF_VOICE_S
+        if deaf != deaf_was:
+            log_entry({"kind": "glass-deaf", "deaf": deaf, "feed_s": page_deaf(status), "choom": status.get("choom"),
+                       "voice": "to the browsers" if deaf else "back to the glass"})
+            deaf_was = deaf
+        voice = bool(page_alive and status.get("voiceOn") and not deaf)
         beat = {"voice": voice}
         if page_alive and isinstance(status.get("glassOff"), bool):
             beat["glassOff"] = status["glassOff"]  # for the app's Glass button: the picture really is off (or on)
@@ -1193,6 +1206,36 @@ RECOVERY_LOG = HERE / "recovery.log"
 HELPERS = (("tower_ears.py", "HOLOGRAM_EARS", "ears.log"), ("tower_eyes.py", "HOLOGRAM_EYES", "eyes.log"))
 HELPER_RESTARTS = 3              # at most this many restarts of one helper ...
 HELPER_WINDOW_S = 10 * 60        # ... in this long; then it's left down (and logged)
+# A deaf page (2026-11-24): it went on posting its status and moving, but stopped hearing /events at 09:59,
+# so the Choom app's turns, presence and gaze never reached it. It missed three of Genesis's turns while
+# the voice hand-off still said the glass speaks: Brave kept quiet, she was never heard, and the quiet-turn
+# rotation left Aloy on. Restart the glass cured it. Now the server ticks every 15 s, the page reports
+# feedS (seconds since it last heard anything) and reopens its feed itself at 40 s; at PAGE_DEAF_VOICE_S
+# the browsers get the voice back (voice_heartbeat), at PAGE_DEAF_S it's relaunched like a silent page,
+# and no more than PAGE_DEAF_RELAUNCHES times in an hour (one that doesn't cure it isn't repeated all day).
+PAGE_DEAF_VOICE_S = 45
+PAGE_DEAF_S = 90
+PAGE_DEAF_RELAUNCHES = 3
+
+
+def page_deaf(status):
+    """Seconds since the page last heard its feed, from its status (0 if it doesn't say: an older page)."""
+    seconds = status.get("feedS")
+    return seconds if isinstance(seconds, (int, float)) else 0
+
+
+def deaf_relaunches(now):
+    """Relaunches for a deaf page in the last hour (recovery.log)."""
+    count = 0
+    try:
+        for line in RECOVERY_LOG.read_text().splitlines():
+            entry = json.loads(line)
+            if entry.get("action") == "page relaunch" and "deaf_s" in entry and \
+                    now - time.mktime(time.strptime(entry["time"], "%Y-%m-%dT%H:%M:%S")) < 3600:
+                count += 1
+    except (OSError, ValueError, KeyError):
+        pass
+    return count
 
 
 def recovery_note(entry):
@@ -1228,13 +1271,19 @@ def page_watch():
                 continue
             page = ((latest.get("start") or {}).get("page")) or "living"
             silent = now - received_at.get("status", STARTED_AT)
-            if page != "living" or silent < PAGE_SILENT_S:
+            status = latest.get("status") or {}
+            deaf = page_deaf(status) if silent < 10 else 0  # reporting, but not hearing its feed
+            if page != "living" or (silent < PAGE_SILENT_S and deaf < PAGE_DEAF_S):
                 continue
             if now - last_page_relaunch() < PAGE_RELAUNCH_EVERY_S:
                 continue
+            if silent < PAGE_SILENT_S and deaf_relaunches(now) >= PAGE_DEAF_RELAUNCHES:
+                latest["page_watch_error"] = f"deaf for {round(deaf)} s; {PAGE_DEAF_RELAUNCHES} relaunches this hour, left as is"
+                continue
             if subprocess.run(["pgrep", "-f", "--", r"launch\.sh( |$)"], capture_output=True).returncode == 0:
                 continue  # a relaunch is under way (also "./launch.sh living" from relaunch_when_quiet.sh)
-            recovery_note({"action": "page relaunch", "silent_s": round(silent)})
+            recovery_note({"action": "page relaunch", **({"silent_s": round(silent)} if silent >= PAGE_SILENT_S
+                                                          else {"deaf_s": round(deaf), "choom": status.get("choom")})})
             subprocess.Popen([str(HERE / "launch.sh"), "living"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                              stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True)
         except Exception as e:
@@ -1818,6 +1867,14 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_response(204)
             self.end_headers()
             return
+        if self.path == "/control" and isinstance(entry.get("deafTest"), (int, float)):
+            # {"deafTest": 50}: the page's feed is held that long (at most 5 minutes), as if it had stopped
+            # hearing it: tries the page's reopen (40 s), the voice hand-back (45 s), the relaunch (90 s).
+            deaf_test_until[0] = time.time() + min(max(entry["deafTest"], 0), 300)
+            log_entry({"kind": "glass-deaf", "test_s": entry["deafTest"]})
+            self.send_response(204)
+            self.end_headers()
+            return
         if self.path == "/control":
             # e.g. {"choom": "genesis"}, {"action": "next"}, {"listening": true}
             broadcast({**entry, "type": "control"})
@@ -1854,9 +1911,12 @@ class Handler(SimpleHTTPRequestHandler):
             self.wfile.flush()
             while True:
                 try:
-                    self.wfile.write(f"data: {q.get(timeout=15)}\n\n".encode())
-                except queue.Empty:
-                    self.wfile.write(b": ping\n\n")
+                    chunk = f"data: {q.get(timeout=15)}\n\n".encode()
+                except queue.Empty:  # a tick the page can see (a ": ping" comment never reaches its script)
+                    chunk = b'data: {"type": "tick"}\n\n'
+                while time.time() < deaf_test_until[0]:  # /control {"deafTest": s}
+                    time.sleep(0.5)
+                self.wfile.write(chunk)
                 self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
             pass

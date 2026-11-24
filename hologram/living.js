@@ -2575,8 +2575,34 @@ function onButton(button, action) {
   }
 }
 
-const events = new EventSource('/events');
-events.onmessage = (e) => {
+// The server's feed. It ticks at least every 15 s, so a page that hears nothing for long has gone deaf:
+// on 2026-11-24 this page stopped hearing it at 09:59 while it ran on (clips, the quiet-turn rotation, its
+// own /speak fetches) and missed three of Genesis's turns: no voice, and Aloy stayed on. Silent for
+// FEED_REOPEN_MS, the feed is opened again (once per silence); the status says how long it has been
+// (feedS), and server.py gives the browsers the voice back at 45 s and relaunches the glass at 90 s.
+const FEED_REOPEN_MS = 40000;
+let events = null, feedAt = performance.now(), feedReopenedAt = 0;
+function openFeed() {
+  events = new EventSource('/events');
+  events.onmessage = onFeed;
+}
+openFeed();
+setInterval(() => {
+  const silent = performance.now() - feedAt;
+  if (silent < FEED_REOPEN_MS || feedReopenedAt > feedAt) return;
+  feedReopenedAt = performance.now();
+  post('feed-reopen', { silentS: Math.round(silent / 1000) });
+  events.close();
+  openFeed();
+}, 5000);
+function onFeed(e) {
+  if (feedReopenedAt > feedAt) {
+    // Hearing again after a reopen: like the Mac feed reconnecting, an end that came meanwhile was missed.
+    post('feed-heard', { afterReopenS: Math.round((performance.now() - feedReopenedAt) / 1000) });
+    unseenTurns.clear();
+    closeTurn('the feed was reopened');
+  }
+  feedAt = performance.now();
   const ev = JSON.parse(e.data);
   if (ev.type === 'button') onButton(ev.button, ev.action);
   if (ev.type === 'control') onControl(ev);
@@ -2598,7 +2624,7 @@ events.onmessage = (e) => {
     const p = portraits[current];  // (Genesis has them; any Choom given sky-check clips does it too)
     if (turned && p.alive?.clips.some((c) => /skycheck/.test(c.source || ''))) p.toolLook = /skycheck/;
   }
-};
+}
 
 // Remote control (POST /control): the hook the Choom app will use to show who's talking.
 function onControl(ev) {
@@ -3531,7 +3557,7 @@ function sendStatus() {
   post('status', {
     page: 'living', fps: glassOff ? 0 : fps, glassOff, choom: cp.name, body: body ? body.url : null, listening: heard(), mood, voiceOn, paused,
     queued: speech.queue.length, window: windowInfo(), clip: cp.alive && pl?.clip >= 0 ? cp.alive.clips[pl.clip]?.source : null,
-    wearing: wearingNow(),
+    wearing: wearingNow(), feedS: Math.round((performance.now() - feedAt) / 1000),
   });
 }
 setInterval(sendStatus, 2000);
