@@ -52,7 +52,9 @@ describe('Home Assistant times reach her in local time (2026-10-10)', () => {
   });
   test('every Home Assistant tool result goes through it', () => {
     const src = readFileSync(path.join(__dirname, '..', 'skills', 'core', 'home-assistant', 'handler.ts'), 'utf-8');
-    expect(src).toContain('return r.result == null ? r : { ...r, result: localizeTimestamps(r.result) };');
+    // Since Nov 26 2026 the house notes ride along first (houseNotesFor), then the whole result is localized.
+    expect(src).toContain('if (r.result == null) return r;');
+    expect(src).toContain('return { ...r, result: localizeTimestamps(result) };');
   });
 });
 

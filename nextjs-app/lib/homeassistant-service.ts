@@ -33,6 +33,8 @@ export interface HAHistorySummary {
   first: string;
   last: string;
   changes?: Array<{ time: string; state: string }>;
+  /** How many runs the whole period had: changes keeps only the last 100. */
+  runs?: number;
   // Numeric sensors: when the lowest and highest readings were, and the
   // readings over the period as averages per step (see getHistory).
   minAt?: string;
@@ -442,10 +444,14 @@ export class HomeAssistantService {
    * bridge's settings file and fetched the raw history herself (Nov 22).
    */
   async getHistory(entityId: string, hours: number = 24, curvePoints: number = 0): Promise<HAHistorySummary> {
-    const startMs = Date.now() - hours * 3600 * 1000;
+    const endMs = Date.now();
+    const startMs = endMs - hours * 3600 * 1000;
     const start = new Date(startMs).toISOString();
+    // Without end_time HA returns one day from the start. Until Nov 26 2026
+    // every ha_get_history past 24 hours got only the first day of its window:
+    // a week of the east screen door "ended" six days ago.
     const data = await this.apiFetch<HAEntity[][]>(
-      `/api/history/period/${start}?filter_entity_id=${entityId}&minimal_response&no_attributes`
+      `/api/history/period/${start}?filter_entity_id=${entityId}&end_time=${new Date(endMs).toISOString()}&minimal_response&no_attributes`
     );
 
     if (!data || data.length === 0 || data[0].length === 0) {
@@ -506,6 +512,7 @@ export class HomeAssistantService {
         first: entries[0].state,
         last: entries[entries.length - 1].state,
         changes: changes.slice(-100),
+        runs: changes.length,
       };
     }
 
@@ -552,7 +559,7 @@ export class HomeAssistantService {
       curve = [];
       let i = 0;
       let carried: number | null = null;
-      for (let s = firstStep; s < Date.now(); s += stepMs) {
+      for (let s = firstStep; s < endMs; s += stepMs) {
         let sum = 0;
         let n = 0;
         while (i < numericValues.length && readAt[i] < s + stepMs) {

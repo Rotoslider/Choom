@@ -498,7 +498,7 @@ async function resetChangeNoteOf(ha: HomeAssistantService, entity: HAEntity): Pr
   const runs = h?.changes || [];
   const held = runs.length > 0 && runs[runs.length - 1].state === entity.state ? runs[runs.length - 1] : null;
   if (!held) {
-    // The recorder can miss the state a restart brings back (the east screen door: last recorded "off" on Nov 20).
+    // The history's last change disagrees with the live state: the restart brought back a state it didn't record.
     const last = runs[runs.length - 1];
     return {
       last_changed_note: last
@@ -537,7 +537,7 @@ export const HOUSE_NOTES: Array<{ ids: string[]; names: RegExp; note: string }> 
   {
     ids: ['binary_sensor.kitchen1_home_east_screen_door_east_screen_door'],
     names: /east screen door/i,
-    note: "From Donny: the east screen is a retractable screen door and he normally keeps it open, so it reads open (on) for days. That's normal and the sensor is fine. What matters is the East door itself (binary_sensor.kitchen1_home_east_door_window): if it's closed, all is fine. No camera shows the east screen door.",
+    note: "From Donny: the east screen is a retractable screen door and he normally keeps it open, so it reads open (on) for days. That's normal. Sometimes he closes it, usually while the East door is open, to let the house breathe. While it's closed it can flick open for a few seconds at a time, dozens of times in an afternoon: Donny knows, he thinks the wind rocks it at the edge of reading, and he's going to test it. A few seconds open while it's closed isn't someone coming in. What matters is the East door itself (binary_sensor.kitchen1_home_east_door_window): if it's closed, the house is shut. No camera shows the east screen door.",
   },
 ];
 
@@ -1089,9 +1089,8 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
           // Read plainly, a door that never moved came back as "samples: 1",
           // and Genesis took one sample in 168 hours for a dead sensor.
           const lastRun = changes[changes.length - 1];
-          // "Now" is the live state. The recorder can miss the state a restart
-          // brings back: the east screen door's history ends "off" on Nov 20,
-          // while Home Assistant has had it "on" since its Nov 24 restart.
+          // "Now" is the live state, in case the history's last row disagrees
+          // with it (a state the recorder hasn't written, or didn't).
           const nowState = live && live.state !== 'unavailable' && live.state !== 'unknown' ? live.state : summary.last;
           let held = '';
           if (summary.min === null && lastRun) {
@@ -1101,9 +1100,11 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
                 ? `${nowState} now. Home Assistant has had it ${nowState} since ${live.last_changed}${reset ? ` (its restart or reload: ${reset.entities} entities show that minute)` : ''}; the last change its history recorded was to ${lastRun.state} at ${lastRun.time}.`
                 : `${nowState} now; before that ${lastRun.state} from ${lastRun.time}.`;
             } else {
-              held = changes.length === 1
+              // Counted over the whole period: the list keeps only the last 100.
+              const runs = summary.runs ?? changes.length;
+              held = runs === 1
                 ? `${lastRun.state} the whole ${hours} hours: it didn't change in that time.`
-                : `${lastRun.state} now, since ${lastRun.time}; it changed ${changes.length - 1} time${changes.length === 2 ? '' : 's'} in ${hours} hours.`;
+                : `${lastRun.state} now, since ${lastRun.time}; it changed ${runs - 1} time${runs === 2 ? '' : 's'} in ${hours} hours${runs > changes.length ? ` (changes lists the last ${changes.length})` : ''}.`;
             }
           }
 
