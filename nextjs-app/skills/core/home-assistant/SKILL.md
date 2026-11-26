@@ -101,7 +101,9 @@ ha_call_service(domain: "light", service: "turn_on", target: {"entity_id": ["lig
 - **Reading one entity**: `ha_get_state` — fast, cached
 - **Finding entities**: `ha_list_entities` — discover what's available; `area` filter uses HA's real area registry (device→area inheritance respected), falls back to friendly-name matching
 - **Controlling devices / services**: `ha_call_service` — lights, scenes, scripts, TTS, notify, automation triggering, etc.
-- **Trends/history**: `ha_get_history` — min/max/avg over time (numeric sensors) or state changes (non-numeric)
+- **Trends/history**: `ha_get_history` — min/max (and when)/avg and the curve over time (numeric sensors; `points` for a finer or coarser curve) or state changes and how long the state has held (non-numeric)
+- **Change times after a restart**: when Home Assistant restarts or reloads, it resets many entities' `last_changed` to that minute. A time like that means "unchanged since then"; the HA tools say so (`last_changed_note`, `times_note`), and `ha_get_history` shows how long the state really held.
+- **House notes**: a result that names an entity Donny has explained (the east screen door) carries `house_notes`. They are his words; go by them.
 - **Activity log**: `ha_get_logbook` — timestamped state changes (location history, door events, etc.)
 - **Full overview**: `ha_get_home_status` — snapshot of all active devices
 - **Camera frame**: `ha_get_camera_snapshot` — fetches JPEG to workspace

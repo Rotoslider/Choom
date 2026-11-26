@@ -1,6 +1,8 @@
 // Home Assistant REST API Service
 // Provides typed access to HA states, services, and history
 
+import { OWNER_TIMEZONE } from '@/lib/time-context';
+
 export interface HomeAssistantSettings {
   baseUrl: string;           // e.g. "http://your-ha-host:8123"
   accessToken: string;       // Long-lived access token
@@ -31,6 +33,29 @@ export interface HAHistorySummary {
   first: string;
   last: string;
   changes?: Array<{ time: string; state: string }>;
+  // Numeric sensors: when the lowest and highest readings were, and the
+  // readings over the period as averages per step (see getHistory).
+  minAt?: string;
+  maxAt?: string;
+  curve?: string[];
+  curveStep?: string;
+}
+
+// Step sizes for a history curve, in minutes; the smallest that keeps the curve
+// within the points asked for is used.
+const CURVE_STEPS_MIN = [5, 10, 15, 30, 60, 120, 180, 360, 720, 1440];
+
+function stepLabel(min: number): string {
+  if (min < 60) return `${min} minutes`;
+  const h = min / 60;
+  return h === 1 ? '1 hour' : `${h} hours`;
+}
+
+/** "Wed 6:00 PM" in Donny's zone: short enough for a curve of a week. */
+function curveTime(ms: number): string {
+  return new Date(ms).toLocaleString('en-US', {
+    timeZone: OWNER_TIMEZONE, weekday: 'short', hour: 'numeric', minute: '2-digit',
+  });
 }
 
 // In-memory cache
@@ -154,16 +179,51 @@ export class HomeAssistantService {
   /**
    * List all entity states, optionally filtered by domain or area name.
    */
-  async listStates(domain?: string, area?: string): Promise<HAEntity[]> {
-    let entities: HAEntity[];
+  /** Every entity Home Assistant has, before the Assist / entity filters (cached). */
+  private async allStates(): Promise<HAEntity[]> {
+    if (allStatesCacheRef && allStatesCacheRef.expiresAt > Date.now()) return allStatesCacheRef.data;
+    const entities = await this.apiFetch<HAEntity[]>('/api/states');
+    allStatesCacheRef = { data: entities, expiresAt: Date.now() + this.cacheTTL };
+    return entities;
+  }
 
-    // Use cache for all-states calls
-    if (allStatesCacheRef && allStatesCacheRef.expiresAt > Date.now()) {
-      entities = allStatesCacheRef.data;
-    } else {
-      entities = await this.apiFetch<HAEntity[]>('/api/states');
-      allStatesCacheRef = { data: entities, expiresAt: Date.now() + this.cacheTTL };
+  /**
+   * Minutes when Home Assistant gave a crowd of entities the same last_changed
+   * at once, newest first. A restart does that to every entity it restores
+   * (Nov 24 2026 06:38: 152 of 1,170), and an integration reloading does it to
+   * its own; a last_changed at one of these minutes means "unchanged since
+   * then", not "changed then". The Chooms read the east screen door's
+   * "on since Tue 06:38" as a sensor stuck for two days and spent the
+   * Thanksgiving room on it. The last half hour is left out: busy sensors
+   * share the current minutes.
+   */
+  async massResetTimes(): Promise<Array<{ at: string; entities: number }>> {
+    const all = await this.allStates();
+    const recent = Date.now() - 30 * 60 * 1000;
+    const perMinute = new Map<number, number>();
+    for (const e of all) {
+      const t = Date.parse(e.last_changed);
+      if (!Number.isFinite(t) || t > recent) continue;
+      const minute = Math.floor(t / 60000) * 60000;
+      perMinute.set(minute, (perMinute.get(minute) || 0) + 1);
     }
+    const crowd = Math.max(30, Math.round(all.length * 0.04));
+    return [...perMinute]
+      .filter(([, n]) => n >= crowd)
+      .sort((a, b) => b[0] - a[0])
+      .map(([minute, n]) => ({ at: new Date(minute).toISOString(), entities: n }));
+  }
+
+  /** The mass reset (above) this change time belongs to, if any. */
+  async massResetAt(lastChanged: string): Promise<{ at: string; entities: number } | null> {
+    const t = Date.parse(lastChanged);
+    if (!Number.isFinite(t)) return null;
+    const minute = new Date(Math.floor(t / 60000) * 60000).toISOString();
+    return (await this.massResetTimes()).find(r => r.at === minute) || null;
+  }
+
+  async listStates(domain?: string, area?: string): Promise<HAEntity[]> {
+    let entities = await this.allStates();
 
     // Only what Home Assistant exposes to Assist (plus the prompt entities the
     // user pinned). Falls back to the full list if the websocket call fails.
@@ -374,8 +434,16 @@ export class HomeAssistantService {
    * Get history for an entity — GET /api/history/period/{start}
    * Returns a summarized view (min/max/avg/trend) instead of raw data points.
    */
-  async getHistory(entityId: string, hours: number = 24): Promise<HAHistorySummary> {
-    const start = new Date(Date.now() - hours * 3600 * 1000).toISOString();
+  /**
+   * History of one entity. Numeric sensors: min / max (and when) / avg /
+   * trend, and with curvePoints > 0 the readings over the period as averages
+   * per step, at most that many points. Before Nov 2026 there was no curve:
+   * Eve wanted the temperature through the night, found HA's key in the
+   * bridge's settings file and fetched the raw history herself (Nov 22).
+   */
+  async getHistory(entityId: string, hours: number = 24, curvePoints: number = 0): Promise<HAHistorySummary> {
+    const startMs = Date.now() - hours * 3600 * 1000;
+    const start = new Date(startMs).toISOString();
     const data = await this.apiFetch<HAEntity[][]>(
       `/api/history/period/${start}?filter_entity_id=${entityId}&minimal_response&no_attributes`
     );
@@ -402,12 +470,16 @@ export class HomeAssistantService {
     const entity = entries[0];
     const friendlyName = String(entity.attributes?.friendly_name || entityId);
 
-    // Extract numeric values
+    // Extract numeric values (and when each was read: minimal_response rows
+    // carry only state + last_changed after the first)
     const numericValues: number[] = [];
+    const readAt: number[] = [];
     for (const e of entries) {
       const v = parseFloat(e.state);
       if (!isNaN(v) && e.state !== 'unavailable' && e.state !== 'unknown') {
         numericValues.push(v);
+        const t = Date.parse(e.last_changed || e.last_updated);
+        readAt.push(Number.isFinite(t) ? Math.max(t, startMs) : startMs);
       }
     }
 
@@ -460,17 +532,55 @@ export class HomeAssistantService {
       unit = String(fullEntity.attributes.unit_of_measurement || '');
     } catch { /* ignore */ }
 
+    const round1 = (v: number) => Math.round(v * 10) / 10;
+    // Readings as a person says them: 73.22 not 73.2200012207031, and a
+    // 0.253 kWh day stays 0.253 (one decimal would make it 0.3).
+    const tidy = (v: number) => (Math.abs(v) >= 100 ? round1(v) : Number(v.toPrecision(4)));
+    const minAt = new Date(readAt[numericValues.indexOf(min)]).toISOString();
+    const maxAt = new Date(readAt[numericValues.indexOf(max)]).toISOString();
+
+    // The curve: one average per step. A sensor that reports only when it
+    // changes holds its value until the next reading, so a step with no
+    // reading of its own carries the last one on.
+    let curve: string[] | undefined;
+    let curveStep: string | undefined;
+    if (curvePoints > 0) {
+      const spanMin = hours * 60;
+      const stepMin = CURVE_STEPS_MIN.find(s => spanMin / s <= curvePoints) ?? CURVE_STEPS_MIN[CURVE_STEPS_MIN.length - 1];
+      const stepMs = stepMin * 60000;
+      const firstStep = Math.floor(startMs / stepMs) * stepMs;
+      curve = [];
+      let i = 0;
+      let carried: number | null = null;
+      for (let s = firstStep; s < Date.now(); s += stepMs) {
+        let sum = 0;
+        let n = 0;
+        while (i < numericValues.length && readAt[i] < s + stepMs) {
+          sum += numericValues[i];
+          n++;
+          carried = numericValues[i];
+          i++;
+        }
+        const v = n > 0 ? sum / n : carried;
+        if (v !== null) curve.push(`${curveTime(s)} ${tidy(v)}`);
+      }
+      curveStep = `${stepLabel(stepMin)} averages, each labeled with the time its step starts${unit ? `, in ${unit}` : ''}`;
+    }
+
     return {
       entity_id: entityId,
       friendly_name: friendlyName,
-      min: Math.round(min * 10) / 10,
-      max: Math.round(max * 10) / 10,
-      avg: Math.round(avg * 10) / 10,
+      min: round1(min),
+      max: round1(max),
+      avg: round1(avg),
       trend,
       samples: numericValues.length,
       unit,
-      first: String(numericValues[0]),
-      last: String(numericValues[numericValues.length - 1]),
+      first: String(tidy(numericValues[0])),
+      last: String(tidy(numericValues[numericValues.length - 1])),
+      minAt,
+      maxAt,
+      ...(curve && { curve, curveStep }),
     };
   }
 

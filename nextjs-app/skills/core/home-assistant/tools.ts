@@ -113,7 +113,7 @@ export const tools: ToolDefinition[] = [
   },
   {
     name: 'ha_get_history',
-    description: 'Get historical state data for a Home Assistant entity. Numeric sensors return min/max/avg/trend. Non-numeric entities (location, binary_sensor, etc.) return a timestamped list of state changes.',
+    description: 'Get historical state data for a Home Assistant entity. Numeric sensors return min/max (and when)/avg/trend plus the curve: the readings over the period as averages per step, labeled with local times (about 36 points by default). Non-numeric entities (location, binary_sensor, etc.) return a timestamped list of state changes and how long the current state has held.',
     parameters: {
       type: 'object',
       properties: {
@@ -124,6 +124,10 @@ export const tools: ToolDefinition[] = [
         hours: {
           type: 'number',
           description: 'Number of hours to look back (default 24, max 168/7 days)',
+        },
+        points: {
+          type: 'number',
+          description: 'Numeric sensors: about how many points the curve has (default 36, up to 200 for a finer curve, 0 for none). 24 hours at 24 points is one per hour.',
         },
       },
       required: ['entity_id'],

@@ -1,0 +1,186 @@
+/**
+ * 2026-11-26.
+ *  - ha_get_history gave numeric sensors only min/max/avg/trend, no curve.
+ *    Eve wanted the temperature through the night, found Home Assistant's key
+ *    in the bridge settings and fetched the raw history herself (Nov 22). It
+ *    now returns the curve (averages per step) and when the min and max were.
+ *  - After HA restarted (Nov 24 06:38) about 150 entities showed that minute
+ *    as their last_changed. The Chooms read the east screen door's "on since
+ *    Tue 06:38" as a stuck sensor and spent the Thanksgiving room on it. The
+ *    tools now say when a change time is a restart, and how long the state
+ *    really held; and the screen door carries Donny's note wherever it shows.
+ */
+import { HomeAssistantService, type HAEntity } from '@/lib/homeassistant-service';
+
+jest.mock('@/skills/core/image-analysis/handler', () => ({ __esModule: true, default: class {} }));
+jest.mock('@/lib/db', () => ({ __esModule: true, default: {} }));
+jest.mock('@/lib/captured-images', () => ({
+  cameraSnapshotFolder: (slug: string) => `selfies_${slug}/camera`,
+  pruneExpiredCaptures: jest.fn(async () => undefined),
+  CAPTURE_RETENTION_HOURS: 72,
+}));
+jest.mock('@/lib/glass-camera', () => ({ askGlassCamera: jest.fn(), isGlassCameraName: () => false }));
+
+import HomeAssistantHandler, { houseNotesFor } from '@/skills/core/home-assistant/handler';
+
+const HOUR = 3600 * 1000;
+const SCREEN = 'binary_sensor.kitchen1_home_east_screen_door_east_screen_door';
+const now = Date.now();
+const iso = (ms: number) => new Date(ms).toISOString();
+const restart = Math.floor((now - 50 * HOUR) / 60000) * 60000 + 27_000; // 50 h ago, 27 s past the minute
+
+// The house: 60 entities restored by the restart, a few busy ones, the screen door.
+function house(): HAEntity[] {
+  const list: HAEntity[] = [];
+  for (let i = 0; i < 60; i++) {
+    list.push({ entity_id: `sensor.thing_${i}`, state: '1', attributes: {}, last_changed: iso(restart + i * 10), last_updated: iso(restart) });
+  }
+  for (let i = 0; i < 40; i++) {
+    list.push({ entity_id: `sensor.busy_${i}`, state: String(i), attributes: {}, last_changed: iso(now - 60_000), last_updated: iso(now - 60_000) });
+  }
+  list.push({ entity_id: SCREEN, state: 'on', attributes: { device_class: 'door', friendly_name: 'East Screen door' }, last_changed: iso(restart + 500), last_updated: iso(restart + 500) });
+  list.push({
+    entity_id: 'sensor.house_temperature', state: '63.5', last_changed: iso(now - 5 * 60_000), last_updated: iso(now - 5 * 60_000),
+    attributes: { device_class: 'temperature', unit_of_measurement: '°F', friendly_name: 'House temperature' },
+  });
+  return list;
+}
+
+// Temperature: one reading per 30 min for 24 h, coldest 6 h ago.
+function temperatureHistory(startMs: number): Array<Partial<HAEntity>> {
+  const rows: Array<Partial<HAEntity>> = [];
+  for (let t = startMs; t < now; t += 30 * 60_000) {
+    const hoursAgo = (now - t) / HOUR;
+    rows.push({ state: String(Math.round((60 + Math.abs(hoursAgo - 6)) * 10) / 10), last_changed: iso(t) });
+  }
+  rows[0] = { ...rows[0], entity_id: 'sensor.house_temperature', attributes: { friendly_name: 'House temperature' } };
+  return rows;
+}
+
+const settings = { baseUrl: 'http://ha.example:8123', accessToken: 'test-token', injectIntoPrompt: false, cacheSeconds: 30 };
+
+beforeEach(() => {
+  new HomeAssistantService(settings).clearCache();
+  global.fetch = jest.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    const json = (data: unknown) => ({ ok: true, json: async (): Promise<unknown> => data, text: async (): Promise<string> => JSON.stringify(data) });
+    if (url.endsWith('/api/states')) return json(house());
+    const one = url.match(/\/api\/states\/(.+)$/);
+    if (one) return json(house().find(e => e.entity_id === decodeURIComponent(one[1])));
+    const hist = url.match(/\/api\/history\/period\/([^?]+)\?filter_entity_id=([^&]+)/);
+    if (hist) {
+      const start = Date.parse(decodeURIComponent(hist[1]));
+      if (hist[2] === SCREEN) {
+        // On the whole week: the start-of-window state, and the restart's own row.
+        return json([[
+          { entity_id: SCREEN, state: 'on', attributes: {}, last_changed: iso(start), last_updated: iso(start) },
+          { state: 'unavailable', last_changed: iso(restart - 30_000) },
+          { state: 'on', last_changed: iso(restart + 500) },
+        ]]);
+      }
+      return json([temperatureHistory(start)]);
+    }
+    return { ok: false, status: 404, statusText: 'Not Found', text: async (): Promise<string> => '' };
+  }) as unknown as typeof fetch;
+});
+
+describe('the curve', () => {
+  test('24 h at the default 36 points is one average per hour, and the coldest hour is named', async () => {
+    const h = await new HomeAssistantService(settings).getHistory('sensor.house_temperature', 24, 36);
+    expect(h.curveStep).toMatch(/^1 hour averages/);
+    expect(h.curve!.length).toBeGreaterThanOrEqual(24);
+    expect(h.curve!.length).toBeLessThanOrEqual(25);
+    expect(h.curve![0]).toMatch(/^(Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{1,2}:00 (AM|PM) \d+(\.\d+)?$/);
+    expect(h.min).toBe(60);
+    expect(Math.abs(Date.parse(h.minAt!) - (now - 6 * HOUR))).toBeLessThanOrEqual(30 * 60_000);
+  });
+
+  test('points sets the step, and 0 gives no curve', async () => {
+    const ha = new HomeAssistantService(settings);
+    expect((await ha.getHistory('sensor.house_temperature', 24, 100)).curveStep).toMatch(/^15 minutes/);
+    expect((await ha.getHistory('sensor.house_temperature', 24, 0)).curve).toBeUndefined();
+  });
+
+  test('a step with no reading of its own carries the last one on', async () => {
+    const h = await new HomeAssistantService(settings).getHistory('sensor.house_temperature', 24, 200); // 10-minute steps, readings every 30
+    const values = h.curve!.map(p => p.split(' ').pop());
+    expect(values.length).toBeGreaterThan(140);
+    expect(values.every(v => v !== undefined && !Number.isNaN(Number(v)))).toBe(true);
+  });
+});
+
+describe('change times reset by a restart', () => {
+  test('the crowd at one minute is found; busy sensors of the last half hour are not', async () => {
+    const resets = await new HomeAssistantService(settings).massResetTimes();
+    expect(resets).toEqual([{ at: iso(Math.floor(restart / 60000) * 60000), entities: 61 }]);
+  });
+
+  const handler = new HomeAssistantHandler();
+  const ctx = () => ({
+    choom: { name: 'Genesis' }, choomId: 'c1', send: jest.fn(),
+    sessionFileCount: { created: 0, maxAllowed: 50 },
+    settings: { homeAssistant: settings },
+  }) as unknown as Parameters<HomeAssistantHandler['execute']>[1];
+  const call = (name: string, args: Record<string, unknown>) =>
+    handler.execute({ id: 't1', name, arguments: args }, ctx()).then(r => r.result as Record<string, unknown>);
+
+  test('ha_get_state says the time is the restart and how long it really held', async () => {
+    const r = await call('ha_get_state', { entity_id: SCREEN });
+    expect(String(r.last_changed_note)).toMatch(/61 entities show this same minute: Home Assistant restarted or reloaded then/);
+    expect(String(r.last_changed_note)).toMatch(/Its history shows on for the whole 7 days, since at least/);
+    expect(r.really_since).toBeDefined();
+  });
+
+  test("ha_get_history on the door says it didn't change, and what on means", async () => {
+    const r = await call('ha_get_history', { entity_id: SCREEN, hours: 168 });
+    expect(r.held).toBe("on the whole 168 hours: it didn't change in that time.");
+    expect(r.on_means).toBe('open');
+    expect(r.friendly_name).toBe('East Screen door');
+  });
+
+  test('a template that prints change times gets the restart named', async () => {
+    jest.spyOn(HomeAssistantService.prototype, 'renderTemplate').mockResolvedValue('East Screen door = on');
+    const r = await call('ha_render_template', { template: "{{ states.binary_sensor.x.state }} {{ states.binary_sensor.x.last_changed }}" });
+    expect(String(r.times_note)).toMatch(/reset many entities' change times at once at .+ \(61 entities\)/);
+    const plain = await call('ha_render_template', { template: '{{ states("sensor.house_temperature") }}' });
+    expect(plain.times_note).toBeUndefined();
+  });
+
+  test('when the recorder missed what the restart brought back, "now" is the live state', async () => {
+    const realFetch = global.fetch;
+    global.fetch = jest.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/history/period/') && url.includes(SCREEN)) {
+        return { ok: true, json: async (): Promise<unknown> => [[
+          { entity_id: SCREEN, state: 'on', attributes: {}, last_changed: iso(now - 160 * HOUR), last_updated: '' },
+          { state: 'off', last_changed: iso(now - 140 * HOUR) },
+        ]], text: async (): Promise<string> => '' };
+      }
+      return (realFetch as unknown as (i: RequestInfo | URL) => Promise<unknown>)(input);
+    }) as unknown as typeof fetch;
+    const h = await call('ha_get_history', { entity_id: SCREEN, hours: 168 });
+    expect(String(h.held)).toMatch(/^on now\. Home Assistant has had it on since .+ \(its restart or reload: 61 entities show that minute\); the last change its history recorded was to off at /);
+    const st = await call('ha_get_state', { entity_id: SCREEN });
+    expect(String(st.last_changed_note)).toMatch(/The last change its history recorded was to off at .+; Home Assistant has had it on since the restart\./);
+    expect(st.really_since).toBeUndefined();
+    global.fetch = realFetch;
+  });
+
+  test('a state read of an ordinary entity carries no note', async () => {
+    const r = await call('ha_get_state', { entity_id: 'sensor.house_temperature' });
+    expect(r.last_changed_note).toBeUndefined();
+  });
+});
+
+describe("Donny's note on the east screen door", () => {
+  test('rides along wherever the door shows, by id or by name', async () => {
+    expect(houseNotesFor({ entity_id: SCREEN })).toHaveLength(1);
+    expect(houseNotesFor({ alerts: ['Office Occupancy: motion', 'East Screen door: open'] })[0]).toMatch(/retractable screen door/);
+    expect(houseNotesFor({ alerts: ['North Screen door: open'] })).toHaveLength(0);
+    const r = await (new HomeAssistantHandler()).execute(
+      { id: 't2', name: 'ha_get_home_status', arguments: {} },
+      { choom: { name: 'Aloy' }, choomId: 'c1', send: jest.fn(), sessionFileCount: { created: 0, maxAllowed: 50 }, settings: { homeAssistant: settings } } as unknown as Parameters<HomeAssistantHandler['execute']>[1],
+    );
+    expect((r.result as { house_notes?: string[] }).house_notes?.[0]).toMatch(/he normally keeps it open/);
+  });
+});

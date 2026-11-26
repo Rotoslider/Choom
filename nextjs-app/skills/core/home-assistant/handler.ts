@@ -471,6 +471,81 @@ function coerceServiceData(raw: unknown): Record<string, unknown> | undefined {
   return parsedAny ? obj : undefined;
 }
 
+/** What "on" is for a binary sensor of this class, for history results. */
+const ON_MEANS: Record<string, string> = {
+  door: 'open', window: 'open', opening: 'open', garage_door: 'open',
+  motion: 'motion', occupancy: 'occupied', presence: 'home', moisture: 'wet',
+};
+
+/**
+ * ha_get_state for an entity whose last_changed is a mass reset (a restart
+ * or reload, HomeAssistantService.massResetTimes): say so, and how long its
+ * history says the state has really held.
+ */
+async function resetChangeNote(ha: HomeAssistantService, entity: HAEntity): Promise<Record<string, string>> {
+  try {
+    return await resetChangeNoteOf(ha, entity);
+  } catch {
+    return {}; // a note, never a reason for the state read to fail
+  }
+}
+
+async function resetChangeNoteOf(ha: HomeAssistantService, entity: HAEntity): Promise<Record<string, string>> {
+  const reset = await ha.massResetAt(entity.last_changed);
+  if (!reset) return {};
+  const note = `${reset.entities} entities show this same minute: Home Assistant restarted or reloaded then and reset their change times, so it means "unchanged since then", not that it changed then.`;
+  const h = await ha.getHistory(entity.entity_id, 168).catch(() => null);
+  const runs = h?.changes || [];
+  const held = runs.length > 0 && runs[runs.length - 1].state === entity.state ? runs[runs.length - 1] : null;
+  if (!held) {
+    // The recorder can miss the state a restart brings back (the east screen door: last recorded "off" on Nov 20).
+    const last = runs[runs.length - 1];
+    return {
+      last_changed_note: last
+        ? `${note} The last change its history recorded was to ${last.state} at ${last.time}; Home Assistant has had it ${entity.state} since the restart.`
+        : note,
+    };
+  }
+  return {
+    last_changed_note: runs.length === 1
+      ? `${note} Its history shows ${entity.state} for the whole 7 days, since at least ${held.time}.`
+      : `${note} Its history shows ${entity.state} since ${held.time}.`,
+    really_since: held.time,
+  };
+}
+
+/** For a template that prints change times: the mass resets of the last 7 days, if any. */
+async function resetTimesNote(ha: HomeAssistantService): Promise<string> {
+  const week = Date.now() - 7 * 24 * 3600 * 1000;
+  let resets: Array<{ at: string; entities: number }> = [];
+  try {
+    resets = (await ha.massResetTimes()).filter(r => Date.parse(r.at) >= week).slice(0, 3);
+  } catch { /* no note */ }
+  if (resets.length === 0) return '';
+  const list = resets.map(r => `${r.at} (${r.entities} entities)`).join(', ');
+  return `Home Assistant reset many entities' change times at once at ${list}: a restart or a reload. A last_changed at one of those minutes means "unchanged since then", not that it changed then. ha_get_history shows how long a state has really held.`;
+}
+
+/**
+ * Facts about this house that a Choom is told whenever a Home Assistant result
+ * names the entity. Donny has told them about the east screen door many times
+ * and they write it down, but a memory doesn't come back when they're looking
+ * at the sensor: the Thanksgiving room (Nov 26 2026) spent 20 minutes on it
+ * as a stuck reed switch. Matched on the entity id or the name a result shows.
+ */
+export const HOUSE_NOTES: Array<{ ids: string[]; names: RegExp; note: string }> = [
+  {
+    ids: ['binary_sensor.kitchen1_home_east_screen_door_east_screen_door'],
+    names: /east screen door/i,
+    note: "From Donny: the east screen is a retractable screen door and he normally keeps it open, so it reads open (on) for days. That's normal and the sensor is fine. What matters is the East door itself (binary_sensor.kitchen1_home_east_door_window): if it's closed, all is fine. No camera shows the east screen door.",
+  },
+];
+
+export function houseNotesFor(result: unknown): string[] {
+  const text = typeof result === 'string' ? result : JSON.stringify(result ?? '');
+  return HOUSE_NOTES.filter(n => n.ids.some(id => text.includes(id)) || n.names.test(text)).map(n => n.note);
+}
+
 const WORKSPACE_IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'];
 const MAX_SNAPSHOT_KB = 10 * 1024; // 10MB
 
@@ -485,7 +560,12 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
   // reaches her, from any HA tool (stripHaTokens).
   async execute(toolCall: ToolCall, ctx: SkillHandlerContext): Promise<ToolResult> {
     const r = stripHaTokens(await this.run(toolCall, ctx));
-    return r.result == null ? r : { ...r, result: localizeTimestamps(r.result) };
+    if (r.result == null) return r;
+    const notes = houseNotesFor(r.result);
+    const result = notes.length && typeof r.result === 'object' && !Array.isArray(r.result)
+      ? { ...(r.result as Record<string, unknown>), house_notes: notes }
+      : r.result;
+    return { ...r, result: localizeTimestamps(result) };
   }
 
   private async run(toolCall: ToolCall, ctx: SkillHandlerContext): Promise<ToolResult> {
@@ -547,6 +627,7 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
             raw_state: entity.state,
             attributes: relevantAttrs,
             last_changed: entity.last_changed,
+            ...(await resetChangeNote(ha, entity)),
           });
         }
 
@@ -952,6 +1033,7 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
             return this.error(toolCall, `Home Assistant error: ${err instanceof Error ? err.message : String(err)}.${missing.note}`);
           }
           const missing = await templateMissingNote(ha, template, true);
+          const timesNote = /\blast_(changed|updated|reported)\b/.test(template) ? await resetTimesNote(ha) : '';
           // A template can loop over every sensor in the house — Qwen wrote one
           // that rendered 30k chars (2026-09-12). Bound it like every other
           // result; the note tells her how to get the rest.
@@ -972,6 +1054,7 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
             success: true,
             rendered: parsed,
             ...(missing.note && { missing_entities: missing.ids, warning: missing.note.trim() }),
+            ...(timesNote && { times_note: timesNote }),
             ...(renderTruncated && { truncated: true, note: `Output cut at ${RENDER_CAP} chars. Narrow the template (filter by name/domain, or render a few entities at a time).` }),
             ...(typeof parsed === 'string' && parsed !== rendered && { raw: rendered }),
           });
@@ -989,26 +1072,67 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
           const entityId = histResolved.entityId;
 
           const hours = Math.min(Math.max(Number(args.hours) || 24, 1), 168);
-          const summary = await ha.getHistory(entityId, hours);
+          // The curve comes by default (about 36 points, up to 200 when asked):
+          // a summary with no shape is what sent Eve after the raw history.
+          const pointsArg = Number(args.points);
+          const points = args.points === undefined || !Number.isFinite(pointsArg)
+            ? 36
+            : Math.min(Math.max(Math.round(pointsArg), 0), 200);
+          const summary = await ha.getHistory(entityId, hours, points);
+          const live = everyEntity.find(e => e.entity_id === entityId);
+          // no_attributes history names the entity by its id; the live state has its name
+          const friendly = summary.friendly_name === entityId && live?.attributes.friendly_name
+            ? String(live.attributes.friendly_name)
+            : summary.friendly_name;
+          const changes = summary.changes || [];
+          const onMeans = ON_MEANS[String(live?.attributes.device_class || '')];
+          // Read plainly, a door that never moved came back as "samples: 1",
+          // and Genesis took one sample in 168 hours for a dead sensor.
+          const lastRun = changes[changes.length - 1];
+          // "Now" is the live state. The recorder can miss the state a restart
+          // brings back: the east screen door's history ends "off" on Nov 20,
+          // while Home Assistant has had it "on" since its Nov 24 restart.
+          const nowState = live && live.state !== 'unavailable' && live.state !== 'unknown' ? live.state : summary.last;
+          let held = '';
+          if (summary.min === null && lastRun) {
+            if (nowState !== lastRun.state) {
+              const reset = live ? await ha.massResetAt(live.last_changed).catch(() => null) : null;
+              held = live && nowState === live.state
+                ? `${nowState} now. Home Assistant has had it ${nowState} since ${live.last_changed}${reset ? ` (its restart or reload: ${reset.entities} entities show that minute)` : ''}; the last change its history recorded was to ${lastRun.state} at ${lastRun.time}.`
+                : `${nowState} now; before that ${lastRun.state} from ${lastRun.time}.`;
+            } else {
+              held = changes.length === 1
+                ? `${lastRun.state} the whole ${hours} hours: it didn't change in that time.`
+                : `${lastRun.state} now, since ${lastRun.time}; it changed ${changes.length - 1} time${changes.length === 2 ? '' : 's'} in ${hours} hours.`;
+            }
+          }
 
           return this.success(toolCall, {
             entity_id: summary.entity_id,
-            friendly_name: summary.friendly_name,
+            friendly_name: friendly,
             period: `${hours} hours`,
             ...(summary.samples === 0 && {
               note: `No history data recorded for ${entityId} in the last ${hours} hours`,
             }),
+            ...(held && { held }),
+            ...(onMeans && summary.min === null && { on_means: onMeans }),
             ...(summary.min !== null && {
               min: `${summary.min}${summary.unit}`,
               max: `${summary.max}${summary.unit}`,
               avg: `${summary.avg}${summary.unit}`,
+              ...(summary.minAt && { min_at: summary.minAt }),
+              ...(summary.maxAt && { max_at: summary.maxAt }),
             }),
             trend: summary.trend,
             samples: summary.samples,
             first_value: summary.first,
             last_value: summary.last,
-            ...(summary.changes && summary.changes.length > 0 && {
-              changes: summary.changes,
+            ...(summary.curve && summary.curve.length > 0 && {
+              curve: summary.curve,
+              curve_step: summary.curveStep,
+            }),
+            ...(changes.length > 0 && {
+              changes,
             }),
           });
         }
@@ -1036,7 +1160,10 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
               entity_id: entityId,
               period: `${hours} hours`,
               entries: [],
-              note: `No logbook entries for ${entityId} in the last ${hours} hours`,
+              // Sensors with a unit (temperatures, power) never go in the logbook; on/off things do.
+              note: /^(binary_sensor|switch|light|lock|cover|input_boolean|person|device_tracker|fan|alarm_control_panel)\./.test(entityId)
+                ? `No logbook entries for ${entityId} in the last ${hours} hours: it didn't change state in that time.`
+                : `No logbook entries for ${entityId} in the last ${hours} hours. Sensors with readings aren't kept in the logbook; ha_get_history has them.`,
             });
           }
 
