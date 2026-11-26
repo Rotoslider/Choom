@@ -18,6 +18,9 @@
  *  - Secrets on DISK are still readable (.env, token.json, ~/.ssh). Only the
  *    process environment is cleaned. Blocking file reads would break the
  *    user's real ML work, which routinely reads config and data files.
+ *    lib/secret-guard.ts (Nov 2026) refuses commands that name the app's own
+ *    key files and scrubs known key values from their output: a speed bump
+ *    for a Choom who means well, not a wall.
  *  - The shell can still reach the network. The per-domain fetch cap covers
  *    the tool path, not `curl` inside run_command.
  *  - Anything the user explicitly adds to CHOOM_SANDBOX_ENV_EXTRA.

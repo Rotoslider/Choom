@@ -92,9 +92,11 @@ export const STALE_REF_ERROR = new RegExp(
 );
 
 /** Permission-policy blocks — argument-specific and recoverable. An archived
- *  (read-only) group room is one: the Choom can still read and search it. */
+ *  (read-only) group room is one: the Choom can still read and search it.
+ *  So is a command refused for reaching Donny's keys (lib/secret-guard.ts):
+ *  run_command stays usable for everything else. */
 export const PERMISSION_BLOCK =
-  /^Blocked: (?:cannot (?:write into|delete from) another Choom|sibling_journal\/ is archived|"[^"\n]*" is archived|[^/]+\/ is a shared folder|remote SSH is disabled|direct SSH shell commands are disabled)/i;
+  /^Blocked: (?:cannot (?:write into|delete from) another Choom|sibling_journal\/ is archived|"[^"\n]*" is archived|[^/]+\/ is a shared folder|remote SSH is disabled|direct SSH shell commands are disabled|not run, it reaches)/i;
 
 /**
  * Fine-grained classes below only refine the LABEL recorded in traces (what

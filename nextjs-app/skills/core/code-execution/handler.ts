@@ -6,6 +6,13 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { choomHasSshPermission, REMOTE_SSH_DISABLED_MESSAGE } from '@/lib/choom-permissions';
 import { SshExecutor } from '@/lib/ssh-executor';
+import { secretAccessRefusal, scrubKnownSecrets } from '@/lib/secret-guard';
+
+/** Home Assistant's address from Settings > Smart Home, for the key guard. */
+function haBaseUrl(ctx: SkillHandlerContext): string | undefined {
+  const ha = (ctx.settings as Record<string, unknown> | undefined)?.homeAssistant as { baseUrl?: string } | undefined;
+  return ha?.baseUrl || undefined;
+}
 
 /**
  * Try to infer project_folder from code content by checking which workspace
@@ -60,13 +67,13 @@ export default class CodeExecutionHandler extends BaseSkillHandler {
   async execute(toolCall: ToolCall, ctx: SkillHandlerContext): Promise<ToolResult> {
     switch (toolCall.name) {
       case 'execute_code':
-        return this.executeCode(toolCall);
+        return this.executeCode(toolCall, ctx);
       case 'create_venv':
         return this.createVenv(toolCall);
       case 'install_package':
         return this.installPackage(toolCall);
       case 'run_command':
-        return this.runCommand(toolCall);
+        return this.runCommand(toolCall, ctx);
       case 'run_ssh_command':
         return this.runSshCommand(toolCall, ctx);
       case 'ssh_copy_file':
@@ -76,12 +83,17 @@ export default class CodeExecutionHandler extends BaseSkillHandler {
     }
   }
 
-  private async executeCode(toolCall: ToolCall): Promise<ToolResult> {
+  private async executeCode(toolCall: ToolCall, ctx: SkillHandlerContext): Promise<ToolResult> {
     try {
       const { CodeSandbox } = await import('@/lib/code-sandbox');
       const sandbox = new CodeSandbox(WORKSPACE_ROOT);
       // The NUC's old projects folder in her code means this one (lib/legacy-paths.ts).
       const { text: code, changed: movedPath } = translateLegacyPaths((toolCall.arguments.code || toolCall.arguments.command) as string);
+      const refusal = secretAccessRefusal(code, haBaseUrl(ctx));
+      if (refusal) {
+        console.log(`   🔑 execute_code refused: ${refusal.slice(0, 90)}`);
+        return this.error(toolCall, refusal);
+      }
       const projectFolder = (toolCall.arguments.project_folder || toolCall.arguments.projectFolder || toolCall.arguments.folder || (code && inferProjectFolder(code))) as string;
       const language = (toolCall.arguments.language || 'python') as 'python' | 'node';
       const timeoutSeconds = toolCall.arguments.timeout_seconds as number | undefined;
@@ -90,7 +102,7 @@ export default class CodeExecutionHandler extends BaseSkillHandler {
       const result = language === 'python'
         ? await sandbox.executePython(projectFolder, code, timeoutMs)
         : await sandbox.executeNode(projectFolder, code, timeoutMs);
-      return this.success(toolCall, movedPath ? { ...result, note: legacyPathNote() } : result);
+      return this.success(toolCall, scrubKnownSecrets(movedPath ? { ...result, note: legacyPathNote() } : result));
     } catch (err) {
       console.error('   Code execution failed:', err instanceof Error ? err.message : err);
       return this.error(toolCall, `Code execution failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
@@ -132,7 +144,7 @@ export default class CodeExecutionHandler extends BaseSkillHandler {
     }
   }
 
-  private async runCommand(toolCall: ToolCall): Promise<ToolResult> {
+  private async runCommand(toolCall: ToolCall, ctx: SkillHandlerContext): Promise<ToolResult> {
     try {
       const { CodeSandbox } = await import('@/lib/code-sandbox');
       const sandbox = new CodeSandbox(WORKSPACE_ROOT);
@@ -140,6 +152,12 @@ export default class CodeExecutionHandler extends BaseSkillHandler {
       // The NUC's old projects folder in her command means this one (lib/legacy-paths.ts).
       const translated = translateLegacyPaths(toolCall.arguments.command as string);
       let command = translated.text;
+      // Checked before the "cd <folder> &&" below is split off, with the folder she gave.
+      const refusal = secretAccessRefusal(`${projectFolder || ''} ${command || ''}`, haBaseUrl(ctx));
+      if (refusal) {
+        console.log(`   🔑 run_command refused: ${refusal.slice(0, 90)}`);
+        return this.error(toolCall, refusal);
+      }
 
       // LLMs often put "cd <folder> && ..." in the command instead of using project_folder.
       // Extract the folder and strip the cd prefix so the sandbox runs in the right directory.
@@ -169,7 +187,7 @@ export default class CodeExecutionHandler extends BaseSkillHandler {
       const timeoutMs = timeoutSeconds ? Math.min(timeoutSeconds * 1000, 600_000) : undefined;
 
       const result = await sandbox.runCommand(projectFolder, command, timeoutMs);
-      return this.success(toolCall, translated.changed ? { ...result, note: legacyPathNote() } : result);
+      return this.success(toolCall, scrubKnownSecrets(translated.changed ? { ...result, note: legacyPathNote() } : result));
     } catch (err) {
       console.error('   Command execution failed:', err instanceof Error ? err.message : err);
       return this.error(toolCall, `Command execution failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
@@ -179,6 +197,12 @@ export default class CodeExecutionHandler extends BaseSkillHandler {
   private async runSshCommand(toolCall: ToolCall, ctx: SkillHandlerContext): Promise<ToolResult> {
     if (!choomHasSshPermission(ctx.choom)) {
       return this.error(toolCall, REMOTE_SSH_DISABLED_MESSAGE);
+    }
+
+    const sshRefusal = secretAccessRefusal(String(toolCall.arguments.command || ''), haBaseUrl(ctx));
+    if (sshRefusal) {
+      console.log(`   🔑 run_ssh_command refused: ${sshRefusal.slice(0, 90)}`);
+      return this.error(toolCall, sshRefusal);
     }
 
     try {
@@ -193,7 +217,7 @@ export default class CodeExecutionHandler extends BaseSkillHandler {
         timeoutMs,
         toolCall.arguments.port,
       );
-      return this.success(toolCall, result);
+      return this.success(toolCall, scrubKnownSecrets(result));
     } catch (err) {
       console.error('   SSH command failed:', err instanceof Error ? err.message : err);
       return this.error(toolCall, `SSH command failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
