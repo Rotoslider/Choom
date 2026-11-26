@@ -40,11 +40,12 @@ YT_DLP_COOKIES = os.path.join(os.path.dirname(__file__), "youtube-cookies.txt")
 YT_DLP_EXTRA_ARGS = [
     "--js-runtimes", "node",
     "--remote-components", "ejs:github",
-    # YouTube broke android_vr/tv media delivery on 2026-08-13/14 (HTTP 403:
-    # Forbidden on googlevideo URLs missing a PO token). The web_embedded player
-    # client still serves media URLs without a token; android_vr/tv/web/web_safari
-    # either 403, hit DRM, or return formats without URLs.
-    "--extractor-args", "youtube:player_client=web_embedded",
+    # No forced player client. web_embedded was pinned here on 2026-08-14, when
+    # YouTube 403'd the android_vr/tv clients. By 2026-11-24 web_embedded had
+    # turned SABR-only (formats without URLs, "Only images are available"), so
+    # every new video failed its metadata with "Requested format is not
+    # available". yt-dlp's own default clients (2026.11.23) work; when YouTube
+    # breaks downloads again, upgrade yt-dlp first (brew upgrade yt-dlp).
     *(["--cookies", YT_DLP_COOKIES] if os.path.exists(YT_DLP_COOKIES) else []),
 ]
 
