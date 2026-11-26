@@ -94,6 +94,9 @@ export default function RoomsPage() {
   const [running, setRunning] = useState(false);
   const [speaking, setSpeaking] = useState(false);
   const runningRef = useRef(false);
+  // A run this page didn't start (a Choom's talk_with_sisters, a room follow-up,
+  // Signal): who is speaking, from GET /api/group-chat, so Stop can end it too.
+  const [otherRunState, setOtherRun] = useState<{ roomId: string; speaker: string | null } | null>(null);
   // A message the room could not take yet (409: a Choom-started run holds the
   // room). Kept here and re-sent automatically when GET /api/group-chat says the
   // room is free, so the owner's words are never silently dropped (2026-09-21).
@@ -154,6 +157,8 @@ export default function RoomsPage() {
   useEffect(() => { choomsRef.current = chooms; }, [chooms]);
 
   const currentRoom = rooms.find(r => r.id === currentRoomId) || null;
+  // Only the room on screen, and not while this page runs one itself.
+  const otherRun = otherRunState && otherRunState.roomId === currentRoomId && !running ? otherRunState : null;
   const liveRooms = rooms.filter(r => !r.archived);
   const archivedRooms = rooms.filter(r => r.archived);
 
@@ -240,6 +245,12 @@ export default function RoomsPage() {
     if (!currentRoomId) return;
     const interval = setInterval(async () => {
       if (runningRef.current) return; // don't poll mid-turn
+      try {
+        const st = await fetch(`/api/group-chat?roomId=${encodeURIComponent(currentRoomId)}`, { cache: 'no-store' });
+        const j = st.ok ? await st.json() as { running?: boolean; speaker?: string | null } : null;
+        const next = j?.running && !runningRef.current ? { roomId: currentRoomId, speaker: j.speaker || null } : null;
+        setOtherRun(prev => (prev?.roomId === next?.roomId && prev?.speaker === next?.speaker ? prev : next));
+      } catch { /* ignore poll errors */ }
       try {
         const since = lastTimestampRef.current ? `?since=${encodeURIComponent(lastTimestampRef.current)}` : '';
         const res = await fetch(`/api/group-chats/${currentRoomId}/messages${since}`);
@@ -530,14 +541,22 @@ export default function RoomsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentRoomId, consumeStream, currentRoom?.autoRounds]);
 
+  // Stop ends the room's run on the server too, whoever started it: closing
+  // this page's stream only stopped runs this page had started (2026-11-26).
   const handleStop = useCallback(() => {
+    if (currentRoomId && (runningRef.current || otherRun)) {
+      void fetch('/api/group-chat', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stop: currentRoomId }),
+      }).catch(() => { /* the stream abort below still stops our own run */ });
+    }
     abortRef.current?.abort();
     ttsRef.current?.stop();
     runningRef.current = false;
     setRunning(false);
     cancelPending();
     setNotice(null);
-  }, [cancelPending]);
+  }, [cancelPending, currentRoomId, otherRun]);
 
   const handleSetAutoRounds = useCallback(async (roomId: string, value: number) => {
     const v = Math.max(0, Math.min(50, value));
@@ -945,10 +964,15 @@ export default function RoomsPage() {
                 )}
                 {/* Stop the running sequence AND/OR the audio (which can lag the
                     text by minutes). You can also just type to jump in. */}
-                {(running || speaking) && (
-                  <div className="flex justify-center">
+                {(running || speaking || otherRun) && (
+                  <div className="flex flex-col items-center gap-1">
+                    {otherRun && !running && (
+                      <p className="text-xs text-muted-foreground">
+                        {otherRun.speaker ? `${otherRun.speaker} is speaking` : 'A conversation is running'} in this room.
+                      </p>
+                    )}
                     <Button variant="outline" size="sm" className="gap-2" onClick={handleStop}>
-                      <Square className="h-3 w-3" /> {running ? 'Stop' : 'Stop audio'}
+                      <Square className="h-3 w-3" /> {running || otherRun ? 'Stop' : 'Stop audio'}
                     </Button>
                   </div>
                 )}

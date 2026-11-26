@@ -352,11 +352,12 @@ export async function runSpeakerTurn(opts: {
   divergenceDirective?: string; // convergence breaker for this turn (hidden, per-speaker)
   settings: unknown;
   timeoutMs: number;
+  stopSignal?: AbortSignal; // the room's Stop button: cut this turn off now, keep what she said
   send: GroupSend;
 }): Promise<GroupSpeakerResult> {
   const {
     baseUrl, choomId, speakerName, scratchChatId, transcript,
-    participantNames, projectFolder, roomTopic, roomId, isInitiator, antiEcho, antiEchoReason, taskModelOverride, divergenceDirective, settings, timeoutMs, send,
+    participantNames, projectFolder, roomTopic, roomId, isInitiator, antiEcho, antiEchoReason, taskModelOverride, divergenceDirective, settings, timeoutMs, stopSignal, send,
   } = opts;
 
   // Split the transcript so `message` carries the REAL conversational content
@@ -451,6 +452,11 @@ export async function runSpeakerTurn(opts: {
       controller.abort();
     }
   }, 5000);
+  // Closing the /api/chat stream also ends her agent loop at its next round
+  // (agentic-loop.ts, "Stream closed").
+  const onStop = () => { abortReason = 'stopped from Group Rooms'; controller.abort(); };
+  if (stopSignal?.aborted) onStop();
+  else stopSignal?.addEventListener('abort', onStop, { once: true });
 
   const result: GroupSpeakerResult = { passed: false, windingDown: false, content: '', imageUrl: null, imageId: null, toolCalls: [] };
   // Stream accumulators live OUTSIDE the try so an abort/failure mid-read can
@@ -491,7 +497,9 @@ export async function runSpeakerTurn(opts: {
       clearInterval(watchdog);
       const isAbort = (fetchErr as Error).name === 'AbortError';
       result.error = isAbort
-        ? `${speakerName} timed out connecting to the chat API`
+        ? abortReason
+          ? `${speakerName} turn stopped: ${abortReason}`
+          : `${speakerName} timed out connecting to the chat API`
         : `${speakerName} fetch error: ${(fetchErr as Error).message}`;
       return result;
     }

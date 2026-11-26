@@ -52,6 +52,12 @@ const PREEMPT_WAIT_MS = 150 * 1000;
 // Who is speaking in a running room — so a 409 (and GET status) can say so.
 const runningSpeakers = new Map<string, string>();
 const PREEMPT_POLL_MS = 500;
+// Stop (2026-11-26): the Stop button in /rooms only closed the page's own
+// stream, so a run a Choom started (Aloy's "Thanksgiving Morning", 20 min) had
+// no stop at all; only a new message from Donny cut in. PUT { stop: roomId }
+// ends whichever run holds the room: the speaker mid-turn is cut off (what she
+// had said is kept) and nobody speaks after her. One controller per run.
+const runStops = new Map<string, AbortController>();
 // Welcome back (2026-10-15): when Donny sits back down and a Choom welcomes him,
 // a running room stops before its next speaker, so his answer to her isn't held
 // behind more room turns, and picks up where it left off (that speaker first)
@@ -187,12 +193,26 @@ export async function GET(request: NextRequest) {
  * picks up again, and one that hadn't reached its next speaker yet just carries
  * on. The hologram pauses them as a Choom welcomes Donny back and resumes them
  * once he's done talking with her.
+ * PUT { stop: roomId }: the run in that room ends now, whoever started it
+ * (the Stop button in /rooms), and a paused one won't pick up again.
  */
 export async function PUT(request: Request) {
-  const body = (await request.json().catch(() => ({}))) as { pause?: unknown; resume?: unknown };
+  const body = (await request.json().catch(() => ({}))) as { pause?: unknown; resume?: unknown; stop?: unknown };
   const json = (data: unknown, status = 200) =>
     new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
   const now = Date.now();
+  if (typeof body.stop === 'string' && body.stop) {
+    const id = body.stop;
+    const wasPaused = pausedRooms.delete(id);
+    pauseRequested.delete(id);
+    const run = runStops.get(id);
+    const speaker = runningSpeakers.get(id) || null;
+    if (run && !run.signal.aborted) {
+      console.log(`   ⏹ Room ${id}: stopped from Group Rooms${speaker ? ` (${speaker} was speaking)` : ''}`);
+      run.abort();
+    }
+    return json({ stopped: !!run, wasPaused, speaker });
+  }
   if (body.pause === true) {
     const rooms = [...runningRooms].filter(([, since]) => now - since < RUN_LOCK_STALE_MS).map(([id]) => id);
     for (const id of rooms) pauseRequested.set(id, now);
@@ -332,12 +352,15 @@ export async function POST(request: NextRequest) {
   runningRooms.set(roomId, nowMs);
   pausedRooms.delete(roomId); // a new run (his message, a sister's) takes the place of a paused one
   pauseRequested.delete(roomId); // a pause asked of an earlier run (one that ended first) isn't this one's
+  const stopCtl = new AbortController();
+  runStops.set(roomId, stopCtl);
   let lockReleased = false;
   const releaseLock = () => {
     if (lockReleased) return;
     lockReleased = true;
     runningRooms.delete(roomId);
     runningSpeakers.delete(roomId);
+    if (runStops.get(roomId) === stopCtl) runStops.delete(roomId);
     lastRunAt.set(roomId, Date.now());
   };
 
@@ -433,11 +456,23 @@ export async function POST(request: NextRequest) {
         // caller passes `rounds` (the web UI never does on a plain message;
         // the harness and API callers do — `rounds: 0` used to be ignored and
         // still ran the room's autoRounds, 2026-09-12).
-        const maxRounds = continueRun
+        let maxRounds = continueRun
           ? Math.max(1, roundsOverride ?? room.autoRounds)
           : initiator
             ? 1 + Math.max(1, Math.min(roundsOverride ?? room.autoRounds, room.autoRounds))
             : 1 + Math.max(0, roundsOverride ?? room.autoRounds);
+        // Turned down mid-run (2026-11-26): the cap above was read once, so
+        // Donny lowering auto-rounds a minute into Aloy's Thanksgiving room
+        // (06:15) changed nothing and it ran its 3 rounds to 06:34. The room's
+        // setting is read again before every round after the first; a lower
+        // number ends the run sooner (0 = no more rounds after this one), a
+        // higher one doesn't lengthen a run already going.
+        const startAutoRounds = room.autoRounds;
+        const loweredCap = async (): Promise<number | null> => {
+          const now = await prisma.groupRoom.findUnique({ where: { id: roomId }, select: { autoRounds: true } }).catch(() => null);
+          if (!now || now.autoRounds >= startAutoRounds) return null;
+          return (continueRun ? 0 : 1) + Math.min(roundsOverride ?? now.autoRounds, now.autoRounds);
+        };
         // Settle gap between consecutive turns: every Choom usually shares one
         // local model, so firing back-to-back large-context requests at the same
         // LM Studio endpoint can make it return an empty completion (KV-cache
@@ -467,6 +502,7 @@ export async function POST(request: NextRequest) {
             lastRound = round;
             currentSpeakerName = p.choom.name;
             runningSpeakers.set(roomId, p.choom.name);
+            if (stopCtl.signal.aborted) cancelled = true;
             if (cancelled) break;
             if (preemptRequested.has(roomId)) {
               console.log(`   ✋ Room ${roomId}: yielding to the owner's message before ${p.choom.name} speaks`);
@@ -530,9 +566,11 @@ export async function POST(request: NextRequest) {
                 : undefined,
               settings,
               timeoutMs: TURN_CEILING_MS,
+              stopSignal: stopCtl.signal,
               send,
             };
             let result = await runSpeakerTurn(turnOpts);
+            if (stopCtl.signal.aborted) cancelled = true;
 
             // One-shot anti-echo retry: the model parroted the prompt verbatim
             // (the classic first-responder-echoes-the-greeting failure). Re-run the
@@ -670,9 +708,18 @@ export async function POST(request: NextRequest) {
               }
             }
           }
+
+          if (!cancelled && round + 1 < maxRounds) {
+            const lowered = await loweredCap();
+            if (lowered !== null && lowered < maxRounds) {
+              console.log(`   🔽 Room ${roomId}: auto-rounds turned down to ${lowered - (continueRun ? 0 : 1)} during the run — ${round + 1 >= lowered ? 'ending after this round' : `${lowered - round - 1} more round(s)`}`);
+              maxRounds = lowered;
+            }
+          }
         }
 
         await prisma.groupRoom.update({ where: { id: roomId }, data: { updatedAt: new Date() } });
+        if (stopCtl.signal.aborted) send({ type: 'stopped' });
         send({ type: 'done' });
       } catch (err) {
         // This catch ends the ENTIRE room run (stream closes below). Name the
