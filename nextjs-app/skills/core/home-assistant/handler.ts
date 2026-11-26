@@ -8,6 +8,8 @@ import { cameraSnapshotFolder, pruneExpiredCaptures, CAPTURE_RETENTION_HOURS } f
 import type { ToolCall, ToolResult } from '@/lib/types';
 import { askGlassCamera, isGlassCameraName } from '@/lib/glass-camera';
 import ImageAnalysisHandler from '@/skills/core/image-analysis/handler';
+import { readFile } from 'fs/promises';
+import { CONFIG_PATH as BRIDGE_CONFIG_PATH } from '@/lib/bridge-config-store';
 
 const TOOL_NAMES = new Set([
   'ha_get_state',
@@ -537,13 +539,74 @@ export const HOUSE_NOTES: Array<{ ids: string[]; names: RegExp; note: string }> 
   {
     ids: ['binary_sensor.kitchen1_home_east_screen_door_east_screen_door'],
     names: /east screen door/i,
-    note: "From Donny: the east screen is a retractable screen door and he normally keeps it open, so it reads open (on) for days. That's normal. Sometimes he closes it, usually while the East door is open, to let the house breathe. While it's closed it can flick open for a few seconds at a time, dozens of times in an afternoon: Donny knows, he thinks the wind rocks it at the edge of reading, and he's going to test it. A few seconds open while it's closed isn't someone coming in. What matters is the East door itself (binary_sensor.kitchen1_home_east_door_window): if it's closed, the house is shut. No camera shows the east screen door.",
+    note: "From Donny: the east screen is a retractable screen door and he normally keeps it open, so it reads open (on) for days. That's normal: with the East door (binary_sensor.kitchen1_home_east_door_window) closed, the house is shut. Sometimes he opens the East door and closes the screen to let the house breathe; that's fine too. Only both open for more than a minute or so is a problem: rattlesnakes can get in. A few seconds of both open is someone going through (Nov 20: about 50 times in an afternoon, and the kitchen radar saw a person each time). The sensor works (Donny tested it Nov 26). No camera shows the east screen door. doorways_now says how the doors are right now.",
   },
 ];
 
 export function houseNotesFor(result: unknown): string[] {
   const text = typeof result === 'string' ? result : JSON.stringify(result ?? '');
   return HOUSE_NOTES.filter(n => n.ids.some(id => text.includes(id)) || n.names.test(text)).map(n => n.note);
+}
+
+/** A doorway as bridge-config.json lists it (homeAssistant.doors); the presence heartbeat reads the same list. */
+export interface Doorway { name?: string; door?: string; screen?: string; leads?: string }
+
+/** Both open for less than this is someone going through. */
+const BOTH_OPEN_FOR_MS = 60_000;
+
+/**
+ * Donny's rule for a doorway with a screen (Nov 26 2026): the door open with
+ * its screen closed is fine (letting the house breathe), the screen open with
+ * the door closed is fine (how he leaves the east one for days), and both
+ * open for more than a minute or so is the problem: rattlesnakes can get in.
+ * The Chooms took any open door for something wrong, and a rule they were
+ * told didn't stay with them, so the result works it out from the live states.
+ */
+export function doorwayVerdict(d: Doorway, door: HAEntity | undefined, screen: HAEntity | undefined, nowMs = Date.now()): string | null {
+  if (!d.door || !d.screen) return null;
+  const label = d.name ? d.name[0].toUpperCase() + d.name.slice(1) : 'Door';
+  const unread = ([['door', door], ['screen', screen]] as const).filter(([, e]) => !e || (e.state !== 'on' && e.state !== 'off'));
+  if (unread.length) {
+    return `${label}: can't tell right now, its ${unread.map(([part, e]) => `${part} sensor reads ${e ? e.state : 'nothing'}`).join(' and its ')}.`;
+  }
+  const doorOpen = door!.state === 'on';
+  const screenOpen = screen!.state === 'on';
+  if (doorOpen && screenOpen) {
+    const since = Math.max(Date.parse(door!.last_changed), Date.parse(screen!.last_changed));
+    const ms = nowMs - since;
+    if (Number.isFinite(ms) && ms < BOTH_OPEN_FOR_MS) {
+      return `${label}: the door and its screen are both open right now (${Math.max(0, Math.round(ms / 1000))} seconds): someone going through, most likely. Only a problem if it lasts more than a minute or so.`;
+    }
+    const howLong = Number.isFinite(ms) ? ` since ${new Date(since).toISOString()} (${Math.round(ms / 60000)} minutes)` : '';
+    return `${label}: NOT OK. The door and its screen have both been open${howLong}. Donny's rule: both open for more than a minute or so lets rattlesnakes in. Tell Donny.`;
+  }
+  if (doorOpen) return `${label}: fine. The door is open and its screen is closed (letting the house breathe).`;
+  if (screenOpen) return `${label}: fine. The screen is open and the door is closed.`;
+  return `${label}: fine. The door and its screen are both closed.`;
+}
+
+/** The doorways with a screen, from bridge-config.json (read only: never written from here). */
+async function screenedDoorways(): Promise<Doorway[]> {
+  try {
+    const doors = JSON.parse(await readFile(BRIDGE_CONFIG_PATH, 'utf-8'))?.homeAssistant?.doors;
+    return Array.isArray(doors) ? doors.filter((d: Doorway) => d?.door && d?.screen) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** The doorways (with a screen) a result shows, by entity id or name, each with doorwayVerdict. */
+async function doorwaysNow(ha: HomeAssistantService, result: unknown): Promise<string[]> {
+  const text = typeof result === 'string' ? result : JSON.stringify(result ?? '');
+  if (!/door/i.test(text)) return [];
+  const doorways = await screenedDoorways();
+  if (!doorways.length) return [];
+  const live = await ha.statesOf(doorways.flatMap(d => [d.door!, d.screen!]));
+  const named = (s: string | undefined) => !!s && new RegExp(`\\b${s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(text);
+  return doorways
+    .filter(d => [d.door!, d.screen!].some(id => text.includes(id) || named(String(live.get(id)?.attributes.friendly_name || ''))) || named(d.name))
+    .map(d => doorwayVerdict(d, live.get(d.door!), live.get(d.screen!)))
+    .filter((v): v is string => !!v);
 }
 
 const WORKSPACE_IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'];
@@ -562,8 +625,19 @@ export default class HomeAssistantHandler extends BaseSkillHandler {
     const r = stripHaTokens(await this.run(toolCall, ctx));
     if (r.result == null) return r;
     const notes = houseNotesFor(r.result);
-    const result = notes.length && typeof r.result === 'object' && !Array.isArray(r.result)
-      ? { ...(r.result as Record<string, unknown>), house_notes: notes }
+    const haSettings = (ctx.settings as Record<string, unknown>)?.homeAssistant as HomeAssistantSettings | undefined;
+    let doorways: string[] = [];
+    if (haSettings?.baseUrl && haSettings?.accessToken) {
+      try {
+        doorways = await doorwaysNow(new HomeAssistantService(haSettings), r.result);
+      } catch { /* a note, never a reason for the tool to fail */ }
+    }
+    const result = (notes.length || doorways.length) && typeof r.result === 'object' && !Array.isArray(r.result)
+      ? {
+          ...(r.result as Record<string, unknown>),
+          ...(notes.length && { house_notes: notes }),
+          ...(doorways.length && { doorways_now: doorways }),
+        }
       : r.result;
     return { ...r, result: localizeTimestamps(result) };
   }

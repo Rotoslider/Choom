@@ -189,6 +189,12 @@ export class HomeAssistantService {
     return entities;
   }
 
+  /** These entities' live states, from the cached full list (before the Assist / entity filters). */
+  async statesOf(ids: string[]): Promise<Map<string, HAEntity>> {
+    const wanted = new Set(ids);
+    return new Map((await this.allStates()).filter(e => wanted.has(e.entity_id)).map(e => [e.entity_id, e]));
+  }
+
   /**
    * Minutes when Home Assistant gave a crowd of entities the same last_changed
    * at once, newest first. A restart does that to every entity it restores

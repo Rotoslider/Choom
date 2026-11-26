@@ -11,6 +11,9 @@
  *    really held; and the screen door carries Donny's note wherever it shows.
  *  - HA's history API stops one day after the start unless end_time is sent,
  *    so every ha_get_history past 24 hours had only the first day of its window.
+ *  - Donny's rule for a door and its screen: one of them open is fine, both
+ *    open for more than a minute or so lets rattlesnakes in. Results that show
+ *    a doorway now say which it is (doorways_now).
  */
 import { HomeAssistantService, type HAEntity } from '@/lib/homeassistant-service';
 
@@ -22,11 +25,25 @@ jest.mock('@/lib/captured-images', () => ({
   CAPTURE_RETENTION_HOURS: 72,
 }));
 jest.mock('@/lib/glass-camera', () => ({ askGlassCamera: jest.fn(), isGlassCameraName: () => false }));
+// The bridge settings' door list, in a file of the test's own (never the real settings).
+jest.mock('@/lib/bridge-config-store', () => ({
+  CONFIG_PATH: require('path').join(require('os').tmpdir(), `ha-doorways-${process.pid}.json`),
+}));
 
-import HomeAssistantHandler, { houseNotesFor } from '@/skills/core/home-assistant/handler';
+import fs from 'fs';
+import { CONFIG_PATH } from '@/lib/bridge-config-store';
+import HomeAssistantHandler, { houseNotesFor, doorwayVerdict, type Doorway } from '@/skills/core/home-assistant/handler';
 
 const HOUR = 3600 * 1000;
 const SCREEN = 'binary_sensor.kitchen1_home_east_screen_door_east_screen_door';
+const EAST_DOOR = 'binary_sensor.kitchen1_home_east_door_window';
+const EAST: Doorway = { name: 'east door', door: EAST_DOOR, screen: SCREEN, leads: 'outside' };
+beforeAll(() => fs.writeFileSync(CONFIG_PATH, JSON.stringify({ homeAssistant: { doors: [
+  EAST,
+  { name: 'north door', door: 'binary_sensor.north_door', screen: 'binary_sensor.north_screen_door' },
+  { name: 'shop door', door: 'binary_sensor.shop_door' },
+] } })));
+afterAll(() => fs.rmSync(CONFIG_PATH, { force: true }));
 const now = Date.now();
 const iso = (ms: number) => new Date(ms).toISOString();
 const restart = Math.floor((now - 50 * HOUR) / 60000) * 60000 + 27_000; // 50 h ago, 27 s past the minute
@@ -41,6 +58,7 @@ function house(): HAEntity[] {
     list.push({ entity_id: `sensor.busy_${i}`, state: String(i), attributes: {}, last_changed: iso(now - 60_000), last_updated: iso(now - 60_000) });
   }
   list.push({ entity_id: SCREEN, state: 'on', attributes: { device_class: 'door', friendly_name: 'East Screen door' }, last_changed: iso(restart + 500), last_updated: iso(restart + 500) });
+  list.push({ entity_id: EAST_DOOR, state: 'off', attributes: { device_class: 'door', friendly_name: 'East door' }, last_changed: iso(now - 2 * HOUR), last_updated: iso(now - 2 * HOUR) });
   list.push({
     entity_id: 'sensor.house_temperature', state: '63.5', last_changed: iso(now - 5 * 60_000), last_updated: iso(now - 5 * 60_000),
     attributes: { device_class: 'temperature', unit_of_measurement: '°F', friendly_name: 'House temperature' },
@@ -216,7 +234,47 @@ describe("Donny's note on the east screen door", () => {
     );
     const note = (r.result as { house_notes?: string[] }).house_notes?.[0];
     expect(note).toMatch(/he normally keeps it open/);
-    expect(note).toMatch(/usually while the East door is open, to let the house breathe/);
-    expect(note).toMatch(/A few seconds open while it's closed isn't someone coming in/);
+    expect(note).toMatch(/opens the East door and closes the screen to let the house breathe; that's fine too/);
+    expect(note).toMatch(/Only both open for more than a minute or so is a problem: rattlesnakes can get in/);
+    expect((r.result as { doorways_now?: string[] }).doorways_now).toEqual(['East door: fine. The screen is open and the door is closed.']);
+  });
+});
+
+describe("Donny's rule for a door and its screen", () => {
+  const t = Date.parse('2026-11-26T20:00:00Z');
+  const ent = (id: string, state: string, changedMsAgo: number): HAEntity =>
+    ({ entity_id: id, state, attributes: {}, last_changed: iso(t - changedMsAgo), last_updated: iso(t - changedMsAgo) });
+
+  test('one of the two open is fine, either way round', () => {
+    expect(doorwayVerdict(EAST, ent(EAST_DOOR, 'off', HOUR), ent(SCREEN, 'on', 50 * HOUR), t)).toBe('East door: fine. The screen is open and the door is closed.');
+    expect(doorwayVerdict(EAST, ent(EAST_DOOR, 'on', HOUR), ent(SCREEN, 'off', HOUR), t)).toBe('East door: fine. The door is open and its screen is closed (letting the house breathe).');
+    expect(doorwayVerdict(EAST, ent(EAST_DOOR, 'off', HOUR), ent(SCREEN, 'off', HOUR), t)).toBe('East door: fine. The door and its screen are both closed.');
+  });
+
+  test('both open for a few seconds is someone going through', () => {
+    // Nov 20: the East door open all afternoon, the screen open 3-9 s at a time
+    const v = doorwayVerdict(EAST, ent(EAST_DOOR, 'on', 3 * HOUR), ent(SCREEN, 'on', 6_000), t)!;
+    expect(v).toBe('East door: the door and its screen are both open right now (6 seconds): someone going through, most likely. Only a problem if it lasts more than a minute or so.');
+  });
+
+  test('both open past a minute is the problem, counted from the later of the two', () => {
+    const v = doorwayVerdict(EAST, ent(EAST_DOOR, 'on', 3 * HOUR), ent(SCREEN, 'on', 4 * 60_000), t)!;
+    expect(v).toMatch(/^East door: NOT OK\. The door and its screen have both been open since \S+ \(4 minutes\)\. Donny's rule: both open for more than a minute or so lets rattlesnakes in\. Tell Donny\.$/);
+    expect(v).toContain(iso(t - 4 * 60_000));
+  });
+
+  test("a sensor that isn't reporting is said, not guessed", () => {
+    expect(doorwayVerdict(EAST, ent(EAST_DOOR, 'unavailable', HOUR), ent(SCREEN, 'on', HOUR), t)).toBe("East door: can't tell right now, its door sensor reads unavailable.");
+    expect(doorwayVerdict(EAST, undefined, undefined, t)).toBe("East door: can't tell right now, its door sensor reads nothing and its screen sensor reads nothing.");
+    expect(doorwayVerdict({ name: 'shop door', door: 'binary_sensor.shop_door' }, ent('binary_sensor.shop_door', 'on', HOUR), undefined, t)).toBeNull();
+  });
+
+  test('only the doorways a result shows get a line', async () => {
+    const handler = new HomeAssistantHandler();
+    const run = (name: string, args: Record<string, unknown>) => handler.execute({ id: 't3', name, arguments: args },
+      { choom: { name: 'Eve' }, choomId: 'c1', send: jest.fn(), sessionFileCount: { created: 0, maxAllowed: 50 }, settings: { homeAssistant: settings } } as unknown as Parameters<HomeAssistantHandler['execute']>[1])
+      .then(r => r.result as Record<string, unknown>);
+    expect((await run('ha_get_state', { entity_id: EAST_DOOR })).doorways_now).toEqual(['East door: fine. The screen is open and the door is closed.']);
+    expect((await run('ha_get_state', { entity_id: 'sensor.house_temperature' })).doorways_now).toBeUndefined();
   });
 });
