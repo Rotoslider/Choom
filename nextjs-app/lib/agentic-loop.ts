@@ -28,7 +28,8 @@ import { classifyEndpoint, isLocalEndpoint } from '@/lib/stream-timeouts';
 import { readLlmStream, newStreamState, streamHasToolCalls, type StreamState } from '@/lib/llm-stream-reader';
 import { unexposedToolMentions } from '@/lib/tool-exposure';
 import { detectClaimedTool, detectZeroToolClaim, detectUncalledToolClaim, findFabricatedImageRefs } from '@/lib/phantom-claim';
-import { isNearVerbatimRepeat, stripRepeatedParagraphs, stripInternalRepeats, wordCoverage } from '@/lib/repetition-guard';
+import { isNearVerbatimRepeat, stripRepeatedParagraphs, stripInternalRepeats, stripRestatedSentences, wordCoverage } from '@/lib/repetition-guard';
+import { describesToolAction as describesToolActionIn } from '@/lib/tool-narration';
 import { wakeNoteTask } from '@/lib/wake-note';
 import { trimForLocalFallback, LOCAL_FALLBACK_PROMPT_TOKENS } from '@/lib/fallback-trim';
 import {
@@ -299,6 +300,15 @@ export const WAKE_LAST_ROUND_NOTE = '[System] Last round of this wake-up: tools 
  * heartbeat terminator in the loop). It opens with "Nothing", not "You", so
  * a fallback model keeps it (BEHAVIOUR_NUDGE strips notes about the primary).
  */
+/**
+ * After a tool round that follows a reply already sent to Donny (streamed and
+ * spoken), once per turn: don't say it again. The paragraph and sentence
+ * strips catch what she repeats anyway; this keeps her from writing it.
+ */
+export const DELIVERED_REPLY_NOTE = '[System] Your reply above has already been delivered and heard. Do not repeat or reword any of it. After these tool results, add only what is new (what the tools found or did); if there is nothing new, write nothing.';
+/** How much she must have sent before the tool round for DELIVERED_REPLY_NOTE: more than a "Let me check…". */
+export const DELIVERED_REPLY_MIN_CHARS = 300;
+
 export const WAKE_WROTE_NOTHING_NOTE = '[System] Nothing from this wake-up has reached the user: heartbeat_complete was called, but no message was written. The summary is never shown to them; only your reply text reaches them, and the pictures you made go only with it. Tools are off now. Write your message to them now, in your own voice, from what you found. If you meant to stay quiet this time, reply with just (quiet) and nothing else. (Automated note, not from the user — do not mention it.)';
 
 /**
@@ -763,6 +773,7 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
           let deliberationNudged = false; // Guard: one "you thought but didn't act" nudge per request
           const autoOpenedSkills = new Set<string>(); // skills-mode: each skill auto-opened at most once per request
           let duplicateFinalNudged = false; // one retry when the would-be final reply was dropped as a repeat
+          let deliveredReplyNoted = false; // told once that her reply already went out before a tool round (DELIVERED_REPLY_NOTE)
           // heartbeat_complete with nothing written (2026-11-02, see the terminator below):
           let wroteNothingNudged = false; // asked once per wake-up
           let quietRoundActive = false; // the round answering WAKE_WROTE_NOTHING_NOTE: buffered, "(quiet)" = silence
@@ -974,6 +985,13 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                 // Let the user SEE the thinking (own box, never spoken) — it just
                 // must not become the reply.
                 send({ type: 'thinking', content: stream.reasoningProse.trim() });
+              }
+              if (deliveredReplyNoted && !iterationContent.trim() && !hasToolCalls && !(reasoningOnly && !deliberation)) {
+                // Nothing new to add after the tool, as DELIVERED_REPLY_NOTE allows: her
+                // reply is the one already sent. Not an empty response for the
+                // fallback chain, and no nudge, which would get the reply a third time.
+                console.log(`   📨 ${choomTag} Nothing to add after the tool — her reply already went out, turn done`);
+                break;
               }
               if (reasoningOnly && !deliberation) {
                 iterationContent = stream.reasoningProse.trim();
@@ -1626,6 +1644,16 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                   console.log(`   🔄 ${choomTag} Stripped repeated paragraphs from buffered content (${iterationContent.length} → ${stripped.length} chars)`);
                   iterationContent = stripped;
                 }
+                // Then sentence by sentence: a reply written again after a tool call
+                // comes back reworded, so no paragraph matches (Eve, Nov 26 2026: the
+                // Genesis-cooked-dinner paragraph and her goodnight, heard twice).
+                // Everything earlier this turn was already sent, so a sentence that
+                // restates one of it is never news.
+                const restated = stripRestatedSentences(iterationContent, iterationTexts, { exactShort: true });
+                if (restated.dropped.length) {
+                  console.log(`   🔄 ${choomTag} Dropped ${restated.dropped.length} sentence${restated.dropped.length === 1 ? '' : 's'} already said this turn (${iterationContent.length} → ${restated.text.length} chars): ${restated.dropped.slice(0, 3).map(d => JSON.stringify(d.slice(0, 60))).join(', ')}`);
+                  iterationContent = restated.text;
+                }
                 // Degenerate self-repetition inside ONE completion (six
                 // apology blocks in a single 7k-token generation, 2026-08-06)
                 // — invisible to every cross-iteration layer above.
@@ -2092,8 +2120,7 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
               // No tools called yet — check if model is narrating instead of acting
               const lowerContent = iterationContent.toLowerCase();
 
-              const describesToolAction =
-                /(?:(?:generat|creat|mak|produc|design|render|draw|craft|captur|snap)\w*\s+(?:\d+\s+)?(?:\w+\s+)?(?:unique\s+|some\s+|a\s+|an\s+|the\s+|your\s+|my\s+)?(?:\w+\s+)?(?:image|selfie|portrait|picture|photo|illustration|artwork))|(?:(?:search|check|fetch|get|grab|download|send|analyz|look\w* up)\w*\s+(?:the |your |a |for )?(?:weather|forecast|web|image|file|email|contact|video|result|drone|review))|(?:(?:here(?:'s| is| are)|i (?:created|generated|made|took|prepared|composed|rendered))\s+(?:the |your |some |a |\d+ )?(?:\w+ )?(?:image|selfie|portrait|picture|photo|illustration|result|file|forecast))|(?:i (?:created|generated|made)\s+\d+\s+\w+)|(?:(?:remember|sav|stor|not|record|keep)\w*\s+(?:that|this|it|your|the )\s*(?:in |to |as )?(?:my |your )?(?:memory|notes|knowledge)?)|(?:(?:i'?ve |i have |i )?(?:stored|saved|noted|recorded|memorized|remembered)\s+(?:that|this|it|your|the ))|(?:(?:fix|updat|edit|modif|correct|rewrit|patch|chang|writ)\w*\s+(?:the |this |that )?(?:file|code|script|bug|issue|error|implementation|model|function|class))|(?:(?:set|creat|schedul)\w*\s+(?:a\s+|the\s+|your\s+)?(?:reminder|remind))|(?:(?:i'?ll |i will |let me )?remind\s+(?:you|the user))|(?:^logged[!.\s]|(?:i'?ve |i )?logged\s+(?:your|that|this|the|it|a ))/i.test(lowerContent);
+              const describesToolAction = describesToolActionIn(lowerContent);
 
               // Short preambles (< 500 chars) are likely pure narration.
               // Longer responses may also be narration (planning essays) — detect
@@ -2942,6 +2969,18 @@ export async function runAgenticLoop(params: AgenticLoopParams): Promise<LoopOut
                 tool_call_id: tr.toolCallId,
                 name: tr.name,
               });
+            }
+
+            // --- Her reply already went out (streamed, spoken) before this tool round:
+            // she wrote the whole answer, then called remember (or was nudged into a
+            // tool), and after the result wrote the answer again (Eve, Nov 26 2026).
+            // Told once per turn. Not on wake-ups or delegations: their text is
+            // delivered when the turn ends, so nothing has gone out yet.
+            if (!deliveredReplyNoted && !isHeartbeat && !isDelegation
+              && iterationTexts.join('\n\n').length >= DELIVERED_REPLY_MIN_CHARS) {
+              deliveredReplyNoted = true;
+              console.log(`   📨 ${choomTag} Her reply already went out before this tool round — told not to say it again`);
+              currentMessages.push({ role: 'user', content: DELIVERED_REPLY_NOTE });
             }
 
             // --- Same-tool streak: only one tool this iteration, same as last time?

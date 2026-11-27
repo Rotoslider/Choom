@@ -24,6 +24,8 @@
  * in the middle of the request handler where none of it could be unit-tested.
  */
 
+import { MEMORY_CLAIM } from './tool-narration';
+
 // Attempt JSON repair for malformed tool call arguments from local models.
 // Uses a state machine to properly track string context so braces/brackets
 // inside strings are not miscounted (common when content contains code).
@@ -1248,8 +1250,13 @@ export function extractToolCallFromText(
   // Remember / save memory — broad matching for LLM text describing a save/store action
   // Also check user message for explicit remember requests the LLM acknowledged but didn't tool-call
   const userLower = userMessage.toLowerCase();
-  const describesRemember = /(?:(?:remember|sav|stor|not|record|keep|memoriz)\w*\s+(?:that|this|it|your |the |my )|(?:i'?ll |let me |i'?m going to )(?:remember|save|store|note|record|keep)|(?:i'?ve |i have )?(?:stored|saved|noted|recorded|memorized|remembered)\s+(?:that|this|it|your|the)|use (?:the )?remember)/i.test(lower);
-  const userAskedRemember = /(?:(?:please |can you |you should )remember (?:that|this|my|i |the |for )|(?<!i )(?<!i'll )remember (?:that |this |my |i |the |for )|(?:don'?t |never )forget |(?:save|store|note|keep) (?:this|that|my|the |it )|use (?:the )?remember)/i.test(userLower);
+  // The memory claim is shared with the narration nudge (MEMORY_CLAIM). The old
+  // pattern here took any "not"/"keep"/"save" + "the"/"that"/"it" for one, so
+  // "not the clear ones" saved Donny's whole message as a memory (61 since Oct 29,
+  // 2026), and she then wrote her reply again after the call. His own "keep the"
+  // or "save the" is no request to remember either: it has to name the memory.
+  const describesRemember = MEMORY_CLAIM.test(lower) || /use (?:the )?remember/i.test(lower);
+  const userAskedRemember = /(?:(?:please |can you |you should )remember (?:that|this|my|i |the |for )|(?<!i )(?<!i'll )remember (?:that |this |my |i |the |for )|(?:don'?t |never )forget |(?:save|store|note|keep|put) (?:this|that|it) (?:in|to|into) (?:your |my )?(?:memory|memories|mind|notes)|make a note|use (?:the )?remember)/i.test(userLower);
   if (availableToolNames.has('remember') && (describesRemember || userAskedRemember)) {
     // Try to extract a meaningful title from the user message
     const titleMatch = userMessage.match(/(?:remember|save|store|note|keep|don'?t forget)\s+(?:that\s+)?(.{5,60}?)(?:\.|$)/i);

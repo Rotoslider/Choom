@@ -220,6 +220,148 @@ export function stripInternalRepeats(text: string): string {
   return out.join('').replace(/\n{3,}/g, '\n\n').replace(/^\n+|\n+$/g, '').replace(/\s+$/, '');
 }
 
+/**
+ * Sentence by sentence: is this sentence something already said, in other
+ * words? A sentence with at least RESTATED_SENTENCE_MIN_WORDS content words
+ * (contentWords) counts as restated when RESTATED_SENTENCE_SHARE of them are
+ * in ONE earlier sentence. One sentence, not the whole earlier text: with a
+ * few messages on the same subject, the topic's words are all somewhere
+ * before, and a new point about it would look restated. Two more checks, from
+ * the dry run on two weeks of rooms (Nov 26 2026):
+ *  - a sentence under RESTATED_SHORT_WORDS content words must also keep the
+ *    earlier one's wording (RESTATED_SHORT_PAIRS of its word pairs): "One
+ *    piece a square and it's nearer three thousand" used the topic's words
+ *    for a new sum;
+ *  - a "not" on one side only is a correction, not a repeat ("The washes
+ *    aren't cutting through a terrace" after "The wash is cutting through
+ *    the terrace").
+ *
+ * Why: Donny hears most things twice. In group rooms a sister retold what
+ * another had just said in 36-80% of messages (Aloy at 5:26 PM: "I'm saving
+ * the love seat and the paper plate…", 86% of her message), and in one-to-one
+ * chats a reply written again after a tool call came back reworded, so the
+ * paragraph checks above, which need 85% of a whole paragraph's words, let
+ * it through.
+ */
+export const RESTATED_SENTENCE_MIN_WORDS = 5;
+export const RESTATED_SENTENCE_SHARE = 0.7;
+export const RESTATED_SHORT_WORDS = 8;
+export const RESTATED_SHORT_PAIRS = 0.4;
+
+/** Sentence-ish units, each with its trailing whitespace (as stripInternalRepeats splits). */
+export function sentenceUnits(text: string): string[] {
+  return text.match(/[^.!?…\n]*[.!?…]+["')\]*_]*\s*|[^\n]+\n+|[^\n]+$/g) || [];
+}
+
+// Never judged, so never cut: a room's image note ("[image shared to the room …
+// image_path=…]" is how a sister sees the picture), links, and table rows.
+const NEVER_RESTATED = /image shared to the room|image_path=|analyze_image|\]\(|https?:\/\/|^\s*\|/i;
+// Voice cues ([amused], [softly]) aren't words of the sentence.
+const VOICE_CUE = /\[[a-z][a-z ,'-]{0,30}\]/gi;
+// Words inside quotes are what's being talked about: Eve quoting Genesis's
+// "screen shut, handle latched, no gap" to say the camera never showed it is
+// a new point (Nov 26 2026). Only the words outside the quotes are judged.
+const QUOTED = /"[^"\n]{3,}"|“[^”\n]{3,}”/g;
+const NEGATION = /\b(?:not|no|never|none|nothing|nor|neither|without)\b|n['’]t\b/i;
+
+export interface RestatementPrior { text: string; norm: string; words: Set<string>; pairs: Set<string>; negated: boolean }
+
+function judged(unit: string, dropQuotes: boolean): string | null {
+  if (NEVER_RESTATED.test(unit)) return null;
+  const s = unit.replace(VOICE_CUE, ' ');
+  return dropQuotes ? s.replace(QUOTED, ' ') : s;
+}
+
+// The sentence's words in order, lower-cased: for the word-for-word test on short sentences.
+const normWords = (s: string) => (s.toLowerCase().replace(/['’]/g, '').match(/[a-z0-9]+/g) || []).join(' ');
+
+function wordPairs(s: string): Set<string> {
+  const w = s.toLowerCase().replace(/['’]/g, '').match(/[a-z0-9]+/g) || [];
+  const out = new Set<string>();
+  for (let i = 1; i < w.length; i++) out.add(`${w[i - 1]} ${w[i]}`);
+  return out;
+}
+
+/** Each sentence of the texts that is long enough to judge, ready for restatedFrom. */
+export function restatementPriors(texts: string[]): RestatementPrior[] {
+  const out: RestatementPrior[] = [];
+  for (const t of texts) {
+    for (const unit of sentenceUnits(t || '')) {
+      const s = judged(unit, false);
+      if (s === null) continue;
+      const norm = normWords(s);
+      if (norm.split(' ').length < 3) continue;
+      out.push({ text: unit.trim(), norm, words: contentWords(s), pairs: wordPairs(s), negated: NEGATION.test(s) });
+    }
+  }
+  return out;
+}
+
+/**
+ * The earlier sentence this one restates (its index in priors), or -1. With
+ * `exactShort`, a sentence too short to judge by its words (3+ words) counts
+ * when it is word for word an earlier one: within one turn whose text already
+ * went out, "Now go have your frozen yogurt." said again is never news (Eve,
+ * Nov 26 2026). Rooms leave it off, so a sister's "I love you" stays.
+ */
+export function restatedFrom(sentence: string, priors: RestatementPrior[], opts: { exactShort?: boolean } = {}): number {
+  const s = judged(sentence, true);
+  if (s === null) return -1;
+  const words = contentWords(s);
+  if (words.size < RESTATED_SENTENCE_MIN_WORDS) {
+    if (!opts.exactShort) return -1;
+    const norm = normWords(judged(sentence, false) || '');
+    return norm.split(' ').length >= 3 ? priors.findIndex(p => p.norm === norm) : -1;
+  }
+  const negated = NEGATION.test(s);
+  const pairs = words.size < RESTATED_SHORT_WORDS ? wordPairs(s) : null;
+  for (let i = 0; i < priors.length; i++) {
+    const p = priors[i];
+    if (p.words.size < RESTATED_SENTENCE_MIN_WORDS || p.negated !== negated) continue;
+    let hit = 0;
+    for (const w of words) if (p.words.has(w)) hit++;
+    if (hit / words.size < RESTATED_SENTENCE_SHARE) continue;
+    if (pairs && pairs.size) {
+      let same = 0;
+      for (const pr of pairs) if (p.pairs.has(pr)) same++;
+      if (same / pairs.size < RESTATED_SHORT_PAIRS) continue;
+    }
+    return i;
+  }
+  return -1;
+}
+
+/**
+ * Remove the sentences of `text` that restate a sentence of `priorTexts`
+ * (restatedFrom); with `within`, also one that restates an earlier sentence
+ * of the text itself, and with `exactShort`, short ones said word for word.
+ * Text with code in it is left alone. Returns the text and the sentences
+ * taken out.
+ */
+export function stripRestatedSentences(
+  text: string,
+  priorTexts: string[],
+  opts: { within?: boolean; exactShort?: boolean } = {},
+): { text: string; dropped: string[] } {
+  if (!text || text.includes('```') || (priorTexts.length === 0 && !opts.within)) return { text, dropped: [] };
+  const priors = restatementPriors(priorTexts);
+  if (priors.length === 0 && !opts.within) return { text, dropped: [] };
+  const kept: string[] = [];
+  const dropped: string[] = [];
+  for (const unit of sentenceUnits(text)) {
+    if (restatedFrom(unit, priors, { exactShort: opts.exactShort }) >= 0) {
+      dropped.push(unit.trim());
+      // a dropped sentence that ended a paragraph leaves the paragraph break
+      if (/\n{2,}\s*$/.test(unit) && kept.length) kept[kept.length - 1] = kept[kept.length - 1].replace(/\s*$/, '\n\n');
+      continue;
+    }
+    kept.push(unit);
+    if (opts.within) priors.push(...restatementPriors([unit]));
+  }
+  if (!dropped.length) return { text, dropped };
+  return { text: kept.join('').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim(), dropped };
+}
+
 // Markup is stripped with its attributes before comparing lines: a looping
 // template's only varying part is often a URL inside a tag.
 const lineKey = (line: string) => normPara(line

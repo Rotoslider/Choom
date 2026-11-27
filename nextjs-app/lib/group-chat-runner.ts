@@ -9,6 +9,7 @@
 
 import { Agent, fetch as undiciFetch } from 'undici';
 import { describeRoomImages } from './room-image-describe';
+import { restatementPriors, restatedFrom, sentenceUnits, stripRestatedSentences, type RestatementPrior } from './repetition-guard';
 
 // Dedicated dispatcher: disable undici's body/headers timeouts so a slow local
 // model with gaps between iterations doesn't kill the SSE stream. Our own
@@ -46,6 +47,70 @@ export interface GroupSpeakerResult {
 export type GroupSend = (event: Record<string, unknown>) => void;
 
 const PASS_RE = /^\s*\[?\s*pass\s*[.!]?\s*\]?\s*$/i;
+
+// ── Sentences the room has already heard ─────────────────────────────────────
+// Donny, Nov 26 2026: "80% of their replies have them repeating verbatim or damn
+// close just about everything." Measured on two weeks of rooms: a sister retold
+// what another had just said in 36-80% of her messages (Aloy at 5:26 PM, 86% of
+// hers). The checks below (stripEchoedTranscript, isRepeatOrParrot) catch only
+// near word-for-word lines, and run on the finished reply, after the Rooms page
+// has already spoken it sentence by sentence. So each sentence is checked as it
+// streams, against the Chooms' last RESTATE_WINDOW messages and her own earlier
+// sentences (restatedFrom), and only new ones go out to be shown and spoken.
+// Donny's own words are left out: answering him in them is fine.
+const RESTATE_WINDOW = 12;
+/** On unless CHOOM_ROOM_RESTATE_FILTER says otherwise ("off"). */
+export function roomRestateFilterOn(): boolean {
+  return (process.env.CHOOM_ROOM_RESTATE_FILTER || ROOM_RESTATE_FILTER_DEFAULT) !== 'off';
+}
+// On since Nov 26 2026, after Donny saw the dry run on two weeks of rooms
+// ("we can try it and see what happens"). CHOOM_ROOM_RESTATE_FILTER=off turns it off.
+const ROOM_RESTATE_FILTER_DEFAULT: 'on' | 'off' = 'on';
+
+/** What the room's Chooms said lately, as restatedFrom's priors. */
+export function roomRestatePriorTexts(transcript: GroupTranscriptEntry[]): string[] {
+  return transcript.filter(t => t.authorChoomId).slice(-RESTATE_WINDOW).map(t => stripImageNotes(t.content));
+}
+
+// A sentence is complete once whitespace follows its end mark (or a newline ends it).
+const COMPLETE_UNIT = /(?:[.!?…]["')\]*_]*\s+|\n)$/;
+
+/**
+ * The streaming side: tokens in, only sentences the room hasn't heard out.
+ * push() takes each token and returns what may go to the client now; end()
+ * returns the rest. A reply with code in it is let through unfiltered.
+ */
+export class RestatedSentenceFilter {
+  private pending = '';
+  private passThrough = false;
+  private readonly priors: RestatementPrior[];
+  readonly dropped: string[] = [];
+  constructor(priorTexts: string[]) { this.priors = restatementPriors(priorTexts); }
+  push(token: string): string {
+    if (this.passThrough) return token;
+    this.pending += token;
+    if (this.pending.includes('```')) { this.passThrough = true; const all = this.pending; this.pending = ''; return all; }
+    return this.release(false);
+  }
+  end(): string { return this.release(true); }
+  /** Take back the last n characters (the loop retracting a partial reply), if still held. */
+  retract(n: number): void { if (n > 0 && this.pending.length >= n) this.pending = this.pending.slice(0, this.pending.length - n); }
+  private release(atEnd: boolean): string {
+    if (!this.pending) return '';
+    const units = sentenceUnits(this.pending);
+    let ready = units.length;
+    if (!atEnd && ready > 0 && !COMPLETE_UNIT.test(units[ready - 1])) ready--;
+    let out = '';
+    for (let i = 0; i < ready; i++) {
+      const u = units[i];
+      if (restatedFrom(u, this.priors) >= 0) { this.dropped.push(u.trim()); continue; }
+      out += u;
+      this.priors.push(...restatementPriors([u]));
+    }
+    this.pending = units.slice(ready).join('');
+    return out;
+  }
+}
 // A [PASS] (or final lone "pass") tacked onto the END of a real reply. Models
 // routinely write a paragraph and then append [PASS], which the strict PASS_RE
 // above misses — so the turn looked like real speech and the room never
@@ -464,6 +529,8 @@ export async function runSpeakerTurn(opts: {
   // vanished when the 15-min ceiling fired — the old catch couldn't see these).
   let content = '';
   let doneContent = '';
+  const restatePriors = roomRestateFilterOn() ? roomRestatePriorTexts(transcript) : null;
+  const restateFilter = restatePriors ? new RestatedSentenceFilter(restatePriors) : null;
 
   try {
     let response: Awaited<ReturnType<typeof undiciFetch>>;
@@ -533,11 +600,14 @@ export async function runSpeakerTurn(opts: {
         try {
           const data = JSON.parse(line.slice(6));
           switch (data.type) {
-            case 'content':
+            case 'content': {
               content += data.content || '';
-              // Forward streaming tokens tagged with the speaker.
-              send({ type: 'speaker_content', speakerChoomId: choomId, speakerName, content: data.content || '' });
+              // Forward streaming tokens tagged with the speaker; with the restate
+              // filter, only whole sentences the room hasn't heard.
+              const out = restateFilter ? restateFilter.push(data.content || '') : (data.content || '');
+              if (out) send({ type: 'speaker_content', speakerChoomId: choomId, speakerName, content: out });
               break;
+            }
             case 'thinking':
               // Display-only: never added to `content`, so it can't reach the
               // room transcript, Signal, or TTS.
@@ -561,6 +631,7 @@ export async function runSpeakerTurn(opts: {
               break;
             case 'retract_partial':
               if (data.length && content.length >= data.length) content = content.slice(0, content.length - data.length);
+              restateFilter?.retract(data.length || 0);
               break;
             case 'done':
               if (data.content) doneContent = data.content;
@@ -576,6 +647,8 @@ export async function runSpeakerTurn(opts: {
     }
 
     clearInterval(watchdog);
+    const restTail = restateFilter?.end();
+    if (restTail) send({ type: 'speaker_content', speakerChoomId: choomId, speakerName, content: restTail });
     let finalContent = (doneContent || content).trim();
     // Cut off any "[Your turn, …]" instruction the model kept writing past its
     // own reply (it sometimes continues the script into the next turn's prompt).
@@ -599,6 +672,15 @@ export async function runSpeakerTurn(opts: {
       console.log(`   ✂️ [${speakerName}] stripped transcript echo (${(echo.echoRatio * 100).toFixed(0)}% of reply was reproduced room lines)`);
     }
     finalContent = echo.content;
+    // The saved, Signal and transcript copy: the same sentences the stream left out.
+    if (restatePriors) {
+      const restated = stripRestatedSentences(finalContent, restatePriors, { within: true });
+      if (restated.dropped.length) {
+        console.log(`   ✂️ [${speakerName}] left out ${restated.dropped.length} sentence${restated.dropped.length === 1 ? '' : 's'} the room had already heard: ${restated.dropped.slice(0, 3).map(d => JSON.stringify(d.slice(0, 60))).join(', ')}`);
+        // Nothing new left but a name or a word: she passes.
+        finalContent = normalizeForDup(restated.text).length < 25 ? '' : restated.text;
+      }
+    }
     if (PASS_RE.test(finalContent)) {
       // The whole message is just a pass marker → truly silent this turn.
       result.passed = true;
@@ -661,6 +743,7 @@ export async function runSpeakerTurn(opts: {
       partial = partial.replace(/^\s*\[\s*you are\s+[^\]]*\]\s*/i, '').trim();
       partial = stripSpeakerPrefix(partial, [...participantNames, 'Donny', 'You']);
       partial = dedupeParagraphs(partial).trim();
+      if (restatePriors) partial = stripRestatedSentences(partial, restatePriors, { within: true }).text;
     }
     if (partial) result.content = partial;
     result.error = abortReason
